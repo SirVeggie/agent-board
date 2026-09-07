@@ -1,0 +1,238 @@
+:root {
+  --bg: #1e1e1e;
+  --chrome: #252526;
+  --tab: #2d2d2d;
+  --tab-active: #1e1e1e;
+  --border: #3f3f46;
+  --text: #cccccc;
+  --muted: #8b8b8b;
+  --accent: #007acc;
+  --danger: #c54646;
+  --control-height: 28px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  max-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.chrome {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 40px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tabs-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  overscroll-behavior: none;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tabs::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+  background: transparent;
+}
+
+.tabs-fade {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 48px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent 0%, var(--chrome) 75%);
+  z-index: 1;
+}
+
+.tabs-fade[hidden] {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  max-width: 240px;
+  min-width: 96px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--border);
+  background: var(--tab);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab:hover { color: var(--text); background: #333; }
+
+.tab.active {
+  background: var(--tab-active);
+  color: #fff;
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.tab-pin {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.tab-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.tab-close:hover {
+  background: transparent;
+  color: #ff6b6b;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 4px;
+}
+
+button {
+  height: var(--control-height);
+  background: #3c3c3c;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+button:hover { background: #464646; }
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+main {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+iframe {
+  border: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty p {
+  margin: 0;
+  max-width: 440px;
+  line-height: 1.5;
+}
+
+.empty .shortcuts {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.empty .shortcuts li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.empty .shortcuts .keys {
+  white-space: nowrap;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--tab);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+.empty[hidden],
+iframe[hidden] {
+  display: none;
+}

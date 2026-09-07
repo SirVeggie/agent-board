@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #1e1e1e;
+      --text: #e8e8e8;
+      --muted: #9a9a9a;
+      --border: #3a3a3a;
+      --accent: #4ea1ff;
+      --code-bg: #2a2a2a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      font-size: 15px;
+      padding: 28px 32px 72px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.7rem; font-weight: 600; margin: 0 0 0.8rem; }
+    h2 { font-size: 1.15rem; font-weight: 600; margin: 1.6rem 0 0.6rem; }
+    p, ul { margin: 0.65rem 0; }
+    ul { padding-left: 1.3rem; }
+    .muted { color: var(--muted); }
+    kbd, code {
+      display: inline-block;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 0.85em;
+      background: var(--code-bg);
+      padding: 0.1em 0.4em;
+      border-radius: 4px;
+    }
+    kbd {
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+    }
+    table { border-collapse: collapse; width: 100%; margin: 0.8rem 0 1.2rem; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+    th { background: #2a2a2a; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Welcome</h1>
+  <p>Agent Board is a local tabbed viewer for pages the Cursor agent presents. Keep this window open. New pages show up as tabs.</p>
+
+  <h2>Shortcuts</h2>
+  <table>
+    <thead>
+      <tr><th>Key</th><th>Action</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Download the current page as HTML</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Open this help page</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Restore the last closed tab (up to 5)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Tabs</h2>
+  <ul>
+    <li>Middle-click a tab to close it. Pinned tabs ignore middle-click; use ×.</li>
+    <li>Double-click a tab to pin or unpin it. Clear leaves pinned tabs alone.</li>
+    <li>If tabs overflow, scroll the strip with the mouse wheel.</li>
+  </ul>
+
+  <h2>Persistence</h2>
+  <p>Open tabs and the last 5 closed tabs are saved to <code>%LOCALAPPDATA%\agent-board\state.json</code>, so they survive Cursor and Agent Board restarts. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
+  <p class="muted">Ask the agent to present an investigation, analysis, or design here instead of writing a throwaway HTML file.</p>
+</body>
+</html>

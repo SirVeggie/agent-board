@@ -1,0 +1,26 @@
+import path from "node:path";
+
+export const VERSION = "1.0.0";
+export const HOST = "127.0.0.1";
+export const PORT = Number(process.env.AGENT_BOARD_PORT || 4747);
+export const MAX_HTML_BYTES = 2 * 1024 * 1024;
+
+export function baseUrl(): string {
+  return `http://${HOST}:${PORT}`;
+}
+
+export function dataDir(): string {
+  if (process.env.AGENT_BOARD_HOME) {
+    return process.env.AGENT_BOARD_HOME;
+  }
+  const root = process.env.LOCALAPPDATA || process.env.HOME || process.cwd();
+  return path.join(root, "agent-board");
+}
+
+export function statePath(): string {
+  return path.join(dataDir(), "state.json");
+}
+
+export function logPath(): string {
+  return path.join(dataDir(), "daemon.log");
+}

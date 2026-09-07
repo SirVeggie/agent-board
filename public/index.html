@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Board</title>
+  <link rel="stylesheet" href="/app.css?v=8">
+</head>
+<body>
+  <header class="chrome">
+    <div class="tabs-wrap">
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div class="tabs-fade" id="tabs-fade" hidden></div>
+    </div>
+    <div class="actions">
+      <button type="button" id="clear" title="Close unpinned tabs">Clear</button>
+    </div>
+  </header>
+  <main>
+    <div id="empty" class="empty">
+      <h1>Waiting for a page</h1>
+      <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
+      <ul class="shortcuts">
+        <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML</span></li>
+        <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
+        <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>restores the last closed tab</span></li>
+      </ul>
+    </div>
+    <iframe
+      id="frame"
+      title="Page"
+      sandbox="allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
+      hidden
+    ></iframe>
+  </main>
+  <script src="/app.js?v=8"></script>
+</body>
+</html>
