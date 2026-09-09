@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
-import { HOST, PORT, VERSION, baseUrl } from "./config.js";
+import { CONTENT_HOST, HOST, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { log } from "./log.js";
 import { store } from "./store.js";
 import { toMeta, type BoardEvent, type TabMeta } from "./types.js";
@@ -22,6 +22,8 @@ export async function startHttp(): Promise<http.Server> {
 
   const app = express();
   app.disable("x-powered-by");
+  app.use(contentOriginGate);
+  app.use(noStoreShell);
   app.use(express.json({ limit: "3mb" }));
   app.use(express.static(publicDir));
 
@@ -141,6 +143,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   const server = http.createServer(app);
+  const contentServer = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
 
   wss.on("connection", (socket) => {
@@ -155,20 +158,56 @@ export async function startHttp(): Promise<http.Server> {
   store.on("tab_closed", (id: string) => broadcast({ type: "tab_closed", id }));
   store.on("tab_focused", (id: string | null) => broadcast({ type: "tab_focused", id }));
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(PORT, HOST, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await listen(server, PORT, HOST);
+  await listen(contentServer, PORT, CONTENT_HOST);
 
-  log(`Agent Board listening on ${baseUrl()}`);
+  log(`Agent Board listening on ${baseUrl()} (tab pages on ${contentBaseUrl()})`);
   return server;
 }
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function isContentHost(req: express.Request): boolean {
+  return req.hostname === CONTENT_HOST;
+}
+
+function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (isContentHost(req)) {
+    if (req.method === "GET" && /^\/view\/[^/]+$/.test(req.path)) {
+      next();
+      return;
+    }
+    if (req.method === "GET" && (req.path === "/" || req.path === "/index.html")) {
+      res.redirect(302, `${baseUrl()}/`);
+      return;
+    }
+    res.status(403).json({ error: "This origin only serves tab pages" });
+    return;
+  }
+  if (req.path === "/view" || req.path.startsWith("/view/")) {
+    res.status(404).type("text").send("Tab pages are served from the content origin.");
+    return;
+  }
+  next();
+}
+
+function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (req.path === "/" || req.path === "/index.html" || req.path === "/app.js" || req.path === "/app.css") {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+}
+
+function listen(server: http.Server, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
 }
 
 const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CSS}</style>

@@ -1,12 +1,18 @@
 import path from "node:path";
 
-export const VERSION = "1.0.0";
+export const VERSION = "1.0.1";
 export const HOST = "127.0.0.1";
+/** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
+export const CONTENT_HOST = "127.0.0.2";
 export const PORT = Number(process.env.AGENT_BOARD_PORT || 4747);
 export const MAX_HTML_BYTES = 2 * 1024 * 1024;
 
 export function baseUrl(): string {
   return `http://${HOST}:${PORT}`;
+}
+
+export function contentBaseUrl(): string {
+  return `http://${CONTENT_HOST}:${PORT}`;
 }
 
 export function dataDir(): string {

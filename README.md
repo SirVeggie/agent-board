@@ -61,3 +61,5 @@ Tabs persist in `%LOCALAPPDATA%\agent-board\state.json` across daemon and Cursor
 The browser **Clear** button closes unpinned tabs. Pinned tabs stay until you close them. **Ctrl+S** downloads the current page as HTML.
 
 Port: `4747` (override with `AGENT_BOARD_PORT`). Bound to localhost only.
+
+Tab pages load in an iframe from **http://127.0.0.2:4747** so they can use `localStorage` without accessing the board chrome or API. Refresh the board after upgrading so the new iframe sandbox takes effect.

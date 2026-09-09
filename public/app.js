@@ -80,6 +80,11 @@
     return state.tabs.find((tab) => tab.id === state.activeId) || null;
   }
 
+  function viewUrl(tab) {
+    const port = location.port ? `:${location.port}` : "";
+    return `${location.protocol}//127.0.0.2${port}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}`;
+  }
+
   function renderChrome() {
     clearBtn.disabled = !state.tabs.some((tab) => !tab.pinned);
   }
@@ -173,7 +178,7 @@
     emptyEl.hidden = true;
     frameEl.hidden = false;
     document.title = tab.title + " · Agent Board";
-    const next = `/view/${encodeURIComponent(tab.id)}?r=${tab.revision}`;
+    const next = viewUrl(tab);
     if (!frameEl.src.includes(`${tab.id}?r=${tab.revision}`)) {
       frameEl.src = next;
       state.shownRevision = tab.revision;
