@@ -51,6 +51,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_list` | List open tabs |
 | `board_read` | Read a tab's HTML so it can be revised |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
+| `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
 | `board_set_state` | Write state back; an open page applies it live without reloading |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Close one tab, all unpinned tabs, or everything |
@@ -64,9 +65,12 @@ Every tab owns a JSON state object that lives in the daemon, not in the browser.
 ```js
 board.state                  // current state, readable synchronously on load
 board.set({ todos })         // merge top-level keys, saved on a short debounce
+board.signal("submitted")    // wake board_wait; flushes pending board.set first
 board.onChange(render)       // agent or another viewer changed something
 board.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
 ```
+
+A submit button can declare the same handshake without extra script: `data-board-signal="submitted"`. The agent then calls `board_wait` with that signal name. `board_show` clears the last signal on the tab so a new wait does not instantly see the previous submit.
 
 Interactive pages should use this instead of `localStorage` — all tab pages share one origin, so their `localStorage` collides, and the agent cannot see it.
 
@@ -77,6 +81,8 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 ### Conflicts
 
 `board_get_state` returns a `stateRevision`. Passing it back as `expectedRevision` makes the write conditional: if the user changed the page in between, it is refused with `409` and the response carries their current state, so the agent can merge and retry. Agent writes without an `expectedRevision` are refused on a page that already has state, unless `force` is set. Writes from the page itself are never blocked — the person looking at the screen wins ties.
+
+`board_wait` blocks until `board.signal("name")` (or `data-board-signal="name"`) fires on that tab. It returns the signal plus the current state. Waiting for any state change would wake on every keystroke; the named signal is the handshake. After a successful wait, pass `signal.revision` as `afterSignalRevision` to wait for the next one without re-showing the page.
 
 ## Data
 

@@ -1,5 +1,11 @@
 export type BoardState = Record<string, unknown>;
 
+export type TabSignal = {
+  name: string;
+  revision: number;
+  at: number;
+};
+
 export type Tab = {
   id: string;
   key: string;
@@ -12,9 +18,13 @@ export type Tab = {
   state: BoardState;
   stateRevision: number;
   stateUpdatedAt: number;
+  /** Monotonic counter; survives board_show clearing `signal`. */
+  signalRevision: number;
+  /** Last signal, or null after board_show resets the wait handshake. */
+  signal: TabSignal | null;
 };
 
-export type TabMeta = Omit<Tab, "html" | "state"> & { htmlBytes: number };
+export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision"> & { htmlBytes: number };
 
 export type TrashEntry = {
   tab: Tab;
@@ -23,12 +33,20 @@ export type TrashEntry = {
 
 export const TRASH_LIMIT = 5;
 
+export type UpsertNotice = {
+  activate: boolean;
+  /** HTML or title changed; pin-only updates are not structural. */
+  structural: boolean;
+};
+
 export type BoardEvent =
   | { type: "snapshot"; tabs: TabMeta[]; activeId: string | null }
   | { type: "tab_upserted"; tab: TabMeta; index?: number }
   | { type: "tab_closed"; id: string }
   | { type: "tab_focused"; id: string | null }
-  | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string };
+  | { type: "tab_focus_request"; id: string }
+  | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string }
+  | { type: "tab_signal"; id: string; signal: TabSignal };
 
 export type UpsertInput = {
   key?: string;
@@ -43,6 +61,12 @@ export type SetStateInput = {
   state: BoardState;
   replace?: boolean;
   expectedRevision?: number;
+  client?: string;
+};
+
+export type SignalInput = {
+  name: string;
+  state?: BoardState;
   client?: string;
 };
 

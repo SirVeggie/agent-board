@@ -3,19 +3,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
-import { CONTENT_HOST, HOST, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { CONTENT_HOST, HOST, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { log } from "./log.js";
+import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { store } from "./store.js";
-import { isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta } from "./types.js";
+import { isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta, type UpsertNotice } from "./types.js";
+import { ViewerHub } from "./viewers.js";
+import { waitForSignal } from "./wait.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 const startedAt = Date.now();
 const sockets = new Set<WebSocket>();
+const viewers = new ViewerHub();
 
 export function viewerCount(): number {
-  return sockets.size;
+  return viewers.count();
 }
 
 export async function startHttp(): Promise<http.Server> {
@@ -96,7 +100,41 @@ export async function startHttp(): Promise<http.Server> {
       state: tab.state,
       stateRevision: tab.stateRevision,
       stateUpdatedAt: tab.stateUpdatedAt,
+      signal: toSignalView(tab.signal),
+      signalRevision: tab.signalRevision,
     });
+  });
+
+  app.post("/api/tabs/:id/signal", (req, res) => {
+    try {
+      const tab = store.signal(req.params.id, {
+        name: String(req.body?.name ?? ""),
+        state: isPlainObject(req.body?.state) ? req.body.state : undefined,
+        client: optionalString(req.body?.client),
+      });
+        res.json({
+          signal: toSignalView(tab.signal),
+          state: tab.state,
+          stateRevision: tab.stateRevision,
+        });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/tabs/:id/wait", (req, res) => {
+    handleWait(req, res, req.body?.signal ?? req.body?.signals, req.body?.afterSignalRevision, req.body?.timeoutMs);
+  });
+
+  app.get("/api/tabs/:id/wait", (req, res) => {
+    handleWait(
+      req,
+      res,
+      req.query.signal ?? req.query.signals,
+      req.query.afterSignalRevision ?? req.query.after,
+      req.query.timeoutMs
+    );
   });
 
   app.put("/api/tabs/:id/state", (req, res) => {
@@ -190,15 +228,37 @@ export async function startHttp(): Promise<http.Server> {
 
   wss.on("connection", (socket) => {
     sockets.add(socket);
+    viewers.add(socket);
     send(socket, { type: "snapshot", ...store.snapshot() });
-    socket.on("close", () => sockets.delete(socket));
+    socket.on("message", (raw) => {
+      let msg: { type?: string; selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown };
+      try {
+        msg = JSON.parse(String(raw)) as typeof msg;
+      } catch {
+        return;
+      }
+      if (msg?.type !== "viewer_state") {
+        return;
+      }
+      viewers.update(socket, {
+        selectedId: msg.selectedId,
+        lastInteractedAt: msg.lastInteractedAt,
+        lastEditAt: msg.lastEditAt,
+      });
+    });
+    socket.on("close", () => {
+      sockets.delete(socket);
+      viewers.remove(socket);
+    });
   });
 
-  store.on("tab_upserted", (tab: TabMeta, index?: number) =>
-    broadcast({ type: "tab_upserted", tab, index })
-  );
+  store.on("tab_upserted", (tab: TabMeta, index?: number, notice?: UpsertNotice) => {
+    broadcast({ type: "tab_upserted", tab, index });
+    if (notice?.activate && notice.structural) {
+      requestAgentFocus(tab.id);
+    }
+  });
   store.on("tab_closed", (id: string) => broadcast({ type: "tab_closed", id }));
-  store.on("tab_focused", (id: string | null) => broadcast({ type: "tab_focused", id }));
   store.on("tab_state", (tab: Tab, client?: string) =>
     broadcast({
       type: "tab_state",
@@ -208,6 +268,14 @@ export async function startHttp(): Promise<http.Server> {
       client,
     })
   );
+  store.on("tab_signal", (tab: Tab) => {
+    if (tab.signal) {
+      broadcast({ type: "tab_signal", id: tab.id, signal: tab.signal });
+    }
+  });
+
+  server.requestTimeout = MAX_WAIT_MS + 30_000;
+  contentServer.requestTimeout = MAX_WAIT_MS + 30_000;
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
@@ -220,11 +288,65 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function handleWait(
+  req: express.Request,
+  res: express.Response,
+  signalInput: unknown,
+  afterInput: unknown,
+  timeoutInput: unknown
+): void {
+  let names: string[];
+  try {
+    names = parseSignalNames(signalInput);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
+
+  const timeoutMs = clampWaitMs(typeof timeoutInput === "string" ? Number(timeoutInput) : timeoutInput);
+  req.setTimeout(timeoutMs + 10_000);
+  res.setTimeout(timeoutMs + 10_000);
+
+  const abort = new AbortController();
+  const onClientGone = () => {
+    if (!res.writableEnded) {
+      abort.abort();
+    }
+  };
+  res.on("close", onClientGone);
+
+  waitForSignal({
+    idOrKey: req.params.id,
+    names,
+    afterRevision: parseAfterRevision(typeof afterInput === "string" ? Number(afterInput) : afterInput),
+    timeoutMs,
+    abort: abort.signal,
+  })
+    .then((result) => {
+      if (!res.writableEnded) {
+        res.json({
+          ...result,
+          signal: toSignalView(result.signal),
+        });
+      }
+    })
+    .catch((err: Error) => {
+      if (res.writableEnded) {
+        return;
+      }
+      res.status(err.message.startsWith("tab not found") ? 404 : 400).json({ error: err.message });
+    })
+    .finally(() => {
+      res.off("close", onClientGone);
+    });
+}
+
 function isContentHost(req: express.Request): boolean {
   return req.hostname === CONTENT_HOST;
 }
 
 const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
+const SIGNAL_PATH = /^\/api\/tabs\/[^/]+\/signal$/;
 
 function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (isContentHost(req)) {
@@ -233,6 +355,10 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
       return;
     }
     if ((req.method === "GET" || req.method === "PUT") && STATE_PATH.test(req.path)) {
+      next();
+      return;
+    }
+    if (req.method === "POST" && SIGNAL_PATH.test(req.path)) {
       next();
       return;
     }
@@ -338,6 +464,14 @@ function jsonForScript(value: unknown): string {
 function safeFilename(title: string): string {
   const cleaned = title.replace(/[<>:"/\\|?*]+/g, " ").trim().replace(/\s+/g, "-");
   return (cleaned || "page").slice(0, 80);
+}
+
+function requestAgentFocus(tabId: string): void {
+  const target = viewers.focusTarget(tabId);
+  if (!target || target === "already-visible") {
+    return;
+  }
+  send(target.socket, { type: "tab_focus_request", id: tabId });
 }
 
 function send(socket: WebSocket, event: BoardEvent): void {

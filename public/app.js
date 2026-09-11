@@ -2,32 +2,71 @@
   const tabsEl = document.getElementById("tabs");
   const fadeEl = document.getElementById("tabs-fade");
   const emptyEl = document.getElementById("empty");
-  const frameEl = document.getElementById("frame");
+  const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
 
-  /** @type {{ tabs: Array<{id: string, key: string, title: string, pinned: boolean, revision: number}>, activeId: string | null, connected: boolean, shownRevision: number | null }} */
+  const SANDBOX =
+    "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
+  const LIVE_FRAME_CAP = 5;
+
+  /** @type {{ tabs: Array<{id: string, key: string, title: string, pinned: boolean, revision: number}>, activeId: string | null, connected: boolean }} */
   const state = {
     tabs: [],
     activeId: null,
     connected: false,
-    shownRevision: null,
   };
+
+  /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
+  const frames = new Map();
+  /** @type {Set<string>} */
+  const unread = new Set();
+
+  /** @type {WebSocket | null} */
+  let socket = null;
+  let lastInteractedAt = 0;
+  let lastEditAt = 0;
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
+    socket = ws;
     ws.addEventListener("open", () => {
       state.connected = true;
       renderChrome();
+      reportViewer();
     });
     ws.addEventListener("message", (event) => {
       applyEvent(JSON.parse(event.data));
     });
     ws.addEventListener("close", () => {
+      if (socket === ws) {
+        socket = null;
+      }
       state.connected = false;
       renderChrome();
       setTimeout(connect, 1000);
     });
+  }
+
+  function reportViewer() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socket.send(
+      JSON.stringify({
+        type: "viewer_state",
+        selectedId: state.activeId,
+        lastInteractedAt,
+        lastEditAt,
+      })
+    );
+  }
+
+  function noteEdit() {
+    const now = Date.now();
+    lastEditAt = now;
+    lastInteractedAt = now;
+    reportViewer();
   }
 
   function applyEvent(msg) {
@@ -36,33 +75,58 @@
       const hash = location.hash.replace(/^#/, "");
       const fromHash = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
       state.activeId = fromHash ? fromHash.id : msg.activeId;
+      unread.clear();
       syncHash();
       render();
+      reportViewer();
       return;
     }
     if (msg.type === "tab_upserted") {
       const idx = state.tabs.findIndex((tab) => tab.id === msg.tab.id);
+      const prev = idx === -1 ? null : state.tabs[idx];
+      const structural = !prev || prev.revision !== msg.tab.revision;
       if (idx === -1) {
         const at = Number.isInteger(msg.index) ? Math.max(0, Math.min(msg.index, state.tabs.length)) : state.tabs.length;
         state.tabs.splice(at, 0, msg.tab);
       } else {
         state.tabs[idx] = msg.tab;
       }
+      if (structural && state.activeId !== msg.tab.id) {
+        unread.add(msg.tab.id);
+      }
+      if (structural) {
+        refreshFrame(msg.tab);
+      }
+      if (!state.activeId && state.tabs.length) {
+        state.activeId = msg.tab.id;
+        unread.delete(msg.tab.id);
+        syncHash();
+      }
+      if (state.activeId === msg.tab.id) {
+        unread.delete(msg.tab.id);
+      }
       render();
       return;
     }
     if (msg.type === "tab_closed") {
       state.tabs = state.tabs.filter((tab) => tab.id !== msg.id);
+      unread.delete(msg.id);
+      discardFrame(msg.id);
       if (state.activeId === msg.id) {
         state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
+        if (state.activeId) {
+          unread.delete(state.activeId);
+        }
+        syncHash();
       }
       render();
+      reportViewer();
       return;
     }
-    if (msg.type === "tab_focused") {
-      state.activeId = msg.id;
-      syncHash();
-      render();
+    if (msg.type === "tab_focus_request") {
+      if (state.tabs.some((tab) => tab.id === msg.id)) {
+        selectTab(msg.id, { fromUser: false });
+      }
       return;
     }
     if (msg.type === "tab_state") {
@@ -70,8 +134,9 @@
       if (tab) {
         tab.stateRevision = msg.stateRevision;
       }
-      if (msg.id === state.activeId && frameEl.contentWindow) {
-        frameEl.contentWindow.postMessage(
+      const entry = frames.get(msg.id);
+      if (entry?.el.contentWindow) {
+        entry.el.contentWindow.postMessage(
           {
             type: "agent-board-state",
             id: msg.id,
@@ -87,6 +152,9 @@
 
   function syncHash() {
     if (!state.activeId) {
+      if (location.hash) {
+        history.replaceState(null, "", location.pathname + location.search);
+      }
       return;
     }
     const wanted = "#" + state.activeId;
@@ -128,15 +196,19 @@
     tabsEl.replaceChildren();
     for (const tab of state.tabs) {
       const el = document.createElement("div");
-      el.className = "tab" + (tab.id === state.activeId ? " active" : "") + (tab.pinned ? " pinned" : "");
+      el.className =
+        "tab" +
+        (tab.id === state.activeId ? " active" : "") +
+        (tab.pinned ? " pinned" : "") +
+        (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "");
       el.role = "tab";
-      el.title = tab.pinned ? tab.title + " (pinned)" : tab.title;
+      el.title = unread.has(tab.id) && tab.id !== state.activeId ? tab.title + " (updated)" : tab.pinned ? tab.title + " (pinned)" : tab.title;
       el.addEventListener("click", (event) => {
         if (event.detail > 1) {
           setPinned(tab.id, !tab.pinned);
           return;
         }
-        focusTab(tab.id);
+        selectTab(tab.id, { fromUser: true });
       });
       el.addEventListener("auxclick", (event) => {
         if (event.button !== 1) {
@@ -158,6 +230,13 @@
       title.className = "tab-title";
       title.textContent = tab.title;
       el.appendChild(title);
+
+      if (unread.has(tab.id) && tab.id !== state.activeId) {
+        const dot = document.createElement("span");
+        dot.className = "tab-updated";
+        dot.title = "Updated in the background";
+        el.appendChild(dot);
+      }
 
       if (tab.pinned) {
         const pin = document.createElement("span");
@@ -184,39 +263,127 @@
     requestAnimationFrame(updateTabFade);
   }
 
-  function renderFrame() {
+  function isPinned(id) {
+    return Boolean(state.tabs.find((tab) => tab.id === id)?.pinned);
+  }
+
+  function touchFrame(id) {
+    const entry = frames.get(id);
+    if (!entry) {
+      return;
+    }
+    frames.delete(id);
+    frames.set(id, entry);
+  }
+
+  function unpinnedLiveCount() {
+    let count = 0;
+    for (const id of frames.keys()) {
+      if (!isPinned(id)) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  function evictOverflow(keepId) {
+    while (unpinnedLiveCount() > LIVE_FRAME_CAP) {
+      const victim = [...frames.keys()].find((id) => id !== keepId && !isPinned(id));
+      if (!victim) {
+        break;
+      }
+      discardFrame(victim);
+    }
+  }
+
+  function ensureFrame(tab) {
+    let entry = frames.get(tab.id);
+    if (!entry) {
+      const el = document.createElement("iframe");
+      el.title = tab.title;
+      el.sandbox = SANDBOX;
+      framesEl.appendChild(el);
+      el.src = viewUrl(tab);
+      entry = { el, revision: tab.revision };
+      frames.set(tab.id, entry);
+    } else {
+      if (entry.el.title !== tab.title) {
+        entry.el.title = tab.title;
+      }
+      if (entry.revision !== tab.revision) {
+        entry.el.src = viewUrl(tab);
+        entry.revision = tab.revision;
+      }
+      touchFrame(tab.id);
+      entry = frames.get(tab.id);
+    }
+    evictOverflow(tab.id);
+    return entry;
+  }
+
+  function refreshFrame(tab) {
+    const entry = frames.get(tab.id);
+    if (!entry) {
+      return;
+    }
+    if (entry.revision !== tab.revision) {
+      entry.el.src = viewUrl(tab);
+      entry.revision = tab.revision;
+    }
+    if (entry.el.title !== tab.title) {
+      entry.el.title = tab.title;
+    }
+  }
+
+  function discardFrame(id) {
+    const entry = frames.get(id);
+    if (!entry) {
+      return;
+    }
+    entry.el.remove();
+    frames.delete(id);
+  }
+
+  function renderFrames() {
     const tab = activeTab();
     if (!tab) {
       emptyEl.hidden = false;
-      frameEl.hidden = true;
-      frameEl.removeAttribute("src");
-      state.shownRevision = null;
+      for (const entry of frames.values()) {
+        entry.el.classList.add("inactive");
+      }
       document.title = "Agent Board";
       return;
     }
     emptyEl.hidden = true;
-    frameEl.hidden = false;
     document.title = tab.title + " · Agent Board";
-    const next = viewUrl(tab);
-    if (!frameEl.src.includes(`${tab.id}?r=${tab.revision}`)) {
-      frameEl.src = next;
-      state.shownRevision = tab.revision;
+    ensureFrame(tab);
+    for (const [id, entry] of frames) {
+      entry.el.classList.toggle("inactive", id !== tab.id);
     }
   }
 
   function render() {
     renderChrome();
     renderTabs();
-    renderFrame();
+    renderFrames();
   }
 
-  async function focusTab(id) {
+  function selectTab(id, { fromUser } = {}) {
+    if (!state.tabs.some((tab) => tab.id === id)) {
+      return;
+    }
     if (state.activeId !== id) {
       state.activeId = id;
+      unread.delete(id);
       syncHash();
       render();
+    } else {
+      unread.delete(id);
     }
-    await fetch(`/api/tabs/${encodeURIComponent(id)}/focus`, { method: "POST" });
+    if (fromUser) {
+      lastInteractedAt = Date.now();
+    }
+    reportViewer();
   }
 
   async function closeTab(id) {
@@ -268,6 +435,11 @@
     if (!res.ok) {
       return;
     }
+    const data = await res.json();
+    const id = data?.tab?.id;
+    if (id) {
+      selectTab(id, { fromUser: true });
+    }
   }
 
   function isTypingTarget(el) {
@@ -311,13 +483,31 @@
     updateTabFade();
   }
 
+  function frameByWindow(win) {
+    for (const entry of frames.values()) {
+      if (entry.el.contentWindow === win) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
   tabsEl.parentElement.addEventListener("wheel", onTabsWheel, { passive: false });
   tabsEl.addEventListener("scroll", updateTabFade);
   window.addEventListener("resize", updateTabFade);
 
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      lastInteractedAt = Date.now();
+      reportViewer();
+    },
+    true
+  );
+
   window.addEventListener("keydown", onBoardShortcut, true);
   window.addEventListener("message", (event) => {
-    if (event.source !== frameEl.contentWindow) {
+    if (!frameByWindow(event.source)) {
       return;
     }
     if (event.data?.type === "agent-board-download") {
@@ -326,6 +516,8 @@
       undoClose();
     } else if (event.data?.type === "agent-board-help") {
       openWelcome();
+    } else if (event.data?.type === "agent-board-activity") {
+      noteEdit();
     }
   });
 
@@ -338,7 +530,7 @@
     if (id && state.tabs.some((tab) => tab.id === id || tab.key === id)) {
       const tab = state.tabs.find((item) => item.id === id || item.key === id);
       if (tab && tab.id !== state.activeId) {
-        focusTab(tab.id);
+        selectTab(tab.id, { fromUser: true });
       }
     }
   });

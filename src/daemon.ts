@@ -53,12 +53,14 @@ export async function ensureDaemon(): Promise<string> {
 export async function api(
   method: string,
   pathname: string,
-  body?: unknown
+  body?: unknown,
+  options?: { timeoutMs?: number }
 ): Promise<{ status: number; data: unknown }> {
   const res = await fetch(`${baseUrl()}${pathname}`, {
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
   });
   const text = await res.text();
   let data: unknown = text;

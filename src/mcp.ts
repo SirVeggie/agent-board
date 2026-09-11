@@ -5,6 +5,7 @@ import { baseUrl } from "./config.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBrowser } from "./openBrowser.js";
+import { clampWaitMs, parseSignalNames } from "./signal.js";
 import type { Tab } from "./types.js";
 
 type ApiError = { error?: string };
@@ -13,7 +14,7 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.0.0",
+    version: "1.1.0",
   });
 
   server.tool(
@@ -101,7 +102,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_get_state",
-    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision. Works whether or not the tab is focused or the browser is open.",
+    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused or the browser is open. Do not poll this tool while waiting for the user — use board_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -116,6 +117,61 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_wait",
+    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 10 minutes. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Tab key used when the page was shown."),
+      signal: z
+        .string()
+        .describe(
+          "Signal name the page fires. Must match board.signal(\"name\") or data-board-signal=\"name\". For more than one outcome, pass a comma-separated list: approved,rejected"
+        ),
+      afterSignalRevision: z
+        .number()
+        .optional()
+        .describe(
+          "Ignore signals at or below this revision. Omit (or 0) after board_show. After a successful wait, pass the returned signal.revision to wait for the next one on the same page."
+        ),
+      timeoutMs: z
+        .number()
+        .optional()
+        .describe("How long to wait, in milliseconds. Defaults to 600000 (10 minutes). Maximum 10 minutes."),
+    },
+    async ({ id, key, signal, afterSignalRevision, timeoutMs }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      let names: string[];
+      try {
+        names = parseSignalNames(signal);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+      const waitMs = clampWaitMs(timeoutMs);
+      try {
+        const { status, data } = await api(
+          "POST",
+          `/api/tabs/${encodeURIComponent(which)}/wait`,
+          {
+            signal: names,
+            afterSignalRevision: afterSignalRevision ?? 0,
+            timeoutMs: waitMs,
+          },
+          { timeoutMs: waitMs + 15_000 }
+        );
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "board_wait failed");
+      }
     }
   );
 

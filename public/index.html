@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Board</title>
-  <link rel="stylesheet" href="/app.css?v=8">
+  <link rel="stylesheet" href="/app.css?v=11">
 </head>
 <body>
   <header class="chrome">
@@ -26,13 +26,8 @@
         <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>restores the last closed tab</span></li>
       </ul>
     </div>
-    <iframe
-      id="frame"
-      title="Page"
-      sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
-      hidden
-    ></iframe>
+    <div id="frames"></div>
   </main>
-  <script src="/app.js?v=10"></script>
+  <script src="/app.js?v=13"></script>
 </body>
 </html>

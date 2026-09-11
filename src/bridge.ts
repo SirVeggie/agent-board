@@ -1,6 +1,7 @@
 /**
  * Injected into every tab page. Gives the page `window.board` over the tab's
- * server-owned state: `board.state`, `board.set`, `board.onChange`, `board.bind`.
+ * server-owned state: `board.state`, `board.set`, `board.onChange`, `board.bind`,
+ * `board.signal`.
  *
  * Boot state is inlined ahead of this script so `board.state` is readable
  * synchronously by page scripts.
@@ -24,6 +25,7 @@ export const BOARD_BRIDGE_JS = `
   var pendingSince = 0;
   var timer = null;
   var inFlight = false;
+  var queuedSignal = null;
 
   function readEl(el) {
     return el.type === "checkbox" ? el.checked : el.value;
@@ -117,17 +119,87 @@ export const BOARD_BRIDGE_JS = `
           revision = data.stateRevision;
           adopt(data.state);
         }
-        if (pending) {
+        if (queuedSignal) {
+          sendSignal();
+        } else if (pending) {
           schedule();
         }
       })
       .catch(function (err) {
         inFlight = false;
         console.error("[board] save failed", err);
-        if (pending) {
+        if (queuedSignal) {
+          sendSignal();
+        } else if (pending) {
           schedule();
         }
       });
+  }
+
+  function sendSignal() {
+    if (!queuedSignal || inFlight || !tabId) {
+      return;
+    }
+    var name = queuedSignal;
+    queuedSignal = null;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    var body = { name: name, client: client };
+    if (pending) {
+      body.state = pending;
+      pending = null;
+      pendingSince = 0;
+    }
+    inFlight = true;
+    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/signal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive: true
+    })
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(function (data) {
+        inFlight = false;
+        if (data) {
+          if (typeof data.stateRevision === "number") {
+            revision = data.stateRevision;
+          }
+          if (data.state) {
+            adopt(data.state);
+          }
+        }
+        if (queuedSignal) {
+          sendSignal();
+        } else if (pending) {
+          schedule();
+        }
+      })
+      .catch(function (err) {
+        inFlight = false;
+        console.error("[board] signal failed", err);
+        if (queuedSignal) {
+          sendSignal();
+        } else if (pending) {
+          schedule();
+        }
+      });
+  }
+
+  function signal(name) {
+    var next = name == null ? "" : String(name).trim();
+    if (!next) {
+      console.error("[board] signal name is required");
+      return;
+    }
+    queuedSignal = next;
+    if (inFlight) {
+      return;
+    }
+    sendSignal();
   }
 
   /** Take the server's view, keeping any local edits made while the save was in flight. */
@@ -230,17 +302,77 @@ export const BOARD_BRIDGE_JS = `
     applyRemote(data);
   });
 
+  var lastActivityPing = 0;
+  function pingActivity() {
+    var now = Date.now();
+    if (now - lastActivityPing < 400) {
+      return;
+    }
+    lastActivityPing = now;
+    try {
+      parent.postMessage({ type: "agent-board-activity", id: tabId }, "*");
+    } catch (err) {}
+  }
+
   document.addEventListener("pointerdown", reconcileSoon, true);
   document.addEventListener("keyup", reconcileSoon, true);
+  document.addEventListener("input", pingActivity, true);
+  document.addEventListener("change", pingActivity, true);
+  document.addEventListener("keydown", pingActivity, true);
+  document.addEventListener("pointerdown", pingActivity, true);
 
-  window.addEventListener("pagehide", flush);
+  window.addEventListener("pagehide", function () {
+    if (queuedSignal) {
+      sendSignal();
+      return;
+    }
+    flush();
+  });
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "hidden") {
+      if (queuedSignal) {
+        sendSignal();
+        return;
+      }
       flush();
       return;
     }
     applyBindings();
   });
+
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || !target.closest) {
+      return;
+    }
+    var src = target.closest("[data-board-signal]");
+    if (!src) {
+      return;
+    }
+    var name = src.getAttribute("data-board-signal");
+    if (!name) {
+      return;
+    }
+    var tag = (src.tagName || "").toLowerCase();
+    var type = (src.getAttribute("type") || (tag === "button" ? "submit" : "")).toLowerCase();
+    if (tag === "a" || tag === "button" || type === "submit" || type === "button" || type === "image") {
+      event.preventDefault();
+    }
+    signal(name);
+  }, false);
+
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (!form || !form.getAttribute) {
+      return;
+    }
+    var name = form.getAttribute("data-board-signal");
+    if (!name) {
+      return;
+    }
+    event.preventDefault();
+    signal(name);
+  }, false);
 
   window.board = {
     id: tabId,
@@ -253,6 +385,7 @@ export const BOARD_BRIDGE_JS = `
     set: set,
     bind: bind,
     flush: flush,
+    signal: signal,
     onChange: function (fn) {
       listeners.push(fn);
       return function () {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { MAX_HTML_BYTES, MAX_STATE_BYTES, dataDir, statePath } from "./config.js";
 import { log } from "./log.js";
+import { normalizeSignalName } from "./signal.js";
 import {
   TRASH_LIMIT,
   isPlainObject,
@@ -10,6 +11,7 @@ import {
   type BoardState,
   type SetStateInput,
   type SetStateResult,
+  type SignalInput,
   type Tab,
   type TabMeta,
   type TrashEntry,
@@ -29,6 +31,11 @@ class BoardStore extends EventEmitter {
   private activeId: string | null = null;
   private trash: TrashEntry[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    super();
+    this.setMaxListeners(0);
+  }
 
   load(): void {
     try {
@@ -110,6 +117,7 @@ class BoardStore extends EventEmitter {
       existing.html = html;
       existing.updatedAt = now;
       existing.revision += 1;
+      existing.signal = null;
       seedState(existing, input.state);
       if (input.pin !== undefined) {
         existing.pinned = input.pin;
@@ -118,7 +126,10 @@ class BoardStore extends EventEmitter {
         this.activeId = existing.id;
       }
       this.persistSoon();
-      this.emit("tab_upserted", toMeta(existing));
+      this.emit("tab_upserted", toMeta(existing), undefined, {
+        activate: input.activate !== false,
+        structural: true,
+      });
       if (input.activate !== false) {
         this.emit("tab_focused", existing.id);
       }
@@ -138,6 +149,8 @@ class BoardStore extends EventEmitter {
       state: {},
       stateRevision: 0,
       stateUpdatedAt: 0,
+      signalRevision: 0,
+      signal: null,
     };
     seedState(tab, input.state);
     this.tabs.set(id, tab);
@@ -146,7 +159,10 @@ class BoardStore extends EventEmitter {
       this.activeId = id;
     }
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab));
+    this.emit("tab_upserted", toMeta(tab), undefined, {
+      activate: input.activate !== false,
+      structural: true,
+    });
     if (input.activate !== false) {
       this.emit("tab_focused", id);
     }
@@ -182,15 +198,19 @@ class BoardStore extends EventEmitter {
       tab.pinned = patch.pin;
     }
     tab.updatedAt = Date.now();
-    if (patch.title !== undefined || patch.html !== undefined) {
+    const structural = patch.title !== undefined || patch.html !== undefined;
+    if (structural) {
       tab.revision += 1;
     }
     if (patch.activate !== false) {
       this.activeId = tab.id;
     }
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab));
-    if (patch.activate !== false) {
+    this.emit("tab_upserted", toMeta(tab), undefined, {
+      activate: patch.activate !== false,
+      structural,
+    });
+    if (patch.activate !== false && structural) {
       this.emit("tab_focused", tab.id);
     }
     return tab;
@@ -222,6 +242,37 @@ class BoardStore extends EventEmitter {
     this.persistSoon();
     this.emit("tab_state", tab, input.client);
     return { ok: true, tab };
+  }
+
+  signal(idOrKey: string, input: SignalInput): Tab {
+    const tab = this.get(idOrKey);
+    if (!tab) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const name = normalizeSignalName(input.name);
+    if (input.state !== undefined) {
+      if (!isPlainObject(input.state)) {
+        throw new Error("state must be a JSON object");
+      }
+      const next = { ...tab.state, ...input.state };
+      const serialized = JSON.stringify(next);
+      if (serialized !== JSON.stringify(tab.state)) {
+        const bytes = Buffer.byteLength(serialized, "utf8");
+        if (bytes > MAX_STATE_BYTES) {
+          throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
+        }
+        tab.state = next;
+        tab.stateRevision += 1;
+        tab.stateUpdatedAt = Date.now();
+        this.emit("tab_state", tab, input.client);
+      }
+    }
+    tab.signalRevision += 1;
+    tab.signal = { name, revision: tab.signalRevision, at: Date.now() };
+    tab.updatedAt = Date.now();
+    this.persistSoon();
+    this.emit("tab_signal", tab);
+    return tab;
   }
 
   focus(idOrKey: string): Tab {
@@ -270,7 +321,7 @@ class BoardStore extends EventEmitter {
     this.order.splice(index, 0, entry.tab.id);
     this.activeId = entry.tab.id;
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(entry.tab), index);
+    this.emit("tab_upserted", toMeta(entry.tab), index, { activate: true, structural: true });
     this.emit("tab_focused", entry.tab.id);
     return entry.tab;
   }
@@ -323,11 +374,21 @@ function newId(): string {
 }
 
 function withStateDefaults(tab: Tab): Tab {
+  const signal =
+    tab.signal && typeof tab.signal === "object" && typeof tab.signal.name === "string"
+      ? {
+          name: tab.signal.name,
+          revision: typeof tab.signal.revision === "number" ? tab.signal.revision : 0,
+          at: typeof tab.signal.at === "number" ? tab.signal.at : 0,
+        }
+      : null;
   return {
     ...tab,
     state: isPlainObject(tab.state) ? tab.state : {},
     stateRevision: typeof tab.stateRevision === "number" ? tab.stateRevision : 0,
     stateUpdatedAt: typeof tab.stateUpdatedAt === "number" ? tab.stateUpdatedAt : 0,
+    signalRevision: typeof tab.signalRevision === "number" ? tab.signalRevision : (signal?.revision ?? 0),
+    signal,
   };
 }
 
