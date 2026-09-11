@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { CONTENT_HOST, HOST, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { log } from "./log.js";
 import { store } from "./store.js";
-import { toMeta, type BoardEvent, type TabMeta } from "./types.js";
+import { isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta } from "./types.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
@@ -60,6 +61,7 @@ export async function startHttp(): Promise<http.Server> {
         html: String(req.body?.html ?? ""),
         activate: req.body?.activate,
         pin: req.body?.pin,
+        state: isPlainObject(req.body?.state) ? req.body.state : undefined,
       });
       res.status(created ? 201 : 200).json({ created, tab: toMeta(tab) });
     } catch (err) {
@@ -76,6 +78,46 @@ export async function startHttp(): Promise<http.Server> {
         activate: req.body?.activate,
       });
       res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.get("/api/tabs/:id/state", (req, res) => {
+    const tab = store.get(req.params.id);
+    if (!tab) {
+      res.status(404).json({ error: `tab not found: ${req.params.id}` });
+      return;
+    }
+    res.json({
+      id: tab.id,
+      key: tab.key,
+      state: tab.state,
+      stateRevision: tab.stateRevision,
+      stateUpdatedAt: tab.stateUpdatedAt,
+    });
+  });
+
+  app.put("/api/tabs/:id/state", (req, res) => {
+    try {
+      const result = store.setState(req.params.id, {
+        state: req.body?.state,
+        replace: req.body?.replace === true,
+        expectedRevision:
+          typeof req.body?.expectedRevision === "number" ? req.body.expectedRevision : undefined,
+        client: optionalString(req.body?.client),
+      });
+      if (!result.ok) {
+        res.status(409).json({
+          error: "stale expectedRevision",
+          conflict: true,
+          state: result.state,
+          stateRevision: result.stateRevision,
+        });
+        return;
+      }
+      res.json({ state: result.tab.state, stateRevision: result.tab.stateRevision });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
@@ -123,7 +165,7 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(injectBoardKeys(tab.html));
+    res.type("html").send(injectBoardRuntime(tab));
   });
 
   app.get("/download/:id", (req, res) => {
@@ -157,6 +199,15 @@ export async function startHttp(): Promise<http.Server> {
   );
   store.on("tab_closed", (id: string) => broadcast({ type: "tab_closed", id }));
   store.on("tab_focused", (id: string | null) => broadcast({ type: "tab_focused", id }));
+  store.on("tab_state", (tab: Tab, client?: string) =>
+    broadcast({
+      type: "tab_state",
+      id: tab.id,
+      state: tab.state,
+      stateRevision: tab.stateRevision,
+      client,
+    })
+  );
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
@@ -173,9 +224,15 @@ function isContentHost(req: express.Request): boolean {
   return req.hostname === CONTENT_HOST;
 }
 
+const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
+
 function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (isContentHost(req)) {
     if (req.method === "GET" && /^\/view\/[^/]+$/.test(req.path)) {
+      next();
+      return;
+    }
+    if ((req.method === "GET" || req.method === "PUT") && STATE_PATH.test(req.path)) {
       next();
       return;
     }
@@ -240,6 +297,19 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
 })();
 </script>`;
 
+function injectBoardRuntime(tab: Tab): string {
+  const html = injectBoardKeys(tab.html);
+  if (html.includes("data-agent-board-bridge")) {
+    return html;
+  }
+  const boot = jsonForScript({ id: tab.id, state: tab.state, stateRevision: tab.stateRevision });
+  const snippet = `<style data-agent-board-bridge>${BOARD_STALE_CSS}</style>
+<script>window.__BOARD_BOOT__=${boot};
+${BOARD_BRIDGE_JS}
+</script>`;
+  return injectIntoHead(html, snippet);
+}
+
 function injectBoardKeys(html: string): string {
   if (html.includes("data-agent-board-keys")) {
     return html;
@@ -249,6 +319,20 @@ function injectBoardKeys(html: string): string {
     return html + BOARD_CHROME_INJECT;
   }
   return html.slice(0, idx) + BOARD_CHROME_INJECT + html.slice(idx);
+}
+
+/** The bridge has to exist before any page script runs, so it goes as early as the document allows. */
+function injectIntoHead(html: string, snippet: string): string {
+  const opening = /<head[^>]*>/i.exec(html) || /<body[^>]*>/i.exec(html);
+  if (!opening) {
+    return snippet + html;
+  }
+  const at = opening.index + opening[0].length;
+  return html.slice(0, at) + snippet + html.slice(at);
+}
+
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
 }
 
 function safeFilename(title: string): string {

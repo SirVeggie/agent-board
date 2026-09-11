@@ -31,9 +31,15 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Focus this tab in the open board. Defaults to true."),
       pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned will keep it."),
+      state: z
+        .record(z.unknown())
+        .optional()
+        .describe(
+          "Initial state for an interactive page, readable in the page as board.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
+        ),
     },
-    async ({ key, title, html, activate, pin }) => {
-      const { status, data } = await api("POST", "/api/tabs", { key, title, html, activate, pin });
+    async ({ key, title, html, activate, pin, state }) => {
+      const { status, data } = await api("POST", "/api/tabs", { key, title, html, activate, pin, state });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
@@ -90,6 +96,70 @@ export async function startMcp(): Promise<void> {
         pinned: tab.pinned,
         html: tab.html,
       });
+    }
+  );
+
+  server.tool(
+    "board_get_state",
+    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision. Works whether or not the tab is focused or the browser is open.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Tab key used when the page was shown."),
+    },
+    async ({ id, key }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}/state`);
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_set_state",
+    "Update the state of an interactive board page; an open page applies it live without reloading. Keys merge into the existing state, so send only what you are changing. Pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft).",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Tab key used when the page was shown."),
+      state: z.record(z.unknown()).describe("Top-level keys to write. Merges unless replace is true."),
+      expectedRevision: z
+        .number()
+        .optional()
+        .describe("stateRevision from your last board_get_state. Omit only when seeding a page that has no state yet."),
+      replace: z
+        .boolean()
+        .optional()
+        .describe("Replace the whole state object instead of merging keys into it."),
+      force: z
+        .boolean()
+        .optional()
+        .describe("Skip the revision check and overwrite whatever is there. Only for deliberately resetting a page."),
+    },
+    async ({ id, key, state, expectedRevision, replace, force }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const guardRevision = force ? undefined : (expectedRevision ?? 0);
+      const { status, data } = await api("PUT", `/api/tabs/${encodeURIComponent(which)}/state`, {
+        state,
+        replace,
+        expectedRevision: guardRevision,
+      });
+      if (status === 409) {
+        const conflict = data as { state: unknown; stateRevision: number };
+        return errorResult(
+          `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Merge your change into the state below and retry with expectedRevision ${conflict.stateRevision}.\n\n${JSON.stringify(conflict.state, null, 2)}`
+        );
+      }
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
     }
   );
 

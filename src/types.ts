@@ -1,3 +1,5 @@
+export type BoardState = Record<string, unknown>;
+
 export type Tab = {
   id: string;
   key: string;
@@ -7,9 +9,12 @@ export type Tab = {
   createdAt: number;
   updatedAt: number;
   revision: number;
+  state: BoardState;
+  stateRevision: number;
+  stateUpdatedAt: number;
 };
 
-export type TabMeta = Omit<Tab, "html"> & { htmlBytes: number };
+export type TabMeta = Omit<Tab, "html" | "state"> & { htmlBytes: number };
 
 export type TrashEntry = {
   tab: Tab;
@@ -22,7 +27,8 @@ export type BoardEvent =
   | { type: "snapshot"; tabs: TabMeta[]; activeId: string | null }
   | { type: "tab_upserted"; tab: TabMeta; index?: number }
   | { type: "tab_closed"; id: string }
-  | { type: "tab_focused"; id: string | null };
+  | { type: "tab_focused"; id: string | null }
+  | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string };
 
 export type UpsertInput = {
   key?: string;
@@ -30,7 +36,20 @@ export type UpsertInput = {
   html: string;
   activate?: boolean;
   pin?: boolean;
+  state?: BoardState;
 };
+
+export type SetStateInput = {
+  state: BoardState;
+  replace?: boolean;
+  expectedRevision?: number;
+  client?: string;
+};
+
+/** A stale expectedRevision resolves to ok:false carrying the current state so the caller can merge and retry. */
+export type SetStateResult =
+  | { ok: true; tab: Tab }
+  | { ok: false; state: BoardState; stateRevision: number };
 
 export function toMeta(tab: Tab): TabMeta {
   return {
@@ -41,6 +60,12 @@ export function toMeta(tab: Tab): TabMeta {
     createdAt: tab.createdAt,
     updatedAt: tab.updatedAt,
     revision: tab.revision,
+    stateRevision: tab.stateRevision,
+    stateUpdatedAt: tab.stateUpdatedAt,
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
   };
+}
+
+export function isPlainObject(value: unknown): value is BoardState {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

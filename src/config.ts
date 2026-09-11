@@ -6,6 +6,7 @@ export const HOST = "127.0.0.1";
 export const CONTENT_HOST = "127.0.0.2";
 export const PORT = Number(process.env.AGENT_BOARD_PORT || 4747);
 export const MAX_HTML_BYTES = 2 * 1024 * 1024;
+export const MAX_STATE_BYTES = 256 * 1024;
 
 export function baseUrl(): string {
   return `http://${HOST}:${PORT}`;

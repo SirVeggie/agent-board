@@ -1,9 +1,20 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
-import { MAX_HTML_BYTES, dataDir, statePath } from "./config.js";
+import { MAX_HTML_BYTES, MAX_STATE_BYTES, dataDir, statePath } from "./config.js";
 import { log } from "./log.js";
-import { TRASH_LIMIT, toMeta, type Tab, type TabMeta, type TrashEntry, type UpsertInput } from "./types.js";
+import {
+  TRASH_LIMIT,
+  isPlainObject,
+  toMeta,
+  type BoardState,
+  type SetStateInput,
+  type SetStateResult,
+  type Tab,
+  type TabMeta,
+  type TrashEntry,
+  type UpsertInput,
+} from "./types.js";
 import { wrapHtml } from "./wrapHtml.js";
 
 type Persisted = {
@@ -30,7 +41,7 @@ class BoardStore extends EventEmitter {
         if (!tab?.id || !tab?.html) {
           continue;
         }
-        this.tabs.set(tab.id, tab);
+        this.tabs.set(tab.id, withStateDefaults(tab));
         this.order.push(tab.id);
       }
       this.activeId =
@@ -38,6 +49,7 @@ class BoardStore extends EventEmitter {
       if (Array.isArray(parsed.trash)) {
         this.trash = parsed.trash
           .filter((entry) => entry?.tab?.id && entry.tab.html && typeof entry.index === "number")
+          .map((entry) => ({ tab: withStateDefaults(entry.tab), index: entry.index }))
           .slice(-TRASH_LIMIT);
       }
     } catch (err) {
@@ -98,6 +110,7 @@ class BoardStore extends EventEmitter {
       existing.html = html;
       existing.updatedAt = now;
       existing.revision += 1;
+      seedState(existing, input.state);
       if (input.pin !== undefined) {
         existing.pinned = input.pin;
       }
@@ -122,7 +135,11 @@ class BoardStore extends EventEmitter {
       createdAt: now,
       updatedAt: now,
       revision: 1,
+      state: {},
+      stateRevision: 0,
+      stateUpdatedAt: 0,
     };
+    seedState(tab, input.state);
     this.tabs.set(id, tab);
     this.order.push(id);
     if (input.activate !== false) {
@@ -177,6 +194,34 @@ class BoardStore extends EventEmitter {
       this.emit("tab_focused", tab.id);
     }
     return tab;
+  }
+
+  setState(idOrKey: string, input: SetStateInput): SetStateResult {
+    const tab = this.get(idOrKey);
+    if (!tab) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (!isPlainObject(input.state)) {
+      throw new Error("state must be a JSON object");
+    }
+    if (input.expectedRevision !== undefined && input.expectedRevision !== tab.stateRevision) {
+      return { ok: false, state: tab.state, stateRevision: tab.stateRevision };
+    }
+    const next = input.replace ? { ...input.state } : { ...tab.state, ...input.state };
+    const serialized = JSON.stringify(next);
+    if (serialized === JSON.stringify(tab.state)) {
+      return { ok: true, tab };
+    }
+    const bytes = Buffer.byteLength(serialized, "utf8");
+    if (bytes > MAX_STATE_BYTES) {
+      throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
+    }
+    tab.state = next;
+    tab.stateRevision += 1;
+    tab.stateUpdatedAt = Date.now();
+    this.persistSoon();
+    this.emit("tab_state", tab, input.client);
+    return { ok: true, tab };
   }
 
   focus(idOrKey: string): Tab {
@@ -275,6 +320,25 @@ class BoardStore extends EventEmitter {
 
 function newId(): string {
   return "t_" + randomBytes(4).toString("hex");
+}
+
+function withStateDefaults(tab: Tab): Tab {
+  return {
+    ...tab,
+    state: isPlainObject(tab.state) ? tab.state : {},
+    stateRevision: typeof tab.stateRevision === "number" ? tab.stateRevision : 0,
+    stateUpdatedAt: typeof tab.stateUpdatedAt === "number" ? tab.stateUpdatedAt : 0,
+  };
+}
+
+/** Initial state only lands on a tab that has none, so re-showing a page never resets what the user changed. */
+function seedState(tab: Tab, state: BoardState | undefined): void {
+  if (!state || !isPlainObject(state) || tab.stateRevision > 0) {
+    return;
+  }
+  tab.state = { ...state };
+  tab.stateRevision = 1;
+  tab.stateUpdatedAt = Date.now();
 }
 
 function normalizeKey(value: string): string {

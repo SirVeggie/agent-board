@@ -63,6 +63,25 @@
       state.activeId = msg.id;
       syncHash();
       render();
+      return;
+    }
+    if (msg.type === "tab_state") {
+      const tab = state.tabs.find((item) => item.id === msg.id);
+      if (tab) {
+        tab.stateRevision = msg.stateRevision;
+      }
+      if (msg.id === state.activeId && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage(
+          {
+            type: "agent-board-state",
+            id: msg.id,
+            state: msg.state,
+            stateRevision: msg.stateRevision,
+            client: msg.client,
+          },
+          "*"
+        );
+      }
     }
   }
 
