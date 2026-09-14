@@ -6,6 +6,18 @@ export type TabSignal = {
   at: number;
 };
 
+export type TabAsset = {
+  name: string;
+  mimeType: string;
+  bytes: number;
+};
+
+export type PreparedAsset = {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+};
+
 export type Tab = {
   id: string;
   key: string;
@@ -22,6 +34,7 @@ export type Tab = {
   signalRevision: number;
   /** Last signal, or null after board_show resets the wait handshake. */
   signal: TabSignal | null;
+  assets: TabAsset[];
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision"> & { htmlBytes: number };
@@ -55,6 +68,7 @@ export type UpsertInput = {
   activate?: boolean;
   pin?: boolean;
   state?: BoardState;
+  assets?: PreparedAsset[];
 };
 
 export type SetStateInput = {
@@ -87,6 +101,7 @@ export function toMeta(tab: Tab): TabMeta {
     stateRevision: tab.stateRevision,
     stateUpdatedAt: tab.stateUpdatedAt,
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
+    assets: tab.assets,
   };
 }
 

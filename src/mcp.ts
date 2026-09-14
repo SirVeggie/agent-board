@@ -1,12 +1,14 @@
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { parseAssetInputs } from "./assets.js";
 import { baseUrl } from "./config.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBrowser } from "./openBrowser.js";
 import { clampWaitMs, parseSignalNames } from "./signal.js";
-import type { Tab } from "./types.js";
+import type { Tab, TabAsset } from "./types.js";
 
 type ApiError = { error?: string };
 
@@ -27,12 +29,12 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.2.0",
+    version: "1.3.0",
   });
 
   server.tool(
     "board_show",
-    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key. By default it focuses the tab and opens the browser only if the board is not already open. Pass background: true to update without focusing the tab or raising the window — use that when screenshotting a design. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. Reuse key when updating the same topic.",
+    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key. By default it focuses the tab and opens the browser only if the board is not already open. Pass background: true to update without focusing the tab or raising the window — use that when screenshotting a design. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic.",
     {
       key: z
         .string()
@@ -40,6 +42,23 @@ export async function startMcp(): Promise<void> {
         .describe("Stable identity for this page. Reusing the same key updates that tab instead of opening another."),
       title: z.string().describe("Tab title shown in the board."),
       html: z.string().describe("HTML document or fragment to render in the tab."),
+      assets: z
+        .array(
+          z.union([
+            z.string().describe("Absolute or workspace-relative path to an image file."),
+            z.object({
+              path: z.string().describe("Absolute or workspace-relative path to an image file."),
+              name: z
+                .string()
+                .optional()
+                .describe("Name to use in asset:name. Defaults to the file's basename."),
+            }),
+          ])
+        )
+        .optional()
+        .describe(
+          "Local image files to attach (png, jpg, gif, webp, svg, ico, avif). Reference them in HTML as asset:name, e.g. <img src=\"asset:hero.png\">. Re-showing the same key without assets keeps files already attached."
+        ),
       activate: z
         .boolean()
         .optional()
@@ -58,10 +77,16 @@ export async function startMcp(): Promise<void> {
           "Initial state for an interactive page, readable in the page as board.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
         ),
     },
-    async ({ key, title, html, activate, pin, state, background }) => {
+    async ({ key, title, html, assets, activate, pin, state, background }) => {
       const resolved = resolveActivate(activate, background);
       if (!resolved.ok) {
         return errorResult(resolved.error);
+      }
+      let resolvedAssets: { path: string; name?: string }[] = [];
+      try {
+        resolvedAssets = resolveAssetPaths(assets);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
       const { status, data } = await api("POST", "/api/tabs", {
         key,
@@ -70,12 +95,13 @@ export async function startMcp(): Promise<void> {
         activate: resolved.activate,
         pin,
         state,
+        assets: resolvedAssets.length ? resolvedAssets : undefined,
       });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const created = Boolean((data as { created?: boolean }).created);
-      const tab = (data as { tab: { id: string; key: string; title: string } }).tab;
+      const tab = (data as { tab: { id: string; key: string; title: string; assets?: TabAsset[] } }).tab;
       if (resolved.activate) {
         const info = await health();
         if (!info || info.viewers === 0) {
@@ -88,6 +114,7 @@ export async function startMcp(): Promise<void> {
         key: tab.key,
         title: tab.title,
         url: boardUrl(tab.id),
+        assets: tab.assets ?? [],
         note: "Shown on Agent Board. Do not write this HTML to a workspace file.",
       });
     }
@@ -128,6 +155,7 @@ export async function startMcp(): Promise<void> {
         title: tab.title,
         pinned: tab.pinned,
         html: tab.html,
+        assets: tab.assets ?? [],
       });
     }
   );
@@ -395,6 +423,13 @@ async function pinResult(which: string | undefined, pin: boolean) {
     title: tab.title,
     pinned: tab.pinned,
   });
+}
+
+function resolveAssetPaths(assets: Array<string | { path: string; name?: string }> | undefined) {
+  return parseAssetInputs(assets).map((item) => ({
+    path: path.resolve(item.path),
+    name: item.name,
+  }));
 }
 
 function resolveActivate(

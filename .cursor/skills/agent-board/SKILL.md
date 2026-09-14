@@ -24,6 +24,7 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
    - `key`: stable slug for this topic (reuse to update, e.g. `clims-12345-analysis`)
    - `title`: short tab label
    - `html`: a **complete HTML document** with inline CSS, or a fragment (the board wraps fragments in a dark readable template)
+   - `assets`: omit unless the page needs images. Pass local file paths (user attachments) and reference them as `asset:name` in the HTML — see Images below.
    - `activate`: true (default) when the user should look at this tab. Use `background: true` instead when you are iterating privately (design screenshot loops) or updating a tab the user is not on. Do not pass `background: true` together with `activate: true`.
    - `pin`: omit or false. Pin only when the user hints the tab should persist (e.g. “long lived tab”, keep it between sessions) or the page is a keep-using interactive app (todo app, reusable tool). Do **not** pin one-off investigations, designs, info dumps, questionnaires, demos, or forms — even if you expect to read the answers later in this chat.
 3. `board_show` focuses the tab and opens the browser only if nothing is already viewing the board, unless you passed `background: true` (or `activate: false`) — then it does not switch tabs or raise the window. Do not call a second tool to open or refresh.
@@ -32,10 +33,32 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 
 ## HTML
 
-- Self-contained: inline CSS, no workspace assets.
+- Self-contained: inline CSS. Do not link workspace files as `<img src="./foo.png">` or `file://` — those do not load.
 - Full documents start with `<!DOCTYPE html>` or `<html`.
-- Keep pages focused. Typical size is well under 200 KB (hard limit 2 MB).
+- Keep pages focused. Typical size is well under 200 KB (hard limit 2 MB). Images passed via `assets` do not count toward that cap.
 - Do not rely on the parent page's styles; tab content renders in an iframe.
+
+## Images
+
+User-provided image files (chat attachments, local paths) go on a page through `assets` on `board_show`. Reference them as `asset:<name>`:
+
+```
+board_show({
+  key: "mockup",
+  title: "Mockup",
+  assets: [{ path: "C:/Users/me/Pictures/hero.png", name: "hero.png" }],
+  html: `<img src="asset:hero.png" alt="Hero">`
+})
+```
+
+`assets` may also be a list of paths. The name is then the file's basename (`photo.png` → `asset:photo.png`). Prefer passing `name` when the filename is long, has spaces, or you want a short slug.
+
+Rules:
+
+- Use `asset:name`. Do not use `file://`, a workspace-relative path, or a base64 data URI for user photos.
+- png, jpg, gif, webp, svg, ico, avif. 8 MB each, 16 per tab, 32 MB total.
+- Re-showing the same `key` without `assets` keeps images already attached. The same `name` replaces that file.
+- The tool result lists the attached names — use those in `src`.
 
 ## Visual feedback
 

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, writePreparedAssets } from "./assets.js";
 import { MAX_HTML_BYTES, MAX_STATE_BYTES, dataDir, statePath } from "./config.js";
 import { log } from "./log.js";
 import { normalizeSignalName } from "./signal.js";
@@ -13,6 +14,7 @@ import {
   type SetStateResult,
   type SignalInput,
   type Tab,
+  type TabAsset,
   type TabMeta,
   type TrashEntry,
   type UpsertInput,
@@ -58,6 +60,11 @@ class BoardStore extends EventEmitter {
           .filter((entry) => entry?.tab?.id && entry.tab.html && typeof entry.index === "number")
           .map((entry) => ({ tab: withStateDefaults(entry.tab), index: entry.index }))
           .slice(-TRASH_LIMIT);
+      }
+      try {
+        cleanupOrphanAssets(this.knownAssetTabIds());
+      } catch (err) {
+        log("Failed to clean orphan assets", String(err));
       }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -113,6 +120,7 @@ class BoardStore extends EventEmitter {
     const existing = input.key ? this.get(input.key) : undefined;
     const now = Date.now();
     if (existing) {
+      existing.assets = applyAssets(existing.id, existing.assets ?? [], input.assets);
       existing.title = title;
       existing.html = html;
       existing.updatedAt = now;
@@ -137,6 +145,13 @@ class BoardStore extends EventEmitter {
     }
 
     const id = newId();
+    let assets: TabAsset[] = [];
+    try {
+      assets = applyAssets(id, [], input.assets);
+    } catch (err) {
+      deleteTabAssets(id);
+      throw err;
+    }
     const tab: Tab = {
       id,
       key: uniqueKey(this, input.key, title, id),
@@ -151,6 +166,7 @@ class BoardStore extends EventEmitter {
       stateUpdatedAt: 0,
       signalRevision: 0,
       signal: null,
+      assets,
     };
     seedState(tab, input.state);
     this.tabs.set(id, tab);
@@ -364,8 +380,17 @@ class BoardStore extends EventEmitter {
   private pushTrash(entry: TrashEntry): void {
     this.trash.push(entry);
     if (this.trash.length > TRASH_LIMIT) {
-      this.trash.splice(0, this.trash.length - TRASH_LIMIT);
+      const removed = this.trash.splice(0, this.trash.length - TRASH_LIMIT);
+      for (const gone of removed) {
+        if (!this.tabs.has(gone.tab.id)) {
+          deleteTabAssets(gone.tab.id);
+        }
+      }
     }
+  }
+
+  private knownAssetTabIds(): string[] {
+    return [...this.tabs.keys(), ...this.trash.map((entry) => entry.tab.id)];
   }
 }
 
@@ -389,7 +414,15 @@ function withStateDefaults(tab: Tab): Tab {
     stateUpdatedAt: typeof tab.stateUpdatedAt === "number" ? tab.stateUpdatedAt : 0,
     signalRevision: typeof tab.signalRevision === "number" ? tab.signalRevision : (signal?.revision ?? 0),
     signal,
+    assets: normalizeTabAssets(tab.assets),
   };
+}
+
+function applyAssets(tabId: string, current: TabAsset[], incoming: UpsertInput["assets"]): TabAsset[] {
+  if (!incoming?.length) {
+    return current;
+  }
+  return writePreparedAssets(tabId, current, incoming);
 }
 
 /** Initial state only lands on a tab that has none, so re-showing a page never resets what the user changed. */

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
+import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { CONTENT_HOST, HOST, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { log } from "./log.js";
@@ -60,6 +61,7 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/tabs", (req, res) => {
     try {
+      const assets = prepareAssets(parseAssetInputs(req.body?.assets));
       const { tab, created } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
@@ -67,6 +69,7 @@ export async function startHttp(): Promise<http.Server> {
         activate: req.body?.activate,
         pin: req.body?.pin,
         state: isPlainObject(req.body?.state) ? req.body.state : undefined,
+        assets: assets.length ? assets : undefined,
       });
       res.status(created ? 201 : 200).json({ created, tab: toMeta(tab) });
     } catch (err) {
@@ -216,6 +219,21 @@ export async function startHttp(): Promise<http.Server> {
     const filter = req.query.filter === "all" ? "all" : "unpinned";
     const closed = store.closeMany(filter);
     res.json({ closed });
+  });
+
+  app.get("/view/:id/asset/:name", (req, res) => {
+    const tab = store.get(req.params.id);
+    const name = req.params.name;
+    const meta = tab?.assets.find((asset) => asset.name === name);
+    const file = tab && meta && isSafeAssetName(name) ? readStoredAsset(tab.id, name) : undefined;
+    if (!tab || !meta || !file) {
+      res.status(404).type("text").send("asset not found");
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'");
+    res.type(meta.mimeType).send(file);
   });
 
   app.get("/view/:id", (req, res) => {
@@ -380,6 +398,10 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
       next();
       return;
     }
+    if (req.method === "GET" && /^\/view\/[^/]+\/asset\/[^/]+$/.test(req.path)) {
+      next();
+      return;
+    }
     if ((req.method === "GET" || req.method === "PUT") && STATE_PATH.test(req.path)) {
       next();
       return;
@@ -450,7 +472,7 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
 </script>`;
 
 function injectBoardRuntime(tab: Tab): string {
-  const html = injectBoardKeys(tab.html);
+  const html = injectBoardKeys(rewriteAssetRefs(tab.html, tab.id));
   if (html.includes("data-agent-board-bridge")) {
     return html;
   }

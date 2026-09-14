@@ -47,7 +47,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 | Tool | Purpose |
 | --- | --- |
-| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state`). Opens the browser only if the board is not already open. Pass `background: true` to skip focusing the tab and raising the window. |
+| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Opens the browser only if the board is not already open. Pass `background: true` to skip focusing the tab and raising the window. |
 | `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
 | `board_list` | List open tabs |
 | `board_read` | Read a tab's HTML so it can be revised |
@@ -58,6 +58,16 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_close` | Close one tab, all unpinned tabs, or everything |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template).
+
+### Images
+
+`board_show` accepts local image files via `assets` (path strings, or `{ path, name }`). The daemon copies them next to the tab and the page can reference them as `asset:name`:
+
+```html
+<img src="asset:hero.png" alt="Hero">
+```
+
+png, jpg, gif, webp, svg, ico, and avif. 8 MB per file, 16 files / 32 MB per tab. These do not count toward the 2 MB HTML cap. Re-showing a key without `assets` keeps files already attached. Workspace-relative `<img src>` and `file://` URLs do not work — tab pages are served from `http://127.0.0.2` and cannot see the disk.
 
 `board_screenshot` loads the tab's content page in a headless Chromium browser (Edge, Chrome, or Brave — not the board chrome) and returns an image. Pair it with `board_show(..., background: true)` so a design loop does not steal window focus. Default viewport is 1280×800; pass `selector` for one element or `fullPage` for a tall page.
 
@@ -89,7 +99,7 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 
 ## Data
 
-Tabs persist in `%LOCALAPPDATA%\agent-board\state.json` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). The last 5 closed pages stay in that file too, so **Ctrl+Z** can restore them.
+Tabs persist in `%LOCALAPPDATA%\agent-board\state.json` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. The last 5 closed pages stay in that file too, so **Ctrl+Z** can restore them.
 
 The browser **Clear** button closes unpinned tabs. Pinned tabs stay until you close them. **Ctrl+S** downloads the current page as HTML.
 
