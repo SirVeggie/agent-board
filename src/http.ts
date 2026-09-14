@@ -10,6 +10,7 @@ import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from 
 import { store } from "./store.js";
 import { isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta, type UpsertNotice } from "./types.js";
 import { ViewerHub } from "./viewers.js";
+import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
@@ -171,6 +172,27 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.post("/api/tabs/:id/screenshot", (req, res) => {
+    captureTab({
+      idOrKey: req.params.id,
+      selector: optionalString(req.body?.selector),
+      fullPage: req.body?.fullPage === true,
+      width: optionalNumber(req.body?.width),
+      height: optionalNumber(req.body?.height),
+    })
+      .then((shot) => {
+        if (!res.writableEnded) {
+          res.json(shot);
+        }
+      })
+      .catch((err: Error) => {
+        if (res.writableEnded) {
+          return;
+        }
+        res.status(screenshotHttpStatus(err.message)).json({ error: err.message });
+      });
+  });
+
   app.post("/api/undo", (_req, res) => {
     try {
       const tab = store.restoreLast();
@@ -219,7 +241,7 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/shutdown", (_req, res) => {
     res.json({ ok: true });
-    setTimeout(() => process.exit(0), 50);
+    void closeScreenshotBrowser().finally(() => process.exit(0));
   });
 
   const server = http.createServer(app);
@@ -286,6 +308,10 @@ export async function startHttp(): Promise<http.Server> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function handleWait(

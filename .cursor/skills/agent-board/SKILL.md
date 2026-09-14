@@ -1,6 +1,6 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_list, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_screenshot, board_list, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms; and for testing visual designs by showing HTML and screenshotting it.
 ---
 
 # Agent Board
@@ -11,7 +11,7 @@ If the `board_show` tool is missing, tell the user the Agent Board MCP is not co
 
 ## When to use it
 
-Use the board for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs.
+Use the board for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Use it to **test visual designs** too: show HTML, screenshot it, inspect the image, and revise — the board is the design surface, `board_screenshot` is how you see it.
 
 Skip it for code edits, short factual answers, drafts meant to be copied, or when the user asked for a specific other artifact.
 
@@ -24,9 +24,9 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
    - `key`: stable slug for this topic (reuse to update, e.g. `clims-12345-analysis`)
    - `title`: short tab label
    - `html`: a **complete HTML document** with inline CSS, or a fragment (the board wraps fragments in a dark readable template)
-   - `activate`: true unless you are updating a background tab
+   - `activate`: true (default) when the user should look at this tab. Use `background: true` instead when you are iterating privately (design screenshot loops) or updating a tab the user is not on. Do not pass `background: true` together with `activate: true`.
    - `pin`: omit or false. Pin only when the user hints the tab should persist (e.g. “long lived tab”, keep it between sessions) or the page is a keep-using interactive app (todo app, reusable tool). Do **not** pin one-off investigations, designs, info dumps, questionnaires, demos, or forms — even if you expect to read the answers later in this chat.
-3. `board_show` focuses the tab and opens the browser only if nothing is already viewing the board. Do not call a second tool to open or refresh.
+3. `board_show` focuses the tab and opens the browser only if nothing is already viewing the board, unless you passed `background: true` (or `activate: false`) — then it does not switch tabs or raise the window. Do not call a second tool to open or refresh.
 4. If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `board_wait` **next, in the same turn**, with the same signal name the page fires. Do not poll `board_get_state`.
 5. Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
 
@@ -36,6 +36,35 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 - Full documents start with `<!DOCTYPE html>` or `<html`.
 - Keep pages focused. Typical size is well under 200 KB (hard limit 2 MB).
 - Do not rely on the parent page's styles; tab content renders in an iframe.
+
+## Visual feedback
+
+Use `board_screenshot` when you need to **see** a page — layout, spacing, type, color — not just read its HTML. The tool returns an image. Look at that image, then revise.
+
+Loop:
+
+1. `board_show` with the same `key`, `background: true` (so the tab does not steal focus).
+2. `board_screenshot` with that `key`. Default is a 1280×800 viewport of the page.
+3. Inspect the image. Change the HTML (or `board_set_state`), then `board_show` again with `background: true` and screenshot again.
+
+```
+board_show({ key: "hero", title: "Hero", html, background: true })
+board_screenshot({ key: "hero" })
+board_screenshot({ key: "hero", selector: ".hero" })   // one component
+board_screenshot({ key: "hero", fullPage: true })      // tall page; height is capped
+```
+
+Rules:
+
+- Always `background: true` on `board_show` in this loop unless the user should look at the tab right now.
+- Identify the tab by the same `key` (or `id`) you used in `board_show`.
+- `selector` is a CSS selector; it captures the first match. If it is missing or not visible, the tool errors — fix the markup or selector, do not retry blindly.
+- After `board_set_state`, screenshot again without re-showing HTML. The capture loads current HTML + state from the daemon.
+- The image is a canonical viewport, not the user's window size, zoom, or currently focused tab. Inactive / hidden board tabs still screenshot correctly.
+- Do not pin design-test pages. Do not write the HTML to a workspace file.
+- If `board_screenshot` is missing, the Agent Board MCP is on an old build — tell the user to reload MCP after rebuilding the daemon.
+
+When you are done iterating and the user should see the result, `board_show` once more **without** `background` so the tab comes to the front.
 
 ## Interactive pages
 
@@ -197,7 +226,7 @@ document.addEventListener("keydown", (event) => {
 ## Updating and cleanup
 
 - `board_list` before guessing ids.
-- `board_read` with `id` or `key` to revise existing HTML, then `board_show` with the same `key`.
+- `board_read` with `id` or `key` to revise existing HTML, then `board_show` with the same `key`. For visual QA, follow with `board_screenshot` instead of guessing from the markup.
 - `board_pin` / `board_unpin` for a tab (`id`/`key`) so Clear and close-unpinned keep or drop it. Same rule as `board_show` `pin`: only after a persistence hint or for a keep-using app — never because a one-off page feels useful.
 - `board_close` for one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`).
 - Reuse the same `key` across a conversation instead of opening duplicate tabs for the same topic.

@@ -10,16 +10,29 @@ import type { Tab } from "./types.js";
 
 type ApiError = { error?: string };
 
+type ScreenshotPayload = {
+  mimeType: "image/png" | "image/jpeg";
+  data: string;
+  width: number;
+  height: number;
+  fullPage: boolean;
+  selector?: string;
+  id: string;
+  key: string;
+  title: string;
+  bytes: number;
+};
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.1.0",
+    version: "1.2.0",
   });
 
   server.tool(
     "board_show",
-    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key, focuses it, and opens the browser only if the board is not already open. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. Reuse key when updating the same topic.",
+    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key. By default it focuses the tab and opens the browser only if the board is not already open. Pass background: true to update without focusing the tab or raising the window — use that when screenshotting a design. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. Reuse key when updating the same topic.",
     {
       key: z
         .string()
@@ -30,7 +43,13 @@ export async function startMcp(): Promise<void> {
       activate: z
         .boolean()
         .optional()
-        .describe("Focus this tab in the open board. Defaults to true."),
+        .describe("Focus this tab in the open board. Defaults to true. Do not pass true together with background."),
+      background: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, do not focus this tab and do not bring the board window forward. Use when iterating on a design the user is not looking at, especially before board_screenshot."
+        ),
       pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned will keep it."),
       state: z
         .record(z.unknown())
@@ -39,16 +58,29 @@ export async function startMcp(): Promise<void> {
           "Initial state for an interactive page, readable in the page as board.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
         ),
     },
-    async ({ key, title, html, activate, pin, state }) => {
-      const { status, data } = await api("POST", "/api/tabs", { key, title, html, activate, pin, state });
+    async ({ key, title, html, activate, pin, state, background }) => {
+      const resolved = resolveActivate(activate, background);
+      if (!resolved.ok) {
+        return errorResult(resolved.error);
+      }
+      const { status, data } = await api("POST", "/api/tabs", {
+        key,
+        title,
+        html,
+        activate: resolved.activate,
+        pin,
+        state,
+      });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const created = Boolean((data as { created?: boolean }).created);
       const tab = (data as { tab: { id: string; key: string; title: string } }).tab;
-      const info = await health();
-      if (!info || info.viewers === 0) {
-        openBrowser(boardUrl(tab.id));
+      if (resolved.activate) {
+        const info = await health();
+        if (!info || info.viewers === 0) {
+          openBrowser(boardUrl(tab.id));
+        }
       }
       return jsonResult({
         created,
@@ -97,6 +129,77 @@ export async function startMcp(): Promise<void> {
         pinned: tab.pinned,
         html: tab.html,
       });
+    }
+  );
+
+  server.tool(
+    "board_screenshot",
+    "Capture a screenshot of a board page so you can visually inspect a design. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key. Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Tab key used when the page was shown."),
+      selector: z
+        .string()
+        .optional()
+        .describe("CSS selector for one element. Captures the first match. Errors if missing or not visible."),
+      fullPage: z
+        .boolean()
+        .optional()
+        .describe("Capture the full scrolling page, capped at 6000px tall. Ignored when selector is set. Defaults to the viewport."),
+      width: z
+        .number()
+        .optional()
+        .describe("Viewport width in CSS pixels. Default 1280. Clamped 320–1600."),
+      height: z
+        .number()
+        .optional()
+        .describe("Viewport height in CSS pixels. Default 800. Clamped 320–1600."),
+    },
+    async ({ id, key, selector, fullPage, width, height }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      try {
+        const { status, data } = await api(
+          "POST",
+          `/api/tabs/${encodeURIComponent(which)}/screenshot`,
+          { selector, fullPage, width, height },
+          { timeoutMs: 45_000 }
+        );
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        const shot = data as ScreenshotPayload;
+        if (!shot?.data || !shot.mimeType) {
+          return errorResult("Screenshot response was empty");
+        }
+        return {
+          content: [
+            { type: "image" as const, mimeType: shot.mimeType, data: shot.data },
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  id: shot.id,
+                  key: shot.key,
+                  title: shot.title,
+                  width: shot.width,
+                  height: shot.height,
+                  mimeType: shot.mimeType,
+                  bytes: shot.bytes,
+                  fullPage: shot.fullPage,
+                  selector: shot.selector ?? null,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err) {
+        return errorResult((err as Error).message || "board_screenshot failed");
+      }
     }
   );
 
@@ -292,6 +395,19 @@ async function pinResult(which: string | undefined, pin: boolean) {
     title: tab.title,
     pinned: tab.pinned,
   });
+}
+
+function resolveActivate(
+  activate: boolean | undefined,
+  background: boolean | undefined
+): { ok: true; activate: boolean } | { ok: false; error: string } {
+  if (background === true && activate === true) {
+    return { ok: false, error: "background and activate cannot both be true" };
+  }
+  if (background === true) {
+    return { ok: true, activate: false };
+  }
+  return { ok: true, activate: activate !== false };
 }
 
 function boardUrl(id?: string): string {

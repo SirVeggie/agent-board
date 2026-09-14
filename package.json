@@ -17,6 +17,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",
     "express": "^4.21.2",
+    "playwright-core": "^1.63.0",
     "ws": "^8.18.3",
     "zod": "^3.25.76"
   },

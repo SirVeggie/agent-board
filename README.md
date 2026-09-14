@@ -47,7 +47,8 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 | Tool | Purpose |
 | --- | --- |
-| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state`). Opens the browser only if the board is not already open. |
+| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state`). Opens the browser only if the board is not already open. Pass `background: true` to skip focusing the tab and raising the window. |
+| `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
 | `board_list` | List open tabs |
 | `board_read` | Read a tab's HTML so it can be revised |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
@@ -57,6 +58,8 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_close` | Close one tab, all unpinned tabs, or everything |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template).
+
+`board_screenshot` loads the tab's content page in a headless Chromium browser (Edge, Chrome, or Brave — not the board chrome) and returns an image. Pair it with `board_show(..., background: true)` so a design loop does not steal window focus. Default viewport is 1280×800; pass `selector` for one element or `fullPage` for a tall page.
 
 ## Interactive pages
 
