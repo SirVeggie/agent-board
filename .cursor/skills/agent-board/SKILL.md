@@ -21,7 +21,7 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 
 1. Before writing HTML or calling `board_show`, mention in a new line clearly that the board is being updated so the pause does not look like the chat stopped.
 2. Call `board_show` once with:
-   - `key`: stable slug for this topic (reuse to update, e.g. `clims-12345-analysis`)
+   - `key`: stable slug for this topic (reuse to update, e.g. `issue-12345-analysis`)
    - `title`: short tab label
    - `html`: a **complete HTML document** with inline CSS, or a fragment (the board wraps fragments in a dark readable template)
    - `assets`: omit unless the page needs images. Pass local file paths (user attachments) and reference them as `asset:name` in the HTML — see Images below.

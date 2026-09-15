@@ -17,7 +17,7 @@ The MCP process can come and go with Cursor. The daemon stays up so the board do
 `dist/` is not in git, and Cursor only sees the MCP server and skill if they are registered on that machine. After clone:
 
 ```bat
-cd C:\library\software\agent-board
+cd C:\path\to\agent-board
 npm install
 npm run build
 ```
@@ -29,14 +29,14 @@ Then two copies outside the repo:
 ```json
 "agent-board": {
   "command": "node",
-  "args": ["C:\\library\\software\\agent-board\\dist\\index.js"]
+  "args": ["C:\\path\\to\\agent-board\\dist\\index.js"]
 }
 ```
 
 2. **Skill** — copy `.cursor\skills\agent-board` to `%USERPROFILE%\.cursor\skills\agent-board`. A project skill only applies in this repo; the personal copy is what agents use from every other workspace. A junction stays in sync with git:
 
 ```bat
-mklink /J %USERPROFILE%\.cursor\skills\agent-board C:\library\software\agent-board\.cursor\skills\agent-board
+mklink /J %USERPROFILE%\.cursor\skills\agent-board C:\path\to\agent-board\.cursor\skills\agent-board
 ```
 
 Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 or ask the agent to present something visually.
