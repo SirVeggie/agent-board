@@ -1,6 +1,6 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_screenshot, board_list, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms; and for testing visual designs by showing HTML and screenshotting it.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_screenshot, board_list, board_archive, board_restore, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms; and for testing visual designs by showing HTML and screenshotting it.
 ---
 
 # Agent Board
@@ -163,7 +163,8 @@ Do **not** signal on every keystroke, bind, or `onChange`. Do **not** wait for `
 ### After the wait
 
 - `timedOut: true` — tell the user you are still waiting, then call `board_wait` again with the **same** `afterSignalRevision` you used (omit / `0` if this was the first wait after `board_show`).
-- `closed: true` — the tab was closed; stop.
+- `archived: true` — the tab was archived; restore it with `board_restore` if you still need the handshake, or stop.
+- `closed: true` — the tab was permanently deleted; stop.
 - `signal` is set — continue from `state`. Branch on `signal.name` when you waited for more than one outcome.
 
 Waiting again on the **same** page without `board_show`: pass `afterSignalRevision` = the previous `signal.revision`, or you instantly get the old signal. After a new `board_show`, omit it.
@@ -248,8 +249,10 @@ document.addEventListener("keydown", (event) => {
 
 ## Updating and cleanup
 
-- `board_list` before guessing ids.
-- `board_read` with `id` or `key` to revise existing HTML, then `board_show` with the same `key`. For visual QA, follow with `board_screenshot` instead of guessing from the markup.
+- `board_list` before guessing ids. It returns **open** tabs plus `archiveCount`. Dates are local ISO (timezone offset), stored as unix ms on disk.
+- `board_archive` to page (`offset` / `limit`, default 20, max 50) or fuzzy-search archived tabs (`query` over title, key, and page text). The result includes `returned`, `remaining` (how many matching tabs after this page), `matchCount`, and `archiveCount`. Search hits include a short `snippet`. Do not dump the whole archive into context.
+- `board_restore` (`id`/`key`) brings an archived tab back to the open strip.
+- `board_read` with `id` or `key` to revise existing HTML (works on archived tabs without restoring), then `board_show` with the same `key`. For visual QA, follow with `board_screenshot` instead of guessing from the markup. Default `board_show` restores an archived key to the strip; `background: true` updates it in the archive instead.
 - `board_pin` / `board_unpin` for a tab (`id`/`key`) so Clear and close-unpinned keep or drop it. Same rule as `board_show` `pin`: only after a persistence hint or for a keep-using app — never because a one-off page feels useful.
-- `board_close` for one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`).
-- Reuse the same `key` across a conversation instead of opening duplicate tabs for the same topic.
+- `board_close` archives one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Pass `permanent: true` to delete instead of archiving.
+- Reuse the same `key` across a conversation instead of opening duplicate tabs for the same topic. Search the archive before re-showing an old investigation.

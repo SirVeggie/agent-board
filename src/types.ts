@@ -26,6 +26,8 @@ export type Tab = {
   pinned: boolean;
   createdAt: number;
   updatedAt: number;
+  /** Set while the tab is in the archive; omitted when open. */
+  archivedAt?: number;
   revision: number;
   state: BoardState;
   stateRevision: number;
@@ -39,27 +41,36 @@ export type Tab = {
 
 export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision"> & { htmlBytes: number };
 
-export type TrashEntry = {
+export type ArchiveEntry = {
   tab: Tab;
   index: number;
 };
 
-export const TRASH_LIMIT = 5;
+export type DeletedEntry = {
+  tab: Tab;
+  index: number;
+  deletedAt: number;
+};
+
+export const ARCHIVE_LIMIT = 200;
+export const DELETE_LIMIT = 5;
 
 export type UpsertNotice = {
   activate: boolean;
-  /** HTML or title changed; pin-only updates are not structural. */
+  /** HTML, title, or an in-archive write; pin-only updates on open tabs are not structural. */
   structural: boolean;
 };
 
 export type BoardEvent =
-  | { type: "snapshot"; tabs: TabMeta[]; activeId: string | null }
+  | { type: "snapshot"; tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null }
   | { type: "tab_upserted"; tab: TabMeta; index?: number }
   | { type: "tab_closed"; id: string }
+  | { type: "tab_archived"; id: string }
   | { type: "tab_focused"; id: string | null }
   | { type: "tab_focus_request"; id: string }
   | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string }
-  | { type: "tab_signal"; id: string; signal: TabSignal };
+  | { type: "tab_signal"; id: string; signal: TabSignal }
+  | { type: "archive_cleared" };
 
 export type UpsertInput = {
   key?: string;
@@ -84,6 +95,8 @@ export type SignalInput = {
   client?: string;
 };
 
+export type RestorePlacement = "append" | "index";
+
 /** A stale expectedRevision resolves to ok:false carrying the current state so the caller can merge and retry. */
 export type SetStateResult =
   | { ok: true; tab: Tab }
@@ -97,6 +110,7 @@ export function toMeta(tab: Tab): TabMeta {
     pinned: tab.pinned,
     createdAt: tab.createdAt,
     updatedAt: tab.updatedAt,
+    ...(tab.archivedAt ? { archivedAt: tab.archivedAt } : {}),
     revision: tab.revision,
     stateRevision: tab.stateRevision,
     stateUpdatedAt: tab.stateUpdatedAt,

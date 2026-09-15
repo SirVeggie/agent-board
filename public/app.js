@@ -4,27 +4,51 @@
   const emptyEl = document.getElementById("empty");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
+  const archiveToggle = document.getElementById("archive-toggle");
+  const archiveBadge = document.getElementById("archive-badge");
+  const archivePane = document.getElementById("archive-pane");
+  const archiveCountEl = document.getElementById("archive-count");
+  const archiveSearch = document.getElementById("archive-search");
+  const archiveList = document.getElementById("archive-list");
+  const archiveNone = document.getElementById("archive-none");
+  const archiveEmptyBtn = document.getElementById("archive-empty");
+  const archiveCloseBtn = document.getElementById("archive-close");
+  const archiveResizer = document.getElementById("archive-resizer");
+  const confirmDlg = document.getElementById("confirm");
+  const confirmMessage = document.getElementById("confirm-message");
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
   const LIVE_FRAME_CAP = 5;
+  const ARCHIVE_OPEN_KEY = "agent-board.archiveOpen";
+  const ARCHIVE_WIDTH_KEY = "agent-board.archiveWidth";
 
-  /** @type {{ tabs: Array<{id: string, key: string, title: string, pinned: boolean, revision: number}>, activeId: string | null, connected: boolean }} */
+  /** @type {{ tabs: Array<any>, archive: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean }} */
   const state = {
     tabs: [],
+    archive: [],
     activeId: null,
     connected: false,
+    archiveOpen: localStorage.getItem(ARCHIVE_OPEN_KEY) === "1",
   };
 
   /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
   const frames = new Map();
   /** @type {Set<string>} */
   const unread = new Set();
+  /** @type {Set<string>} */
+  const unreadArchive = new Set();
 
   /** @type {WebSocket | null} */
   let socket = null;
   let lastInteractedAt = 0;
   let lastEditAt = 0;
+  let searchTimer = 0;
+  /** @type {Array<any> | null} */
+  let searchHits = null;
+  let searchMeta = null;
+
+  applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -69,22 +93,40 @@
     reportViewer();
   }
 
+  function isArchivedMeta(tab) {
+    return Boolean(tab?.archivedAt);
+  }
+
   function applyEvent(msg) {
     if (msg.type === "snapshot") {
       state.tabs = msg.tabs;
+      state.archive = Array.isArray(msg.archive) ? msg.archive : [];
       const hash = location.hash.replace(/^#/, "");
-      const fromHash = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
-      state.activeId = fromHash ? fromHash.id : msg.activeId;
+      const fromOpen = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
+      const fromArchive = state.archive.find((tab) => tab.id === hash || tab.key === hash);
+      state.activeId = fromOpen ? fromOpen.id : msg.activeId;
       unread.clear();
+      unreadArchive.clear();
       syncHash();
       render();
       reportViewer();
+      if (fromArchive && !fromOpen) {
+        restoreTab(fromArchive.id);
+      }
       return;
     }
     if (msg.type === "tab_upserted") {
+      if (isArchivedMeta(msg.tab)) {
+        const existed = state.archive.some((item) => item.id === msg.tab.id);
+        upsertArchive(msg.tab, existed);
+        render();
+        return;
+      }
       const idx = state.tabs.findIndex((tab) => tab.id === msg.tab.id);
       const prev = idx === -1 ? null : state.tabs[idx];
       const structural = !prev || prev.revision !== msg.tab.revision;
+      state.archive = state.archive.filter((tab) => tab.id !== msg.tab.id);
+      unreadArchive.delete(msg.tab.id);
       if (idx === -1) {
         const at = Number.isInteger(msg.index) ? Math.max(0, Math.min(msg.index, state.tabs.length)) : state.tabs.length;
         state.tabs.splice(at, 0, msg.tab);
@@ -110,7 +152,9 @@
     }
     if (msg.type === "tab_closed") {
       state.tabs = state.tabs.filter((tab) => tab.id !== msg.id);
+      state.archive = state.archive.filter((tab) => tab.id !== msg.id);
       unread.delete(msg.id);
+      unreadArchive.delete(msg.id);
       discardFrame(msg.id);
       if (state.activeId === msg.id) {
         state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
@@ -119,8 +163,21 @@
         }
         syncHash();
       }
+      if (archiveSearch.value.trim()) {
+        scheduleSearch(0);
+      }
       render();
       reportViewer();
+      return;
+    }
+    if (msg.type === "archive_cleared") {
+      for (const tab of state.archive) {
+        unreadArchive.delete(tab.id);
+      }
+      state.archive = [];
+      searchHits = null;
+      searchMeta = null;
+      render();
       return;
     }
     if (msg.type === "tab_focus_request") {
@@ -133,6 +190,10 @@
       const tab = state.tabs.find((item) => item.id === msg.id);
       if (tab) {
         tab.stateRevision = msg.stateRevision;
+      }
+      const archived = state.archive.find((item) => item.id === msg.id);
+      if (archived) {
+        archived.stateRevision = msg.stateRevision;
       }
       const entry = frames.get(msg.id);
       if (entry?.el.contentWindow) {
@@ -147,6 +208,32 @@
           "*"
         );
       }
+    }
+  }
+
+  function upsertArchive(tab, markUnread) {
+    state.tabs = state.tabs.filter((item) => item.id !== tab.id);
+    unread.delete(tab.id);
+    discardFrame(tab.id);
+    const idx = state.archive.findIndex((item) => item.id === tab.id);
+    if (idx === -1) {
+      state.archive.unshift(tab);
+    } else {
+      state.archive[idx] = tab;
+    }
+    state.archive.sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+    if (markUnread) {
+      unreadArchive.add(tab.id);
+    }
+    if (state.activeId === tab.id) {
+      state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
+      if (state.activeId) {
+        unread.delete(state.activeId);
+      }
+      syncHash();
+    }
+    if (archiveSearch.value.trim()) {
+      scheduleSearch(0);
     }
   }
 
@@ -172,8 +259,34 @@
     return `${location.protocol}//127.0.0.2${port}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}`;
   }
 
+  function setArchiveOpen(open) {
+    state.archiveOpen = Boolean(open);
+    localStorage.setItem(ARCHIVE_OPEN_KEY, state.archiveOpen ? "1" : "0");
+    archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
+    archivePane.hidden = !state.archiveOpen;
+    if (state.archiveOpen && archiveSearch.value.trim()) {
+      scheduleSearch(0);
+    }
+    renderChrome();
+    renderArchive();
+  }
+
+  function applyArchiveWidth(px) {
+    const width = Math.max(220, Math.min(480, px));
+    document.documentElement.style.setProperty("--archive-width", width + "px");
+    localStorage.setItem(ARCHIVE_WIDTH_KEY, String(width));
+  }
+
   function renderChrome() {
     clearBtn.disabled = !state.tabs.some((tab) => !tab.pinned);
+    const count = state.archive.length;
+    archiveCountEl.textContent = String(count);
+    archiveEmptyBtn.disabled = count === 0;
+    archiveBadge.hidden = count === 0;
+    archiveBadge.textContent = count > 99 ? "99+" : String(count);
+    archiveBadge.classList.toggle("updated", unreadArchive.size > 0);
+    archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
+    archivePane.hidden = !state.archiveOpen;
   }
 
   function revealTab(el) {
@@ -202,7 +315,12 @@
         (tab.pinned ? " pinned" : "") +
         (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "");
       el.role = "tab";
-      el.title = unread.has(tab.id) && tab.id !== state.activeId ? tab.title + " (updated)" : tab.pinned ? tab.title + " (pinned)" : tab.title;
+      el.title =
+        unread.has(tab.id) && tab.id !== state.activeId
+          ? tab.title + " (updated)"
+          : tab.pinned
+            ? tab.title + " (pinned)"
+            : tab.title;
       el.addEventListener("click", (event) => {
         if (event.detail > 1) {
           setPinned(tab.id, !tab.pinned);
@@ -216,6 +334,10 @@
         }
         event.preventDefault();
         event.stopPropagation();
+        if (event.shiftKey) {
+          closeTab(tab.id, { permanent: true });
+          return;
+        }
         if (!tab.pinned) {
           closeTab(tab.id);
         }
@@ -251,7 +373,7 @@
       close.textContent = "×";
       close.addEventListener("click", (event) => {
         event.stopPropagation();
-        closeTab(tab.id);
+        closeTab(tab.id, { permanent: event.shiftKey });
       });
       el.appendChild(close);
       tabsEl.appendChild(el);
@@ -261,6 +383,126 @@
       revealTab(active);
     }
     requestAnimationFrame(updateTabFade);
+  }
+
+  function visibleArchive() {
+    if (state.archive.length === 0) {
+      return [];
+    }
+    if (searchHits) {
+      return searchHits;
+    }
+    return state.archive;
+  }
+
+  function renderArchive() {
+    if (state.archive.length === 0) {
+      searchHits = null;
+      searchMeta = null;
+    }
+    const rows = visibleArchive();
+    archiveList.replaceChildren();
+    const querying = Boolean(archiveSearch.value.trim()) && searchHits;
+    const empty = state.archive.length === 0;
+    const noMatch = Boolean(querying) && rows.length === 0;
+    archiveNone.hidden = !(empty || noMatch);
+    archiveNone.textContent = empty ? "No archived tabs" : "No matching tabs";
+    if (searchMeta && archiveSearch.value.trim()) {
+      const meta = document.createElement("div");
+      meta.className = "archive-meta";
+      meta.textContent =
+        searchMeta.remaining > 0
+          ? `${searchMeta.returned} of ${searchMeta.matchCount} matches · ${searchMeta.archiveCount} in archive`
+          : `${searchMeta.matchCount} of ${searchMeta.archiveCount} in archive`;
+      archiveList.appendChild(meta);
+    }
+    for (const tab of rows) {
+      const el = document.createElement("div");
+      el.className = "archive-row";
+      el.role = "button";
+      el.tabIndex = 0;
+      el.title = tab.title;
+      el.addEventListener("click", () => restoreTab(tab.id));
+      el.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          restoreTab(tab.id);
+        }
+      });
+      el.addEventListener("auxclick", (event) => {
+        if (event.button !== 1) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        closeTab(tab.id, { permanent: true, fromArchive: true });
+      });
+      el.addEventListener("mousedown", (event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+        }
+      });
+
+      if (unreadArchive.has(tab.id)) {
+        const dot = document.createElement("span");
+        dot.className = "tab-updated";
+        dot.title = "Updated in the archive";
+        el.appendChild(dot);
+      }
+
+      const title = document.createElement("span");
+      title.className = "tab-title";
+      title.textContent = tab.title;
+      el.appendChild(title);
+
+      const when = document.createElement("span");
+      when.className = "archive-when";
+      when.textContent = relativeTime(tab.archivedAt);
+      when.title = tab.archivedAt ? new Date(tab.archivedAt).toLocaleString() : "";
+      el.appendChild(when);
+
+      const close = document.createElement("button");
+      close.className = "tab-close";
+      close.type = "button";
+      close.textContent = "×";
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeTab(tab.id, { permanent: true, fromArchive: true });
+      });
+      el.appendChild(close);
+      archiveList.appendChild(el);
+
+      if (tab.snippet) {
+        const snippet = document.createElement("div");
+        snippet.className = "archive-snippet";
+        snippet.textContent = tab.snippet;
+        archiveList.appendChild(snippet);
+      }
+    }
+  }
+
+  function relativeTime(ms) {
+    if (!ms) {
+      return "";
+    }
+    const delta = Date.now() - ms;
+    const sec = Math.round(delta / 1000);
+    if (sec < 45) {
+      return "just now";
+    }
+    const min = Math.round(sec / 60);
+    if (min < 60) {
+      return min + "m ago";
+    }
+    const hr = Math.round(min / 60);
+    if (hr < 24) {
+      return hr + "h ago";
+    }
+    const day = Math.round(hr / 24);
+    if (day < 14) {
+      return day + "d ago";
+    }
+    return new Date(ms).toLocaleDateString();
   }
 
   function isPinned(id) {
@@ -366,6 +608,7 @@
     renderChrome();
     renderTabs();
     renderFrames();
+    renderArchive();
   }
 
   function selectTab(id, { fromUser } = {}) {
@@ -386,8 +629,60 @@
     reportViewer();
   }
 
-  async function closeTab(id) {
+  async function confirmDelete(message) {
+    confirmMessage.textContent = message;
+    confirmDlg.returnValue = "cancel";
+    confirmDlg.showModal();
+    const cancelBtn = confirmDlg.querySelector('button[value="cancel"]');
+    cancelBtn?.focus();
+    return new Promise((resolve) => {
+      confirmDlg.addEventListener(
+        "close",
+        () => {
+          resolve(confirmDlg.returnValue === "ok");
+        },
+        { once: true }
+      );
+    });
+  }
+
+  async function closeTab(id, { permanent = false, fromArchive = false } = {}) {
+    const open = state.tabs.find((tab) => tab.id === id);
+    const archived = state.archive.find((tab) => tab.id === id);
+    const tab = open || archived;
+    if (permanent || fromArchive) {
+      const title = tab?.title || "this tab";
+      const ok = await confirmDelete(
+        fromArchive
+          ? `Delete “${title}” permanently? This cannot be undone.`
+          : `Delete “${title}” permanently? Ctrl+Z can restore it if it was still open (last 5).`
+      );
+      if (!ok) {
+        return;
+      }
+      await fetch(`/api/tabs/${encodeURIComponent(id)}?permanent=true`, { method: "DELETE" });
+      return;
+    }
     await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async function restoreTab(id) {
+    unreadArchive.delete(id);
+    await fetch(`/api/tabs/${encodeURIComponent(id)}/restore`, { method: "POST" });
+  }
+
+  async function emptyArchive() {
+    const n = state.archive.length;
+    if (!n) {
+      return;
+    }
+    const ok = await confirmDelete(
+      `Delete all ${n} archived tab${n === 1 ? "" : "s"} permanently? This cannot be undone.`
+    );
+    if (!ok) {
+      return;
+    }
+    await fetch("/api/archive", { method: "DELETE" });
   }
 
   async function setPinned(id, pin) {
@@ -453,7 +748,44 @@
     return Boolean(el.isContentEditable);
   }
 
+  function isFindKey(event) {
+    if (event.key === "/") {
+      return true;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+      return true;
+    }
+    return false;
+  }
+
   function onBoardShortcut(event) {
+    if (confirmDlg.open) {
+      return;
+    }
+    if (event.key === "Escape") {
+      if (confirmDlg.open) {
+        return;
+      }
+      if (state.archiveOpen && document.activeElement === archiveSearch && archiveSearch.value) {
+        event.preventDefault();
+        archiveSearch.value = "";
+        searchHits = null;
+        searchMeta = null;
+        renderArchive();
+        return;
+      }
+      if (state.archiveOpen) {
+        event.preventDefault();
+        setArchiveOpen(false);
+      }
+      return;
+    }
+    if (isFindKey(event) && state.archiveOpen && !isTypingTarget(event.target)) {
+      event.preventDefault();
+      archiveSearch.focus();
+      archiveSearch.select();
+      return;
+    }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) {
       return;
     }
@@ -492,6 +824,29 @@
     return null;
   }
 
+  function scheduleSearch(delay = 250) {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(runSearch, delay);
+  }
+
+  async function runSearch() {
+    const query = archiveSearch.value.trim();
+    if (!query) {
+      searchHits = null;
+      searchMeta = null;
+      renderArchive();
+      return;
+    }
+    const res = await fetch(`/api/archive?query=${encodeURIComponent(query)}&limit=200`);
+    if (!res.ok) {
+      return;
+    }
+    const data = await res.json();
+    searchHits = data.tabs || [];
+    searchMeta = data;
+    renderArchive();
+  }
+
   tabsEl.parentElement.addEventListener("wheel", onTabsWheel, { passive: false });
   tabsEl.addEventListener("scroll", updateTabFade);
   window.addEventListener("resize", updateTabFade);
@@ -524,17 +879,61 @@
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
+  archiveToggle.addEventListener("click", () => setArchiveOpen(!state.archiveOpen));
+  archiveCloseBtn.addEventListener("click", () => setArchiveOpen(false));
+  archiveEmptyBtn.addEventListener("click", () => emptyArchive());
+  archiveSearch.addEventListener("input", () => scheduleSearch());
+
+  archiveResizer.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = archivePane.getBoundingClientRect().width;
+    archiveResizer.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-archive");
+
+    function onMove(move) {
+      if (move.pointerId !== event.pointerId) {
+        return;
+      }
+      applyArchiveWidth(startWidth - (move.clientX - startX));
+    }
+    function onUp(up) {
+      if (up.pointerId !== event.pointerId) {
+        return;
+      }
+      archiveResizer.removeEventListener("pointermove", onMove);
+      archiveResizer.removeEventListener("pointerup", onUp);
+      archiveResizer.removeEventListener("pointercancel", onUp);
+      if (archiveResizer.hasPointerCapture(event.pointerId)) {
+        archiveResizer.releasePointerCapture(event.pointerId);
+      }
+      document.body.classList.remove("resizing-archive");
+    }
+    archiveResizer.addEventListener("pointermove", onMove);
+    archiveResizer.addEventListener("pointerup", onUp);
+    archiveResizer.addEventListener("pointercancel", onUp);
+  });
 
   window.addEventListener("hashchange", () => {
     const id = location.hash.replace(/^#/, "");
-    if (id && state.tabs.some((tab) => tab.id === id || tab.key === id)) {
-      const tab = state.tabs.find((item) => item.id === id || item.key === id);
-      if (tab && tab.id !== state.activeId) {
-        selectTab(tab.id, { fromUser: true });
-      }
+    if (!id) {
+      return;
+    }
+    const open = state.tabs.find((item) => item.id === id || item.key === id);
+    if (open && open.id !== state.activeId) {
+      selectTab(open.id, { fromUser: true });
+      return;
+    }
+    const archived = state.archive.find((item) => item.id === id || item.key === id);
+    if (archived) {
+      restoreTab(archived.id);
     }
   });
 
+  setArchiveOpen(state.archiveOpen);
   connect();
   render();
 })();

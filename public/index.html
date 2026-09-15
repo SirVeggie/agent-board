@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Board</title>
-  <link rel="stylesheet" href="/app.css?v=11">
+  <link rel="stylesheet" href="/app.css?v=13">
 </head>
 <body>
   <header class="chrome">
@@ -13,21 +13,50 @@
       <div class="tabs-fade" id="tabs-fade" hidden></div>
     </div>
     <div class="actions">
-      <button type="button" id="clear" title="Close unpinned tabs">Clear</button>
+      <button type="button" id="clear" title="Archive unpinned tabs">Clear</button>
+      <button type="button" id="archive-toggle" class="icon-btn" aria-label="Archive" aria-expanded="false" title="Archive">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.25"/>
+          <rect x="9.5" y="2.5" width="4.5" height="11" fill="currentColor"/>
+        </svg>
+        <span id="archive-badge" class="badge" hidden></span>
+      </button>
     </div>
   </header>
-  <main>
-    <div id="empty" class="empty">
-      <h1>Waiting for a page</h1>
-      <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
-      <ul class="shortcuts">
-        <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML</span></li>
-        <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
-        <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>restores the last closed tab</span></li>
-      </ul>
-    </div>
-    <div id="frames"></div>
-  </main>
-  <script src="/app.js?v=13"></script>
+  <div class="workspace">
+    <main>
+      <div id="empty" class="empty">
+        <h1>Waiting for a page</h1>
+        <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
+        <ul class="shortcuts">
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML</span></li>
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>restores the last archived or deleted tab</span></li>
+        </ul>
+      </div>
+      <div id="frames"></div>
+    </main>
+    <aside id="archive-pane" class="archive-pane" hidden>
+      <div class="archive-resizer" id="archive-resizer" role="separator" aria-orientation="vertical" aria-label="Resize archive" title="Resize archive"></div>
+      <div class="archive-head">
+        <h2>Archive <span id="archive-count">0</span></h2>
+        <button type="button" id="archive-empty" title="Delete all archived tabs">Empty</button>
+        <button type="button" id="archive-close" class="icon-btn" title="Close archive" aria-label="Close archive">×</button>
+      </div>
+      <input type="search" id="archive-search" placeholder="Search titles and content" autocomplete="off" spellcheck="false">
+      <div id="archive-list" class="archive-list"></div>
+      <div id="archive-none" class="archive-none" hidden>No archived tabs</div>
+    </aside>
+  </div>
+  <dialog id="confirm" class="confirm">
+    <form method="dialog">
+      <p id="confirm-message"></p>
+      <div class="confirm-actions">
+        <button type="submit" value="cancel">Cancel</button>
+        <button type="submit" value="ok" class="danger">Delete</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/app.js?v=16"></script>
 </body>
 </html>

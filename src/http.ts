@@ -41,13 +41,28 @@ export async function startHttp(): Promise<http.Server> {
       url: baseUrl(),
       viewers: viewerCount(),
       tabs: store.list().length,
+      archiveCount: store.archiveCount(),
       activeId: store.getActiveId(),
       uptimeMs: Date.now() - startedAt,
     });
   });
 
   app.get("/api/tabs", (_req, res) => {
-    res.json({ tabs: store.list(), activeId: store.getActiveId() });
+    res.json({ tabs: store.list(), activeId: store.getActiveId(), archiveCount: store.archiveCount() });
+  });
+
+  app.get("/api/archive", (req, res) => {
+    const query = typeof req.query.query === "string" ? req.query.query : "";
+    const offset = optionalNumber(req.query.offset) ?? 0;
+    const limit = optionalNumber(req.query.limit) ?? 200;
+    const result = store.searchArchive(query, offset, limit);
+    res.json({
+      tabs: result.hits.map((hit) => ({ ...toMeta(hit.tab), snippet: hit.snippet })),
+      returned: result.returned,
+      remaining: result.remaining,
+      matchCount: result.matchCount,
+      archiveCount: result.archiveCount,
+    });
   });
 
   app.get("/api/tabs/:id", (req, res) => {
@@ -62,7 +77,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs", (req, res) => {
     try {
       const assets = prepareAssets(parseAssetInputs(req.body?.assets));
-      const { tab, created } = store.upsert({
+      const { tab, created, archived } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
         html: String(req.body?.html ?? ""),
@@ -71,7 +86,7 @@ export async function startHttp(): Promise<http.Server> {
         state: isPlainObject(req.body?.state) ? req.body.state : undefined,
         assets: assets.length ? assets : undefined,
       });
-      res.status(created ? 201 : 200).json({ created, tab: toMeta(tab) });
+      res.status(created ? 201 : 200).json({ created, archived, tab: toMeta(tab) });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -206,19 +221,55 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.post("/api/tabs/:id/restore", (req, res) => {
+    try {
+      const tab = store.restore(req.params.id, { placement: "append", activate: true });
+      res.json({ tab: toMeta(tab), archiveCount: store.archiveCount() });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/archive", (_req, res) => {
+    const deleted = store.emptyArchive();
+    res.json({ deleted, archiveCount: 0 });
+  });
+
   app.delete("/api/tabs/:id", (req, res) => {
     try {
-      const tab = store.close(req.params.id);
-      res.json({ closed: [tab.id] });
+      const permanent = req.query.permanent === "true" || req.query.permanent === "1";
+      if (permanent) {
+        const tab = store.deletePermanent(req.params.id);
+        res.json({ deleted: [tab.id], archiveCount: store.archiveCount() });
+        return;
+      }
+      if (store.isArchived(req.params.id)) {
+        res.status(400).json({
+          error: "tab is archived; restore it or pass permanent=true to delete",
+        });
+        return;
+      }
+      const tab = store.archiveTab(req.params.id);
+      res.json({ archived: [tab.id], archiveCount: store.archiveCount() });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
   });
 
   app.delete("/api/tabs", (req, res) => {
+    const permanent = req.query.permanent === "true" || req.query.permanent === "1";
     const filter = req.query.filter === "all" ? "all" : "unpinned";
-    const closed = store.closeMany(filter);
-    res.json({ closed });
+    if (permanent) {
+      const ids = store.list().filter((tab) => filter === "all" || !tab.pinned).map((tab) => tab.id);
+      const deleted: string[] = [];
+      for (const id of ids) {
+        deleted.push(store.deletePermanent(id).id);
+      }
+      res.json({ deleted, archiveCount: store.archiveCount() });
+      return;
+    }
+    const archived = store.archiveMany(filter);
+    res.json({ archived, archiveCount: store.archiveCount() });
   });
 
   app.get("/view/:id/asset/:name", (req, res) => {
@@ -299,6 +350,7 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
   store.on("tab_closed", (id: string) => broadcast({ type: "tab_closed", id }));
+  store.on("archive_cleared", () => broadcast({ type: "archive_cleared" }));
   store.on("tab_state", (tab: Tab, client?: string) =>
     broadcast({
       type: "tab_state",
@@ -329,7 +381,16 @@ function optionalString(value: unknown): string | undefined {
 }
 
 function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) {
+      return n;
+    }
+  }
+  return undefined;
 }
 
 function handleWait(

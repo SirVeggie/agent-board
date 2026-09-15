@@ -8,7 +8,9 @@ import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBrowser } from "./openBrowser.js";
 import { clampWaitMs, parseSignalNames } from "./signal.js";
-import type { Tab, TabAsset } from "./types.js";
+import { clampArchivePage } from "./archiveSearch.js";
+import { withAgentDates } from "./dates.js";
+import type { Tab, TabAsset, TabMeta } from "./types.js";
 
 type ApiError = { error?: string };
 
@@ -29,12 +31,12 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.3.0",
+    version: "1.4.0",
   });
 
   server.tool(
     "board_show",
-    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key. By default it focuses the tab and opens the browser only if the board is not already open. Pass background: true to update without focusing the tab or raising the window — use that when screenshotting a design. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic.",
+    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key (open or archived). By default it focuses the tab and opens the browser only if the board is not already open; if that key is archived, this restores it to the tab strip. Pass background: true to update without focusing — an archived tab stays archived, its archived date is bumped, and the archive row shows an updated blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic.",
     {
       key: z
         .string()
@@ -101,6 +103,7 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const created = Boolean((data as { created?: boolean }).created);
+      const archived = Boolean((data as { archived?: boolean }).archived);
       const tab = (data as { tab: { id: string; key: string; title: string; assets?: TabAsset[] } }).tab;
       if (resolved.activate) {
         const info = await health();
@@ -110,31 +113,117 @@ export async function startMcp(): Promise<void> {
       }
       return jsonResult({
         created,
+        archived,
         id: tab.id,
         key: tab.key,
         title: tab.title,
         url: boardUrl(tab.id),
         assets: tab.assets ?? [],
-        note: "Shown on Agent Board. Do not write this HTML to a workspace file.",
+        note: archived
+          ? "Updated in the archive (background). Use board_restore to bring it back to the tab strip."
+          : "Shown on Agent Board. Do not write this HTML to a workspace file.",
       });
     }
   );
 
   server.tool(
     "board_list",
-    "List tabs currently on the Agent Board (id, key, title, pinned, size). Use before updating or closing an existing page.",
+    "List open Agent Board tabs (id, key, title, pinned, dates, size) plus archiveCount. Does not list archived tabs — use board_archive to page or search those.",
     async () => {
       const { status, data } = await api("GET", "/api/tabs");
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      return jsonResult(data);
+      const payload = data as { tabs: TabMeta[]; activeId: string | null; archiveCount?: number };
+      return jsonResult({
+        tabs: (payload.tabs ?? []).map((tab) => withAgentDates(tab)),
+        activeId: payload.activeId,
+        archiveCount: payload.archiveCount ?? 0,
+      });
+    }
+  );
+
+  server.tool(
+    "board_archive",
+    "List or search archived tabs. Omit query to page by archived date (newest first). Pass query for fuzzy search over title, key, and page text. Returns this page of tabs, how many were returned, how many remain after this page, matchCount (rows in this result set), and archiveCount (all archived tabs). Dates are local ISO. Do not dump the whole archive into context — page or search instead.",
+    {
+      query: z
+        .string()
+        .optional()
+        .describe("Fuzzy search over tab titles, keys, and page content. Omit to list by archived date."),
+      offset: z.number().optional().describe("Skip this many matching tabs. Default 0."),
+      limit: z
+        .number()
+        .optional()
+        .describe("Page size. Default 20, maximum 50."),
+    },
+    async ({ query, offset, limit }) => {
+      const page = clampArchivePage(offset, limit);
+      const params = new URLSearchParams();
+      if (query?.trim()) {
+        params.set("query", query.trim());
+      }
+      params.set("offset", String(page.offset));
+      params.set("limit", String(page.limit));
+      const { status, data } = await api("GET", `/api/archive?${params.toString()}`);
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      const payload = data as {
+        tabs: Array<TabMeta & { snippet?: string | null }>;
+        returned: number;
+        remaining: number;
+        matchCount: number;
+        archiveCount: number;
+      };
+      return jsonResult({
+        tabs: (payload.tabs ?? []).map((tab) => {
+          const dates = withAgentDates(tab);
+          return {
+            ...dates,
+            snippet: tab.snippet ?? null,
+          };
+        }),
+        returned: payload.returned,
+        remaining: payload.remaining,
+        matchCount: payload.matchCount,
+        archiveCount: payload.archiveCount,
+        note:
+          payload.matchCount === payload.archiveCount
+            ? `Returned ${payload.returned} of ${payload.archiveCount} archived tabs; ${payload.remaining} after this page.`
+            : `Returned ${payload.returned} of ${payload.matchCount} matches (${payload.archiveCount} tabs in the archive); ${payload.remaining} matches after this page.`,
+      });
+    }
+  );
+
+  server.tool(
+    "board_restore",
+    "Bring an archived tab back to the open tab strip (appended at the end and focused). Identify the tab by id or key from board_archive.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Tab key used when the page was shown."),
+    },
+    async ({ id, key }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/restore`);
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      const payload = data as { tab: TabMeta; archiveCount: number };
+      return jsonResult({
+        ...withAgentDates(payload.tab),
+        archiveCount: payload.archiveCount,
+        note: "Restored to the open tab strip.",
+      });
     }
   );
 
   server.tool(
     "board_read",
-    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key.",
+    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and archived tabs without restoring.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -149,11 +238,16 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab;
+      const dates = withAgentDates(tab);
       return jsonResult({
         id: tab.id,
         key: tab.key,
         title: tab.title,
         pinned: tab.pinned,
+        archived: Boolean(tab.archivedAt),
+        createdAt: dates.createdAt,
+        updatedAt: dates.updatedAt,
+        ...(dates.archivedAt ? { archivedAt: dates.archivedAt } : {}),
         html: tab.html,
         assets: tab.assets ?? [],
       });
@@ -162,7 +256,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_screenshot",
-    "Capture a screenshot of a board page so you can visually inspect a design. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key. Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
+    "Capture a screenshot of a board page so you can visually inspect a design. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or archived). Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -233,7 +327,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_get_state",
-    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused or the browser is open. Do not poll this tool while waiting for the user — use board_wait.",
+    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, archived, or the browser is open. Do not poll this tool while waiting for the user — use board_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -253,7 +347,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_wait",
-    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 10 minutes. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
+    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 10 minutes. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If archived is true, the tab moved to the archive — restore it or stop. If closed is true, the tab was permanently deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -372,17 +466,23 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_close",
-    "Close Agent Board tabs. Pass id or key for one tab, or unpinned/all for bulk close.",
+    "Archive Agent Board tabs (same as the UI close button). Pass id or key for one tab, or unpinned/all for bulk archive. Pass permanent: true to delete instead of archiving (no confirmation). Permanent delete of an open tab can be undone with Ctrl+Z for the last 5; deleting from the archive cannot.",
     {
-      id: z.string().optional().describe("Tab id to close."),
-      key: z.string().optional().describe("Tab key to close."),
-      unpinned: z.boolean().optional().describe("If true, close every tab that is not pinned."),
-      all: z.boolean().optional().describe("If true, close every tab including pinned ones."),
+      id: z.string().optional().describe("Tab id to archive or delete."),
+      key: z.string().optional().describe("Tab key to archive or delete."),
+      unpinned: z.boolean().optional().describe("If true, archive (or permanently delete) every tab that is not pinned."),
+      all: z.boolean().optional().describe("If true, archive (or permanently delete) every tab including pinned ones."),
+      permanent: z
+        .boolean()
+        .optional()
+        .describe("If true, delete instead of moving to the archive. Default false."),
     },
-    async ({ id, key, unpinned, all }) => {
+    async ({ id, key, unpinned, all, permanent }) => {
+      const extra = permanent ? "permanent=true" : "";
       if (all || unpinned) {
         const filter = all ? "all" : "unpinned";
-        const { status, data } = await api("DELETE", `/api/tabs?filter=${filter}`);
+        const qs = extra ? `filter=${filter}&${extra}` : `filter=${filter}`;
+        const { status, data } = await api("DELETE", `/api/tabs?${qs}`);
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }
@@ -392,7 +492,8 @@ export async function startMcp(): Promise<void> {
       if (!which) {
         return errorResult("Provide id, key, unpinned, or all");
       }
-      const { status, data } = await api("DELETE", `/api/tabs/${encodeURIComponent(which)}`);
+      const suffix = extra ? `?${extra}` : "";
+      const { status, data } = await api("DELETE", `/api/tabs/${encodeURIComponent(which)}${suffix}`);
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }

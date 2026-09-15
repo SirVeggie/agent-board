@@ -60,19 +60,22 @@
     <tbody>
       <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Download the current page as HTML</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Open this help page</td></tr>
-      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Restore the last closed tab (up to 5)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Restore the last archived tab, or the last permanently deleted open tab (up to 5), whichever is newer</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Close the archive sidebar</td></tr>
+      <tr><td><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Focus archive search when the sidebar is open (<kbd>Shift</kbd>+<kbd>7</kbd> on Nordic layouts)</td></tr>
     </tbody>
   </table>
 
   <h2>Tabs</h2>
   <ul>
-    <li>Middle-click a tab to close it. Pinned tabs ignore middle-click; use ×.</li>
-    <li>Double-click a tab to pin or unpin it. Clear leaves pinned tabs alone.</li>
+    <li>Middle-click a tab to archive it. Pinned tabs ignore middle-click; use ×. Shift+click × (or Shift+middle-click) permanently deletes after a confirmation.</li>
+    <li>Double-click a tab to pin or unpin it. Clear archives unpinned tabs and leaves pinned tabs alone.</li>
+    <li>The archive sidebar (button to the right of Clear) lists archived tabs. Click a row to restore it. Close a row to delete it permanently.</li>
     <li>If tabs overflow, scroll the strip with the mouse wheel.</li>
   </ul>
 
   <h2>Persistence</h2>
-  <p>Open tabs and the last 5 closed tabs are saved to <code>%LOCALAPPDATA%\agent-board\state.json</code>, so they survive Cursor and Agent Board restarts. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
+  <p>Open tabs, the archive (up to 200), and the last 5 permanently deleted open tabs are saved to <code>%LOCALAPPDATA%\agent-board\state.json</code>, so they survive Cursor and Agent Board restarts. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
   <p class="muted">Ask the agent to present an investigation, analysis, or design here instead of writing a throwaway HTML file.</p>
 </body>
 </html>

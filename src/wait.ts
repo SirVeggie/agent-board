@@ -5,6 +5,7 @@ import type { BoardState, Tab, TabSignal } from "./types.js";
 export type WaitResult = {
   timedOut: boolean;
   closed: boolean;
+  archived: boolean;
   id: string;
   key: string;
   signal: TabSignal | null;
@@ -26,7 +27,10 @@ export function waitForSignal(opts: {
   }
   const tabId = initial.id;
   if (signalMatches(initial, opts.names, afterRevision)) {
-    return Promise.resolve(toWaitResult(initial, false, false));
+    return Promise.resolve(toWaitResult(initial, false, false, false));
+  }
+  if (store.isArchived(tabId)) {
+    return Promise.resolve(toWaitResult(initial, false, false, true));
   }
 
   return new Promise((resolve) => {
@@ -42,11 +46,26 @@ export function waitForSignal(opts: {
       resolve(result);
     };
 
-    const check = (tab: Tab | undefined, timedOut: boolean, closed: boolean) => {
+    const check = (tab: Tab | undefined, timedOut: boolean, closed: boolean, archived: boolean) => {
+      if (archived) {
+        const current = tab ?? last;
+        finish({
+          timedOut: false,
+          closed: false,
+          archived: true,
+          id: tabId,
+          key: current.key,
+          signal: snapshotSignal(current.signal),
+          state: { ...current.state },
+          stateRevision: current.stateRevision,
+        });
+        return;
+      }
       if (!tab) {
         finish({
           timedOut: false,
           closed: true,
+          archived: false,
           id: tabId,
           key: last.key,
           signal: snapshotSignal(last.signal),
@@ -60,6 +79,7 @@ export function waitForSignal(opts: {
         finish({
           timedOut: false,
           closed: true,
+          archived: false,
           id: tabId,
           key: tab.key,
           signal: snapshotSignal(tab.signal),
@@ -69,40 +89,51 @@ export function waitForSignal(opts: {
         return;
       }
       if (signalMatches(tab, opts.names, afterRevision)) {
-        finish(toWaitResult(tab, false, false));
+        finish(toWaitResult(tab, false, false, false));
         return;
       }
       if (timedOut) {
-        finish(toWaitResult(tab, true, false));
+        finish(toWaitResult(tab, true, false, false));
       }
     };
 
     const onSignal = (tab: Tab) => {
       if (tab.id === tabId) {
-        check(tab, false, false);
+        check(tab, false, false, false);
       }
     };
 
     const onClose = (id: string) => {
       if (id === tabId) {
-        check(store.get(tabId), false, true);
+        check(store.get(tabId), false, true, false);
+      }
+    };
+
+    const onArchived = (id: string) => {
+      if (id === tabId) {
+        check(store.get(tabId) ?? last, false, false, true);
       }
     };
 
     const onAbort = () => {
-      check(store.get(tabId) ?? last, true, false);
+      check(store.get(tabId) ?? last, true, false, false);
     };
 
     const timer = setTimeout(() => {
-      check(store.get(tabId), true, false);
+      check(store.get(tabId), true, false, store.isArchived(tabId));
     }, opts.timeoutMs);
 
     const poll = setInterval(() => {
-      check(store.get(tabId), false, false);
+      if (store.isArchived(tabId)) {
+        check(store.get(tabId) ?? last, false, false, true);
+        return;
+      }
+      check(store.get(tabId), false, false, false);
     }, 50);
 
     store.on("tab_signal", onSignal);
     store.on("tab_closed", onClose);
+    store.on("tab_archived", onArchived);
     if (opts.abort) {
       if (opts.abort.aborted) {
         onAbort();
@@ -111,22 +142,24 @@ export function waitForSignal(opts: {
       }
     }
 
-    check(store.get(tabId), false, false);
+    check(store.get(tabId), false, false, false);
 
     function cleanup() {
       clearTimeout(timer);
       clearInterval(poll);
       store.off("tab_signal", onSignal);
       store.off("tab_closed", onClose);
+      store.off("tab_archived", onArchived);
       opts.abort?.removeEventListener("abort", onAbort);
     }
   });
 }
 
-function toWaitResult(tab: Tab, timedOut: boolean, closed: boolean): WaitResult {
+function toWaitResult(tab: Tab, timedOut: boolean, closed: boolean, archived: boolean): WaitResult {
   return {
     timedOut,
     closed,
+    archived,
     id: tab.id,
     key: tab.key,
     signal: snapshotSignal(tab.signal),

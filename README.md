@@ -49,13 +49,15 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | --- | --- |
 | `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Opens the browser only if the board is not already open. Pass `background: true` to skip focusing the tab and raising the window. |
 | `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
-| `board_list` | List open tabs |
-| `board_read` | Read a tab's HTML so it can be revised |
+| `board_list` | List open tabs, plus `archiveCount` |
+| `board_archive` | Page or fuzzy-search archived tabs (`query`, `offset`, `limit`). Returns `returned`, `remaining`, `matchCount`, `archiveCount` |
+| `board_restore` | Bring an archived tab back to the open strip |
+| `board_read` | Read a tab's HTML so it can be revised (open or archived) |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
 | `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
 | `board_set_state` | Write state back; an open page applies it live without reloading |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
-| `board_close` | Close one tab, all unpinned tabs, or everything |
+| `board_close` | Archive one tab, all unpinned tabs, or everything. Pass `permanent: true` to delete instead |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template).
 
@@ -99,9 +101,9 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 
 ## Data
 
-Tabs persist in `%LOCALAPPDATA%\agent-board\state.json` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. The last 5 closed pages stay in that file too, so **Ctrl+Z** can restore them.
+Tabs persist in `%LOCALAPPDATA%\agent-board\state.json` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Closing a tab moves it to the **archive** (up to 200, oldest dropped). **Ctrl+Z** restores whichever is newer: the most recently archived tab (no cap on how far back), or one of the last 5 tabs that were permanently deleted while still open.
 
-The browser **Clear** button closes unpinned tabs. Pinned tabs stay until you close them. **Ctrl+S** downloads the current page as HTML.
+The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you archive or delete them. Shift+click a tab's × permanently deletes it (confirmation in the UI). **Ctrl+S** downloads the current page as HTML.
 
 Port: `4747` (override with `AGENT_BOARD_PORT`). Bound to localhost only.
 
