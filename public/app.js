@@ -282,9 +282,9 @@
     const count = state.archive.length;
     archiveCountEl.textContent = String(count);
     archiveEmptyBtn.disabled = count === 0;
-    archiveBadge.hidden = count === 0;
-    archiveBadge.textContent = count > 99 ? "99+" : String(count);
-    archiveBadge.classList.toggle("updated", unreadArchive.size > 0);
+    const unread = unreadArchive.size;
+    archiveBadge.hidden = unread === 0;
+    archiveBadge.textContent = unread > 99 ? "99+" : String(unread);
     archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
     archivePane.hidden = !state.archiveOpen;
   }
