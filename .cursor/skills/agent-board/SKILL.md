@@ -42,7 +42,7 @@ Before writing HTML or calling `board_show`, mention in a new line that the boar
 
 Call `board_show` once:
 
-- `key`: stable slug for this topic (reuse to update, e.g. `clims-12345-analysis`)
+- `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`)
 - `title`: short tab label
 - `html`: a complete HTML document with inline CSS, or a fragment (the board wraps fragments)
 - `assets`: omit unless the page needs images
@@ -61,6 +61,19 @@ Do not pass a second tool to open or refresh. Do not pass `activate` — that fl
 If `board_show` returns `archived: true`, tell the user the blip is on Archive, not the tab strip.
 
 Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
+
+### Updating vs replacing
+
+Do not replace a page with a new page without asking, even if it is a continuation of the previous subject.
+
+Allowed page edits without clear intention:
+- some edits, additions or otherwise improving the page
+
+Not allowed:
+- replacing all or most of the page content
+- replacing the page with a continuation
+
+If the content page would change a lot, it is better to make a new page, otherwise the user loses the ability to refer back to some older information if they want. If the subject remains the same and is a continuation, instead of replacing the page directly, archive the old page (`board_close`) and create a new one with a new `key`.
 
 ## HTML
 
@@ -285,5 +298,5 @@ If the page asks the user to do something you must continue from — submit, cho
 - `board_pin` / `board_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `board_show` `pin`.
 - `board_close` archives one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Pass `permanent: true` to delete instead of archiving.
 - `board_restore` (`id`/`key`) brings an archived tab back to the open strip (focused).
-- Reuse the same `key` across a conversation instead of opening duplicate tabs for the same topic.
+- Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; archive the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
