@@ -47,15 +47,15 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 | Tool | Purpose |
 | --- | --- |
-| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Opens the browser only if the board is not already open. Pass `background: true` to skip focusing the tab and raising the window. |
+| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Default focuses the tab (and restores it if archived). Pass `background: true` to update without focusing: unread blip on an open tab, or on Archive if the tab is archived. |
 | `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
-| `board_list` | List open tabs, plus `archiveCount` |
-| `board_archive` | Page or fuzzy-search archived tabs (`query`, `offset`, `limit`). Returns `returned`, `remaining`, `matchCount`, `archiveCount` |
+| `board_list` | List open tabs (`id`, `key`, `title`, …) plus `archiveCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
+| `board_archive` | Page archived tabs (default 20, max 50) or search with `query` over title, key, page text, and JSON state. Open tabs are not searched. |
 | `board_restore` | Bring an archived tab back to the open strip |
 | `board_read` | Read a tab's HTML so it can be revised (open or archived) |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
 | `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
-| `board_set_state` | Write state back; an open page applies it live without reloading |
+| `board_set_state` | Write state without focusing. Unfocused open tabs and archived tabs show an unread blip. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Archive one tab, all unpinned tabs, or everything. Pass `permanent: true` to delete instead |
 

@@ -47,7 +47,21 @@ export async function startHttp(): Promise<http.Server> {
     });
   });
 
-  app.get("/api/tabs", (_req, res) => {
+  app.get("/api/tabs", (req, res) => {
+    const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
+    if (query) {
+      const result = store.searchOpen(query);
+      res.json({
+        tabs: result.hits.map((hit) => ({ ...toMeta(hit.tab), snippet: hit.snippet })),
+        returned: result.returned,
+        remaining: result.remaining,
+        matchCount: result.matchCount,
+        openCount: result.archiveCount,
+        activeId: store.getActiveId(),
+        archiveCount: store.archiveCount(),
+      });
+      return;
+    }
     res.json({ tabs: store.list(), activeId: store.getActiveId(), archiveCount: store.archiveCount() });
   });
 

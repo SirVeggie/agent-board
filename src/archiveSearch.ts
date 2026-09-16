@@ -3,6 +3,29 @@ import type { Tab } from "./types.js";
 export const ARCHIVE_PAGE_DEFAULT = 20;
 export const ARCHIVE_PAGE_MAX = 50;
 
+/** Dropped from search queries so “my jira issues page” still matches “My Jira issues”. */
+const QUERY_STOPWORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "my",
+  "me",
+  "your",
+  "our",
+  "page",
+  "pages",
+  "tab",
+  "tabs",
+  "board",
+  "html",
+  "list",
+  "lists",
+  "updated",
+  "update",
+  "please",
+  "show",
+]);
+
 export type ArchiveSearchHit = {
   tab: Tab;
   snippet: string | null;
@@ -45,12 +68,15 @@ export function searchArchive(
   limit: number
 ): ArchiveSearchResult {
   const archiveCount = tabs.length;
-  const q = query.trim();
-  const ranked: ArchiveSearchHit[] = q
+  const toks = queryTokens(query);
+  const ranked: ArchiveSearchHit[] = toks.length
     ? tabs
-        .map((tab) => scoreTab(tab, q))
+        .map((tab) => scoreTab(tab, toks))
         .filter((hit): hit is ArchiveSearchHit => hit !== null)
-        .sort((a, b) => b.score - a.score || (b.tab.archivedAt ?? 0) - (a.tab.archivedAt ?? 0))
+        .sort(
+          (a, b) =>
+            b.score - a.score || (b.tab.archivedAt ?? b.tab.updatedAt) - (a.tab.archivedAt ?? a.tab.updatedAt)
+        )
     : tabs.map((tab) => ({ tab, snippet: null, score: 0 }));
 
   const slice = ranked.slice(offset, offset + limit);
@@ -63,32 +89,40 @@ export function searchArchive(
   };
 }
 
-function scoreTab(tab: Tab, query: string): ArchiveSearchHit | null {
+function queryTokens(query: string): string[] {
+  return normalize(query)
+    .split(/\s+/)
+    .filter((tok) => tok && !QUERY_STOPWORDS.has(tok));
+}
+
+function stateText(tab: Tab): string {
+  try {
+    return JSON.stringify(tab.state ?? {});
+  } catch {
+    return "";
+  }
+}
+
+function scoreTab(tab: Tab, toks: string[]): ArchiveSearchHit | null {
   const title = normalize(tab.title);
   const key = normalize(tab.key);
   const body = normalize(htmlToText(tab.html));
-  const hay = `${title} ${key} ${body}`;
-  const q = normalize(query);
-  const toks = q.split(/\s+/).filter(Boolean);
-  if (!toks.length) {
-    return { tab, snippet: null, score: 0 };
-  }
-  const titleSeq = subsequence(title, q.replace(/\s+/g, ""));
+  const state = normalize(stateText(tab));
+  const hay = `${title} ${key} ${body} ${state}`;
+  const joined = toks.join("");
+  const titleSeq = subsequence(title, joined);
   const allInHay = toks.every((tok) => hay.includes(tok));
   if (!allInHay && !titleSeq) {
     return null;
   }
   let score = 0;
-  if (title === q) {
+  if (title === toks.join(" ")) {
     score += 100;
   }
-  if (title.includes(q)) {
+  if (toks.every((tok) => title.includes(tok))) {
     score += 80;
   } else if (titleSeq) {
     score += 55;
-  }
-  if (toks.every((tok) => title.includes(tok))) {
-    score += 40;
   }
   if (toks.every((tok) => key.includes(tok))) {
     score += 25;
@@ -96,10 +130,22 @@ function scoreTab(tab: Tab, query: string): ArchiveSearchHit | null {
   if (toks.every((tok) => body.includes(tok))) {
     score += 10;
   }
+  if (toks.every((tok) => state.includes(tok))) {
+    score += 8;
+  }
   if (score === 0 && allInHay) {
     score = 1;
   }
-  return { tab, snippet: makeSnippet(htmlToText(tab.html) || tab.title, toks[0] ?? q), score };
+  const snippetSource = toks.every((tok) => title.includes(tok))
+    ? ""
+    : toks.some((tok) => body.includes(tok))
+      ? htmlToText(tab.html)
+      : stateText(tab);
+  return {
+    tab,
+    snippet: snippetSource ? makeSnippet(snippetSource, toks[0] ?? "") : null,
+    score,
+  };
 }
 
 function normalize(value: string): string {

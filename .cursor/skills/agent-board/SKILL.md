@@ -7,7 +7,9 @@ description: Present investigation results, analyses, design suggestions, compar
 
 A localhost tabbed HTML viewer the user keeps open. Drive it with the `agent-board` MCP. Do **not** write one-off HTML files into the workspace for presentation.
 
-If the `board_show` tool is missing, tell the user the Agent Board MCP is not connected (reload MCP / check `~/.cursor/mcp.json`) and fall back to a concise chat summary.
+If `board_show` is missing, the MCP is not connected — tell the user to reload MCP / check `~/.cursor/mcp.json`, and fall back to a concise chat summary.
+
+If `board_list` exists but `board_archive` does not, the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the archive.
 
 ## When to use it
 
@@ -17,19 +19,48 @@ Skip it for code edits, short factual answers, drafts meant to be copied, or whe
 
 Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 
-## How to present
+## Find a page
 
-1. Before writing HTML or calling `board_show`, mention in a new line clearly that the board is being updated so the pause does not look like the chat stopped.
-2. Call `board_show` once with:
-   - `key`: stable slug for this topic (reuse to update, e.g. `issue-12345-analysis`)
-   - `title`: short tab label
-   - `html`: a **complete HTML document** with inline CSS, or a fragment (the board wraps fragments in a dark readable template)
-   - `assets`: omit unless the page needs images. Pass local file paths (user attachments) and reference them as `asset:name` in the HTML — see Images below.
-   - `activate`: true (default) when the user should look at this tab. Use `background: true` instead when you are iterating privately (design screenshot loops) or updating a tab the user is not on. Do not pass `background: true` together with `activate: true`.
-   - `pin`: omit or false. Pin only when the user hints the tab should persist (e.g. “long lived tab”, keep it between sessions) or the page is a keep-using interactive app (todo app, reusable tool). Do **not** pin one-off investigations, designs, info dumps, questionnaires, demos, or forms — even if you expect to read the answers later in this chat.
-3. `board_show` focuses the tab and opens the browser only if nothing is already viewing the board, unless you passed `background: true` (or `activate: false`) — then it does not switch tabs or raise the window. Do not call a second tool to open or refresh.
-4. If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `board_wait` **next, in the same turn**, with the same signal name the page fires. Do not poll `board_get_state`.
-5. Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
+The user names pages by **title** (“my Jira issues page”). Keys are slugs you invented earlier. Never guess a key.
+
+**By title** (usual):
+
+1. `board_list` — every **open** tab. Each row has `id`, `key`, **`title`**. Scan titles.
+2. If it is not there and `archiveCount` > 0, `board_archive` (no query: newest first, default 20, max 50; if `remaining` > 0, pass `offset`).
+
+**By content** (body or JSON state, or the title scan missed it): call `board_list({ query })` and `board_archive({ query })` **in the same turn** with the same keywords. They do not search each other’s tabs.
+
+Then `board_read` with that `id` or `key` when you need the HTML (works on archived tabs without restoring).
+
+**Search keywords.** Use 1–3 distinctive words (`jira`, `clims-18595`, a phrase from the page or its state). Do not paste the whole utterance (`my jira issues page`). Filler like *my / page / tab / the* is ignored; every remaining word must match. Both tools search **title, key, visible page text, and JSON state**. Title matches rank first.
+
+Do not dump the archive into context. Cap is 200 archived tabs.
+
+## Show or update
+
+Before writing HTML or calling `board_show`, mention in a new line that the board is being updated so the pause does not look like the chat stopped.
+
+Call `board_show` once:
+
+- `key`: stable slug for this topic (reuse to update, e.g. `clims-12345-analysis`)
+- `title`: short tab label
+- `html`: a complete HTML document with inline CSS, or a fragment (the board wraps fragments)
+- `assets`: omit unless the page needs images
+- `background`: omit when the user should look at this tab (default: focus, restore if archived, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or you are looping on screenshots they should not see yet.
+- `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
+
+Do not pass a second tool to open or refresh. Do not pass `activate` — that flag is gone; `background` is the only one.
+
+| User said | Call | After |
+| --- | --- | --- |
+| show me / put it on the board | `board_show` (default) | Focused. Archived key is restored to the strip. |
+| update in the background / don’t switch | `board_show(..., background: true)` | Open: unread blip on that tab. Archived: stays archived, unread blip on Archive. |
+| bring it back / restore | `board_restore` | Strip, focused. |
+| change todos / notes / checklist | `board_set_state` | Never focuses. Unread blip if they are not on that tab (open or archived). |
+
+If `board_show` returns `archived: true`, tell the user the blip is on Archive, not the tab strip.
+
+Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
 
 ## HTML
 
@@ -243,16 +274,16 @@ document.addEventListener("keydown", (event) => {
 ## Reading and writing page state
 
 - `board_get_state` (`id` or `key`) returns `state`, `stateRevision`, and the last `signal`. Use it when you are **not** blocked on the user (they said “look at my notes”). Do not poll it.
-- `board_set_state` merges the keys you pass, so send only what you are changing. An open page applies it live without reloading.
+- `board_set_state` merges the keys you pass, so send only what you are changing. An open page applies it live without reloading. It does **not** focus the tab and does **not** restore an archived tab. Unfocused open tabs and archived tabs show an unread blip.
 - Pass `expectedRevision` from your last read. If the user changed the page in between, the write is refused and the error carries their current state — merge your change into it and retry with the revision it reports. Do not reach for `force`; it exists for deliberately resetting a page.
 - Read state before acting on a page the user has had time to touch. Do not assume the state you wrote earlier is still current.
 
-## Updating and cleanup
+If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `board_wait` **next, in the same turn**, with the same signal name the page fires. Do not poll `board_get_state`.
 
-- `board_list` before guessing ids. It returns **open** tabs plus `archiveCount`. Dates are local ISO (timezone offset), stored as unix ms on disk.
-- `board_archive` to page (`offset` / `limit`, default 20, max 50) or fuzzy-search archived tabs (`query` over title, key, and page text). The result includes `returned`, `remaining` (how many matching tabs after this page), `matchCount`, and `archiveCount`. Search hits include a short `snippet`. Do not dump the whole archive into context.
-- `board_restore` (`id`/`key`) brings an archived tab back to the open strip.
-- `board_read` with `id` or `key` to revise existing HTML (works on archived tabs without restoring), then `board_show` with the same `key`. For visual QA, follow with `board_screenshot` instead of guessing from the markup. Default `board_show` restores an archived key to the strip; `background: true` updates it in the archive instead.
-- `board_pin` / `board_unpin` for a tab (`id`/`key`) so Clear and close-unpinned keep or drop it. Same rule as `board_show` `pin`: only after a persistence hint or for a keep-using app — never because a one-off page feels useful.
+## Pin, archive, close
+
+- `board_pin` / `board_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `board_show` `pin`.
 - `board_close` archives one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Pass `permanent: true` to delete instead of archiving.
-- Reuse the same `key` across a conversation instead of opening duplicate tabs for the same topic. Search the archive before re-showing an old investigation.
+- `board_restore` (`id`/`key`) brings an archived tab back to the open strip (focused).
+- Reuse the same `key` across a conversation instead of opening duplicate tabs for the same topic.
+- Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.

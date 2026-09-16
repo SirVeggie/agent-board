@@ -123,8 +123,17 @@ class BoardStore extends EventEmitter {
     return this.archiveOrder.length;
   }
 
+  listOpenTabs(): Tab[] {
+    return this.order.map((id) => this.tabs.get(id)!).filter(Boolean);
+  }
+
   listArchiveTabs(): Tab[] {
     return this.archiveOrder.map((id) => this.archive.get(id)!.tab);
+  }
+
+  searchOpen(query: string): ArchiveSearchResult {
+    const tabs = this.listOpenTabs();
+    return searchArchive(tabs, query, 0, Math.max(tabs.length, 1));
   }
 
   searchArchive(query: string, offset = 0, limit = ARCHIVE_PAGE_DEFAULT): ArchiveSearchResult {
@@ -200,14 +209,18 @@ class BoardStore extends EventEmitter {
       tab.revision += 1;
       tab.signal = null;
       seedState(tab, input.state);
-      if (input.pin !== undefined) {
+      let pinIndex: number | undefined;
+      if (input.pin !== undefined && tab.pinned !== input.pin) {
+        tab.pinned = input.pin;
+        pinIndex = this.insertOpen(tab.id, "pin");
+      } else if (input.pin !== undefined) {
         tab.pinned = input.pin;
       }
       if (input.activate !== false) {
         this.activeId = tab.id;
       }
       this.persistSoon();
-      this.emit("tab_upserted", toMeta(tab), undefined, {
+      this.emit("tab_upserted", toMeta(tab), pinIndex, {
         activate: input.activate !== false,
         structural: true,
       });
@@ -243,12 +256,12 @@ class BoardStore extends EventEmitter {
     };
     seedState(tab, input.state);
     this.tabs.set(id, tab);
-    this.order.push(id);
+    const createdAt = this.insertOpen(id, tab.pinned ? "pin" : "append");
     if (input.activate !== false) {
       this.activeId = id;
     }
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab), undefined, {
+    this.emit("tab_upserted", toMeta(tab), createdAt, {
       activate: input.activate !== false,
       structural: true,
     });
@@ -274,6 +287,7 @@ class BoardStore extends EventEmitter {
       throw new Error(`tab not found: ${idOrKey}`);
     }
     const tab = found.tab;
+    let pinIndex: number | undefined;
     if (patch.title !== undefined) {
       const title = patch.title.trim();
       if (!title) {
@@ -291,7 +305,10 @@ class BoardStore extends EventEmitter {
         throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
       }
     }
-    if (patch.pin !== undefined) {
+    if (patch.pin !== undefined && found.where === "open" && tab.pinned !== patch.pin) {
+      tab.pinned = patch.pin;
+      pinIndex = this.insertOpen(tab.id, "pin");
+    } else if (patch.pin !== undefined) {
       tab.pinned = patch.pin;
     }
     tab.updatedAt = Date.now();
@@ -309,7 +326,7 @@ class BoardStore extends EventEmitter {
       this.activeId = tab.id;
     }
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab), undefined, {
+    this.emit("tab_upserted", toMeta(tab), pinIndex, {
       activate: patch.activate !== false,
       structural,
     });
@@ -512,7 +529,7 @@ class BoardStore extends EventEmitter {
     }
     if (newestDeleted && (!newestArchive || deletedAt >= archiveAt)) {
       this.deleted.splice(deletedIndex, 1);
-      return this.reopen(newestDeleted.tab, newestDeleted.index, true);
+      return this.reopen(newestDeleted.tab, newestDeleted.index, true, true);
     }
     return this.restoreEntry(newestArchive!, "index", true);
   }
@@ -550,14 +567,42 @@ class BoardStore extends EventEmitter {
     return undefined;
   }
 
+  /** Pinned tabs sit left of unpinned. Pin -> last pinned; unpin -> first unpinned. */
+  private pinBoundary(): number {
+    let i = 0;
+    while (i < this.order.length && this.tabs.get(this.order[i])?.pinned) {
+      i += 1;
+    }
+    return i;
+  }
+
+  private insertOpen(id: string, placement: "pin" | "append" | "index", index = 0): number {
+    this.order = this.order.filter((item) => item !== id);
+    const tab = this.tabs.get(id);
+    if (!tab) {
+      return 0;
+    }
+    const boundary = this.pinBoundary();
+    let at: number;
+    if (tab.pinned || placement === "pin") {
+      at = boundary;
+    } else if (placement === "append") {
+      at = this.order.length;
+    } else {
+      at = Math.max(boundary, Math.min(index, this.order.length));
+    }
+    this.order.splice(at, 0, id);
+    return at;
+  }
+
   private restoreEntry(entry: ArchiveEntry, placement: RestorePlacement, activate: boolean): Tab {
     this.archive.delete(entry.tab.id);
     this.archiveOrder = this.archiveOrder.filter((id) => id !== entry.tab.id);
     const index = placement === "index" ? entry.index : this.order.length;
-    return this.reopen(entry.tab, index, activate);
+    return this.reopen(entry.tab, index, activate, placement === "index");
   }
 
-  private reopen(tab: Tab, index: number, activate: boolean): Tab {
+  private reopen(tab: Tab, index: number, activate: boolean, undo: boolean): Tab {
     if (this.tabs.has(tab.id) || this.archive.has(tab.id)) {
       throw new Error(`tab already open: ${tab.id}`);
     }
@@ -566,9 +611,10 @@ class BoardStore extends EventEmitter {
       tab.key = uniqueKey(this, tab.key, tab.title, tab.id);
     }
     delete tab.archivedAt;
-    const at = Math.max(0, Math.min(index, this.order.length));
     this.tabs.set(tab.id, tab);
-    this.order.splice(at, 0, tab.id);
+    const at = tab.pinned
+      ? this.insertOpen(tab.id, "pin")
+      : this.insertOpen(tab.id, undo ? "index" : "append", index);
     if (activate) {
       this.activeId = tab.id;
     }

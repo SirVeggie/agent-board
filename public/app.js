@@ -130,6 +130,10 @@
       if (idx === -1) {
         const at = Number.isInteger(msg.index) ? Math.max(0, Math.min(msg.index, state.tabs.length)) : state.tabs.length;
         state.tabs.splice(at, 0, msg.tab);
+      } else if (Number.isInteger(msg.index)) {
+        state.tabs.splice(idx, 1);
+        const at = Math.max(0, Math.min(msg.index, state.tabs.length));
+        state.tabs.splice(at, 0, msg.tab);
       } else {
         state.tabs[idx] = msg.tab;
       }
@@ -207,6 +211,10 @@
           },
           "*"
         );
+      }
+      if (tab && state.activeId !== msg.id) {
+        unread.add(msg.id);
+        render();
       }
     }
   }
@@ -685,10 +693,20 @@
     await fetch("/api/archive", { method: "DELETE" });
   }
 
+  function pinBoundary() {
+    let i = 0;
+    while (i < state.tabs.length && state.tabs[i].pinned) {
+      i += 1;
+    }
+    return i;
+  }
+
   async function setPinned(id, pin) {
-    const tab = state.tabs.find((item) => item.id === id);
-    if (tab) {
+    const idx = state.tabs.findIndex((item) => item.id === id);
+    if (idx !== -1) {
+      const [tab] = state.tabs.splice(idx, 1);
       tab.pinned = pin;
+      state.tabs.splice(pinBoundary(), 0, tab);
       render();
     }
     await fetch(`/api/tabs/${encodeURIComponent(id)}`, {
