@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { CONTENT_HOST, HOST, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
+import { parseHtmlEdits } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { store } from "./store.js";
@@ -115,6 +116,21 @@ export async function startHttp(): Promise<http.Server> {
         activate: req.body?.activate,
       });
       res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/tabs/:id/patch", (req, res) => {
+    try {
+      const edits = parseHtmlEdits(req.body?.edits);
+      const { tab, applied, archived } = store.patchHtml(req.params.id, {
+        edits,
+        title: optionalString(req.body?.title),
+        activate: req.body?.activate,
+      });
+      res.json({ applied, archived, tab: toMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });

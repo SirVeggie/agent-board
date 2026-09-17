@@ -48,6 +48,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | Tool | Purpose |
 | --- | --- |
 | `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Default focuses the tab (and restores it if archived). Pass `background: true` to update without focusing: unread blip on an open tab, or on Archive if the tab is archived. |
+| `board_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`). Same background/focus rules as show. Does not create a tab or reset wait state. |
 | `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
 | `board_list` | List open tabs (`id`, `key`, `title`, …) plus `archiveCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
 | `board_archive` | Page archived tabs (default 20, max 50) or search with `query` over title, key, page text, and JSON state. Open tabs are not searched. |
@@ -59,7 +60,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Archive one tab, all unpinned tabs, or everything. Pass `permanent: true` to delete instead |
 
-Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template).
+Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `board_patch` with exact `oldString`/`newString` edits instead of sending the whole document again.
 
 ### Images
 

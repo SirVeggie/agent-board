@@ -1,6 +1,6 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_screenshot, board_list, board_archive, board_restore, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms; and for testing visual designs by showing HTML and screenshotting it.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_patch, board_screenshot, board_list, board_archive, board_restore, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
 ---
 
 # Agent Board
@@ -9,13 +9,17 @@ A localhost tabbed HTML viewer the user keeps open. Drive it with the `agent-boa
 
 If `board_show` is missing, the MCP is not connected — tell the user to reload MCP / check `~/.cursor/mcp.json`, and fall back to a concise chat summary.
 
-If `board_list` exists but `board_archive` does not, the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the archive.
+If `board_list` exists but `board_archive` or `board_patch` does not, the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the archive.
 
 ## When to use it
 
-Use the board for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Use it to **test visual designs** too: show HTML, screenshot it, inspect the image, and revise — the board is the design surface, `board_screenshot` is how you see it.
+Use the board for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Put those pages up and stop — do not screenshot them to tweak layout or type.
 
-Skip it for code edits, short factual answers, drafts meant to be copied, or when the user asked for a specific other artifact.
+Use `board_screenshot` only when the page **is** the design work for this project (a UI mock, layout, or component the user asked you to design or implement). Then the board is the design surface and the screenshot is how you see it.
+
+Skip the board for code edits, short factual answers, drafts meant to be copied, or when the user asked for a specific other artifact.
+
+After a page is up, answer small follow-up questions in chat. Do not patch or re-show the page for a clarification, a yes/no, a short extra fact, or anything that does not need to stay on the board. Update the page when the user asked to change it, or when the new material is substantial enough to belong there.
 
 Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 
@@ -30,7 +34,7 @@ The user names pages by **title** (“my Jira issues page”). Keys are slugs yo
 
 **By content** (body or JSON state, or the title scan missed it): call `board_list({ query })` and `board_archive({ query })` **in the same turn** with the same keywords. They do not search each other’s tabs.
 
-Then `board_read` with that `id` or `key` when you need the HTML (works on archived tabs without restoring).
+Then `board_read` with that `id` or `key` when you need the HTML (works on archived tabs without restoring). Prefer `board_patch` over rewriting what you read.
 
 **Search keywords.** Use 1–3 distinctive words (`jira`, `clims-18595`, a phrase from the page or its state). Do not paste the whole utterance (`my jira issues page`). Filler like *my / page / tab / the* is ignored; every remaining word must match. Both tools search **title, key, visible page text, and JSON state**. Title matches rank first.
 
@@ -38,29 +42,58 @@ Do not dump the archive into context. Cap is 200 archived tabs.
 
 ## Show or update
 
-Before writing HTML or calling `board_show`, mention in a new line that the board is being updated so the pause does not look like the chat stopped.
+Before writing HTML or calling `board_show` / `board_patch`, mention in a new line that the board is being updated so the pause does not look like the chat stopped.
 
-Call `board_show` once:
+**Create or rewrite** with `board_show` once:
 
 - `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`)
 - `title`: short tab label
 - `html`: a complete HTML document with inline CSS, or a fragment (the board wraps fragments)
 - `assets`: omit unless the page needs images
-- `background`: omit when the user should look at this tab (default: focus, restore if archived, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or you are looping on screenshots they should not see yet.
+- `background`: omit when the user should look at this tab (default: focus, restore if archived, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or during a **project design** screenshot loop they should not see yet.
 - `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
+
+**Small markup edits** to a page that already exists: `board_patch` (see below). Do not `board_show` the whole document again.
 
 Do not pass a second tool to open or refresh. Do not pass `activate` — that flag is gone; `background` is the only one.
 
 | User said | Call | After |
 | --- | --- | --- |
 | show me / put it on the board | `board_show` (default) | Focused. Archived key is restored to the strip. |
-| update in the background / don’t switch | `board_show(..., background: true)` | Open: unread blip on that tab. Archived: stays archived, unread blip on Archive. |
+| update in the background / don’t switch | `board_show` or `board_patch` with `background: true` | Open: unread blip on that tab. Archived: stays archived, unread blip on Archive. |
+| tweak a section / fix a line / add a paragraph | `board_patch` | Same focus rules as show. Does not rewrite the rest of the page. |
+| a small follow-up about what’s already on the page | nothing — answer in chat | Leave the tab as-is. |
 | bring it back / restore | `board_restore` | Strip, focused. |
 | change todos / notes / checklist | `board_set_state` | Never focuses. Unread blip if they are not on that tab (open or archived). |
 
-If `board_show` returns `archived: true`, tell the user the blip is on Archive, not the tab strip.
+If `board_show` or `board_patch` returns `archived: true`, tell the user the blip is on Archive, not the tab strip.
 
 Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
+
+### Patch an existing page
+
+Prefer `board_patch` when the tab already exists and you are changing a few snippets — a heading, a paragraph, a table row, a CSS rule. It is cheaper than rewriting `html` and will not accidentally clobber the rest of the page.
+
+```
+board_patch({
+  key: "clims-12345-analysis",
+  background: true,
+  edits: [
+    { oldString: "<p>Status: in progress</p>", newString: "<p>Status: ready</p>" },
+    { oldString: "</section>", newString: "<h2>Next</h2><p>Ship it.</p></section>" }
+  ]
+})
+```
+
+Rules:
+
+- Identify the tab by the same `key` (or `id`) you used in `board_show`. The tab must already exist — this does not create.
+- `oldString` is an exact substring of the **stored** HTML. If you originally passed a fragment, the stored page is wrapped (doctype + default CSS); match the body you wrote, not the wrapper.
+- Each `oldString` must match exactly once. If it matches several times, add surrounding context or pass `replaceAll: true`.
+- Edits apply in order, atomically. A failure changes nothing; do not retry with a guessed snippet — `board_read` or add more context.
+- Do not `board_read` first when the original markup is still in the conversation.
+- Same `background` / focus rules as `board_show`. Does not clear wait signals or JSON state.
+- Still `board_show` for a new page, a large rewrite, new `assets`, or seeding `state`.
 
 ### Updating vs replacing
 
@@ -104,15 +137,17 @@ Rules:
 - Re-showing the same `key` without `assets` keeps images already attached. The same `name` replaces that file.
 - The tool result lists the attached names — use those in `src`.
 
-## Visual feedback
+## Visual feedback (project designs only)
 
-Use `board_screenshot` when you need to **see** a page — layout, spacing, type, color — not just read its HTML. The tool returns an image. Look at that image, then revise.
+`board_screenshot` is for **designs that belong to the current project** — a mock, layout, or component the user asked you to design or ship. It is not a proofreader for board pages.
 
-Loop:
+Do **not** screenshot investigation results, analyses, architecture notes, ticket dumps, checklists, walkthroughs, or any other throwaway information page. Show (or patch) those once. The user can see them. Polishing their spacing or type wastes tokens.
+
+When it **is** project design work:
 
 1. `board_show` with the same `key`, `background: true` (so the tab does not steal focus).
 2. `board_screenshot` with that `key`. Default is a 1280×800 viewport of the page.
-3. Inspect the image. Change the HTML (or `board_set_state`), then `board_show` again with `background: true` and screenshot again.
+3. Inspect the image. For a small markup change, `board_patch` with `background: true`. For a larger rewrite, `board_show` again with `background: true`. Then screenshot again.
 
 ```
 board_show({ key: "hero", title: "Hero", html, background: true })
@@ -123,15 +158,15 @@ board_screenshot({ key: "hero", fullPage: true })      // tall page; height is c
 
 Rules:
 
-- Always `background: true` on `board_show` in this loop unless the user should look at the tab right now.
+- Always `background: true` on `board_show` / `board_patch` in this loop unless the user should look at the tab right now.
 - Identify the tab by the same `key` (or `id`) you used in `board_show`.
 - `selector` is a CSS selector; it captures the first match. If it is missing or not visible, the tool errors — fix the markup or selector, do not retry blindly.
-- After `board_set_state`, screenshot again without re-showing HTML. The capture loads current HTML + state from the daemon.
+- After `board_set_state` or `board_patch`, screenshot again without re-showing the full HTML. The capture loads current HTML + state from the daemon.
 - The image is a canonical viewport, not the user's window size, zoom, or currently focused tab. Inactive / hidden board tabs still screenshot correctly.
 - Do not pin design-test pages. Do not write the HTML to a workspace file.
 - If `board_screenshot` is missing, the Agent Board MCP is on an old build — tell the user to reload MCP after rebuilding the daemon.
 
-When you are done iterating and the user should see the result, `board_show` once more **without** `background` so the tab comes to the front.
+When you are done iterating and the user should see the result, `board_show` or `board_patch` once more **without** `background` so the tab comes to the front.
 
 ## Interactive pages
 

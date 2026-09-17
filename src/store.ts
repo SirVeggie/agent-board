@@ -23,6 +23,7 @@ import {
   type TabMeta,
   type UpsertInput,
 } from "./types.js";
+import { applyEdits, type HtmlEdit } from "./htmlEdit.js";
 import { wrapHtml } from "./wrapHtml.js";
 
 type Located = { tab: Tab; where: "open" | "archive" };
@@ -269,6 +270,69 @@ class BoardStore extends EventEmitter {
       this.emit("tab_focused", id);
     }
     return { tab, created: true, archived: false };
+  }
+
+  patchHtml(
+    idOrKey: string,
+    input: { edits: HtmlEdit[]; title?: string; activate?: boolean }
+  ): { tab: Tab; applied: number; archived: boolean } {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    let nextTitle = located.tab.title;
+    if (input.title !== undefined) {
+      nextTitle = input.title.trim();
+      if (!nextTitle) {
+        throw new Error("title is required");
+      }
+    }
+    const result = applyEdits(located.tab.html, input.edits);
+    const bytes = Buffer.byteLength(result.html, "utf8");
+    if (bytes > MAX_HTML_BYTES) {
+      throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
+    }
+
+    const htmlChanged = result.html !== located.tab.html;
+    const titleChanged = nextTitle !== located.tab.title;
+    if (!htmlChanged && !titleChanged) {
+      return {
+        tab: located.tab,
+        applied: result.applied,
+        archived: located.where === "archive",
+      };
+    }
+
+    if (located.where === "archive" && input.activate !== false) {
+      this.restore(located.tab.id, { placement: "append", activate: true });
+    }
+    const found = this.locate(idOrKey);
+    if (!found) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const tab = found.tab;
+    tab.title = nextTitle;
+    tab.html = result.html;
+    tab.updatedAt = Date.now();
+    tab.revision += 1;
+    if (found.where === "archive") {
+      this.touchArchive(tab);
+      this.persistSoon();
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
+      return { tab, applied: result.applied, archived: true };
+    }
+    if (input.activate !== false) {
+      this.activeId = tab.id;
+    }
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, {
+      activate: input.activate !== false,
+      structural: true,
+    });
+    if (input.activate !== false) {
+      this.emit("tab_focused", tab.id);
+    }
+    return { tab, applied: result.applied, archived: false };
   }
 
   update(

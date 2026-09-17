@@ -31,12 +31,12 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.4.2",
+    version: "1.5.0",
   });
 
   server.tool(
     "board_show",
-    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key (open or archived). Default: focus the tab, restore it if archived, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; an archived tab stays archived with an Archive blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic.",
+    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key (open or archived). Default: focus the tab, restore it if archived, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; an archived tab stays archived with an Archive blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer board_patch instead of rewriting html.",
     {
       key: z
         .string()
@@ -117,6 +117,79 @@ export async function startMcp(): Promise<void> {
           : activate
             ? "Shown on Agent Board. Do not write this HTML to a workspace file."
             : "Updated in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.",
+      });
+    }
+  );
+
+  server.tool(
+    "board_patch",
+    "Patch snippets on an existing Agent Board page without rewriting the whole HTML. The tab must already exist (open or archived) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes. Does not clear wait signals or page state. Default: focus the tab (and restore it if archived). Pass background: true to patch without focusing. Prefer this over board_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. On a match failure, call board_read or add more surrounding context; do not guess.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Tab key used when the page was shown."),
+      edits: z
+        .array(
+          z.object({
+            oldString: z
+              .string()
+              .min(1)
+              .describe("Exact snippet to find in the stored HTML. Must match once unless replaceAll is true."),
+            newString: z.string().describe("Replacement. Pass an empty string to delete the snippet."),
+            replaceAll: z
+              .boolean()
+              .optional()
+              .describe("Replace every match. Default false (exactly one match required)."),
+          })
+        )
+        .min(1)
+        .describe("Replacements to apply in order. Each sees the result of the previous edit."),
+      title: z.string().optional().describe("Optional new tab title."),
+      background: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, do not focus this tab and do not bring the board window forward. Open tab: unread blip on that tab. Archived tab: stays archived, unread blip on Archive. Omit (default) when the user should look at this tab — that also restores an archived key to the strip."
+        ),
+    },
+    async ({ id, key, edits, title, background }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const activate = background !== true;
+      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/patch`, {
+        edits,
+        title,
+        activate,
+      });
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      const payload = data as {
+        applied: number;
+        archived: boolean;
+        tab: { id: string; key: string; title: string; revision: number; htmlBytes: number };
+      };
+      if (activate) {
+        const info = await health();
+        if (!info || info.viewers === 0) {
+          openBrowser(boardUrl(payload.tab.id));
+        }
+      }
+      return jsonResult({
+        applied: payload.applied,
+        archived: payload.archived,
+        id: payload.tab.id,
+        key: payload.tab.key,
+        title: payload.tab.title,
+        revision: payload.tab.revision,
+        htmlBytes: payload.tab.htmlBytes,
+        url: boardUrl(payload.tab.id),
+        note: payload.archived
+          ? "Patched in the archive (background). The unread blip is on Archive, not the tab strip. Use board_restore to bring it back."
+          : activate
+            ? "Patched on Agent Board. Do not write this HTML to a workspace file."
+            : "Patched in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.",
       });
     }
   );
@@ -295,7 +368,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_screenshot",
-    "Capture a screenshot of a board page so you can visually inspect a design. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or archived). Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
+    "Capture a screenshot of a board page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or archived). Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
