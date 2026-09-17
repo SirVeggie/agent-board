@@ -12,7 +12,6 @@
   const archiveList = document.getElementById("archive-list");
   const archiveNone = document.getElementById("archive-none");
   const archiveEmptyBtn = document.getElementById("archive-empty");
-  const archiveCloseBtn = document.getElementById("archive-close");
   const archiveResizer = document.getElementById("archive-resizer");
   const confirmDlg = document.getElementById("confirm");
   const confirmMessage = document.getElementById("confirm-message");
@@ -898,7 +897,6 @@
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
   archiveToggle.addEventListener("click", () => setArchiveOpen(!state.archiveOpen));
-  archiveCloseBtn.addEventListener("click", () => setArchiveOpen(false));
   archiveEmptyBtn.addEventListener("click", () => emptyArchive());
   archiveSearch.addEventListener("input", () => scheduleSearch());
 

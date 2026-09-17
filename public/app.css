@@ -233,7 +233,7 @@ body.resizing-archive iframe {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 8px 6px 12px;
+  padding: 8px 12px 6px 12px;
   flex-shrink: 0;
 }
 
