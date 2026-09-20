@@ -102,7 +102,7 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 
 ## Data
 
-Tabs persist in `%LOCALAPPDATA%\agent-board\state.json` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Closing a tab moves it to the **archive** (up to 200, oldest dropped). **Ctrl+Z** restores whichever is newer: the most recently archived tab (no cap on how far back), or one of the last 5 tabs that were permanently deleted while still open.
+Tabs persist in `%LOCALAPPDATA%\agent-board\board.sqlite` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Closing a tab moves it to the **archive** (kept until you empty it or permanently delete). **Ctrl+Z** restores whichever is newer: the most recently archived tab, or one of the last 5 tabs that were permanently deleted while still open. A previous `state.json` is imported once and renamed to `state.json.bak`.
 
 The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you archive or delete them. Shift+click a tab's × permanently deletes it (confirmation in the UI). **Ctrl+S** downloads the current page as HTML.
 

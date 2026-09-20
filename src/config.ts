@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export const VERSION = "1.5.0";
+export const VERSION = "1.6.0";
 export const HOST = "127.0.0.1";
 /** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
 export const CONTENT_HOST = "127.0.0.2";
@@ -31,6 +31,10 @@ export function dataDir(): string {
 
 export function statePath(): string {
   return path.join(dataDir(), "state.json");
+}
+
+export function dbPath(): string {
+  return path.join(dataDir(), "board.sqlite");
 }
 
 export function logPath(): string {

@@ -27,6 +27,21 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
+  const flush = () => {
+    try {
+      store.closeDb();
+    } catch {
+      /* already logged */
+    }
+  };
+  process.once("SIGINT", () => {
+    flush();
+    process.exit(0);
+  });
+  process.once("SIGTERM", () => {
+    flush();
+    process.exit(0);
+  });
 
   const app = express();
   app.disable("x-powered-by");
@@ -340,6 +355,11 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/shutdown", (_req, res) => {
     res.json({ ok: true });
+    try {
+      store.closeDb();
+    } catch {
+      /* already logged */
+    }
     void closeScreenshotBrowser().finally(() => process.exit(0));
   });
 

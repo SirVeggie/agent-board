@@ -1,17 +1,15 @@
 import { randomBytes } from "node:crypto";
-import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, writePreparedAssets } from "./assets.js";
 import { searchArchive, ARCHIVE_PAGE_DEFAULT, type ArchiveSearchResult } from "./archiveSearch.js";
-import { MAX_HTML_BYTES, MAX_STATE_BYTES, dataDir, statePath } from "./config.js";
+import { MAX_HTML_BYTES, MAX_STATE_BYTES, dbPath, statePath } from "./config.js";
+import { BoardDb, type StoredTab } from "./db.js";
 import { log } from "./log.js";
 import { normalizeSignalName } from "./signal.js";
 import {
-  ARCHIVE_LIMIT,
   DELETE_LIMIT,
   isPlainObject,
   toMeta,
-  type ArchiveEntry,
   type BoardState,
   type DeletedEntry,
   type RestorePlacement,
@@ -28,22 +26,19 @@ import { wrapHtml } from "./wrapHtml.js";
 
 type Located = { tab: Tab; where: "open" | "archive" };
 
-type Persisted = {
-  activeId: string | null;
-  tabs: Tab[];
-  archive?: ArchiveEntry[];
-  deleted?: DeletedEntry[];
-};
-
-class BoardStore extends EventEmitter {
+export class BoardStore extends EventEmitter {
   private tabs = new Map<string, Tab>();
   private order: string[] = [];
-  private archive = new Map<string, ArchiveEntry>();
+  private archive = new Map<string, Tab>();
   private archiveOrder: string[] = [];
   private deleted: DeletedEntry[] = [];
   private activeId: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStamp = 0;
+  private lastSeq = 0;
+  private db: BoardDb | null = null;
+  private dirty = new Set<string>();
+  private removed = new Set<string>();
 
   constructor() {
     super();
@@ -51,67 +46,58 @@ class BoardStore extends EventEmitter {
   }
 
   load(): void {
+    this.db = BoardDb.open(dbPath(), statePath());
+    const snapshot = this.db.load();
+    for (const row of snapshot.rows) {
+      const tab = withStateDefaults(row.tab);
+      this.lastSeq = Math.max(this.lastSeq, tab.stripSeq);
+      if (row.status === "open") {
+        delete tab.archivedAt;
+        this.tabs.set(tab.id, tab);
+      } else if (row.status === "archived") {
+        tab.archivedAt = typeof tab.archivedAt === "number" ? tab.archivedAt : tab.updatedAt;
+        this.archive.set(tab.id, tab);
+        this.archiveOrder.push(tab.id);
+      } else {
+        this.deleted.push({
+          tab,
+          deletedAt: typeof row.deletedAt === "number" ? row.deletedAt : tab.updatedAt,
+        });
+      }
+    }
+    this.deleted.sort((a, b) => a.deletedAt - b.deletedAt);
+    if (this.deleted.length > DELETE_LIMIT) {
+      const extra = this.deleted.splice(0, this.deleted.length - DELETE_LIMIT);
+      for (const gone of extra) {
+        this.removed.add(gone.tab.id);
+        if (!this.tabs.has(gone.tab.id) && !this.archive.has(gone.tab.id)) {
+          deleteTabAssets(gone.tab.id);
+        }
+      }
+    }
+    this.rebuildOrder();
+    this.sortArchive();
+    this.lastStamp = Math.max(
+      this.lastStamp,
+      ...[...this.archive.values()].map((tab) => tab.archivedAt ?? 0),
+      ...this.deleted.map((entry) => entry.deletedAt)
+    );
+    this.activeId =
+      snapshot.activeId && this.tabs.has(snapshot.activeId) ? snapshot.activeId : (this.order[0] ?? null);
     try {
-      const raw = fs.readFileSync(statePath(), "utf8");
-      const parsed = JSON.parse(raw) as Persisted;
-      if (!Array.isArray(parsed.tabs)) {
-        return;
-      }
-      for (const tab of parsed.tabs) {
-        if (!tab?.id || !tab?.html) {
-          continue;
-        }
-        const open = withStateDefaults(tab);
-        delete open.archivedAt;
-        this.tabs.set(open.id, open);
-        this.order.push(open.id);
-      }
-      this.activeId =
-        parsed.activeId && this.tabs.has(parsed.activeId) ? parsed.activeId : (this.order[0] ?? null);
-      if (Array.isArray(parsed.archive)) {
-        for (const entry of parsed.archive) {
-          if (!entry?.tab?.id || !entry.tab.html || this.tabs.has(entry.tab.id) || this.archive.has(entry.tab.id)) {
-            continue;
-          }
-          const tab = withStateDefaults(entry.tab);
-          tab.archivedAt = typeof tab.archivedAt === "number" ? tab.archivedAt : tab.updatedAt;
-          this.archive.set(tab.id, { tab, index: Math.max(0, entry.index ?? 0) });
-          this.archiveOrder.push(tab.id);
-        }
-        this.sortArchive();
-      }
-      if (Array.isArray(parsed.deleted)) {
-        this.deleted = parsed.deleted
-          .filter((entry) => entry?.tab?.id && entry.tab.html && typeof entry.index === "number")
-          .map((entry) => ({
-            tab: withStateDefaults(entry.tab),
-            index: entry.index,
-            deletedAt: typeof entry.deletedAt === "number" ? entry.deletedAt : entry.tab.updatedAt,
-          }))
-          .slice(-DELETE_LIMIT);
-      }
-      this.lastStamp = Math.max(
-        this.lastStamp,
-        ...[...this.archive.values()].map((entry) => entry.tab.archivedAt ?? 0),
-        ...this.deleted.map((entry) => entry.deletedAt)
-      );
-      try {
-        cleanupOrphanAssets(this.knownAssetTabIds());
-      } catch (err) {
-        log("Failed to clean orphan assets", String(err));
-      }
+      cleanupOrphanAssets(this.knownAssetTabIds());
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        log("Failed to load board state", String(err));
-      }
+      log("Failed to clean orphan assets", String(err));
+    }
+    if (this.removed.size) {
+      this.persistSoon();
     }
   }
 
   snapshot(): { tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null } {
     return {
       tabs: this.order.map((id) => toMeta(this.tabs.get(id)!)).filter(Boolean),
-      archive: this.archiveOrder.map((id) => toMeta(this.archive.get(id)!.tab)),
+      archive: this.archiveOrder.map((id) => toMeta(this.archive.get(id)!)),
       activeId: this.activeId,
     };
   }
@@ -129,7 +115,7 @@ class BoardStore extends EventEmitter {
   }
 
   listArchiveTabs(): Tab[] {
-    return this.archiveOrder.map((id) => this.archive.get(id)!.tab);
+    return this.archiveOrder.map((id) => this.archive.get(id)!);
   }
 
   searchOpen(query: string): ArchiveSearchResult {
@@ -139,7 +125,7 @@ class BoardStore extends EventEmitter {
 
   searchArchive(query: string, offset = 0, limit = ARCHIVE_PAGE_DEFAULT): ArchiveSearchResult {
     const off = Math.max(0, Math.floor(offset));
-    const lim = Math.min(ARCHIVE_LIMIT, Math.max(1, Math.floor(limit)));
+    const lim = Math.max(1, Math.floor(limit));
     return searchArchive(this.listArchiveTabs(), query, off, lim);
   }
 
@@ -193,6 +179,7 @@ class BoardStore extends EventEmitter {
         tab.pinned = input.pin;
       }
       this.touchArchive(tab);
+      this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), undefined, {
         activate: false,
@@ -212,14 +199,15 @@ class BoardStore extends EventEmitter {
       seedState(tab, input.state);
       let pinIndex: number | undefined;
       if (input.pin !== undefined && tab.pinned !== input.pin) {
-        tab.pinned = input.pin;
-        pinIndex = this.insertOpen(tab.id, "pin");
+        this.setPinned(tab, input.pin);
+        pinIndex = this.order.indexOf(tab.id);
       } else if (input.pin !== undefined) {
         tab.pinned = input.pin;
       }
       if (input.activate !== false) {
         this.activeId = tab.id;
       }
+      this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), pinIndex, {
         activate: input.activate !== false,
@@ -247,6 +235,7 @@ class BoardStore extends EventEmitter {
       pinned: Boolean(input.pin),
       createdAt: now,
       updatedAt: now,
+      stripSeq: this.nextSeq(),
       revision: 1,
       state: {},
       stateRevision: 0,
@@ -257,10 +246,12 @@ class BoardStore extends EventEmitter {
     };
     seedState(tab, input.state);
     this.tabs.set(id, tab);
-    const createdAt = this.insertOpen(id, tab.pinned ? "pin" : "append");
+    this.rebuildOrder();
+    const createdAt = this.order.indexOf(id);
     if (input.activate !== false) {
       this.activeId = id;
     }
+    this.markDirty(id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), createdAt, {
       activate: input.activate !== false,
@@ -317,6 +308,7 @@ class BoardStore extends EventEmitter {
     tab.revision += 1;
     if (found.where === "archive") {
       this.touchArchive(tab);
+      this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
       return { tab, applied: result.applied, archived: true };
@@ -324,6 +316,7 @@ class BoardStore extends EventEmitter {
     if (input.activate !== false) {
       this.activeId = tab.id;
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, {
       activate: input.activate !== false,
@@ -370,8 +363,8 @@ class BoardStore extends EventEmitter {
       }
     }
     if (patch.pin !== undefined && found.where === "open" && tab.pinned !== patch.pin) {
-      tab.pinned = patch.pin;
-      pinIndex = this.insertOpen(tab.id, "pin");
+      this.setPinned(tab, patch.pin);
+      pinIndex = this.order.indexOf(tab.id);
     } else if (patch.pin !== undefined) {
       tab.pinned = patch.pin;
     }
@@ -382,6 +375,7 @@ class BoardStore extends EventEmitter {
     }
     if (found.where === "archive") {
       this.touchArchive(tab);
+      this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
       return tab;
@@ -389,6 +383,7 @@ class BoardStore extends EventEmitter {
     if (patch.activate !== false) {
       this.activeId = tab.id;
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), pinIndex, {
       activate: patch.activate !== false,
@@ -429,6 +424,7 @@ class BoardStore extends EventEmitter {
       this.touchArchive(tab);
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_state", tab, input.client);
     return { ok: true, tab };
@@ -463,8 +459,8 @@ class BoardStore extends EventEmitter {
     tab.updatedAt = Date.now();
     if (located.where === "archive") {
       this.touchArchive(tab);
-      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_signal", tab);
     return tab;
@@ -493,25 +489,21 @@ class BoardStore extends EventEmitter {
       return located.tab;
     }
     const tab = located.tab;
-    const index = this.order.indexOf(tab.id);
     this.tabs.delete(tab.id);
-    this.order = this.order.filter((id) => id !== tab.id);
+    this.rebuildOrder();
     const stamped = this.stamp();
     tab.archivedAt = stamped;
     tab.updatedAt = stamped;
-    this.archive.set(tab.id, { tab, index: Math.max(0, index) });
+    this.archive.set(tab.id, tab);
     this.archiveOrder.unshift(tab.id);
-    const evicted = this.pruneArchive();
     if (this.activeId === tab.id) {
       this.activeId = this.order[this.order.length - 1] ?? null;
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
     this.emit("tab_archived", tab.id);
     this.emit("tab_focused", this.activeId);
-    for (const gone of evicted) {
-      this.emit("tab_closed", gone);
-    }
     return tab;
   }
 
@@ -535,14 +527,14 @@ class BoardStore extends EventEmitter {
       return this.deleteFromArchive(located.tab.id);
     }
     const tab = located.tab;
-    const index = this.order.indexOf(tab.id);
     this.tabs.delete(tab.id);
-    this.order = this.order.filter((id) => id !== tab.id);
+    this.rebuildOrder();
     delete tab.archivedAt;
-    this.pushDeleted({ tab, index: Math.max(0, index), deletedAt: this.stamp() });
+    this.pushDeleted({ tab, deletedAt: this.stamp() });
     if (this.activeId === tab.id) {
       this.activeId = this.order[this.order.length - 1] ?? null;
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_closed", tab.id);
     this.emit("tab_focused", this.activeId);
@@ -552,9 +544,11 @@ class BoardStore extends EventEmitter {
   emptyArchive(): string[] {
     const ids = [...this.archiveOrder];
     for (const id of ids) {
-      const entry = this.archive.get(id);
+      const tab = this.archive.get(id);
       this.archive.delete(id);
-      if (entry && !this.tabs.has(id) && !this.deleted.some((item) => item.tab.id === id)) {
+      this.removed.add(id);
+      this.dirty.delete(id);
+      if (tab && !this.tabs.has(id) && !this.deleted.some((item) => item.tab.id === id)) {
         deleteTabAssets(id);
       }
     }
@@ -566,17 +560,15 @@ class BoardStore extends EventEmitter {
 
   restore(idOrKey: string, opts?: { placement?: RestorePlacement; activate?: boolean }): Tab {
     const id = this.locate(idOrKey)?.tab.id ?? idOrKey;
-    const entry = this.archive.get(id);
-    if (!entry) {
+    const tab = this.archive.get(id);
+    if (!tab) {
       throw new Error(`archived tab not found: ${idOrKey}`);
     }
-    return this.restoreEntry(entry, opts?.placement ?? "append", opts?.activate !== false);
+    return this.restoreTab(tab, opts?.placement ?? "append", opts?.activate !== false);
   }
 
   restoreLast(): Tab {
-    const newestArchive = this.archiveOrder[0]
-      ? this.archive.get(this.archiveOrder[0])
-      : undefined;
+    const newestArchive = this.archiveOrder[0] ? this.archive.get(this.archiveOrder[0]) : undefined;
     let newestDeleted: DeletedEntry | undefined;
     let deletedIndex = -1;
     for (let i = 0; i < this.deleted.length; i += 1) {
@@ -586,16 +578,16 @@ class BoardStore extends EventEmitter {
         deletedIndex = i;
       }
     }
-    const archiveAt = newestArchive?.tab.archivedAt ?? 0;
+    const archiveAt = newestArchive?.archivedAt ?? 0;
     const deletedAt = newestDeleted?.deletedAt ?? 0;
     if (!newestArchive && !newestDeleted) {
       throw new Error("nothing to restore");
     }
     if (newestDeleted && (!newestArchive || deletedAt >= archiveAt)) {
       this.deleted.splice(deletedIndex, 1);
-      return this.reopen(newestDeleted.tab, newestDeleted.index, true, true);
+      return this.reopen(newestDeleted.tab, "index", true);
     }
-    return this.restoreEntry(newestArchive!, "index", true);
+    return this.restoreTab(newestArchive!, "index", true);
   }
 
   close(idOrKey: string): Tab {
@@ -606,6 +598,44 @@ class BoardStore extends EventEmitter {
     return this.archiveMany(filter);
   }
 
+  persist(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.db) {
+      return;
+    }
+    const upserts: StoredTab[] = [];
+    for (const id of this.dirty) {
+      const stored = this.storedOf(id);
+      if (stored) {
+        upserts.push(stored);
+      }
+    }
+    try {
+      this.db.save({
+        activeId: this.activeId,
+        upserts,
+        removedIds: [...this.removed],
+      });
+      this.dirty.clear();
+      this.removed.clear();
+    } catch (err) {
+      log("Failed to persist board state", String(err));
+    }
+  }
+
+  closeDb(): void {
+    this.persist();
+    try {
+      this.db?.close();
+    } catch (err) {
+      log("Failed to close board database", String(err));
+    }
+    this.db = null;
+  }
+
   private locate(idOrKey: string): Located | undefined {
     const openById = this.tabs.get(idOrKey);
     if (openById) {
@@ -613,7 +643,7 @@ class BoardStore extends EventEmitter {
     }
     const archivedById = this.archive.get(idOrKey);
     if (archivedById) {
-      return { tab: archivedById.tab, where: "archive" };
+      return { tab: archivedById, where: "archive" };
     }
     const key = normalizeKey(idOrKey);
     for (const id of this.order) {
@@ -623,50 +653,35 @@ class BoardStore extends EventEmitter {
       }
     }
     for (const id of this.archiveOrder) {
-      const entry = this.archive.get(id);
-      if (entry && entry.tab.key === key) {
-        return { tab: entry.tab, where: "archive" };
+      const tab = this.archive.get(id);
+      if (tab && tab.key === key) {
+        return { tab, where: "archive" };
       }
     }
     return undefined;
   }
 
-  /** Pinned tabs sit left of unpinned. Pin -> last pinned; unpin -> first unpinned. */
-  private pinBoundary(): number {
-    let i = 0;
-    while (i < this.order.length && this.tabs.get(this.order[i])?.pinned) {
-      i += 1;
-    }
-    return i;
-  }
-
-  private insertOpen(id: string, placement: "pin" | "append" | "index", index = 0): number {
-    this.order = this.order.filter((item) => item !== id);
-    const tab = this.tabs.get(id);
-    if (!tab) {
-      return 0;
-    }
-    const boundary = this.pinBoundary();
-    let at: number;
-    if (tab.pinned || placement === "pin") {
-      at = boundary;
-    } else if (placement === "append") {
-      at = this.order.length;
+  private setPinned(tab: Tab, pinned: boolean): void {
+    tab.pinned = pinned;
+    if (pinned) {
+      tab.stripSeq = this.nextSeq();
     } else {
-      at = Math.max(boundary, Math.min(index, this.order.length));
+      const others = [...this.tabs.values()].filter((item) => item.id !== tab.id && !item.pinned);
+      if (others.length) {
+        const min = Math.min(...others.map((item) => item.stripSeq));
+        tab.stripSeq = this.allocBefore(min);
+      }
     }
-    this.order.splice(at, 0, id);
-    return at;
+    this.rebuildOrder();
   }
 
-  private restoreEntry(entry: ArchiveEntry, placement: RestorePlacement, activate: boolean): Tab {
-    this.archive.delete(entry.tab.id);
-    this.archiveOrder = this.archiveOrder.filter((id) => id !== entry.tab.id);
-    const index = placement === "index" ? entry.index : this.order.length;
-    return this.reopen(entry.tab, index, activate, placement === "index");
+  private restoreTab(tab: Tab, placement: RestorePlacement, activate: boolean): Tab {
+    this.archive.delete(tab.id);
+    this.archiveOrder = this.archiveOrder.filter((id) => id !== tab.id);
+    return this.reopen(tab, placement, activate);
   }
 
-  private reopen(tab: Tab, index: number, activate: boolean, undo: boolean): Tab {
+  private reopen(tab: Tab, placement: RestorePlacement, activate: boolean): Tab {
     if (this.tabs.has(tab.id) || this.archive.has(tab.id)) {
       throw new Error(`tab already open: ${tab.id}`);
     }
@@ -675,13 +690,24 @@ class BoardStore extends EventEmitter {
       tab.key = uniqueKey(this, tab.key, tab.title, tab.id);
     }
     delete tab.archivedAt;
+    switch (placement) {
+      case "append":
+        tab.stripSeq = this.nextSeq();
+        break;
+      case "index":
+        break;
+      default: {
+        const _never: never = placement;
+        return _never;
+      }
+    }
     this.tabs.set(tab.id, tab);
-    const at = tab.pinned
-      ? this.insertOpen(tab.id, "pin")
-      : this.insertOpen(tab.id, undo ? "index" : "append", index);
+    this.rebuildOrder();
+    const at = this.order.indexOf(tab.id);
     if (activate) {
       this.activeId = tab.id;
     }
+    this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), at, { activate, structural: true });
     if (activate) {
@@ -691,18 +717,20 @@ class BoardStore extends EventEmitter {
   }
 
   private deleteFromArchive(id: string): Tab {
-    const entry = this.archive.get(id);
-    if (!entry) {
+    const tab = this.archive.get(id);
+    if (!tab) {
       throw new Error(`tab not found: ${id}`);
     }
     this.archive.delete(id);
     this.archiveOrder = this.archiveOrder.filter((item) => item !== id);
+    this.removed.add(id);
+    this.dirty.delete(id);
     if (!this.tabs.has(id) && !this.deleted.some((item) => item.tab.id === id)) {
       deleteTabAssets(id);
     }
     this.persistSoon();
     this.emit("tab_closed", id);
-    return entry.tab;
+    return tab;
   }
 
   private touchArchive(tab: Tab): void {
@@ -714,27 +742,41 @@ class BoardStore extends EventEmitter {
 
   private sortArchive(): void {
     this.archiveOrder.sort((a, b) => {
-      const left = this.archive.get(a)?.tab.archivedAt ?? 0;
-      const right = this.archive.get(b)?.tab.archivedAt ?? 0;
+      const left = this.archive.get(a)?.archivedAt ?? 0;
+      const right = this.archive.get(b)?.archivedAt ?? 0;
       return right - left;
     });
   }
 
-  private pruneArchive(): string[] {
-    const evicted: string[] = [];
-    while (this.archiveOrder.length > ARCHIVE_LIMIT) {
-      const id = this.archiveOrder.pop();
-      if (!id) {
-        break;
-      }
-      const entry = this.archive.get(id);
-      this.archive.delete(id);
-      if (entry && !this.tabs.has(id) && !this.deleted.some((item) => item.tab.id === id)) {
-        deleteTabAssets(id);
-      }
-      evicted.push(id);
+  private rebuildOrder(): void {
+    this.order = [...this.tabs.values()]
+      .sort((a, b) => {
+        const ap = a.pinned ? 0 : 1;
+        const bp = b.pinned ? 0 : 1;
+        if (ap !== bp) {
+          return ap - bp;
+        }
+        return a.stripSeq - b.stripSeq;
+      })
+      .map((tab) => tab.id);
+  }
+
+  private nextSeq(): number {
+    this.lastSeq += 1;
+    return this.lastSeq;
+  }
+
+  private allocBefore(n: number): number {
+    const used = new Set(this.allKnownTabs().map((tab) => tab.stripSeq));
+    let seq = n - 1;
+    while (used.has(seq)) {
+      seq -= 1;
     }
-    return evicted;
+    return seq;
+  }
+
+  private allKnownTabs(): Tab[] {
+    return [...this.tabs.values(), ...this.archive.values(), ...this.deleted.map((entry) => entry.tab)];
   }
 
   private persistSoon(): void {
@@ -744,29 +786,35 @@ class BoardStore extends EventEmitter {
     this.saveTimer = setTimeout(() => this.persist(), 150);
   }
 
-  persist(): void {
-    const payload: Persisted = {
-      activeId: this.activeId,
-      tabs: this.order.map((id) => this.tabs.get(id)!),
-      archive: this.archiveOrder.map((id) => this.archive.get(id)!),
-      deleted: this.deleted,
-    };
-    try {
-      fs.mkdirSync(dataDir(), { recursive: true });
-      const tmp = statePath() + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(payload));
-      fs.copyFileSync(tmp, statePath());
-      fs.unlinkSync(tmp);
-    } catch (err) {
-      log("Failed to persist board state", String(err));
+  private markDirty(id: string): void {
+    this.dirty.add(id);
+    this.removed.delete(id);
+  }
+
+  private storedOf(id: string): StoredTab | undefined {
+    const open = this.tabs.get(id);
+    if (open) {
+      return { tab: open, status: "open" };
     }
+    const archived = this.archive.get(id);
+    if (archived) {
+      return { tab: archived, status: "archived" };
+    }
+    const deleted = this.deleted.find((entry) => entry.tab.id === id);
+    if (deleted) {
+      return { tab: deleted.tab, status: "deleted", deletedAt: deleted.deletedAt };
+    }
+    return undefined;
   }
 
   private pushDeleted(entry: DeletedEntry): void {
     this.deleted.push(entry);
+    this.markDirty(entry.tab.id);
     if (this.deleted.length > DELETE_LIMIT) {
       const removed = this.deleted.splice(0, this.deleted.length - DELETE_LIMIT);
       for (const gone of removed) {
+        this.removed.add(gone.tab.id);
+        this.dirty.delete(gone.tab.id);
         if (!this.tabs.has(gone.tab.id) && !this.archive.has(gone.tab.id)) {
           deleteTabAssets(gone.tab.id);
         }
@@ -782,11 +830,7 @@ class BoardStore extends EventEmitter {
   }
 
   private knownAssetTabIds(): string[] {
-    return [
-      ...this.tabs.keys(),
-      ...this.archive.keys(),
-      ...this.deleted.map((entry) => entry.tab.id),
-    ];
+    return [...this.tabs.keys(), ...this.archive.keys(), ...this.deleted.map((entry) => entry.tab.id)];
   }
 }
 
@@ -805,6 +849,7 @@ function withStateDefaults(tab: Tab): Tab {
       : null;
   return {
     ...tab,
+    stripSeq: typeof tab.stripSeq === "number" ? tab.stripSeq : 0,
     state: isPlainObject(tab.state) ? tab.state : {},
     stateRevision: typeof tab.stateRevision === "number" ? tab.stateRevision : 0,
     stateUpdatedAt: typeof tab.stateUpdatedAt === "number" ? tab.stateUpdatedAt : 0,

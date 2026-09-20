@@ -10,10 +10,10 @@
     "mcp": "node dist/index.js",
     "dev": "tsx watch src/index.ts --daemon",
     "stop": "node dist/index.js --stop",
-    "test": "tsx --test src/htmlEdit.test.ts"
+    "test": "tsx --test src/htmlEdit.test.ts src/store.test.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",

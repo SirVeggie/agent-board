@@ -28,6 +28,8 @@ export type Tab = {
   updatedAt: number;
   /** Set while the tab is in the archive; omitted when open. */
   archivedAt?: number;
+  /** Strip coordinate. Owned by the tab; omitted from agent-facing meta. */
+  stripSeq: number;
   revision: number;
   state: BoardState;
   stateRevision: number;
@@ -39,20 +41,15 @@ export type Tab = {
   assets: TabAsset[];
 };
 
-export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision"> & { htmlBytes: number };
-
-export type ArchiveEntry = {
-  tab: Tab;
-  index: number;
+export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision" | "stripSeq"> & {
+  htmlBytes: number;
 };
 
 export type DeletedEntry = {
   tab: Tab;
-  index: number;
   deletedAt: number;
 };
 
-export const ARCHIVE_LIMIT = 200;
 export const DELETE_LIMIT = 5;
 
 export type UpsertNotice = {

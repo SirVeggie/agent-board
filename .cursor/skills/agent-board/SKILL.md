@@ -38,7 +38,7 @@ Then `board_read` with that `id` or `key` when you need the HTML (works on archi
 
 **Search keywords.** Use 1–3 distinctive words (`jira`, `clims-18595`, a phrase from the page or its state). Do not paste the whole utterance (`my jira issues page`). Filler like *my / page / tab / the* is ignored; every remaining word must match. Both tools search **title, key, visible page text, and JSON state**. Title matches rank first.
 
-Do not dump the archive into context. Cap is 200 archived tabs.
+Do not dump the archive into context. Page it (default 20, max 50). The archive is not capped.
 
 ## Show or update
 

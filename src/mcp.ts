@@ -255,7 +255,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_archive",
-    "Page or search archived tabs only (max 200 stored). Each row includes id, key, title, dates, and a snippet when searching. Omit query to list by archived date, newest first (default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Open tabs are not searched — use board_list with the same query for those. If remaining > 0, pass offset to get the next page. Do not dump the whole archive into context.",
+    "Page or search archived tabs only. Each row includes id, key, title, dates, and a snippet when searching. Omit query to list by archived date, newest first (default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Open tabs are not searched — use board_list with the same query for those. If remaining > 0, pass offset to get the next page. Do not dump the whole archive into context.",
     {
       query: z
         .string()
