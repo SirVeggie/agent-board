@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="Agent Board">
+  <rect width="16" height="16" rx="3.5" fill="#007acc"/>
+  <rect x="3" y="2.5" width="5" height="3" rx="1" fill="#fff"/>
+  <rect x="3" y="6.5" width="10" height="7" rx="1.25" fill="#fff"/>
+</svg>
