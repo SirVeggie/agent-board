@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Board</title>
   <link rel="icon" href="/favicon.svg?v=1" type="image/svg+xml" sizes="any">
-  <link rel="stylesheet" href="/app.css?v=14">
+  <link rel="stylesheet" href="/app.css?v=17">
 </head>
 <body>
   <header class="chrome">
@@ -30,6 +30,7 @@
         <h1>Waiting for a page</h1>
         <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
         <ul class="shortcuts">
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>D</kbd></span><span>searches open and archived pages</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>restores the last archived or deleted tab</span></li>
@@ -48,6 +49,19 @@
       <div id="archive-none" class="archive-none" hidden>No archived tabs</div>
     </aside>
   </div>
+  <div id="palette" class="palette" hidden>
+    <div class="palette-backdrop" id="palette-backdrop"></div>
+    <div class="palette-panel" role="dialog" aria-modal="true" aria-label="Search pages">
+      <input type="search" id="palette-input" placeholder="Search open and archived pages" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="palette-list">
+      <div id="palette-list" class="palette-list" role="listbox"></div>
+      <div id="palette-empty" class="palette-empty" hidden>No matching pages</div>
+      <div class="palette-hint">
+        <span><kbd>↑</kbd> <kbd>↓</kbd> move</span>
+        <span><kbd>Enter</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
   <dialog id="confirm" class="confirm">
     <form method="dialog">
       <p id="confirm-message"></p>
@@ -57,6 +71,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=20"></script>
+  <script src="/app.js?v=21"></script>
 </body>
 </html>

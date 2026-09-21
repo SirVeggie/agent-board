@@ -9,6 +9,7 @@ import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { parseHtmlEdits } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
+import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store } from "./store.js";
 import { isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta, type UpsertNotice } from "./types.js";
 import { ViewerHub } from "./viewers.js";
@@ -92,6 +93,27 @@ export async function startHttp(): Promise<http.Server> {
       remaining: result.remaining,
       matchCount: result.matchCount,
       archiveCount: result.archiveCount,
+    });
+  });
+
+  app.get("/api/search", (req, res) => {
+    const query = typeof req.query.query === "string" ? req.query.query : "";
+    const limit = optionalNumber(req.query.limit);
+    const result = store.searchPages(query, limit);
+    res.json({
+      tabs: result.hits.map((hit) => ({
+        ...toMeta(hit.tab),
+        archived: hit.archived,
+        location: hit.location,
+        quality: hit.quality,
+        locationLabel: hit.location ? locationLabel(hit.location) : null,
+        qualityLabel: hit.quality ? qualityLabel(hit.quality, hit.matchedParts, hit.totalParts) : null,
+        matchedParts: hit.matchedParts,
+        totalParts: hit.totalParts,
+        snippet: hit.snippet,
+      })),
+      returned: result.returned,
+      matchCount: result.matchCount,
     });
   });
 
@@ -577,6 +599,11 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
     if (key === "z" && !event.shiftKey && !typing(event.target)) {
       event.preventDefault();
       parent.postMessage({ type: "agent-board-undo" }, "*");
+      return;
+    }
+    if (key === "d" && !event.shiftKey) {
+      event.preventDefault();
+      parent.postMessage({ type: "agent-board-palette" }, "*");
     }
   }, true);
 })();

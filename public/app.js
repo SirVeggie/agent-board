@@ -15,6 +15,11 @@
   const archiveResizer = document.getElementById("archive-resizer");
   const confirmDlg = document.getElementById("confirm");
   const confirmMessage = document.getElementById("confirm-message");
+  const paletteEl = document.getElementById("palette");
+  const paletteBackdrop = document.getElementById("palette-backdrop");
+  const paletteInput = document.getElementById("palette-input");
+  const paletteList = document.getElementById("palette-list");
+  const paletteEmpty = document.getElementById("palette-empty");
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
@@ -46,6 +51,11 @@
   /** @type {Array<any> | null} */
   let searchHits = null;
   let searchMeta = null;
+  let paletteTimer = 0;
+  let paletteReq = 0;
+  /** @type {Array<any>} */
+  let paletteHits = [];
+  let paletteIndex = 0;
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
 
@@ -783,6 +793,11 @@
       if (confirmDlg.open) {
         return;
       }
+      if (isPaletteOpen()) {
+        event.preventDefault();
+        closePalette();
+        return;
+      }
       if (state.archiveOpen && document.activeElement === archiveSearch && archiveSearch.value) {
         event.preventDefault();
         archiveSearch.value = "";
@@ -807,6 +822,11 @@
       return;
     }
     const key = event.key.toLowerCase();
+    if (key === "d" && !event.shiftKey) {
+      event.preventDefault();
+      togglePalette();
+      return;
+    }
     if (key === "s" && !event.shiftKey) {
       event.preventDefault();
       downloadActive();
@@ -864,6 +884,167 @@
     renderArchive();
   }
 
+  function isPaletteOpen() {
+    return !paletteEl.hidden;
+  }
+
+  function togglePalette() {
+    if (isPaletteOpen()) {
+      closePalette();
+      return;
+    }
+    openPalette();
+  }
+
+  function openPalette() {
+    paletteEl.hidden = false;
+    paletteInput.value = "";
+    paletteIndex = 0;
+    showLocalPaletteRows();
+    paletteInput.focus();
+    paletteInput.select();
+  }
+
+  function closePalette() {
+    paletteEl.hidden = true;
+    clearTimeout(paletteTimer);
+    paletteReq += 1;
+  }
+
+  function showLocalPaletteRows() {
+    paletteHits = [
+      ...state.tabs.map((tab) => ({ ...tab, archived: false })),
+      ...state.archive.slice(0, 15).map((tab) => ({ ...tab, archived: true })),
+    ];
+    paletteIndex = 0;
+    renderPalette();
+  }
+
+  function schedulePaletteSearch(delay = 80) {
+    clearTimeout(paletteTimer);
+    paletteTimer = setTimeout(runPaletteSearch, delay);
+  }
+
+  async function runPaletteSearch() {
+    const query = paletteInput.value.trim();
+    if (!query) {
+      showLocalPaletteRows();
+      return;
+    }
+    const req = ++paletteReq;
+    const res = await fetch(`/api/search?query=${encodeURIComponent(query)}&limit=40`);
+    if (req !== paletteReq || !isPaletteOpen()) {
+      return;
+    }
+    if (!res.ok) {
+      return;
+    }
+    const data = await res.json();
+    paletteHits = data.tabs || [];
+    if (paletteIndex >= paletteHits.length) {
+      paletteIndex = 0;
+    }
+    renderPalette();
+  }
+
+  function renderPalette() {
+    paletteList.replaceChildren();
+    const empty = paletteHits.length === 0;
+    paletteEmpty.hidden = !empty;
+    paletteEmpty.textContent = paletteInput.value.trim() ? "No matching pages" : "No pages yet";
+    for (let index = 0; index < paletteHits.length; index += 1) {
+      const tab = paletteHits[index];
+      const el = document.createElement("div");
+      el.className = "palette-row" + (index === paletteIndex ? " active" : "");
+      el.role = "option";
+      el.setAttribute("aria-selected", index === paletteIndex ? "true" : "false");
+      el.addEventListener("mouseenter", () => {
+        paletteIndex = index;
+        highlightPaletteRows();
+      });
+      el.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        activatePaletteHit(tab);
+      });
+
+      const main = document.createElement("div");
+      main.className = "palette-row-main";
+      const title = document.createElement("span");
+      title.className = "tab-title";
+      title.textContent = tab.title;
+      main.appendChild(title);
+
+      const chips = document.createElement("div");
+      chips.className = "palette-chips";
+      if (tab.locationLabel) {
+        chips.appendChild(paletteChip(tab.locationLabel, "location-" + tab.location));
+      }
+      if (tab.qualityLabel) {
+        chips.appendChild(paletteChip(tab.qualityLabel));
+      }
+      if (tab.archived) {
+        chips.appendChild(paletteChip("Archived"));
+      }
+      if (chips.childElementCount) {
+        main.appendChild(chips);
+      }
+      el.appendChild(main);
+
+      if (tab.snippet) {
+        const snippet = document.createElement("div");
+        snippet.className = "palette-snippet";
+        snippet.textContent = tab.snippet;
+        el.appendChild(snippet);
+      }
+      paletteList.appendChild(el);
+    }
+    const active = paletteList.querySelector(".palette-row.active");
+    if (active) {
+      active.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function paletteChip(label, extraClass) {
+    const chip = document.createElement("span");
+    chip.className = "palette-chip" + (extraClass ? " " + extraClass : "");
+    chip.textContent = label;
+    return chip;
+  }
+
+  function highlightPaletteRows() {
+    const rows = paletteList.children;
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const on = i === paletteIndex;
+      row.classList.toggle("active", on);
+      row.setAttribute("aria-selected", on ? "true" : "false");
+    }
+    const active = paletteList.querySelector(".palette-row.active");
+    if (active) {
+      active.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function movePalette(delta) {
+    if (!paletteHits.length) {
+      return;
+    }
+    paletteIndex = (paletteIndex + delta + paletteHits.length) % paletteHits.length;
+    highlightPaletteRows();
+  }
+
+  function activatePaletteHit(tab) {
+    if (!tab) {
+      return;
+    }
+    closePalette();
+    if (tab.archived || tab.archivedAt) {
+      restoreTab(tab.id);
+      return;
+    }
+    selectTab(tab.id, { fromUser: true });
+  }
+
   tabsEl.parentElement.addEventListener("wheel", onTabsWheel, { passive: false });
   tabsEl.addEventListener("scroll", updateTabFade);
   window.addEventListener("resize", updateTabFade);
@@ -888,6 +1069,8 @@
       undoClose();
     } else if (event.data?.type === "agent-board-help") {
       openWelcome();
+    } else if (event.data?.type === "agent-board-palette") {
+      togglePalette();
     } else if (event.data?.type === "agent-board-activity") {
       noteEdit();
     }
@@ -899,6 +1082,39 @@
   archiveToggle.addEventListener("click", () => setArchiveOpen(!state.archiveOpen));
   archiveEmptyBtn.addEventListener("click", () => emptyArchive());
   archiveSearch.addEventListener("input", () => scheduleSearch());
+  paletteBackdrop.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    closePalette();
+  });
+  paletteInput.addEventListener("input", () => {
+    const query = paletteInput.value.trim();
+    if (!query) {
+      showLocalPaletteRows();
+      return;
+    }
+    schedulePaletteSearch();
+  });
+  paletteInput.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      movePalette(1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      movePalette(-1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      activatePaletteHit(paletteHits[paletteIndex]);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePalette();
+    }
+  });
 
   archiveResizer.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) {

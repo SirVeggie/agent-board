@@ -49,8 +49,18 @@ export function htmlToText(html: string): string {
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
+    .replace(/&#39;|&apos;|&lsquo;|&rsquo;/gi, "'")
+    .replace(/&mdash;|&ndash;/gi, "-")
+    .replace(/&hellip;/gi, "...")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = Number.parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
     .replace(/\s+/g, " ")
     .trim();
 }

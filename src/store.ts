@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, writePreparedAssets } from "./assets.js";
 import { searchArchive, ARCHIVE_PAGE_DEFAULT, type ArchiveSearchResult } from "./archiveSearch.js";
+import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
 import { MAX_HTML_BYTES, MAX_STATE_BYTES, dbPath, statePath } from "./config.js";
 import { BoardDb, type StoredTab } from "./db.js";
 import { log } from "./log.js";
@@ -127,6 +128,10 @@ export class BoardStore extends EventEmitter {
     const off = Math.max(0, Math.floor(offset));
     const lim = Math.max(1, Math.floor(limit));
     return searchArchive(this.listArchiveTabs(), query, off, lim);
+  }
+
+  searchPages(query: string, limit?: number): PageSearchResult {
+    return rankPages(this.listOpenTabs(), this.listArchiveTabs(), query, limit ?? PAGE_SEARCH_DEFAULT);
   }
 
   getActiveId(): string | null {
