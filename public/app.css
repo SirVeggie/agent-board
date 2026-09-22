@@ -168,7 +168,7 @@ body {
   align-items: center;
 }
 
-.tab-close {
+button.tab-close {
   appearance: none;
   border: 0;
   background: transparent;
@@ -183,8 +183,9 @@ body {
   box-shadow: none;
 }
 
-.tab-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+button.tab-close:hover {
+  background: transparent;
+  box-shadow: none;
   color: var(--danger);
 }
 
