@@ -11,7 +11,7 @@ import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store } from "./store.js";
-import { isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta, type UpsertNotice } from "./types.js";
+import { isAppTab, isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta, type UpsertNotice } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
@@ -310,14 +310,19 @@ export async function startHttp(): Promise<http.Server> {
         res.json({ deleted: [tab.id], archiveCount: store.archiveCount() });
         return;
       }
-      if (store.isArchived(req.params.id)) {
+      const existing = store.get(req.params.id);
+      if (store.isArchived(req.params.id) && existing && !isAppTab(existing)) {
         res.status(400).json({
           error: "tab is archived; restore it or pass permanent=true to delete",
         });
         return;
       }
       const tab = store.archiveTab(req.params.id);
-      res.json({ archived: [tab.id], archiveCount: store.archiveCount() });
+      if (store.isArchived(tab.id)) {
+        res.json({ archived: [tab.id], archiveCount: store.archiveCount() });
+        return;
+      }
+      res.json({ deleted: [tab.id], archiveCount: store.archiveCount() });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }

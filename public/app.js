@@ -685,6 +685,10 @@
     const open = state.tabs.find((tab) => tab.id === id);
     const archived = state.archive.find((tab) => tab.id === id);
     const tab = open || archived;
+    if (tab?.key === "welcome") {
+      await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      return;
+    }
     if (permanent || fromArchive) {
       const title = tab?.title || "this tab";
       const ok = await confirmDelete(

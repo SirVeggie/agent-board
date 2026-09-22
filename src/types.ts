@@ -52,6 +52,13 @@ export type DeletedEntry = {
 
 export const DELETE_LIMIT = 5;
 
+/** Reserved for the in-app help page. Closing it discards the tab instead of archiving. */
+export const WELCOME_KEY = "welcome";
+
+export function isAppTab(tab: { key: string }): boolean {
+  return tab.key === WELCOME_KEY;
+}
+
 export type UpsertNotice = {
   activate: boolean;
   /** HTML, title, or an in-archive write; pin-only updates on open tabs are not structural. */

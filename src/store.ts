@@ -9,6 +9,7 @@ import { log } from "./log.js";
 import { normalizeSignalName } from "./signal.js";
 import {
   DELETE_LIMIT,
+  isAppTab,
   isPlainObject,
   toMeta,
   type BoardState,
@@ -55,6 +56,8 @@ export class BoardStore extends EventEmitter {
       if (row.status === "open") {
         delete tab.archivedAt;
         this.tabs.set(tab.id, tab);
+      } else if (isAppTab(tab)) {
+        this.removed.add(tab.id);
       } else if (row.status === "archived") {
         tab.archivedAt = typeof tab.archivedAt === "number" ? tab.archivedAt : tab.updatedAt;
         this.archive.set(tab.id, tab);
@@ -490,6 +493,9 @@ export class BoardStore extends EventEmitter {
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
+    if (isAppTab(located.tab)) {
+      return this.discardAppTab(located.tab);
+    }
     if (located.where === "archive") {
       return located.tab;
     }
@@ -517,16 +523,23 @@ export class BoardStore extends EventEmitter {
       const tab = this.tabs.get(id);
       return tab && (filter === "all" || !tab.pinned);
     });
+    const archived: string[] = [];
     for (const id of ids) {
       this.archiveTab(id);
+      if (this.archive.has(id)) {
+        archived.push(id);
+      }
     }
-    return ids;
+    return archived;
   }
 
   deletePermanent(idOrKey: string): Tab {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (isAppTab(located.tab)) {
+      return this.discardAppTab(located.tab);
     }
     if (located.where === "archive") {
       return this.deleteFromArchive(located.tab.id);
@@ -717,6 +730,30 @@ export class BoardStore extends EventEmitter {
     this.emit("tab_upserted", toMeta(tab), at, { activate, structural: true });
     if (activate) {
       this.emit("tab_focused", tab.id);
+    }
+    return tab;
+  }
+
+  /** Drop an in-app page (help) without archiving or keeping it on the Ctrl+Z stack. */
+  private discardAppTab(tab: Tab): Tab {
+    const wasActive = this.activeId === tab.id;
+    const wasOpen = this.tabs.has(tab.id);
+    this.tabs.delete(tab.id);
+    this.archive.delete(tab.id);
+    this.archiveOrder = this.archiveOrder.filter((id) => id !== tab.id);
+    this.deleted = this.deleted.filter((entry) => entry.tab.id !== tab.id);
+    this.rebuildOrder();
+    delete tab.archivedAt;
+    if (wasActive) {
+      this.activeId = this.order[this.order.length - 1] ?? null;
+    }
+    this.removed.add(tab.id);
+    this.dirty.delete(tab.id);
+    deleteTabAssets(tab.id);
+    this.persistSoon();
+    this.emit("tab_closed", tab.id);
+    if (wasOpen) {
+      this.emit("tab_focused", this.activeId);
     }
     return tab;
   }

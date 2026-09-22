@@ -46,6 +46,7 @@
     table { border-collapse: collapse; width: 100%; margin: 0.8rem 0 1.2rem; font-size: 0.95rem; }
     th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
     th { background: #2a2a2a; font-weight: 600; }
+    td:first-child { white-space: nowrap; width: 1%; }
   </style>
 </head>
 <body>
@@ -62,21 +63,36 @@
       <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Download the current page as HTML</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Open this help page</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Restore the last archived tab, or the last permanently deleted open tab (up to 5), whichever is newer</td></tr>
-      <tr><td><kbd>Esc</kbd></td><td>Close the archive sidebar</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Close the search palette, or the archive sidebar</td></tr>
       <tr><td><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Focus archive search when the sidebar is open (<kbd>Shift</kbd>+<kbd>7</kbd> on Nordic layouts)</td></tr>
     </tbody>
   </table>
 
+  <h2>Search</h2>
+  <ul>
+    <li><kbd>Ctrl</kbd>+<kbd>D</kbd> opens a palette over the board. Type to search titles, page content, and saved form data across open and archived tabs.</li>
+    <li>With an empty query it lists open tabs, then recent archived ones. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens (restores an archived tab and switches to it), <kbd>Esc</kbd> closes.</li>
+  </ul>
+
   <h2>Tabs</h2>
   <ul>
-    <li>Middle-click a tab to archive it. Pinned tabs ignore middle-click; use ×. Shift+click × (or Shift+middle-click) permanently deletes after a confirmation.</li>
-    <li>Double-click a tab to pin or unpin it. Clear archives unpinned tabs and leaves pinned tabs alone.</li>
-    <li>The archive sidebar (button to the right of Clear) lists archived tabs. Click a row to restore it. Close a row to delete it permanently.</li>
+    <li>Middle-click a tab to archive it. Pinned tabs ignore middle-click; use ×. Shift+click × (or Shift+middle-click) permanently deletes after a confirmation. <kbd>Ctrl</kbd>+<kbd>Z</kbd> can restore that deletion if the tab was still open (last 5).</li>
+    <li>This Welcome page is part of the app. Closing it dismisses it instead of archiving; <kbd>Ctrl</kbd>+<kbd>H</kbd> opens it again.</li>
+    <li>Double-click a tab to pin or unpin it. Pinned tabs stay on the left. Clear archives unpinned tabs and leaves pinned tabs alone.</li>
+    <li>A dot on a tab means it was updated while you were looking at another tab.</li>
     <li>If tabs overflow, scroll the strip with the mouse wheel.</li>
   </ul>
 
+  <h2>Archive</h2>
+  <ul>
+    <li>The archive button to the right of Clear opens the sidebar. A badge on that button means archived pages were updated, not the total count.</li>
+    <li>Click a row to restore it and switch to it. The search box matches titles, page content, and saved form data.</li>
+    <li>Close a row (× or middle-click) to delete it permanently after a confirmation. That cannot be undone. Empty deletes the whole archive.</li>
+    <li>Drag the left edge of the sidebar to resize it. <kbd>Esc</kbd> clears the search box first, then closes the sidebar.</li>
+  </ul>
+
   <h2>Persistence</h2>
-  <p>Open tabs, the archive (up to 200), and the last 5 permanently deleted open tabs are saved to <code>%LOCALAPPDATA%\agent-board\state.json</code>, so they survive Cursor and Agent Board restarts. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
+  <p>Open tabs, the archive, each tab's page state, and the last 5 permanently deleted open tabs are saved to <code>%LOCALAPPDATA%\agent-board\board.sqlite</code>, so they survive Cursor and Agent Board restarts. The archive is not capped; it stays until you empty it or delete rows. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
   <p class="muted">Ask the agent to present an investigation, analysis, or design here instead of writing a throwaway HTML file.</p>
 </body>
 </html>
