@@ -106,8 +106,8 @@
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
-  applyFlag(tabReorderToggle, TAB_REORDER_KEY);
-  applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY);
+  applyFlag(tabReorderToggle, TAB_REORDER_KEY, true);
+  applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
   syncReorderClass();
   renderThemeList();
 
@@ -415,8 +415,10 @@
     }
   }
 
-  function applyFlag(el, key) {
-    el.setAttribute("aria-checked", localStorage.getItem(key) === "1" ? "true" : "false");
+  function applyFlag(el, key, fallback = false) {
+    const stored = localStorage.getItem(key);
+    const on = stored == null ? fallback : stored === "1";
+    el.setAttribute("aria-checked", on ? "true" : "false");
   }
 
   function flagOn(el) {
