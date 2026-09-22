@@ -41,6 +41,19 @@ body {
   overflow: hidden;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 16px;
+}
+
+.brand img {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
 .tabs-wrap {
   position: relative;
   display: flex;
@@ -79,6 +92,12 @@ body {
   z-index: 1;
 }
 
+.tabs-fade-left {
+  right: auto;
+  left: 0;
+  background: linear-gradient(to left, transparent 0%, var(--chrome) 75%);
+}
+
 .tabs-fade[hidden] {
   display: none;
 }
@@ -96,6 +115,10 @@ body {
   color: var(--muted);
   cursor: pointer;
   user-select: none;
+}
+
+.tab:first-child {
+  border-left: 1px solid var(--border);
 }
 
 .tab:hover { color: var(--text); background: #333; }
@@ -140,7 +163,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px 0 4px;
+  padding: 0 10px;
 }
 
 .icon-btn {

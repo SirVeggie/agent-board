@@ -1,6 +1,7 @@
 (() => {
   const tabsEl = document.getElementById("tabs");
   const fadeEl = document.getElementById("tabs-fade");
+  const fadeLeftEl = document.getElementById("tabs-fade-left");
   const emptyEl = document.getElementById("empty");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
@@ -56,6 +57,8 @@
   /** @type {Array<any>} */
   let paletteHits = [];
   let paletteIndex = 0;
+  /** Archive row this window is opening. Focus it here; agent activate can decline. */
+  let pendingRestoreId = null;
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
 
@@ -146,6 +149,13 @@
       } else {
         state.tabs[idx] = msg.tab;
       }
+      const restoredHere = pendingRestoreId === msg.tab.id;
+      if (restoredHere) {
+        pendingRestoreId = null;
+        state.activeId = msg.tab.id;
+        lastInteractedAt = Date.now();
+        syncHash();
+      }
       if (structural && state.activeId !== msg.tab.id) {
         unread.add(msg.tab.id);
       }
@@ -161,6 +171,9 @@
         unread.delete(msg.tab.id);
       }
       render();
+      if (restoredHere) {
+        reportViewer();
+      }
       return;
     }
     if (msg.type === "tab_closed") {
@@ -319,7 +332,9 @@
   function updateTabFade() {
     const overflow = tabsEl.scrollWidth - tabsEl.clientWidth > 1;
     const moreToTheRight = tabsEl.scrollLeft + tabsEl.clientWidth < tabsEl.scrollWidth - 1;
+    const moreToTheLeft = tabsEl.scrollLeft > 1;
     fadeEl.hidden = !(overflow && moreToTheRight);
+    fadeLeftEl.hidden = !(overflow && moreToTheLeft);
   }
 
   function renderTabs() {
@@ -641,6 +656,9 @@
       unread.delete(id);
     }
     if (fromUser) {
+      if (pendingRestoreId && pendingRestoreId !== id) {
+        pendingRestoreId = null;
+      }
       lastInteractedAt = Date.now();
     }
     reportViewer();
@@ -685,7 +703,18 @@
 
   async function restoreTab(id) {
     unreadArchive.delete(id);
-    await fetch(`/api/tabs/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    pendingRestoreId = id;
+    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    if (!res.ok) {
+      if (pendingRestoreId === id) {
+        pendingRestoreId = null;
+      }
+      return;
+    }
+    if (pendingRestoreId === id && state.tabs.some((tab) => tab.id === id)) {
+      pendingRestoreId = null;
+      selectTab(id, { fromUser: true });
+    }
   }
 
   async function emptyArchive() {
