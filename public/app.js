@@ -681,7 +681,7 @@
     const first = new Map(nodes.map((node) => [node, node.getBoundingClientRect()]));
     mutate();
     for (const node of nodes) {
-      if (node.classList.contains("dragging")) {
+      if (node.classList.contains("dragging") || node === drag?.placeholder) {
         continue;
       }
       const prev = first.get(node);
@@ -796,9 +796,10 @@
       return;
     }
     event.preventDefault();
+    drag.probeX = event.clientX;
     positionDraggedTab(event.clientX, event.clientY);
     updateDragScroll(event.clientX);
-    moveDropSlot(event.clientX);
+    moveDropSlot();
   }
 
   function beginTabDrag(event) {
@@ -835,7 +836,9 @@
     }
     tabsEl.classList.add("reordering");
     document.body.classList.add("dragging-tab");
+    drag.probeX = event.clientX;
     positionDraggedTab(event.clientX, event.clientY);
+    moveDropSlot();
   }
 
   function positionDraggedTab(clientX, clientY) {
@@ -860,62 +863,93 @@
     return -1;
   }
 
-  function slotIndexForX(clientX) {
-    const members = [];
+  /** Layout midpoint, ignoring FLIP translate so hit-testing stays stable while siblings animate. */
+  function layoutMid(el) {
+    const rect = el.getBoundingClientRect();
+    const transform = getComputedStyle(el).transform;
+    const left = !transform || transform === "none" ? rect.left : rect.left - new DOMMatrix(transform).m41;
+    return left + el.offsetWidth / 2;
+  }
+
+  /**
+   * Group-local hole index. Other tabs only; switch a couple of pixels past the neighbor midpoint.
+   */
+  function slotIndexForProbe(probeX) {
+    const others = [];
     for (const child of tabsEl.children) {
       if (child === drag.placeholder) {
-        members.push(child);
         continue;
       }
       const tab = lookupTab(child);
       if (tab && tab.pinned === drag.groupPinned) {
-        members.push(child);
+        others.push(child);
       }
-    }
-    if (!members.length) {
-      return 0;
-    }
-    let slot = members.length - 1;
-    for (let i = 0; i < members.length; i += 1) {
-      const rect = members[i].getBoundingClientRect();
-      if (clientX < rect.left + rect.width / 2) {
-        slot = i;
-        break;
-      }
-    }
-    return slot;
-  }
-
-  function moveDropSlot(clientX) {
-    if (!drag?.placeholder) {
-      return;
     }
     const from = groupLocalIndex(drag.id);
-    const target = slotIndexForX(clientX);
+    let target = from < 0 ? 0 : from;
+    const hyst = 2;
+    while (target < others.length && probeX > layoutMid(others[target]) + hyst) {
+      target += 1;
+    }
+    while (target > 0 && probeX < layoutMid(others[target - 1]) - hyst) {
+      target -= 1;
+    }
+    return target;
+  }
+
+  function absIndexForGroupTarget(target) {
+    let seen = 0;
+    let insertAbs = state.tabs.length;
+    for (let i = 0; i < state.tabs.length; i += 1) {
+      if (state.tabs[i].pinned !== drag.groupPinned) {
+        continue;
+      }
+      if (seen === target) {
+        return i;
+      }
+      seen += 1;
+      insertAbs = i + 1;
+    }
+    return insertAbs;
+  }
+
+  function syncPlaceholder() {
+    const placeholder = drag?.placeholder;
+    if (!placeholder) {
+      return;
+    }
+    const idx = state.tabs.findIndex((tab) => tab.id === drag.id);
+    for (let i = idx - 1; i >= 0; i -= 1) {
+      const el = tabEls.get(state.tabs[i].id);
+      if (el && el.parentNode === tabsEl) {
+        el.after(placeholder);
+        return;
+      }
+    }
+    for (let i = idx + 1; i < state.tabs.length; i += 1) {
+      const el = tabEls.get(state.tabs[i].id);
+      if (el && el.parentNode === tabsEl) {
+        el.before(placeholder);
+        return;
+      }
+    }
+    tabsEl.appendChild(placeholder);
+  }
+
+  function moveDropSlot() {
+    if (!drag?.placeholder || !Number.isFinite(drag.probeX)) {
+      return;
+    }
+    const target = slotIndexForProbe(drag.probeX);
+    const from = groupLocalIndex(drag.id);
     if (from === -1 || from === target) {
       return;
     }
-    const step = target > from ? 1 : -1;
-    const next = from + step;
-    const group = state.tabs.filter((tab) => tab.pinned === drag.groupPinned);
-    const neighbor = group[next];
-    if (!neighbor) {
-      return;
-    }
-    const fromAbs = state.tabs.findIndex((tab) => tab.id === drag.id);
-    const toAbs = state.tabs.findIndex((tab) => tab.id === neighbor.id);
     flipStrip(() => {
+      const fromAbs = state.tabs.findIndex((tab) => tab.id === drag.id);
       const moving = state.tabs.splice(fromAbs, 1)[0];
-      state.tabs.splice(toAbs, 0, moving);
-      const neighborEl = tabEls.get(neighbor.id);
-      if (!neighborEl || !drag.placeholder) {
-        return;
-      }
-      if (step > 0) {
-        neighborEl.after(drag.placeholder);
-      } else {
-        neighborEl.before(drag.placeholder);
-      }
+      state.tabs.splice(absIndexForGroupTarget(target), 0, moving);
+      syncPlaceholder();
     });
   }
 
@@ -941,6 +975,7 @@
         }
         tabsEl.scrollLeft += drag.scrollDir * 14;
         updateTabFade();
+        moveDropSlot();
       }, 16);
     }
     if (!dir && dragScrollTimer) {
@@ -1039,18 +1074,23 @@
     const moved = drag.moved;
     const id = drag.id;
     const origin = drag.originOrder;
-    const before = neighborBeforeId();
-    const changed = state.tabs.map((tab) => tab.id).join("\0") !== origin.join("\0");
+    const before = moved ? neighborBeforeId() : null;
+    const changed = moved && state.tabs.map((tab) => tab.id).join("\0") !== origin.join("\0");
+    if (!moved) {
+      window.removeEventListener("pointermove", onTabPointerMove);
+      window.removeEventListener("pointerup", onTabPointerUp);
+      window.removeEventListener("pointercancel", onTabPointerUp);
+      drag = null;
+      return;
+    }
     stopDragVisual();
     drag = null;
-    if (moved) {
-      dragSuppressClick = true;
-      window.setTimeout(() => {
-        dragSuppressClick = false;
-      }, 0);
-    }
+    dragSuppressClick = true;
+    window.setTimeout(() => {
+      dragSuppressClick = false;
+    }, 0);
     renderTabs();
-    if (!moved || !changed) {
+    if (!changed) {
       return;
     }
     try {
