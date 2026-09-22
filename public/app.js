@@ -21,16 +21,31 @@
   const paletteInput = document.getElementById("palette-input");
   const paletteList = document.getElementById("palette-list");
   const paletteEmpty = document.getElementById("palette-empty");
+  const settingsEl = document.getElementById("settings");
+  const settingsBackdrop = document.getElementById("settings-backdrop");
+  const settingsToggle = document.getElementById("settings-toggle");
+  const themeList = document.getElementById("theme-list");
+  const tabReorderToggle = document.getElementById("tab-reorder");
+  const smoothScrollToggle = document.getElementById("smooth-scroll");
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
   const LIVE_FRAME_CAP = 5;
   const ARCHIVE_OPEN_KEY = "agent-board.archiveOpen";
   const ARCHIVE_WIDTH_KEY = "agent-board.archiveWidth";
+  const THEME_KEY = "agent-board.theme";
+  const TAB_REORDER_KEY = "agent-board.tabReorder";
+  const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
+  const DEFAULT_THEME = "neutral";
+  const THEMES = [
+    { id: "neutral", name: "Neutral", swatch: "#c9c9d0" },
+    { id: "ember", name: "Ember", swatch: "#d0a578" },
+    { id: "spectrum", name: "Spectrum", swatch: "#9db8a4" },
+  ];
   const PIN_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.6 1.4l5 5-1.4 1.4-.9-.2-2.3 2.3.2 2.5-1.5 1.5-2.4-2.4-3.1 3.1-.8-.8 3.1-3.1-2.4-2.4 1.5-1.5 2.5.2 2.3-2.3-.2-.9z" fill="currentColor"/></svg>';
   const FILE_SVG =
-    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="#9db8a4"/></svg>';
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="currentColor"/></svg>';
 
   /** @type {{ tabs: Array<any>, archive: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean }} */
   const state = {
@@ -65,6 +80,10 @@
   let pendingFocus = null;
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
+  applyTheme(loadTheme());
+  applyFlag(tabReorderToggle, TAB_REORDER_KEY);
+  applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY);
+  renderThemeList();
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -311,6 +330,87 @@
     const width = Math.max(220, Math.min(480, px));
     document.documentElement.style.setProperty("--archive-width", width + "px");
     localStorage.setItem(ARCHIVE_WIDTH_KEY, String(width));
+  }
+
+  function loadTheme() {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (THEMES.some((theme) => theme.id === stored)) {
+      return stored;
+    }
+    return DEFAULT_THEME;
+  }
+
+  function applyTheme(id) {
+    const theme = THEMES.find((item) => item.id === id) || THEMES[0];
+    document.documentElement.dataset.theme = theme.id;
+    localStorage.setItem(THEME_KEY, theme.id);
+    highlightThemeOptions();
+  }
+
+  function renderThemeList() {
+    themeList.replaceChildren();
+    const current = loadTheme();
+    for (const theme of THEMES) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "theme-option";
+      btn.role = "option";
+      btn.dataset.theme = theme.id;
+      btn.setAttribute("aria-selected", theme.id === current ? "true" : "false");
+      const swatch = document.createElement("span");
+      swatch.className = "theme-swatch";
+      swatch.style.setProperty("--swatch", theme.swatch);
+      const label = document.createElement("span");
+      label.textContent = theme.name;
+      btn.append(swatch, label);
+      btn.addEventListener("click", () => applyTheme(theme.id));
+      themeList.appendChild(btn);
+    }
+  }
+
+  function highlightThemeOptions() {
+    const current = document.documentElement.dataset.theme || DEFAULT_THEME;
+    for (const btn of themeList.querySelectorAll(".theme-option")) {
+      btn.setAttribute("aria-selected", btn.dataset.theme === current ? "true" : "false");
+    }
+  }
+
+  function applyFlag(el, key) {
+    el.setAttribute("aria-checked", localStorage.getItem(key) === "1" ? "true" : "false");
+  }
+
+  function toggleFlag(el, key) {
+    const on = el.getAttribute("aria-checked") !== "true";
+    el.setAttribute("aria-checked", on ? "true" : "false");
+    localStorage.setItem(key, on ? "1" : "0");
+  }
+
+  function isSettingsOpen() {
+    return !settingsEl.hidden;
+  }
+
+  function openSettings() {
+    if (isPaletteOpen()) {
+      closePalette();
+    }
+    settingsEl.hidden = false;
+    settingsToggle.setAttribute("aria-expanded", "true");
+  }
+
+  function closeSettings() {
+    if (!isSettingsOpen()) {
+      return;
+    }
+    settingsEl.hidden = true;
+    settingsToggle.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleSettings() {
+    if (isSettingsOpen()) {
+      closeSettings();
+      return;
+    }
+    openSettings();
   }
 
   function renderChrome() {
@@ -854,6 +954,11 @@
       if (confirmDlg.open) {
         return;
       }
+      if (isSettingsOpen()) {
+        event.preventDefault();
+        closeSettings();
+        return;
+      }
       if (isPaletteOpen()) {
         event.preventDefault();
         closePalette();
@@ -958,6 +1063,7 @@
   }
 
   function openPalette() {
+    closeSettings();
     paletteEl.hidden = false;
     paletteInput.value = "";
     paletteIndex = 0;
@@ -1137,6 +1243,16 @@
     }
   });
 
+  settingsToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleSettings();
+  });
+  settingsBackdrop.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    closeSettings();
+  });
+  tabReorderToggle.addEventListener("click", () => toggleFlag(tabReorderToggle, TAB_REORDER_KEY));
+  smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });

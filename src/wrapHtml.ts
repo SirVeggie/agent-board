@@ -11,12 +11,12 @@ html { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.45) transpa
 const DEFAULT_CSS = `
 :root {
   color-scheme: dark;
-  --bg: #1a1b1e;
+  --bg: #1a1a1d;
   --text: #e8e8ea;
-  --muted: #8e9096;
+  --muted: #8e8e96;
   --border: rgba(255, 255, 255, 0.08);
-  --accent: #9db8a4;
-  --code-bg: #131416;
+  --accent: #c9c9d0;
+  --code-bg: #131315;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }

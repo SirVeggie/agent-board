@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="neutral">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,13 +8,26 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=24">
+  <link rel="stylesheet" href="/app.css?v=26">
+  <script>
+    (() => {
+      const theme = localStorage.getItem("agent-board.theme");
+      if (theme === "neutral" || theme === "ember" || theme === "spectrum") {
+        document.documentElement.dataset.theme = theme;
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="chrome">
-    <div class="brand">
-      <img src="/favicon.svg?v=3" width="20" height="20" alt="Agent Board">
-    </div>
+    <button type="button" class="brand" id="settings-toggle" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings-panel" title="Settings">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="20" height="20">
+          <rect x="3" y="2.5" width="5" height="3" rx="1" fill="#fff"/>
+          <rect x="3" y="6.5" width="10" height="7" rx="1.25" fill="#fff"/>
+        </svg>
+      </span>
+    </button>
     <div class="tabs-wrap">
       <div class="tabs" id="tabs" role="tablist"></div>
       <div class="tabs-fade tabs-fade-left" id="tabs-fade-left" hidden></div>
@@ -58,6 +71,27 @@
       </div>
     </aside>
   </div>
+  <div id="settings" class="settings" hidden>
+    <div class="settings-backdrop" id="settings-backdrop"></div>
+    <div class="settings-panel" id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h2 id="settings-title" class="settings-title">Settings</h2>
+      <section class="settings-section">
+        <h3>Theme</h3>
+        <div class="theme-list" id="theme-list" role="listbox" aria-label="Theme"></div>
+      </section>
+      <section class="settings-section">
+        <h3>Tabs</h3>
+        <div class="setting-row">
+          <span id="tab-reorder-label">Tab reordering</span>
+          <button type="button" class="pill-toggle" id="tab-reorder" role="switch" aria-checked="false" aria-labelledby="tab-reorder-label"></button>
+        </div>
+        <div class="setting-row">
+          <span id="smooth-scroll-label">Smooth scrolling tab strip</span>
+          <button type="button" class="pill-toggle" id="smooth-scroll" role="switch" aria-checked="false" aria-labelledby="smooth-scroll-label"></button>
+        </div>
+      </section>
+    </div>
+  </div>
   <div id="palette" class="palette" hidden>
     <div class="palette-backdrop" id="palette-backdrop"></div>
     <div class="palette-panel" role="dialog" aria-modal="true" aria-label="Search pages">
@@ -80,6 +114,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=27"></script>
+  <script src="/app.js?v=28"></script>
 </body>
 </html>
