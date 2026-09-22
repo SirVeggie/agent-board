@@ -234,6 +234,43 @@ body {
   box-shadow: var(--accent-glow);
 }
 
+.tabs.reorder-on .tab {
+  touch-action: none;
+  cursor: grab;
+}
+
+.tabs.reordering .tab {
+  transition: transform 160ms var(--ease);
+}
+
+.tab.dragging {
+  z-index: 30;
+  cursor: grabbing;
+  color: var(--heading);
+  background: var(--panel);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 8px 22px rgba(0, 0, 0, 0.45);
+  transform: scale(1.03);
+  transition: none;
+}
+
+.tab-drop-slot {
+  flex: 0 0 auto;
+  height: 32px;
+  border-radius: 9px;
+  border: 1px dashed var(--accent);
+  background: transparent;
+  pointer-events: none;
+}
+
+body.dragging-tab {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.dragging-tab iframe {
+  pointer-events: none;
+}
+
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;

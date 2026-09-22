@@ -78,11 +78,37 @@
   let paletteIndex = 0;
   /** User action in this window that should focus the resulting tab. Agent activate can still decline. */
   let pendingFocus = null;
+  /** @type {number | null} */
+  let tabScrollTarget = null;
+  let tabScrollRaf = 0;
+  /** @type {string | null} */
+  let revealedTabId = null;
+  /** @type {Map<string, HTMLElement>} */
+  const tabEls = new Map();
+  /** @type {null | {
+   *   id: string,
+   *   pointerId: number,
+   *   startX: number,
+   *   startY: number,
+   *   moved: boolean,
+   *   originOrder: string[],
+   *   groupPinned: boolean,
+   *   offsetX: number,
+   *   offsetY: number,
+   *   width: number,
+   *   el: HTMLElement,
+   *   placeholder: HTMLElement,
+   *   scrollDir: number
+   * }} */
+  let drag = null;
+  let dragSuppressClick = false;
+  let dragScrollTimer = 0;
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
   applyFlag(tabReorderToggle, TAB_REORDER_KEY);
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY);
+  syncReorderClass();
   renderThemeList();
 
   function connect() {
@@ -134,6 +160,7 @@
 
   function applyEvent(msg) {
     if (msg.type === "snapshot") {
+      abortDrag(false);
       state.tabs = msg.tabs;
       state.archive = Array.isArray(msg.archive) ? msg.archive : [];
       const hash = location.hash.replace(/^#/, "");
@@ -165,7 +192,7 @@
       if (idx === -1) {
         const at = Number.isInteger(msg.index) ? Math.max(0, Math.min(msg.index, state.tabs.length)) : state.tabs.length;
         state.tabs.splice(at, 0, msg.tab);
-      } else if (Number.isInteger(msg.index)) {
+      } else if (Number.isInteger(msg.index) && !drag?.moved) {
         state.tabs.splice(idx, 1);
         const at = Math.max(0, Math.min(msg.index, state.tabs.length));
         state.tabs.splice(at, 0, msg.tab);
@@ -192,13 +219,26 @@
       if (state.activeId === msg.tab.id) {
         unread.delete(msg.tab.id);
       }
-      render();
+      if (drag?.moved) {
+        const el = tabEls.get(msg.tab.id);
+        if (el) {
+          syncTabEl(el, msg.tab);
+        }
+        renderChrome();
+        renderFrames();
+        renderArchive();
+      } else {
+        render();
+      }
       if (focusedHere) {
         reportViewer();
       }
       return;
     }
     if (msg.type === "tab_closed") {
+      if (drag && drag.id === msg.id) {
+        abortDrag(false);
+      }
       state.tabs = state.tabs.filter((tab) => tab.id !== msg.id);
       state.archive = state.archive.filter((tab) => tab.id !== msg.id);
       unread.delete(msg.id);
@@ -379,10 +419,82 @@
     el.setAttribute("aria-checked", localStorage.getItem(key) === "1" ? "true" : "false");
   }
 
+  function flagOn(el) {
+    return el.getAttribute("aria-checked") === "true";
+  }
+
   function toggleFlag(el, key) {
-    const on = el.getAttribute("aria-checked") !== "true";
+    const on = !flagOn(el);
     el.setAttribute("aria-checked", on ? "true" : "false");
     localStorage.setItem(key, on ? "1" : "0");
+    if (el === tabReorderToggle) {
+      if (!on) {
+        abortDrag();
+      }
+      syncReorderClass();
+    }
+    if (el === smoothScrollToggle && !on) {
+      stopTabScroll();
+    }
+  }
+
+  function syncReorderClass() {
+    tabsEl.classList.toggle("reorder-on", flagOn(tabReorderToggle));
+  }
+
+  function smoothTabScroll() {
+    return flagOn(smoothScrollToggle) && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function stopTabScroll() {
+    if (tabScrollRaf) {
+      cancelAnimationFrame(tabScrollRaf);
+      tabScrollRaf = 0;
+    }
+    tabScrollTarget = null;
+  }
+
+  function clampTabScroll(left) {
+    return Math.max(0, Math.min(Math.max(0, tabsEl.scrollWidth - tabsEl.clientWidth), left));
+  }
+
+  function scrollTabsTo(left, smooth) {
+    const target = clampTabScroll(left);
+    if (!smooth) {
+      stopTabScroll();
+      tabsEl.scrollLeft = target;
+      return;
+    }
+    tabScrollTarget = target;
+    if (!tabScrollRaf) {
+      tabScrollRaf = requestAnimationFrame(stepTabScroll);
+    }
+  }
+
+  function stepTabScroll() {
+    tabScrollRaf = 0;
+    if (tabScrollTarget == null) {
+      return;
+    }
+    const target = clampTabScroll(tabScrollTarget);
+    tabScrollTarget = target;
+    const current = tabsEl.scrollLeft;
+    const delta = target - current;
+    if (Math.abs(delta) < 1) {
+      tabsEl.scrollLeft = target;
+      tabScrollTarget = null;
+      updateTabFade();
+      return;
+    }
+    const step = Math.sign(delta) * Math.max(1, Math.abs(delta) * 0.22);
+    tabsEl.scrollLeft = current + step;
+    if (tabsEl.scrollLeft === current) {
+      tabsEl.scrollLeft = target;
+      tabScrollTarget = null;
+      updateTabFade();
+      return;
+    }
+    tabScrollRaf = requestAnimationFrame(stepTabScroll);
   }
 
   function isSettingsOpen() {
@@ -428,13 +540,15 @@
     archivePane.toggleAttribute("inert", !state.archiveOpen);
   }
 
-  function revealTab(el) {
+  function revealTab(el, smooth) {
     const left = el.offsetLeft;
     const right = left + el.offsetWidth;
-    if (left < tabsEl.scrollLeft) {
-      tabsEl.scrollLeft = left;
-    } else if (right > tabsEl.scrollLeft + tabsEl.clientWidth) {
-      tabsEl.scrollLeft = right - tabsEl.clientWidth;
+    const viewLeft = tabsEl.scrollLeft;
+    const viewRight = viewLeft + tabsEl.clientWidth;
+    if (left < viewLeft) {
+      scrollTabsTo(left, smooth);
+    } else if (right > viewRight) {
+      scrollTabsTo(right - tabsEl.clientWidth, smooth);
     }
   }
 
@@ -446,85 +560,511 @@
     fadeLeftEl.hidden = !(overflow && moreToTheLeft);
   }
 
-  function renderTabs() {
-    tabsEl.replaceChildren();
-    for (const tab of state.tabs) {
-      const el = document.createElement("div");
-      el.className =
-        "tab" +
-        (tab.id === state.activeId ? " active" : "") +
-        (tab.pinned ? " pinned" : "") +
-        (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "");
-      el.role = "tab";
-      el.title =
-        unread.has(tab.id) && tab.id !== state.activeId
-          ? tab.title + " (updated)"
-          : tab.pinned
-            ? tab.title + " (pinned)"
-            : tab.title;
-      el.addEventListener("click", (event) => {
-        if (event.detail > 1) {
-          setPinned(tab.id, !tab.pinned);
-          return;
-        }
-        selectTab(tab.id, { fromUser: true });
-      });
-      el.addEventListener("auxclick", (event) => {
-        if (event.button !== 1) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.shiftKey) {
-          closeTab(tab.id, { permanent: true });
-          return;
-        }
-        if (!tab.pinned) {
-          closeTab(tab.id);
-        }
-      });
-      el.addEventListener("mousedown", (event) => {
-        if (event.button === 1) {
-          event.preventDefault();
-        }
-      });
+  function lookupTab(el) {
+    const id = el?.dataset?.id;
+    return id ? state.tabs.find((tab) => tab.id === id) || null : null;
+  }
 
-      if (tab.pinned) {
-        const pin = document.createElement("span");
+  function syncTabEl(el, tab) {
+    el.dataset.id = tab.id;
+    el.className =
+      "tab" +
+      (tab.id === state.activeId ? " active" : "") +
+      (tab.pinned ? " pinned" : "") +
+      (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "");
+    if (drag?.moved && drag.id === tab.id) {
+      el.classList.add("dragging");
+    }
+    el.title =
+      unread.has(tab.id) && tab.id !== state.activeId
+        ? tab.title + " (updated)"
+        : tab.pinned
+          ? tab.title + " (pinned)"
+          : tab.title;
+    let pin = el.querySelector(".tab-pin");
+    if (tab.pinned) {
+      if (!pin) {
+        pin = document.createElement("span");
         pin.className = "tab-pin";
         pin.title = "Pinned";
         pin.innerHTML = PIN_SVG;
-        el.appendChild(pin);
+        el.insertBefore(pin, el.firstChild);
       }
-
-      if (unread.has(tab.id) && tab.id !== state.activeId) {
-        const dot = document.createElement("span");
+    } else if (pin) {
+      pin.remove();
+    }
+    let dot = el.querySelector(".tab-updated");
+    if (unread.has(tab.id) && tab.id !== state.activeId) {
+      if (!dot) {
+        dot = document.createElement("span");
         dot.className = "tab-updated";
         dot.title = "Updated in the background";
-        el.appendChild(dot);
+        const titleEl = el.querySelector(".tab-title");
+        el.insertBefore(dot, titleEl);
       }
-
-      const title = document.createElement("span");
-      title.className = "tab-title";
+    } else if (dot) {
+      dot.remove();
+    }
+    const title = el.querySelector(".tab-title");
+    if (title) {
       title.textContent = tab.title;
-      el.appendChild(title);
+    }
+  }
 
-      const close = document.createElement("button");
-      close.className = "tab-close";
-      close.type = "button";
-      close.textContent = "×";
-      close.addEventListener("click", (event) => {
+  function createTabEl(tab) {
+    const el = document.createElement("div");
+    el.role = "tab";
+    el.dataset.id = tab.id;
+    const title = document.createElement("span");
+    title.className = "tab-title";
+    el.appendChild(title);
+    const close = document.createElement("button");
+    close.className = "tab-close";
+    close.type = "button";
+    close.textContent = "×";
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const current = lookupTab(el);
+      if (current) {
+        closeTab(current.id, { permanent: event.shiftKey });
+      }
+    });
+    el.appendChild(close);
+    el.addEventListener("click", (event) => {
+      if (dragSuppressClick) {
+        event.preventDefault();
         event.stopPropagation();
-        closeTab(tab.id, { permanent: event.shiftKey });
+        return;
+      }
+      const current = lookupTab(el);
+      if (!current) {
+        return;
+      }
+      if (event.detail > 1) {
+        setPinned(current.id, !current.pinned);
+        return;
+      }
+      selectTab(current.id, { fromUser: true });
+    });
+    el.addEventListener("auxclick", (event) => {
+      if (event.button !== 1) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const current = lookupTab(el);
+      if (!current) {
+        return;
+      }
+      if (event.shiftKey) {
+        closeTab(current.id, { permanent: true });
+        return;
+      }
+      if (!current.pinned) {
+        closeTab(current.id);
+      }
+    });
+    el.addEventListener("mousedown", (event) => {
+      if (event.button === 1) {
+        event.preventDefault();
+      }
+    });
+    el.addEventListener("pointerdown", (event) => onTabPointerDown(event, el));
+    syncTabEl(el, tab);
+    return el;
+  }
+
+  function flipStrip(mutate) {
+    const nodes = [...tabsEl.children];
+    const first = new Map(nodes.map((node) => [node, node.getBoundingClientRect()]));
+    mutate();
+    for (const node of nodes) {
+      if (node.classList.contains("dragging")) {
+        continue;
+      }
+      const prev = first.get(node);
+      if (!prev || !node.isConnected) {
+        continue;
+      }
+      const last = node.getBoundingClientRect();
+      const dx = prev.left - last.left;
+      if (Math.abs(dx) < 1) {
+        continue;
+      }
+      node.style.transition = "none";
+      node.style.transform = `translateX(${dx}px)`;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          node.style.transition = "";
+          node.style.transform = "";
+        });
       });
-      el.appendChild(close);
+    }
+  }
+
+  function renderTabs() {
+    if (drag?.moved) {
+      for (const tab of state.tabs) {
+        const el = tabEls.get(tab.id);
+        if (el) {
+          syncTabEl(el, tab);
+        }
+      }
+      requestAnimationFrame(updateTabFade);
+      return;
+    }
+    const seen = new Set();
+    for (const tab of state.tabs) {
+      let el = tabEls.get(tab.id);
+      if (!el) {
+        el = createTabEl(tab);
+        tabEls.set(tab.id, el);
+      } else {
+        syncTabEl(el, tab);
+      }
+      seen.add(tab.id);
       tabsEl.appendChild(el);
     }
+    for (const [id, el] of tabEls) {
+      if (seen.has(id)) {
+        continue;
+      }
+      el.remove();
+      tabEls.delete(id);
+    }
     const active = tabsEl.querySelector(".tab.active");
-    if (active) {
-      revealTab(active);
+    if (active && !drag) {
+      const smooth = smoothTabScroll() && revealedTabId != null && revealedTabId !== state.activeId;
+      revealTab(active, smooth);
+      revealedTabId = state.activeId;
+    } else if (!active) {
+      revealedTabId = null;
     }
     requestAnimationFrame(updateTabFade);
+  }
+
+  function onTabPointerDown(event, el) {
+    if (event.button !== 0 || !flagOn(tabReorderToggle) || drag) {
+      return;
+    }
+    if (event.target.closest(".tab-close")) {
+      return;
+    }
+    const tab = lookupTab(el);
+    if (!tab) {
+      return;
+    }
+    const groupCount = state.tabs.filter((item) => item.pinned === tab.pinned).length;
+    if (groupCount < 2) {
+      return;
+    }
+    drag = {
+      id: tab.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      originOrder: state.tabs.map((item) => item.id),
+      groupPinned: tab.pinned,
+      offsetX: 0,
+      offsetY: 0,
+      width: 0,
+      el,
+      placeholder: null,
+      scrollDir: 0,
+    };
+    window.addEventListener("pointermove", onTabPointerMove);
+    window.addEventListener("pointerup", onTabPointerUp);
+    window.addEventListener("pointercancel", onTabPointerUp);
+  }
+
+  function onTabPointerMove(event) {
+    if (!drag || event.pointerId !== drag.pointerId) {
+      return;
+    }
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved) {
+      if (Math.hypot(dx, dy) < 6) {
+        return;
+      }
+      beginTabDrag(event);
+    }
+    if (!drag?.moved) {
+      return;
+    }
+    event.preventDefault();
+    positionDraggedTab(event.clientX, event.clientY);
+    updateDragScroll(event.clientX);
+    moveDropSlot(event.clientX);
+  }
+
+  function beginTabDrag(event) {
+    if (!drag) {
+      return;
+    }
+    const el = drag.el;
+    const rect = el.getBoundingClientRect();
+    drag.moved = true;
+    stopTabScroll();
+    drag.offsetX = event.clientX - rect.left;
+    drag.offsetY = event.clientY - rect.top;
+    drag.width = rect.width;
+    const placeholder = document.createElement("div");
+    placeholder.className = "tab-drop-slot";
+    placeholder.style.width = rect.width + "px";
+    placeholder.style.height = rect.height + "px";
+    el.replaceWith(placeholder);
+    drag.placeholder = placeholder;
+    el.classList.add("dragging");
+    document.body.appendChild(el);
+    el.style.position = "fixed";
+    el.style.left = rect.left + "px";
+    el.style.top = rect.top + "px";
+    el.style.width = rect.width + "px";
+    el.style.height = rect.height + "px";
+    el.style.zIndex = "30";
+    el.style.pointerEvents = "none";
+    el.style.margin = "0";
+    try {
+      el.setPointerCapture(event.pointerId);
+    } catch {
+      /* capture is best-effort */
+    }
+    tabsEl.classList.add("reordering");
+    document.body.classList.add("dragging-tab");
+    positionDraggedTab(event.clientX, event.clientY);
+  }
+
+  function positionDraggedTab(clientX, clientY) {
+    if (!drag?.el) {
+      return;
+    }
+    drag.el.style.left = clientX - drag.offsetX + "px";
+    drag.el.style.top = clientY - drag.offsetY + "px";
+  }
+
+  function groupLocalIndex(id) {
+    let index = 0;
+    for (const tab of state.tabs) {
+      if (tab.pinned !== drag.groupPinned) {
+        continue;
+      }
+      if (tab.id === id) {
+        return index;
+      }
+      index += 1;
+    }
+    return -1;
+  }
+
+  function slotIndexForX(clientX) {
+    const members = [];
+    for (const child of tabsEl.children) {
+      if (child === drag.placeholder) {
+        members.push(child);
+        continue;
+      }
+      const tab = lookupTab(child);
+      if (tab && tab.pinned === drag.groupPinned) {
+        members.push(child);
+      }
+    }
+    if (!members.length) {
+      return 0;
+    }
+    let slot = members.length - 1;
+    for (let i = 0; i < members.length; i += 1) {
+      const rect = members[i].getBoundingClientRect();
+      if (clientX < rect.left + rect.width / 2) {
+        slot = i;
+        break;
+      }
+    }
+    return slot;
+  }
+
+  function moveDropSlot(clientX) {
+    if (!drag?.placeholder) {
+      return;
+    }
+    const from = groupLocalIndex(drag.id);
+    const target = slotIndexForX(clientX);
+    if (from === -1 || from === target) {
+      return;
+    }
+    const step = target > from ? 1 : -1;
+    const next = from + step;
+    const group = state.tabs.filter((tab) => tab.pinned === drag.groupPinned);
+    const neighbor = group[next];
+    if (!neighbor) {
+      return;
+    }
+    const fromAbs = state.tabs.findIndex((tab) => tab.id === drag.id);
+    const toAbs = state.tabs.findIndex((tab) => tab.id === neighbor.id);
+    flipStrip(() => {
+      const moving = state.tabs.splice(fromAbs, 1)[0];
+      state.tabs.splice(toAbs, 0, moving);
+      const neighborEl = tabEls.get(neighbor.id);
+      if (!neighborEl || !drag.placeholder) {
+        return;
+      }
+      if (step > 0) {
+        neighborEl.after(drag.placeholder);
+      } else {
+        neighborEl.before(drag.placeholder);
+      }
+    });
+  }
+
+  function updateDragScroll(clientX) {
+    if (!drag) {
+      return;
+    }
+    const rect = tabsEl.getBoundingClientRect();
+    const edge = 36;
+    let dir = 0;
+    if (clientX < rect.left + edge) {
+      dir = -1;
+    } else if (clientX > rect.right - edge) {
+      dir = 1;
+    }
+    drag.scrollDir = dir;
+    if (dir && !dragScrollTimer) {
+      dragScrollTimer = window.setInterval(() => {
+        if (!drag?.moved || !drag.scrollDir) {
+          clearInterval(dragScrollTimer);
+          dragScrollTimer = 0;
+          return;
+        }
+        tabsEl.scrollLeft += drag.scrollDir * 14;
+        updateTabFade();
+      }, 16);
+    }
+    if (!dir && dragScrollTimer) {
+      clearInterval(dragScrollTimer);
+      dragScrollTimer = 0;
+    }
+  }
+
+  function neighborBeforeId() {
+    if (!drag) {
+      return null;
+    }
+    const idx = state.tabs.findIndex((tab) => tab.id === drag.id);
+    const next = state.tabs[idx + 1];
+    if (next && next.pinned === drag.groupPinned) {
+      return next.id;
+    }
+    return null;
+  }
+
+  function restoreTabOrder(order) {
+    const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
+    const next = [];
+    for (const id of order) {
+      const tab = byId.get(id);
+      if (tab) {
+        next.push(tab);
+        byId.delete(id);
+      }
+    }
+    for (const tab of byId.values()) {
+      next.push(tab);
+    }
+    state.tabs = next;
+  }
+
+  function stopDragVisual() {
+    if (dragScrollTimer) {
+      clearInterval(dragScrollTimer);
+      dragScrollTimer = 0;
+    }
+    window.removeEventListener("pointermove", onTabPointerMove);
+    window.removeEventListener("pointerup", onTabPointerUp);
+    window.removeEventListener("pointercancel", onTabPointerUp);
+    tabsEl.classList.remove("reordering");
+    document.body.classList.remove("dragging-tab");
+    if (!drag) {
+      return;
+    }
+    const el = drag.el;
+    try {
+      if (el.hasPointerCapture(drag.pointerId)) {
+        el.releasePointerCapture(drag.pointerId);
+      }
+    } catch {
+      /* already released */
+    }
+    el.classList.remove("dragging");
+    el.style.position = "";
+    el.style.left = "";
+    el.style.top = "";
+    el.style.width = "";
+    el.style.height = "";
+    el.style.zIndex = "";
+    el.style.pointerEvents = "";
+    el.style.margin = "";
+    el.style.transform = "";
+    el.style.transition = "";
+    if (drag.placeholder && drag.placeholder.isConnected) {
+      drag.placeholder.replaceWith(el);
+    } else if (!el.isConnected) {
+      tabsEl.appendChild(el);
+    }
+  }
+
+  function abortDrag(restore = true) {
+    if (!drag) {
+      return;
+    }
+    const origin = drag.originOrder;
+    const moved = drag.moved;
+    stopDragVisual();
+    drag = null;
+    if (restore && moved) {
+      restoreTabOrder(origin);
+    }
+    if (restore) {
+      renderTabs();
+    }
+  }
+
+  async function onTabPointerUp(event) {
+    if (!drag || event.pointerId !== drag.pointerId) {
+      return;
+    }
+    const moved = drag.moved;
+    const id = drag.id;
+    const origin = drag.originOrder;
+    const before = neighborBeforeId();
+    const changed = state.tabs.map((tab) => tab.id).join("\0") !== origin.join("\0");
+    stopDragVisual();
+    drag = null;
+    if (moved) {
+      dragSuppressClick = true;
+      window.setTimeout(() => {
+        dragSuppressClick = false;
+      }, 0);
+    }
+    renderTabs();
+    if (!moved || !changed) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ before }),
+      });
+      if (!res.ok) {
+        restoreTabOrder(origin);
+        renderTabs();
+      }
+    } catch {
+      restoreTabOrder(origin);
+      renderTabs();
+    }
   }
 
   function visibleArchive() {
@@ -954,6 +1494,11 @@
       if (confirmDlg.open) {
         return;
       }
+      if (drag) {
+        event.preventDefault();
+        abortDrag();
+        return;
+      }
       if (isSettingsOpen()) {
         event.preventDefault();
         closeSettings();
@@ -1010,12 +1555,19 @@
   }
 
   function onTabsWheel(event) {
+    if (drag?.moved) {
+      return;
+    }
     if (event.deltaY === 0 && event.deltaX === 0) {
       return;
     }
     event.preventDefault();
-    tabsEl.scrollLeft += event.deltaY + event.deltaX;
-    updateTabFade();
+    const smooth = smoothTabScroll();
+    const from = tabScrollTarget == null ? tabsEl.scrollLeft : tabScrollTarget;
+    scrollTabsTo(from + event.deltaY + event.deltaX, smooth);
+    if (!smooth) {
+      updateTabFade();
+    }
   }
 
   function frameByWindow(win) {
@@ -1214,13 +1766,31 @@
 
   tabsEl.parentElement.addEventListener("wheel", onTabsWheel, { passive: false });
   tabsEl.addEventListener("scroll", updateTabFade);
-  window.addEventListener("resize", updateTabFade);
+  window.addEventListener("resize", () => {
+    if (tabScrollTarget != null) {
+      tabScrollTarget = clampTabScroll(tabScrollTarget);
+    }
+    updateTabFade();
+  });
 
   document.addEventListener(
     "pointerdown",
     () => {
       lastInteractedAt = Date.now();
       reportViewer();
+    },
+    true
+  );
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!dragSuppressClick) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dragSuppressClick = false;
     },
     true
   );

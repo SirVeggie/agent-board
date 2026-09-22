@@ -121,6 +121,94 @@ test("toMeta omits stripSeq", () => {
   store.closeDb();
 });
 
+test("swapStripSeq reorders two unpinned tabs and persists", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.swapStripSeq("a", "b");
+  assert.deepEqual(titles(store), ["B", "A", "C"]);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.deepEqual(titles(again), ["B", "A", "C"]);
+  again.closeDb();
+});
+
+test("swapStripSeq reorders two pinned tabs", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.update("a", { pin: true, activate: false });
+  store.update("b", { pin: true, activate: false });
+  assert.deepEqual(titles(store), ["A", "B", "C"]);
+  store.swapStripSeq("a", "b");
+  assert.deepEqual(titles(store), ["B", "A", "C"]);
+  store.closeDb();
+});
+
+test("swapStripSeq rejects a cross-group pair", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.update("a", { pin: true, activate: false });
+  assert.throws(() => store.swapStripSeq("a", "b"), /pin groups/);
+  assert.deepEqual(titles(store), ["A", "B"]);
+  store.closeDb();
+});
+
+test("swapStripSeq rejects an archived tab", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.archiveTab("a");
+  assert.throws(() => store.swapStripSeq("a", "b"), /archived/);
+  store.closeDb();
+});
+
+test("reorderTab walks adjacent swaps to the end of the group", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "D", html: "<p>d</p>" });
+  store.reorderTab("a", null);
+  assert.deepEqual(titles(store), ["B", "C", "D", "A"]);
+  const seqs = store.listOpenTabs().map((tab) => tab.stripSeq);
+  assert.equal(new Set(seqs).size, seqs.length);
+  store.closeDb();
+});
+
+test("reorderTab stays inside the pinned group", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "D", html: "<p>d</p>" });
+  store.update("a", { pin: true, activate: false });
+  store.update("b", { pin: true, activate: false });
+  store.reorderTab("a", null);
+  assert.deepEqual(titles(store), ["B", "A", "C", "D"]);
+  store.closeDb();
+});
+
+test("reorderTab does not steal an archived tab's strip hole", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "D", html: "<p>d</p>" });
+  store.archiveTab("b");
+  store.reorderTab("a", null);
+  assert.deepEqual(titles(store), ["C", "D", "A"]);
+  store.restoreLast();
+  assert.deepEqual(titles(store), ["C", "B", "D", "A"]);
+  const seqs = store.listOpenTabs().map((tab) => tab.stripSeq);
+  assert.equal(new Set(seqs).size, seqs.length);
+  store.closeDb();
+});
+
 test("pin does not steal an archived tab's strip_seq", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });

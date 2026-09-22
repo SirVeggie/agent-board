@@ -257,6 +257,26 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.post("/api/tabs/:id/reorder", (req, res) => {
+    try {
+      const raw = req.body?.before;
+      let before: string | null = null;
+      if (raw === null || raw === undefined) {
+        before = null;
+      } else if (typeof raw === "string" && raw.trim()) {
+        before = raw.trim();
+      } else {
+        throw new Error("before must be a tab id or null");
+      }
+      const tab = store.reorderTab(req.params.id, before);
+      res.json({ tab: toMeta(tab), tabs: store.list(), activeId: store.getActiveId() });
+    } catch (err) {
+      const message = (err as Error).message;
+      const missing = message.startsWith("tab not found");
+      res.status(missing ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.post("/api/tabs/:id/screenshot", (req, res) => {
     captureTab({
       idOrKey: req.params.id,

@@ -403,6 +403,92 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
+  /** Exchange strip coordinates of two open tabs in the same pin group. */
+  swapStripSeq(aIdOrKey: string, bIdOrKey: string): void {
+    const a = this.requireOpen(aIdOrKey);
+    const b = this.requireOpen(bIdOrKey);
+    if (a.id === b.id) {
+      return;
+    }
+    if (a.pinned !== b.pinned) {
+      throw new Error("cannot reorder across pin groups");
+    }
+    const seq = a.stripSeq;
+    a.stripSeq = b.stripSeq;
+    b.stripSeq = seq;
+    this.markDirty(a.id);
+    this.markDirty(b.id);
+    this.rebuildOrder();
+    this.persistSoon();
+  }
+
+  /**
+   * Walk `id` to `targetIndexInGroup` inside its pin group by adjacent seq swaps.
+   * Does not change activeId or revision.
+   */
+  moveByAdjacentSwaps(idOrKey: string, targetIndexInGroup: number): Tab {
+    const tab = this.requireOpen(idOrKey);
+    if (!Number.isFinite(targetIndexInGroup)) {
+      throw new Error("target index is required");
+    }
+    const groupOf = (): string[] => this.order.filter((id) => this.tabs.get(id)?.pinned === tab.pinned);
+    let group = groupOf();
+    const from = group.indexOf(tab.id);
+    if (from === -1) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const target = Math.max(0, Math.min(group.length - 1, Math.trunc(targetIndexInGroup)));
+    if (from === target) {
+      return tab;
+    }
+    const previous = new Map(this.order.map((id, index) => [id, index] as const));
+    let at = from;
+    while (at < target) {
+      group = groupOf();
+      this.swapStripSeq(group[at], group[at + 1]);
+      at += 1;
+    }
+    while (at > target) {
+      group = groupOf();
+      this.swapStripSeq(group[at], group[at - 1]);
+      at -= 1;
+    }
+    for (const id of this.order) {
+      const next = this.order.indexOf(id);
+      if (previous.get(id) === next) {
+        continue;
+      }
+      const moved = this.tabs.get(id);
+      if (moved) {
+        this.emit("tab_upserted", toMeta(moved), next, { activate: false, structural: false });
+      }
+    }
+    return tab;
+  }
+
+  /** Place an open tab before `before` in its pin group, or at the end when `before` is null. */
+  reorderTab(idOrKey: string, before: string | null): Tab {
+    const tab = this.requireOpen(idOrKey);
+    const group = this.order.filter((id) => this.tabs.get(id)?.pinned === tab.pinned);
+    let target = group.length - 1;
+    if (before !== null) {
+      const other = this.requireOpen(before);
+      if (other.pinned !== tab.pinned) {
+        throw new Error("cannot reorder across pin groups");
+      }
+      const beforeIndex = group.indexOf(other.id);
+      const from = group.indexOf(tab.id);
+      if (beforeIndex === -1 || from === -1) {
+        throw new Error("cannot reorder across pin groups");
+      }
+      if (from === beforeIndex) {
+        return tab;
+      }
+      target = from < beforeIndex ? beforeIndex - 1 : beforeIndex;
+    }
+    return this.moveByAdjacentSwaps(tab.id, target);
+  }
+
   setState(idOrKey: string, input: SetStateInput): SetStateResult {
     const located = this.locate(idOrKey);
     if (!located) {
@@ -652,6 +738,17 @@ export class BoardStore extends EventEmitter {
       log("Failed to close board database", String(err));
     }
     this.db = null;
+  }
+
+  private requireOpen(idOrKey: string): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (located.where !== "open") {
+      throw new Error("cannot reorder an archived tab");
+    }
+    return located.tab;
   }
 
   private locate(idOrKey: string): Located | undefined {
