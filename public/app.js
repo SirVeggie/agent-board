@@ -57,8 +57,8 @@
   /** @type {Array<any>} */
   let paletteHits = [];
   let paletteIndex = 0;
-  /** Archive row this window is opening. Focus it here; agent activate can decline. */
-  let pendingRestoreId = null;
+  /** User action in this window that should focus the resulting tab. Agent activate can still decline. */
+  let pendingFocus = null;
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
 
@@ -149,9 +149,8 @@
       } else {
         state.tabs[idx] = msg.tab;
       }
-      const restoredHere = pendingRestoreId === msg.tab.id;
-      if (restoredHere) {
-        pendingRestoreId = null;
+      const focusedHere = claimPendingFocus(msg.tab);
+      if (focusedHere) {
         state.activeId = msg.tab.id;
         lastInteractedAt = Date.now();
         syncHash();
@@ -171,7 +170,7 @@
         unread.delete(msg.tab.id);
       }
       render();
-      if (restoredHere) {
+      if (focusedHere) {
         reportViewer();
       }
       return;
@@ -643,6 +642,21 @@
     renderArchive();
   }
 
+  function matchesPendingFocus(tab) {
+    if (!pendingFocus || !tab) {
+      return false;
+    }
+    return (pendingFocus.id && pendingFocus.id === tab.id) || (pendingFocus.key && pendingFocus.key === tab.key);
+  }
+
+  function claimPendingFocus(tab) {
+    if (!matchesPendingFocus(tab)) {
+      return false;
+    }
+    pendingFocus = null;
+    return true;
+  }
+
   function selectTab(id, { fromUser } = {}) {
     if (!state.tabs.some((tab) => tab.id === id)) {
       return;
@@ -656,8 +670,8 @@
       unread.delete(id);
     }
     if (fromUser) {
-      if (pendingRestoreId && pendingRestoreId !== id) {
-        pendingRestoreId = null;
+      if (pendingFocus && !matchesPendingFocus({ id, key: state.tabs.find((tab) => tab.id === id)?.key })) {
+        pendingFocus = null;
       }
       lastInteractedAt = Date.now();
     }
@@ -707,16 +721,16 @@
 
   async function restoreTab(id) {
     unreadArchive.delete(id);
-    pendingRestoreId = id;
+    pendingFocus = { id };
     const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/restore`, { method: "POST" });
     if (!res.ok) {
-      if (pendingRestoreId === id) {
-        pendingRestoreId = null;
+      if (pendingFocus?.id === id) {
+        pendingFocus = null;
       }
       return;
     }
-    if (pendingRestoreId === id && state.tabs.some((tab) => tab.id === id)) {
-      pendingRestoreId = null;
+    if (pendingFocus?.id === id && state.tabs.some((tab) => tab.id === id)) {
+      pendingFocus = null;
       selectTab(id, { fromUser: true });
     }
   }
@@ -760,7 +774,8 @@
 
   async function openWelcome() {
     const html = await fetch("/welcome.html").then((res) => res.text());
-    await fetch("/api/tabs", {
+    pendingFocus = { key: "welcome" };
+    const res = await fetch("/api/tabs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -770,6 +785,18 @@
         activate: true,
       }),
     });
+    if (!res.ok) {
+      if (pendingFocus?.key === "welcome") {
+        pendingFocus = null;
+      }
+      return;
+    }
+    const data = await res.json();
+    const id = data?.tab?.id;
+    if (id && pendingFocus?.key === "welcome" && state.tabs.some((tab) => tab.id === id)) {
+      pendingFocus = null;
+      selectTab(id, { fromUser: true });
+    }
   }
 
   function downloadActive() {
