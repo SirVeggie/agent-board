@@ -42,7 +42,30 @@ test("open tabs sort pinned first, then strip_seq", () => {
   store.update("c", { pin: true, activate: false });
   assert.deepEqual(titles(store), ["C", "A", "B"]);
   store.update("c", { pin: false, activate: false });
-  assert.deepEqual(titles(store), ["C", "A", "B"]);
+  assert.deepEqual(titles(store), ["A", "B", "C"]);
+  store.closeDb();
+});
+
+test("unpin restores the tab's original strip hole", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.update("b", { pin: true, activate: false });
+  assert.deepEqual(titles(store), ["B", "A", "C"]);
+  store.update("b", { pin: false, activate: false });
+  assert.deepEqual(titles(store), ["A", "B", "C"]);
+  store.closeDb();
+});
+
+test("pinned tabs follow strip_seq within the pinned group", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.update("c", { pin: true, activate: false });
+  store.update("a", { pin: true, activate: false });
+  assert.deepEqual(titles(store), ["A", "C", "B"]);
   store.closeDb();
 });
 
@@ -98,7 +121,7 @@ test("toMeta omits stripSeq", () => {
   store.closeDb();
 });
 
-test("unpin seq does not collide with an archived tab", () => {
+test("pin does not steal an archived tab's strip_seq", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
@@ -107,6 +130,7 @@ test("unpin seq does not collide with an archived tab", () => {
   store.update("c", { pin: true, activate: false });
   store.update("c", { pin: false, activate: false });
   store.restoreLast();
+  assert.deepEqual(titles(store), ["A", "B", "C"]);
   const seqs = store.listOpenTabs().map((tab) => tab.stripSeq);
   assert.equal(new Set(seqs).size, seqs.length);
   store.closeDb();

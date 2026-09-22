@@ -765,22 +765,7 @@
     await fetch("/api/archive", { method: "DELETE" });
   }
 
-  function pinBoundary() {
-    let i = 0;
-    while (i < state.tabs.length && state.tabs[i].pinned) {
-      i += 1;
-    }
-    return i;
-  }
-
   async function setPinned(id, pin) {
-    const idx = state.tabs.findIndex((item) => item.id === id);
-    if (idx !== -1) {
-      const [tab] = state.tabs.splice(idx, 1);
-      tab.pinned = pin;
-      state.tabs.splice(pinBoundary(), 0, tab);
-      render();
-    }
     await fetch(`/api/tabs/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

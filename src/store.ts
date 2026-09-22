@@ -681,15 +681,6 @@ export class BoardStore extends EventEmitter {
 
   private setPinned(tab: Tab, pinned: boolean): void {
     tab.pinned = pinned;
-    if (pinned) {
-      tab.stripSeq = this.nextSeq();
-    } else {
-      const others = [...this.tabs.values()].filter((item) => item.id !== tab.id && !item.pinned);
-      if (others.length) {
-        const min = Math.min(...others.map((item) => item.stripSeq));
-        tab.stripSeq = this.allocBefore(min);
-      }
-    }
     this.rebuildOrder();
   }
 
@@ -806,19 +797,6 @@ export class BoardStore extends EventEmitter {
   private nextSeq(): number {
     this.lastSeq += 1;
     return this.lastSeq;
-  }
-
-  private allocBefore(n: number): number {
-    const used = new Set(this.allKnownTabs().map((tab) => tab.stripSeq));
-    let seq = n - 1;
-    while (used.has(seq)) {
-      seq -= 1;
-    }
-    return seq;
-  }
-
-  private allKnownTabs(): Tab[] {
-    return [...this.tabs.values(), ...this.archive.values(), ...this.deleted.map((entry) => entry.tab)];
   }
 
   private persistSoon(): void {
