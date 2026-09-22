@@ -4,13 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Board</title>
-  <link rel="icon" href="/favicon.svg?v=1" type="image/svg+xml" sizes="any">
-  <link rel="stylesheet" href="/app.css?v=21">
+  <link rel="icon" href="/favicon.svg?v=3" type="image/svg+xml" sizes="any">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css?v=23">
 </head>
 <body>
   <header class="chrome">
     <div class="brand">
-      <img src="/favicon.svg?v=1" width="18" height="18" alt="Agent Board">
+      <img src="/favicon.svg?v=3" width="20" height="20" alt="Agent Board">
     </div>
     <div class="tabs-wrap">
       <div class="tabs" id="tabs" role="tablist"></div>
@@ -20,8 +23,8 @@
     <div class="actions">
       <button type="button" id="clear" title="Archive unpinned tabs">Clear</button>
       <button type="button" id="archive-toggle" class="icon-btn" aria-label="Archive" aria-expanded="false" title="Archive">
-        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.25"/>
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <rect x="1.5" y="2" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/>
           <rect x="9.5" y="2.5" width="4.5" height="11" fill="currentColor"/>
         </svg>
         <span id="archive-badge" class="badge" hidden></span>
@@ -42,15 +45,17 @@
       </div>
       <div id="frames"></div>
     </main>
-    <aside id="archive-pane" class="archive-pane" hidden>
+    <aside id="archive-pane" class="archive-pane closed" aria-hidden="true" inert>
       <div class="archive-resizer" id="archive-resizer" role="separator" aria-orientation="vertical" aria-label="Resize archive" title="Resize archive"></div>
-      <div class="archive-head">
-        <h2>Archive <span id="archive-count">0</span></h2>
-        <button type="button" id="archive-empty" title="Delete all archived tabs">Empty</button>
+      <div class="archive-inner">
+        <div class="archive-head">
+          <h2>Archive <span id="archive-count">0</span></h2>
+          <button type="button" id="archive-empty" title="Delete all archived tabs">Empty</button>
+        </div>
+        <input type="search" id="archive-search" placeholder="Search titles and content" autocomplete="off" spellcheck="false">
+        <div id="archive-list" class="archive-list"></div>
+        <div id="archive-none" class="archive-none" hidden>No archived tabs</div>
       </div>
-      <input type="search" id="archive-search" placeholder="Search titles and content" autocomplete="off" spellcheck="false">
-      <div id="archive-list" class="archive-list"></div>
-      <div id="archive-none" class="archive-none" hidden>No archived tabs</div>
     </aside>
   </div>
   <div id="palette" class="palette" hidden>
@@ -75,6 +80,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=24"></script>
+  <script src="/app.js?v=27"></script>
 </body>
 </html>

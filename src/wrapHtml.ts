@@ -11,27 +11,27 @@ html { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.45) transpa
 const DEFAULT_CSS = `
 :root {
   color-scheme: dark;
-  --bg: #1e1e1e;
-  --text: #e8e8e8;
-  --muted: #9a9a9a;
-  --border: #3a3a3a;
-  --accent: #4ea1ff;
-  --code-bg: #2a2a2a;
+  --bg: #1a1b1e;
+  --text: #e8e8ea;
+  --muted: #8e9096;
+  --border: rgba(255, 255, 255, 0.08);
+  --accent: #9db8a4;
+  --code-bg: #131416;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.55;
   font-size: 15px;
-  padding: 28px 32px 72px;
+  padding: 34px 44px 72px;
   max-width: 980px;
   margin: 0 auto;
 }
-h1, h2, h3, h4 { line-height: 1.25; font-weight: 600; }
-h1 { font-size: 1.7rem; margin: 0 0 0.8rem; }
+h1, h2, h3, h4 { line-height: 1.25; font-weight: 650; }
+h1 { font-size: 1.7rem; margin: 0 0 0.8rem; letter-spacing: -0.02em; }
 h2 { font-size: 1.25rem; margin: 1.6rem 0 0.6rem; }
 h3 { font-size: 1.05rem; margin: 1.3rem 0 0.45rem; }
 p, ul, ol { margin: 0.65rem 0; }
@@ -43,19 +43,19 @@ code, kbd {
   font-size: 0.9em;
   background: var(--code-bg);
   padding: 0.1em 0.35em;
-  border-radius: 3px;
+  border-radius: 6px;
 }
 pre {
   background: var(--code-bg);
   border: 1px solid var(--border);
   padding: 12px 14px;
   overflow: auto;
-  border-radius: 6px;
+  border-radius: 12px;
 }
 pre code { background: none; padding: 0; }
 table { border-collapse: collapse; width: 100%; margin: 0.8rem 0 1.2rem; font-size: 0.95rem; }
 th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
-th { background: #2a2a2a; font-weight: 600; }
+th { background: rgba(255, 255, 255, 0.04); font-weight: 600; }
 blockquote {
   margin: 0.8rem 0;
   padding: 0.2rem 0.9rem;

@@ -27,6 +27,10 @@
   const LIVE_FRAME_CAP = 5;
   const ARCHIVE_OPEN_KEY = "agent-board.archiveOpen";
   const ARCHIVE_WIDTH_KEY = "agent-board.archiveWidth";
+  const PIN_SVG =
+    '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.6 1.4l5 5-1.4 1.4-.9-.2-2.3 2.3.2 2.5-1.5 1.5-2.4-2.4-3.1 3.1-.8-.8 3.1-3.1-2.4-2.4 1.5-1.5 2.5.2 2.3-2.3-.2-.9z" fill="currentColor"/></svg>';
+  const FILE_SVG =
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="#9db8a4"/></svg>';
 
   /** @type {{ tabs: Array<any>, archive: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean }} */
   const state = {
@@ -292,7 +296,10 @@
     state.archiveOpen = Boolean(open);
     localStorage.setItem(ARCHIVE_OPEN_KEY, state.archiveOpen ? "1" : "0");
     archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
-    archivePane.hidden = !state.archiveOpen;
+    archiveToggle.classList.toggle("on", state.archiveOpen);
+    archivePane.classList.toggle("closed", !state.archiveOpen);
+    archivePane.setAttribute("aria-hidden", state.archiveOpen ? "false" : "true");
+    archivePane.toggleAttribute("inert", !state.archiveOpen);
     if (state.archiveOpen && archiveSearch.value.trim()) {
       scheduleSearch(0);
     }
@@ -315,7 +322,10 @@
     archiveBadge.hidden = unread === 0;
     archiveBadge.textContent = unread > 99 ? "99+" : String(unread);
     archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
-    archivePane.hidden = !state.archiveOpen;
+    archiveToggle.classList.toggle("on", state.archiveOpen);
+    archivePane.classList.toggle("closed", !state.archiveOpen);
+    archivePane.setAttribute("aria-hidden", state.archiveOpen ? "false" : "true");
+    archivePane.toggleAttribute("inert", !state.archiveOpen);
   }
 
   function revealTab(el) {
@@ -379,10 +389,13 @@
         }
       });
 
-      const title = document.createElement("span");
-      title.className = "tab-title";
-      title.textContent = tab.title;
-      el.appendChild(title);
+      if (tab.pinned) {
+        const pin = document.createElement("span");
+        pin.className = "tab-pin";
+        pin.title = "Pinned";
+        pin.innerHTML = PIN_SVG;
+        el.appendChild(pin);
+      }
 
       if (unread.has(tab.id) && tab.id !== state.activeId) {
         const dot = document.createElement("span");
@@ -391,12 +404,10 @@
         el.appendChild(dot);
       }
 
-      if (tab.pinned) {
-        const pin = document.createElement("span");
-        pin.className = "tab-pin";
-        pin.textContent = "pinned";
-        el.appendChild(pin);
-      }
+      const title = document.createElement("span");
+      title.className = "tab-title";
+      title.textContent = tab.title;
+      el.appendChild(title);
 
       const close = document.createElement("button");
       close.className = "tab-close";
@@ -473,6 +484,11 @@
           event.preventDefault();
         }
       });
+
+      const icon = document.createElement("span");
+      icon.className = "fileicon";
+      icon.innerHTML = FILE_SVG;
+      el.appendChild(icon);
 
       if (unreadArchive.has(tab.id)) {
         const dot = document.createElement("span");
