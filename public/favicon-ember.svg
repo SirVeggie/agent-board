@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="Agent Board">
+  <defs>
+    <linearGradient id="ember" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4d3f30"/>
+      <stop offset="1" stop-color="#332a20"/>
+    </linearGradient>
+  </defs>
+  <rect width="16" height="16" rx="4" fill="url(#ember)"/>
+  <rect x="3" y="2.5" width="5" height="3" rx="1" fill="#fff"/>
+  <rect x="3" y="6.5" width="10" height="7" rx="1.25" fill="#fff"/>
+</svg>

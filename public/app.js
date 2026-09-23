@@ -38,9 +38,9 @@
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
   const DEFAULT_THEME = "neutral";
   const THEMES = [
-    { id: "neutral", name: "Neutral", swatch: "#c9c9d0" },
-    { id: "ember", name: "Ember", swatch: "#d0a578" },
-    { id: "spectrum", name: "Spectrum", swatch: "#9db8a4" },
+    { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "/favicon.svg?v=4" },
+    { id: "ember", name: "Ember", swatch: "#d0a578", icon: "/favicon-ember.svg?v=4" },
+    { id: "spectrum", name: "Spectrum", swatch: "#9db8a4", icon: "/favicon-spectrum.svg?v=4" },
   ];
   const PIN_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.6 1.4l5 5-1.4 1.4-.9-.2-2.3 2.3.2 2.5-1.5 1.5-2.4-2.4-3.1 3.1-.8-.8 3.1-3.1-2.4-2.4 1.5-1.5 2.5.2 2.3-2.3-.2-.9z" fill="currentColor"/></svg>';
@@ -380,10 +380,25 @@
     return DEFAULT_THEME;
   }
 
+  function applyFavicon(href) {
+    const prev = document.querySelector('link[rel="icon"]');
+    if (prev && prev.getAttribute("href") === href) {
+      return;
+    }
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/svg+xml";
+    link.setAttribute("sizes", "any");
+    link.href = href;
+    prev?.remove();
+    document.head.appendChild(link);
+  }
+
   function applyTheme(id) {
     const theme = THEMES.find((item) => item.id === id) || THEMES[0];
     document.documentElement.dataset.theme = theme.id;
     localStorage.setItem(THEME_KEY, theme.id);
+    applyFavicon(theme.icon);
     highlightThemeOptions();
   }
 
