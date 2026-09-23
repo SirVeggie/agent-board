@@ -53,6 +53,8 @@ export class BoardStore extends EventEmitter {
   private deleted: DeletedEntry[] = [];
   private activeId: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistError: string | null = null;
   private lastStamp = 0;
   private lastSeq = 0;
   private db: BoardDb | null = null;
@@ -123,12 +125,19 @@ export class BoardStore extends EventEmitter {
     }
   }
 
-  snapshot(): { tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null; templates: TemplateMeta[] } {
+  snapshot(): {
+    tabs: TabMeta[];
+    archive: TabMeta[];
+    activeId: string | null;
+    templates: TemplateMeta[];
+    persistError: string | null;
+  } {
     return {
       tabs: this.order.map((id) => toMeta(this.tabs.get(id)!)).filter(Boolean),
       archive: this.archiveOrder.map((id) => toMeta(this.archive.get(id)!)),
       activeId: this.activeId,
       templates: this.listTemplates(),
+      persistError: this.persistError,
     };
   }
 
@@ -983,9 +992,14 @@ export class BoardStore extends EventEmitter {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    if (this.persistRetryTimer) {
+      clearTimeout(this.persistRetryTimer);
+      this.persistRetryTimer = null;
+    }
     if (!this.db) {
       return;
     }
+    this.ensureUniqueStripSeqs();
     const upserts: StoredTab[] = [];
     for (const id of this.dirty) {
       const stored = this.storedOf(id);
@@ -1007,13 +1021,25 @@ export class BoardStore extends EventEmitter {
       this.removed.clear();
       this.removedTemplates.clear();
       this.templatesDirty = false;
+      if (this.persistError) {
+        this.persistError = null;
+        this.emit("persist_ok");
+      }
     } catch (err) {
-      log("Failed to persist board state", String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      log("Failed to persist board state", message);
+      this.persistError = message;
+      this.emit("persist_error", message);
+      this.schedulePersistRetry();
     }
   }
 
   closeDb(): void {
     this.persist();
+    if (this.persistRetryTimer) {
+      clearTimeout(this.persistRetryTimer);
+      this.persistRetryTimer = null;
+    }
     try {
       this.db?.close();
     } catch (err) {
@@ -1241,6 +1267,42 @@ export class BoardStore extends EventEmitter {
       clearTimeout(this.saveTimer);
     }
     this.saveTimer = setTimeout(() => this.persist(), 150);
+  }
+
+  private schedulePersistRetry(): void {
+    if (this.persistRetryTimer || !this.db) {
+      return;
+    }
+    this.persistRetryTimer = setTimeout(() => {
+      this.persistRetryTimer = null;
+      this.persist();
+    }, 2000);
+  }
+
+  /** Later copies of a seq get a new number so SQLite UNIQUE(strip_seq) cannot stick. */
+  private ensureUniqueStripSeqs(): void {
+    const seen = new Set<number>();
+    const tabs = [
+      ...this.order.map((id) => this.tabs.get(id)),
+      ...this.archiveOrder.map((id) => this.archive.get(id)),
+      ...this.deleted.map((entry) => entry.tab),
+    ];
+    let changed = false;
+    for (const tab of tabs) {
+      if (!tab) {
+        continue;
+      }
+      if (seen.has(tab.stripSeq)) {
+        tab.stripSeq = this.nextSeq();
+        this.markDirty(tab.id);
+        changed = true;
+      } else {
+        seen.add(tab.stripSeq);
+      }
+    }
+    if (changed) {
+      this.rebuildOrder();
+    }
   }
 
   private locateTemplate(idOrKey: string): Template | undefined {

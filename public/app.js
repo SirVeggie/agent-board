@@ -53,6 +53,8 @@
   const tabMenu = document.getElementById("tab-menu");
   const tabMenuExport = document.getElementById("tab-menu-export");
   const noticeEl = document.getElementById("notice");
+  const persistBanner = document.getElementById("persist-banner");
+  const persistBannerDetail = document.getElementById("persist-banner-detail");
   const tabsWrap = tabsEl.parentElement;
 
   const SANDBOX =
@@ -205,9 +207,18 @@
       syncHash();
       render();
       reportViewer();
+      showPersistError(msg.persistError);
       if (fromArchive && !fromOpen) {
         restoreTab(fromArchive.id);
       }
+      return;
+    }
+    if (msg.type === "persist_error") {
+      showPersistError(msg.error);
+      return;
+    }
+    if (msg.type === "persist_ok") {
+      showPersistError(null);
       return;
     }
     if (msg.type === "tab_upserted") {
@@ -1881,6 +1892,12 @@
     noticeTimer = window.setTimeout(() => {
       noticeEl.hidden = true;
     }, 4000);
+  }
+
+  function showPersistError(error) {
+    const message = typeof error === "string" ? error.trim() : "";
+    persistBanner.hidden = !message;
+    persistBannerDetail.textContent = message;
   }
 
   async function importFiles(fileList, destination) {

@@ -121,7 +121,14 @@ export type UpsertNotice = {
 };
 
 export type BoardEvent =
-  | { type: "snapshot"; tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null; templates: TemplateMeta[] }
+  | {
+      type: "snapshot";
+      tabs: TabMeta[];
+      archive: TabMeta[];
+      activeId: string | null;
+      templates: TemplateMeta[];
+      persistError: string | null;
+    }
   | { type: "tab_upserted"; tab: TabMeta; index?: number }
   | { type: "tab_closed"; id: string }
   | { type: "tab_archived"; id: string }
@@ -131,7 +138,9 @@ export type BoardEvent =
   | { type: "tab_signal"; id: string; signal: TabSignal }
   | { type: "archive_cleared" }
   | { type: "template_upserted"; template: TemplateMeta }
-  | { type: "template_deleted"; id: string };
+  | { type: "template_deleted"; id: string }
+  | { type: "persist_error"; error: string }
+  | { type: "persist_ok" };
 
 export type UpsertInput = {
   key?: string;

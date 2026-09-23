@@ -126,9 +126,11 @@ test("swapStripSeq reorders two unpinned tabs and persists", () => {
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
+  store.persist();
   store.swapStripSeq("a", "b");
   assert.deepEqual(titles(store), ["B", "A", "C"]);
   store.persist();
+  assert.equal(store.snapshot().persistError, null);
   store.closeDb();
   const again = loaded();
   assert.deepEqual(titles(again), ["B", "A", "C"]);
@@ -165,6 +167,40 @@ test("swapStripSeq rejects an archived tab", () => {
   store.archiveTab("a");
   assert.throws(() => store.swapStripSeq("a", "b"), /archived/);
   store.closeDb();
+});
+
+test("reorderTab after persist walks adjacent swaps without unique collisions", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "D", html: "<p>d</p>" });
+  store.persist();
+  store.reorderTab("a", null);
+  assert.deepEqual(titles(store), ["B", "C", "D", "A"]);
+  store.persist();
+  assert.equal(store.snapshot().persistError, null);
+  store.closeDb();
+  const again = loaded();
+  assert.deepEqual(titles(again), ["B", "C", "D", "A"]);
+  again.closeDb();
+});
+
+test("persist remints duplicate strip_seq instead of failing", () => {
+  const store = loaded();
+  const a = store.upsert({ title: "A", html: "<p>a</p>" });
+  const b = store.upsert({ title: "B", html: "<p>b</p>" });
+  store.persist();
+  b.tab.stripSeq = a.tab.stripSeq;
+  store.persist();
+  assert.equal(store.snapshot().persistError, null);
+  assert.notEqual(a.tab.stripSeq, b.tab.stripSeq);
+  store.closeDb();
+  const again = loaded();
+  assert.deepEqual(titles(again), ["A", "B"]);
+  const seqs = again.listOpenTabs().map((tab) => tab.stripSeq);
+  assert.equal(new Set(seqs).size, seqs.length);
+  again.closeDb();
 });
 
 test("reorderTab walks adjacent swaps to the end of the group", () => {

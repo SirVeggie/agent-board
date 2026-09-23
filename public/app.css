@@ -98,6 +98,35 @@ body {
   overflow: hidden;
 }
 
+.persist-banner {
+  flex-shrink: 0;
+  padding: 12px 18px 14px;
+  background: #3a1c1c;
+  border-bottom: 1px solid rgba(255, 138, 138, 0.28);
+  box-shadow: inset 4px 0 0 var(--danger);
+}
+
+.persist-banner[hidden] {
+  display: none;
+}
+
+.persist-banner p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.persist-banner strong {
+  color: var(--danger);
+}
+
+.persist-banner-detail {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  word-break: break-word;
+}
+
 .brand {
   appearance: none;
   -webkit-appearance: none;

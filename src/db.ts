@@ -180,6 +180,7 @@ ON CONFLICT(tab_id) DO UPDATE SET
 
 export class BoardDb {
   private upsertStmt;
+  private parkStripStmt;
   private deleteStmt;
   private metaStmt;
   private upsertTemplateStmt;
@@ -190,6 +191,7 @@ export class BoardDb {
 
   constructor(private readonly db: DatabaseSync) {
     this.upsertStmt = db.prepare(UPSERT_SQL);
+    this.parkStripStmt = db.prepare("UPDATE tabs SET strip_seq = ? WHERE id = ?");
     this.deleteStmt = db.prepare("DELETE FROM tabs WHERE id = ?");
     this.metaStmt = db.prepare(
       "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v"
@@ -268,6 +270,10 @@ export class BoardDb {
         this.deleteStmt.run(id);
         this.deleteBindingStmt.run(id);
       }
+      // UNIQUE(strip_seq) is checked per statement, so swapping two existing
+      // seqs would fail if we wrote the final values directly. Park dirty rows
+      // on unused negative seqs first, then apply the real ones.
+      this.parkDirtyStripSeqs(input.upserts);
       for (const row of input.upserts) {
         this.upsertStmt.run(...storedToParams(row));
       }
@@ -297,6 +303,18 @@ export class BoardDb {
 
   close(): void {
     this.db.close();
+  }
+
+  private parkDirtyStripSeqs(upserts: StoredTab[]): void {
+    if (!upserts.length) {
+      return;
+    }
+    const row = this.db.prepare("SELECT MIN(strip_seq) AS m FROM tabs").get() as { m: number | null } | undefined;
+    let park = Math.min(-1, (typeof row?.m === "number" ? row.m : 0) - 1);
+    for (const stored of upserts) {
+      this.parkStripStmt.run(park, stored.tab.id);
+      park -= 1;
+    }
   }
 
   private importLegacyJson(jsonPath: string): void {

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=32">
+  <link rel="stylesheet" href="/app.css?v=34">
   <script>
     (() => {
       const theme = localStorage.getItem("agent-board.theme");
@@ -54,6 +54,10 @@
       </button>
     </div>
   </header>
+  <div id="persist-banner" class="persist-banner" hidden role="alert">
+    <p><strong>Could not save the board.</strong> Changes live only in this session until this is fixed. Ask an agent to look at it, or export the page.</p>
+    <p id="persist-banner-detail" class="persist-banner-detail"></p>
+  </div>
   <div class="workspace">
     <main>
       <div id="template-block" class="template-block" hidden>
@@ -172,6 +176,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=38"></script>
+  <script src="/app.js?v=39"></script>
 </body>
 </html>

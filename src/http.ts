@@ -619,6 +619,8 @@ export async function startHttp(): Promise<http.Server> {
   });
   store.on("template_upserted", (template: TemplateMeta) => broadcast({ type: "template_upserted", template }));
   store.on("template_deleted", (id: string) => broadcast({ type: "template_deleted", id }));
+  store.on("persist_error", (error: string) => broadcast({ type: "persist_error", error }));
+  store.on("persist_ok", () => broadcast({ type: "persist_ok" }));
 
   server.requestTimeout = MAX_WAIT_MS + 30_000;
   contentServer.requestTimeout = MAX_WAIT_MS + 30_000;
