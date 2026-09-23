@@ -197,7 +197,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  padding: 0 7px 0 12px;
   height: 32px;
   max-width: 220px;
   min-width: 110px;
@@ -289,6 +289,10 @@ button.tab-close {
   color: var(--muted);
   width: 18px;
   height: 18px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 5px;
   cursor: pointer;
   font-size: 13px;
