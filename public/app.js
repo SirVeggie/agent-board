@@ -796,7 +796,6 @@
       return;
     }
     event.preventDefault();
-    drag.probeX = event.clientX;
     positionDraggedTab(event.clientX, event.clientY);
     updateDragScroll(event.clientX);
     moveDropSlot();
@@ -836,7 +835,6 @@
     }
     tabsEl.classList.add("reordering");
     document.body.classList.add("dragging-tab");
-    drag.probeX = event.clientX;
     positionDraggedTab(event.clientX, event.clientY);
     moveDropSlot();
   }
@@ -863,18 +861,16 @@
     return -1;
   }
 
-  /** Layout midpoint, ignoring FLIP translate so hit-testing stays stable while siblings animate. */
-  function layoutMid(el) {
+  /** Layout box, ignoring FLIP translate so hit-testing stays stable while siblings animate. */
+  function layoutBox(el) {
     const rect = el.getBoundingClientRect();
     const transform = getComputedStyle(el).transform;
     const left = !transform || transform === "none" ? rect.left : rect.left - new DOMMatrix(transform).m41;
-    return left + el.offsetWidth / 2;
+    const width = el.offsetWidth;
+    return { left, right: left + width };
   }
 
-  /**
-   * Group-local hole index. Other tabs only; switch a couple of pixels past the neighbor midpoint.
-   */
-  function slotIndexForProbe(probeX) {
+  function groupOthers() {
     const others = [];
     for (const child of tabsEl.children) {
       if (child === drag.placeholder) {
@@ -885,16 +881,35 @@
         others.push(child);
       }
     }
+    return others;
+  }
+
+  /**
+   * Adjacent hole index. Right: midpoint from gap left to next tab right.
+   * Left: midpoint from prev tab left to gap right. Compare the lifted tab's center.
+   */
+  function nextGapTarget(ghostMid) {
     const from = groupLocalIndex(drag.id);
-    let target = from < 0 ? 0 : from;
-    const hyst = 2;
-    while (target < others.length && probeX > layoutMid(others[target]) + hyst) {
-      target += 1;
+    if (from < 0 || !drag.placeholder) {
+      return from;
     }
-    while (target > 0 && probeX < layoutMid(others[target - 1]) - hyst) {
-      target -= 1;
+    const others = groupOthers();
+    const gap = layoutBox(drag.placeholder);
+    const next = others[from];
+    const prev = others[from - 1];
+    if (next) {
+      const mid = (gap.left + layoutBox(next).right) / 2;
+      if (ghostMid > mid) {
+        return from + 1;
+      }
     }
-    return target;
+    if (prev) {
+      const mid = (layoutBox(prev).left + gap.right) / 2;
+      if (ghostMid < mid) {
+        return from - 1;
+      }
+    }
+    return from;
   }
 
   function absIndexForGroupTarget(target) {
@@ -937,19 +952,26 @@
   }
 
   function moveDropSlot() {
-    if (!drag?.placeholder || !Number.isFinite(drag.probeX)) {
+    if (!drag?.placeholder || !drag.el) {
       return;
     }
-    const target = slotIndexForProbe(drag.probeX);
-    const from = groupLocalIndex(drag.id);
-    if (from === -1 || from === target) {
+    const ghost = drag.el.getBoundingClientRect();
+    const ghostMid = ghost.left + ghost.width / 2;
+    if (nextGapTarget(ghostMid) === groupLocalIndex(drag.id)) {
       return;
     }
     flipStrip(() => {
-      const fromAbs = state.tabs.findIndex((tab) => tab.id === drag.id);
-      const moving = state.tabs.splice(fromAbs, 1)[0];
-      state.tabs.splice(absIndexForGroupTarget(target), 0, moving);
-      syncPlaceholder();
+      for (let n = 0; n < 12; n += 1) {
+        const from = groupLocalIndex(drag.id);
+        const target = nextGapTarget(ghostMid);
+        if (from === -1 || target === from) {
+          break;
+        }
+        const fromAbs = state.tabs.findIndex((tab) => tab.id === drag.id);
+        const moving = state.tabs.splice(fromAbs, 1)[0];
+        state.tabs.splice(absIndexForGroupTarget(target), 0, moving);
+        syncPlaceholder();
+      }
     });
   }
 
