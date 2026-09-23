@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export const VERSION = "1.8.0";
+export const VERSION = "1.9.0";
 export const HOST = "127.0.0.1";
 /** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
 export const CONTENT_HOST = "127.0.0.2";

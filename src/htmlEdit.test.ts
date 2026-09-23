@@ -41,6 +41,34 @@ test("rejects a missing snippet", () => {
   );
 });
 
+test("a miss reports where the stored text diverges from oldString", () => {
+  const html = "<style>\n.item.done { opacity: .5 }\n.handle { cursor: grab }\n</style>";
+  const oldString = ".item.done { opacity: .5 }\n.item { color: red }";
+  assert.throws(
+    () => applyEdits(html, [{ oldString, newString: "" }]),
+    (err: unknown) =>
+      err instanceof HtmlEditError &&
+      err.message.includes("The first 28 of 47 chars match at line 3") &&
+      err.message.includes('Stored text continues: "handle { cursor: grab }') &&
+      err.message.includes('oldString expects:     "item { color: red }"')
+  );
+});
+
+test("a miss with no useful prefix says the snippet is not on the page", () => {
+  assert.throws(
+    () => applyEdits("<p>hello</p>", [{ oldString: "something else entirely", newString: "" }]),
+    (err: unknown) => err instanceof HtmlEditError && /No meaningful part of it/.test(err.message)
+  );
+});
+
+test("a miss notes when the matching prefix appears in several places", () => {
+  const html = "<li class=\"row\">a</li><li class=\"row\">b</li>";
+  assert.throws(
+    () => applyEdits(html, [{ oldString: "<li class=\"row\">c</li>", newString: "" }]),
+    (err: unknown) => err instanceof HtmlEditError && /first of 2 places/.test(err.message)
+  );
+});
+
 test("rejects an empty oldString", () => {
   assert.throws(
     () => applyEdits("<p>hello</p>", [{ oldString: "", newString: "x" }]),

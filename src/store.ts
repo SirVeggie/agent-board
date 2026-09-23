@@ -32,7 +32,7 @@ import {
   type TemplateValues,
   type UpsertInput,
 } from "./types.js";
-import { applyEdits, type HtmlEdit } from "./htmlEdit.js";
+import { applyEdits, assertRevision, type HtmlEdit, type HtmlEditResult } from "./htmlEdit.js";
 import {
   mergeTemplateValues,
   normalizeTemplateInput,
@@ -540,7 +540,14 @@ export class BoardStore extends EventEmitter {
 
   patchHtml(
     idOrKey: string,
-    input: { edits: HtmlEdit[]; title?: string; activate?: boolean }
+    input: {
+      edits?: HtmlEdit[];
+      /** Replaces the whole body, e.g. a checked-out file. Mutually exclusive with edits. */
+      html?: string;
+      title?: string;
+      activate?: boolean;
+      expectedRevision?: number;
+    }
   ): { tab: Tab; applied: number; archived: boolean } {
     const located = this.locate(idOrKey);
     if (!located) {
@@ -549,6 +556,7 @@ export class BoardStore extends EventEmitter {
     if (isTemplateBound(located.tab)) {
       throw new Error(boundHtmlError(located.tab, this.templateLabel(located.tab)));
     }
+    assertRevision(located.tab.revision, input.expectedRevision);
     let nextTitle = located.tab.title;
     if (input.title !== undefined) {
       nextTitle = input.title.trim();
@@ -556,7 +564,7 @@ export class BoardStore extends EventEmitter {
         throw new Error("title is required");
       }
     }
-    const result = applyEdits(located.tab.html, input.edits);
+    const result = replaceOrEdit(located.tab, input);
     const bytes = Buffer.byteLength(result.html, "utf8");
     if (bytes > MAX_HTML_BYTES) {
       throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
@@ -608,12 +616,13 @@ export class BoardStore extends EventEmitter {
 
   update(
     idOrKey: string,
-    patch: { title?: string; html?: string; pin?: boolean; activate?: boolean }
+    patch: { title?: string; html?: string; pin?: boolean; activate?: boolean; expectedRevision?: number }
   ): Tab {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
+    assertRevision(located.tab.revision, patch.expectedRevision);
     if (located.where === "archive" && patch.activate !== false) {
       this.restore(located.tab.id, { placement: "append", activate: true });
     }
@@ -1546,6 +1555,19 @@ function applyAssets(tabId: string, current: TabAsset[], incoming: UpsertInput["
     return current;
   }
   return writePreparedAssets(tabId, current, incoming);
+}
+
+function replaceOrEdit(tab: Tab, input: { edits?: HtmlEdit[]; html?: string }): HtmlEditResult {
+  if (input.html !== undefined) {
+    if (input.edits?.length) {
+      throw new Error("pass either edits or html, not both");
+    }
+    if (!input.html.trim()) {
+      throw new Error("html is required");
+    }
+    return { html: wrapHtml(tab.title, input.html), applied: 1 };
+  }
+  return applyEdits(tab.html, input.edits ?? []);
 }
 
 /** Initial state only lands on a tab that has none, so re-showing a page never resets what the user changed. */

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import { RevisionConflictError } from "./htmlEdit.js";
 import { BoardStore } from "./store.js";
 import { toMeta } from "./types.js";
 
@@ -493,6 +494,50 @@ test("template open creates a pinned bound page and blocks html edits", () => {
   assert.deepEqual(tab.state, { todos: [] });
   assert.throws(() => store.upsert({ key: tab.key, title: "X", html: "<p>nope</p>" }), /bound to template/);
   assert.throws(() => store.patchHtml(tab.id, { edits: [{ oldString: "<h1>", newString: "<h2>" }] }), /bound to template/);
+  store.closeDb();
+});
+
+test("patchHtml with html replaces the body but keeps state and the wait signal", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "page", title: "Page", html: "<!DOCTYPE html><p>old</p>", state: { n: 1 } });
+  store.signal("page", { name: "submitted" });
+  const { tab: patched, applied } = store.patchHtml("page", {
+    html: "<!DOCTYPE html><p>new</p>",
+    expectedRevision: tab.revision,
+  });
+  assert.equal(applied, 1);
+  assert.equal(patched.html, "<!DOCTYPE html><p>new</p>");
+  assert.equal(patched.revision, 2);
+  assert.deepEqual(patched.state, { n: 1 });
+  assert.equal(patched.signal?.name, "submitted");
+  store.closeDb();
+});
+
+test("patchHtml refuses a stale expectedRevision and changes nothing", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  store.patchHtml("page", { edits: [{ oldString: "<p>a</p>", newString: "<p>b</p>" }] });
+  assert.throws(
+    () => store.patchHtml("page", { html: "<p>clobber</p>", expectedRevision: 1 }),
+    (err: unknown) => err instanceof RevisionConflictError && /since revision 1 \(now 2\)/.test(err.message)
+  );
+  assert.throws(
+    () => store.update("page", { title: "Renamed", expectedRevision: 1 }),
+    (err: unknown) => err instanceof RevisionConflictError
+  );
+  const tab = store.get("page")!;
+  assert.match(tab.html, /<p>b<\/p>/);
+  assert.equal(tab.title, "Page");
+  store.closeDb();
+});
+
+test("patchHtml rejects edits and html together", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  assert.throws(
+    () => store.patchHtml("page", { html: "<p>b</p>", edits: [{ oldString: "a", newString: "c" }] }),
+    /either edits or html/
+  );
   store.closeDb();
 });
 

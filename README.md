@@ -48,12 +48,12 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | Tool | Purpose |
 | --- | --- |
 | `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Default focuses the tab (and restores it if archived). Pass `background: true` to update without focusing: unread blip on an open tab, or on Archive if the tab is archived. |
-| `board_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`). Same background/focus rules as show. Does not create a tab or reset wait state. |
+| `board_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`), or replace the whole HTML from a checked-out file (`htmlPath`). Optional `expectedRevision` refuses the change if the page moved. Same background/focus rules as show. Does not create a tab or reset state or wait signals. |
 | `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
 | `board_list` | List open tabs (`id`, `key`, `title`, …) plus `archiveCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
 | `board_archive` | Page archived tabs (default 20, max 50) or search with `query` over title, key, page text, and JSON state. Open tabs are not searched. |
 | `board_restore` | Bring an archived tab back to the open strip |
-| `board_read` | Read a tab's HTML so it can be revised (open or archived) |
+| `board_read` | Read a tab's HTML so it can be revised (open or archived). `toFile: true` checks it out to a temp file for editing with file tools instead |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
 | `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
 | `board_set_state` | Write state without focusing. Unfocused open tabs and archived tabs show an unread blip. |
@@ -61,7 +61,9 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_close` | Archive one tab, all unpinned tabs, or everything. Pass `permanent: true` to delete instead |
 | `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar) |
 
-Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `board_patch` with exact `oldString`/`newString` edits instead of sending the whole document again.
+Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `board_patch` with exact `oldString`/`newString` edits instead of sending the whole document again. For a large page, `board_read` with `toFile: true`, edit the file, then `board_patch` with `htmlPath` and `expectedRevision`.
+
+`board_show`, `board_patch`, and `board_read` also return `viewUrl`: the tab page on its own (`http://127.0.0.2:4747/view/<id>`), outside the board's iframe, so a browser tool can click, drag, and run scripts in it.
 
 ### Images
 

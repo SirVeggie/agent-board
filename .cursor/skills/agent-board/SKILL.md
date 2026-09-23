@@ -34,7 +34,7 @@ The user names pages by **title** (“my Jira issues page”). Keys are slugs yo
 
 **By content** (body or JSON state, or the title scan missed it): call `board_list({ query })` and `board_archive({ query })` **in the same turn** with the same keywords. They do not search each other’s tabs.
 
-Then `board_read` with that `id` or `key` when you need the HTML (works on archived tabs without restoring). Prefer `board_patch` over rewriting what you read.
+Then `board_read` with that `id` or `key` when you need the HTML (works on archived tabs without restoring). The HTML comes back as its own unescaped text block after the metadata — copy `oldString`s from it verbatim. Prefer `board_patch` over rewriting what you read. For a large page, check it out to a file instead (see below).
 
 **Search keywords.** Use 1–3 distinctive words (`jira`, `clims-18595`, a phrase from the page or its state). Do not paste the whole utterance (`my jira issues page`). Filler like *my / page / tab / the* is ignored; every remaining word must match. Both tools search **title, key, visible page text, and JSON state**. Title matches rank first.
 
@@ -90,10 +90,29 @@ Rules:
 - Identify the tab by the same `key` (or `id`) you used in `board_show`. The tab must already exist — this does not create.
 - `oldString` is an exact substring of the **stored** HTML. If you originally passed a fragment, the stored page is wrapped (doctype + default CSS); match the body you wrote, not the wrapper.
 - Each `oldString` must match exactly once. If it matches several times, add surrounding context or pass `replaceAll: true`.
-- Edits apply in order, atomically. A failure changes nothing; do not retry with a guessed snippet — `board_read` or add more context.
+- Edits apply in order, atomically. A failure changes nothing. The error says how much of your `oldString` matched, at which line, and quotes the stored text where it diverged — fix the snippet from that. Do not retry with a guess.
 - Do not `board_read` first when the original markup is still in the conversation.
+- Pass `expectedRevision` (from `board_read` or the previous `board_patch` result) when the user may have changed the page since you read it. A stale revision is refused.
 - Same `background` / focus rules as `board_show`. Does not clear wait signals or JSON state.
-- Still `board_show` for a new page, a large rewrite, new `assets`, or seeding `state`.
+- Still `board_show` for a new page, new `assets`, or seeding `state`.
+
+### Large pages: check out to a file
+
+When a page is large (tens of KB, like a keep-using app) or you are rewriting a big part of it, do not paste it through tool arguments. Check it out, edit it with your normal file tools, and check it back in:
+
+```
+board_read({ key: "todo-page", toFile: true })
+  → { path: "C:/Users/me/AppData/Local/Temp/agent-board/todo-page.html", revision: 23, ... }
+
+// Read / Grep / StrReplace on that path
+
+board_patch({ key: "todo-page", htmlPath: "<that path>", expectedRevision: 23, background: true })
+```
+
+- The checkout is a scratch copy in the system temp folder, not a workspace file. The tab stays the source of truth; the file is only for editing.
+- Check-in replaces the whole HTML but keeps title, page state, and wait signals (unlike `board_show`). `htmlPath` and `edits` are mutually exclusive.
+- Always pass the checkout's `revision` as `expectedRevision`. If it is refused, the page moved: check out again and redo your edits on the fresh copy.
+- Template-bound pages cannot be checked out.
 
 ### Updating vs replacing
 
@@ -167,6 +186,15 @@ Rules:
 - If `board_screenshot` is missing, the Agent Board MCP is on an old build — tell the user to reload MCP after rebuilding the daemon.
 
 When you are done iterating and the user should see the result, `board_show` or `board_patch` once more **without** `background` so the tab comes to the front.
+
+## Testing interactions
+
+The board shows each page in an iframe that browser tools cannot reach. To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `board_show`, `board_patch`, and `board_read`) directly in the browser tool. There, the page runs on its own with a live `window.board`.
+
+- `board.set` and signals from that page write to the **real tab**. Do not test destructive interactions on a page the user relies on (their todo list). Show a copy under a temp key with `background: true`, test its `viewUrl`, then delete it with `board_close({ key, permanent: true })`.
+- Looking without changing anything (snapshot, reading the DOM, a script that only reads) is fine on the real page.
+- Loaded directly, the page does not receive live updates from `board_set_state` or other viewers. Reload it to see them.
+- This is for testing behavior. For a picture of the layout, `board_screenshot` is still the tool.
 
 ## Interactive pages
 

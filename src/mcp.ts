@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
-import { baseUrl } from "./config.js";
+import { safeStem } from "./boardExport.js";
+import { baseUrl, contentBaseUrl } from "./config.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBrowser } from "./openBrowser.js";
@@ -31,7 +34,7 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.5.0",
+    version: "1.6.0",
   });
 
   server.tool(
@@ -111,6 +114,7 @@ export async function startMcp(): Promise<void> {
         key: tab.key,
         title: tab.title,
         url: boardUrl(tab.id),
+        viewUrl: viewUrl(tab.id),
         assets: tab.assets ?? [],
         note: archived
           ? "Updated in the archive (background). The unread blip is on Archive, not the tab strip. Use board_restore to bring it back."
@@ -123,7 +127,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_patch",
-    "Patch snippets on an existing Agent Board page without rewriting the whole HTML. The tab must already exist (open or archived) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes. Does not clear wait signals or page state. Default: focus the tab (and restore it if archived). Pass background: true to patch without focusing. Prefer this over board_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. On a match failure, call board_read or add more surrounding context; do not guess.",
+    "Patch snippets on an existing Agent Board page without rewriting the whole HTML. The tab must already exist (open or archived) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not clear wait signals or page state. Default: focus the tab (and restore it if archived). Pass background: true to patch without focusing. Prefer this over board_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with board_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -143,7 +147,19 @@ export async function startMcp(): Promise<void> {
         )
         .min(1)
         .optional()
-        .describe("Replacements to apply in order. Each sees the result of the previous edit. Omit when only changing title. Refused on pages bound to a template."),
+        .describe("Replacements to apply in order. Each sees the result of the previous edit. Omit when only changing title or when passing htmlPath. Refused on pages bound to a template."),
+      htmlPath: z
+        .string()
+        .optional()
+        .describe(
+          "Local HTML file that replaces the whole page, usually the path returned by board_read toFile: true after you edited it. Keeps title, page state, and wait signals. Mutually exclusive with edits."
+        ),
+      expectedRevision: z
+        .number()
+        .optional()
+        .describe(
+          "Refuse the change if the page's revision is no longer this one (someone else edited it). Pass the revision from board_read or the previous board_patch."
+        ),
       title: z.string().optional().describe("Optional new tab title. May be sent without edits to rename a tab, including a template-bound page."),
       background: z
         .boolean()
@@ -152,17 +168,31 @@ export async function startMcp(): Promise<void> {
           "If true, do not focus this tab and do not bring the board window forward. Open tab: unread blip on that tab. Archived tab: stays archived, unread blip on Archive. Omit (default) when the user should look at this tab — that also restores an archived key to the strip."
         ),
     },
-    async ({ id, key, edits, title, background }) => {
+    async ({ id, key, edits, htmlPath, expectedRevision, title, background }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
       }
-      if ((!edits || edits.length === 0) && !title) {
-        return errorResult("Provide edits or title");
+      const hasEdits = Boolean(edits && edits.length > 0);
+      if (hasEdits && htmlPath) {
+        return errorResult("Pass either edits or htmlPath, not both");
+      }
+      if (!hasEdits && !htmlPath && !title) {
+        return errorResult("Provide edits, htmlPath, or title");
+      }
+      let html: string | undefined;
+      if (htmlPath) {
+        try {
+          html = stripBom(fs.readFileSync(path.resolve(htmlPath), "utf8"));
+        } catch (err) {
+          return errorResult(`Could not read htmlPath: ${(err as Error).message}`);
+        }
       }
       const activate = background !== true;
       const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/patch`, {
-        edits,
+        edits: hasEdits ? edits : undefined,
+        html,
+        expectedRevision,
         title,
         activate,
       });
@@ -189,6 +219,7 @@ export async function startMcp(): Promise<void> {
         revision: payload.tab.revision,
         htmlBytes: payload.tab.htmlBytes,
         url: boardUrl(payload.tab.id),
+        viewUrl: viewUrl(payload.tab.id),
         note: payload.archived
           ? "Patched in the archive (background). The unread blip is on Archive, not the tab strip. Use board_restore to bring it back."
           : activate
@@ -339,12 +370,18 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_read",
-    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and archived tabs without restoring.",
+    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and archived tabs without restoring. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your file tools (Read, Grep, StrReplace), then check it in with board_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
+      toFile: z
+        .boolean()
+        .optional()
+        .describe(
+          "Check the page out to a temp file instead of returning the HTML. Returns path and revision for board_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
+        ),
     },
-    async ({ id, key }) => {
+    async ({ id, key, toFile }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -355,16 +392,18 @@ export async function startMcp(): Promise<void> {
       }
       const tab = data as Tab;
       const dates = withAgentDates(tab);
-      return jsonResult({
+      const meta = {
         id: tab.id,
         key: tab.key,
         title: tab.title,
         pinned: tab.pinned,
         archived: Boolean(tab.archivedAt),
+        revision: tab.revision,
+        htmlBytes: Buffer.byteLength(tab.html, "utf8"),
         createdAt: dates.createdAt,
         updatedAt: dates.updatedAt,
         ...(dates.archivedAt ? { archivedAt: dates.archivedAt } : {}),
-        html: tab.html,
+        viewUrl: viewUrl(tab.id),
         assets: tab.assets ?? [],
         ...(tab.templateId
           ? {
@@ -374,7 +413,29 @@ export async function startMcp(): Promise<void> {
               note: "This page is bound to a template. Do not edit its HTML — update the template with board_template_upsert.",
             }
           : {}),
-      });
+      };
+      if (toFile) {
+        if (tab.templateId) {
+          return errorResult("This page is bound to a template and cannot be checked out. Update the template instead.");
+        }
+        let file: string;
+        try {
+          file = writeCheckout(tab);
+        } catch (err) {
+          return errorResult(`Could not write checkout: ${(err as Error).message}`);
+        }
+        return jsonResult({
+          ...meta,
+          path: file,
+          note: `Checked out. Edit the file, then board_patch({ key: "${tab.key}", htmlPath, expectedRevision: ${tab.revision} }).`,
+        });
+      }
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(meta, null, 2) },
+          { type: "text" as const, text: tab.html },
+        ],
+      };
     }
   );
 
@@ -816,6 +877,23 @@ function resolveAssetPaths(assets: Array<string | { path: string; name?: string 
 
 function boardUrl(id?: string): string {
   return id ? `${baseUrl()}/#${id}` : baseUrl();
+}
+
+/** The tab page on its own, outside the board's iframe, so a browser tool can drive it. */
+function viewUrl(id: string): string {
+  return `${contentBaseUrl()}/view/${encodeURIComponent(id)}`;
+}
+
+function writeCheckout(tab: Tab): string {
+  const dir = path.join(os.tmpdir(), "agent-board");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${safeStem(tab.key)}.html`);
+  fs.writeFileSync(file, tab.html, "utf8");
+  return file;
+}
+
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 function jsonResult(value: unknown) {

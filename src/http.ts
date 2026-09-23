@@ -7,7 +7,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
-import { parseHtmlEdits } from "./htmlEdit.js";
+import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
@@ -163,26 +163,32 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs/:id/patch", (req, res) => {
     try {
       const title = optionalString(req.body?.title);
+      const html = typeof req.body?.html === "string" ? req.body.html : undefined;
+      const rawRevision = req.body?.expectedRevision;
+      const expectedRevision = typeof rawRevision === "number" && Number.isFinite(rawRevision) ? rawRevision : undefined;
       const rawEdits = req.body?.edits;
       const noEdits = rawEdits === undefined || (Array.isArray(rawEdits) && rawEdits.length === 0);
-      if (noEdits && title) {
+      if (noEdits && html === undefined && title) {
         const tab = store.update(req.params.id, {
           title,
           activate: req.body?.activate,
+          expectedRevision,
         });
         res.json({ applied: 0, archived: store.isArchived(tab.id), tab: toMeta(tab) });
         return;
       }
-      const edits = parseHtmlEdits(req.body?.edits);
       const { tab, applied, archived } = store.patchHtml(req.params.id, {
-        edits,
+        edits: noEdits ? undefined : parseHtmlEdits(rawEdits),
+        html,
         title,
         activate: req.body?.activate,
+        expectedRevision,
       });
       res.json({ applied, archived, tab: toMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
-      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+      const status = message.startsWith("tab not found") ? 404 : err instanceof RevisionConflictError ? 409 : 400;
+      res.status(status).json({ error: message });
     }
   });
 
