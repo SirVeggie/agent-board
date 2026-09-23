@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
-import { isPlainObject, type BoardState, type Tab, type TabSignal } from "./types.js";
+import { ensureTemplateSchema } from "./dbMigrate.js";
+import { isPlainObject, type BoardState, type Tab, type TabSignal, type Template, type TemplateBinding } from "./types.js";
 
 export const SCHEMA_VERSION = 1;
 
@@ -12,6 +13,29 @@ export type StoredTab = {
   tab: Tab;
   status: TabStatus;
   deletedAt?: number;
+};
+
+type TemplateRow = {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  html: string;
+  fields: string;
+  title_template: string | null;
+  initial_state: string;
+  state_version: number;
+  created_at: number;
+  updated_at: number;
+};
+
+type BindingRow = {
+  tab_id: string;
+  template_id: string;
+  values_json: string;
+  state_version: number;
+  compatible: number;
+  reason: string | null;
 };
 
 type TabRow = {
@@ -71,6 +95,27 @@ CREATE TABLE IF NOT EXISTS tabs (
 );
 CREATE INDEX IF NOT EXISTS idx_tabs_status_archived ON tabs(status, archived_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tabs_status_deleted ON tabs(status, deleted_at DESC);
+CREATE TABLE IF NOT EXISTS templates (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  html TEXT NOT NULL,
+  fields TEXT NOT NULL,
+  title_template TEXT,
+  initial_state TEXT NOT NULL DEFAULT '{}',
+  state_version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS template_bindings (
+  tab_id TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL,
+  values_json TEXT NOT NULL,
+  state_version INTEGER NOT NULL,
+  compatible INTEGER NOT NULL DEFAULT 1,
+  reason TEXT
+);
 `;
 
 const UPSERT_SQL = `
@@ -103,10 +148,45 @@ ON CONFLICT(id) DO UPDATE SET
   assets = excluded.assets
 `;
 
+const UPSERT_TEMPLATE_SQL = `
+INSERT INTO templates (
+  id, key, title, description, html, fields, title_template, initial_state,
+  state_version, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  key = excluded.key,
+  title = excluded.title,
+  description = excluded.description,
+  html = excluded.html,
+  fields = excluded.fields,
+  title_template = excluded.title_template,
+  initial_state = excluded.initial_state,
+  state_version = excluded.state_version,
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at
+`;
+
+const UPSERT_BINDING_SQL = `
+INSERT INTO template_bindings (
+  tab_id, template_id, values_json, state_version, compatible, reason
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(tab_id) DO UPDATE SET
+  template_id = excluded.template_id,
+  values_json = excluded.values_json,
+  state_version = excluded.state_version,
+  compatible = excluded.compatible,
+  reason = excluded.reason
+`;
+
 export class BoardDb {
   private upsertStmt;
   private deleteStmt;
   private metaStmt;
+  private upsertTemplateStmt;
+  private deleteTemplateStmt;
+  private upsertBindingStmt;
+  private deleteBindingStmt;
+  private clearBindingsStmt;
 
   constructor(private readonly db: DatabaseSync) {
     this.upsertStmt = db.prepare(UPSERT_SQL);
@@ -114,6 +194,11 @@ export class BoardDb {
     this.metaStmt = db.prepare(
       "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v"
     );
+    this.upsertTemplateStmt = db.prepare(UPSERT_TEMPLATE_SQL);
+    this.deleteTemplateStmt = db.prepare("DELETE FROM templates WHERE id = ?");
+    this.upsertBindingStmt = db.prepare(UPSERT_BINDING_SQL);
+    this.deleteBindingStmt = db.prepare("DELETE FROM template_bindings WHERE tab_id = ?");
+    this.clearBindingsStmt = db.prepare("DELETE FROM template_bindings");
   }
 
   static open(sqlitePath: string, jsonPath: string): BoardDb {
@@ -127,6 +212,7 @@ export class BoardDb {
       db = new DatabaseSync(sqlitePath);
       configure(db);
       db.exec(CREATE_SQL);
+      ensureTemplateSchema(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -147,14 +233,23 @@ export class BoardDb {
     }
   }
 
-  load(): { activeId: string | null; rows: StoredTab[] } {
+  load(): {
+    activeId: string | null;
+    rows: StoredTab[];
+    templates: Template[];
+    bindings: TemplateBinding[];
+  } {
     const active = this.db.prepare("SELECT v FROM meta WHERE k = ?").get("active_id") as
       | { v: string }
       | undefined;
     const rows = this.db.prepare("SELECT * FROM tabs").all() as TabRow[];
+    const templates = (this.db.prepare("SELECT * FROM templates").all() as TemplateRow[]).map(rowToTemplate);
+    const bindings = (this.db.prepare("SELECT * FROM template_bindings").all() as BindingRow[]).map(rowToBinding);
     return {
       activeId: active?.v ?? null,
       rows: rows.map(rowToStored),
+      templates,
+      bindings,
     };
   }
 
@@ -162,14 +257,31 @@ export class BoardDb {
     activeId: string | null;
     upserts: StoredTab[];
     removedIds: string[];
+    templates?: Template[];
+    removedTemplateIds?: string[];
+    bindings?: TemplateBinding[];
+    replaceBindings?: boolean;
   }): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const id of input.removedIds) {
         this.deleteStmt.run(id);
+        this.deleteBindingStmt.run(id);
       }
       for (const row of input.upserts) {
         this.upsertStmt.run(...storedToParams(row));
+      }
+      for (const id of input.removedTemplateIds ?? []) {
+        this.deleteTemplateStmt.run(id);
+      }
+      for (const template of input.templates ?? []) {
+        this.upsertTemplateStmt.run(...templateToParams(template));
+      }
+      if (input.replaceBindings) {
+        this.clearBindingsStmt.run();
+        for (const binding of input.bindings ?? []) {
+          this.upsertBindingStmt.run(...bindingToParams(binding));
+        }
       }
       this.metaStmt.run("active_id", input.activeId ?? "");
       this.db.exec("COMMIT");
@@ -217,6 +329,7 @@ export class BoardDb {
       if (version < SCHEMA_VERSION) {
         throw new Error(`board.sqlite schema ${version} cannot be opened by this daemon`);
       }
+      ensureTemplateSchema(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -401,6 +514,87 @@ function renameLegacy(jsonPath: string): void {
   } catch {
     /* keep state.json if rename fails; sqlite is already the source of truth */
   }
+}
+
+function templateToParams(template: Template): SQLInputValue[] {
+  return [
+    template.id,
+    template.key,
+    template.title,
+    template.description,
+    template.html,
+    JSON.stringify(template.fields),
+    template.titleTemplate ?? null,
+    JSON.stringify(template.initialState ?? {}),
+    template.stateVersion,
+    template.createdAt,
+    template.updatedAt,
+  ];
+}
+
+function bindingToParams(binding: TemplateBinding): SQLInputValue[] {
+  return [
+    binding.tabId,
+    binding.templateId,
+    JSON.stringify(binding.values ?? {}),
+    binding.stateVersion,
+    binding.compatible ? 1 : 0,
+    binding.reason ?? null,
+  ];
+}
+
+function rowToTemplate(row: TemplateRow): Template {
+  let fields: Template["fields"] = [];
+  try {
+    const parsed = JSON.parse(row.fields) as unknown;
+    if (Array.isArray(parsed)) {
+      fields = parsed as Template["fields"];
+    }
+  } catch {
+    fields = [];
+  }
+  let initialState: Template["initialState"];
+  try {
+    const parsed = JSON.parse(row.initial_state) as unknown;
+    if (isPlainObject(parsed) && Object.keys(parsed).length) {
+      initialState = parsed;
+    }
+  } catch {
+    initialState = undefined;
+  }
+  return {
+    id: row.id,
+    key: row.key,
+    title: row.title,
+    description: row.description ?? "",
+    html: row.html,
+    fields,
+    ...(row.title_template ? { titleTemplate: row.title_template } : {}),
+    ...(initialState ? { initialState } : {}),
+    stateVersion: row.state_version || 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToBinding(row: BindingRow): TemplateBinding {
+  let values: TemplateBinding["values"] = {};
+  try {
+    const parsed = JSON.parse(row.values_json) as unknown;
+    if (isPlainObject(parsed)) {
+      values = parsed as TemplateBinding["values"];
+    }
+  } catch {
+    values = {};
+  }
+  return {
+    tabId: row.tab_id,
+    templateId: row.template_id,
+    values,
+    stateVersion: row.state_version,
+    compatible: row.compatible !== 0,
+    ...(row.reason ? { reason: row.reason } : {}),
+  };
 }
 
 function removeSqlite(sqlitePath: string): void {

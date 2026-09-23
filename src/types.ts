@@ -18,6 +18,56 @@ export type PreparedAsset = {
   buffer: Buffer;
 };
 
+export type TemplateFieldType = "text" | "textarea" | "number" | "select" | "checkbox";
+
+export type TemplateFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type TemplateField = {
+  key: string;
+  label: string;
+  type: TemplateFieldType;
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+  default?: string | number | boolean;
+  options?: TemplateFieldOption[];
+  min?: number;
+  max?: number;
+};
+
+export type TemplateValues = Record<string, string | number | boolean>;
+
+export type Template = {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  html: string;
+  fields: TemplateField[];
+  titleTemplate?: string;
+  initialState?: BoardState;
+  stateVersion: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type TemplateMeta = Omit<Template, "html" | "initialState"> & {
+  htmlBytes: number;
+  instanceCount: number;
+};
+
+export type TemplateBinding = {
+  tabId: string;
+  templateId: string;
+  values: TemplateValues;
+  stateVersion: number;
+  compatible: boolean;
+  reason?: string;
+};
+
 export type Tab = {
   id: string;
   key: string;
@@ -39,6 +89,11 @@ export type Tab = {
   /** Last signal, or null after board_show resets the wait handshake. */
   signal: TabSignal | null;
   assets: TabAsset[];
+  templateId?: string;
+  templateValues?: TemplateValues;
+  templateStateVersion?: number;
+  templateCompatible?: boolean;
+  templateIncompatibleReason?: string;
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision" | "stripSeq"> & {
@@ -66,7 +121,7 @@ export type UpsertNotice = {
 };
 
 export type BoardEvent =
-  | { type: "snapshot"; tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null }
+  | { type: "snapshot"; tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null; templates: TemplateMeta[] }
   | { type: "tab_upserted"; tab: TabMeta; index?: number }
   | { type: "tab_closed"; id: string }
   | { type: "tab_archived"; id: string }
@@ -74,7 +129,9 @@ export type BoardEvent =
   | { type: "tab_focus_request"; id: string }
   | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string }
   | { type: "tab_signal"; id: string; signal: TabSignal }
-  | { type: "archive_cleared" };
+  | { type: "archive_cleared" }
+  | { type: "template_upserted"; template: TemplateMeta }
+  | { type: "template_deleted"; id: string };
 
 export type UpsertInput = {
   key?: string;
@@ -91,6 +148,7 @@ export type SetStateInput = {
   replace?: boolean;
   expectedRevision?: number;
   client?: string;
+  resolveIncompatibility?: boolean;
 };
 
 export type SignalInput = {
@@ -100,6 +158,9 @@ export type SignalInput = {
 };
 
 export type RestorePlacement = "append" | "index";
+
+/** Where imported pages land. `meta` follows each page's archivedAt (missing → open). */
+export type ImportDestination = "meta" | "archive";
 
 /** A stale expectedRevision resolves to ok:false carrying the current state so the caller can merge and retry. */
 export type SetStateResult =
@@ -120,7 +181,38 @@ export function toMeta(tab: Tab): TabMeta {
     stateUpdatedAt: tab.stateUpdatedAt,
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
     assets: tab.assets,
+    ...(tab.templateId
+      ? {
+          templateId: tab.templateId,
+          templateValues: tab.templateValues ?? {},
+          templateStateVersion: tab.templateStateVersion ?? 0,
+          templateCompatible: tab.templateCompatible !== false,
+          ...(tab.templateIncompatibleReason
+            ? { templateIncompatibleReason: tab.templateIncompatibleReason }
+            : {}),
+        }
+      : {}),
   };
+}
+
+export function toTemplateMeta(template: Template, instanceCount = 0): TemplateMeta {
+  return {
+    id: template.id,
+    key: template.key,
+    title: template.title,
+    description: template.description,
+    fields: template.fields,
+    ...(template.titleTemplate ? { titleTemplate: template.titleTemplate } : {}),
+    stateVersion: template.stateVersion,
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt,
+    htmlBytes: Buffer.byteLength(template.html, "utf8"),
+    instanceCount,
+  };
+}
+
+export function isTemplateBound(tab: { templateId?: string }): boolean {
+  return Boolean(tab.templateId);
 }
 
 export function isPlainObject(value: unknown): value is BoardState {

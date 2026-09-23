@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, writePreparedAssets } from "./assets.js";
+import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
+import { buildExport, type BoardExportFile, type ImportPageInput } from "./boardExport.js";
 import { searchArchive, ARCHIVE_PAGE_DEFAULT, type ArchiveSearchResult } from "./archiveSearch.js";
 import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
 import { MAX_HTML_BYTES, MAX_STATE_BYTES, dbPath, statePath } from "./config.js";
@@ -9,11 +10,15 @@ import { log } from "./log.js";
 import { normalizeSignalName } from "./signal.js";
 import {
   DELETE_LIMIT,
+  WELCOME_KEY,
   isAppTab,
   isPlainObject,
+  isTemplateBound,
   toMeta,
+  toTemplateMeta,
   type BoardState,
   type DeletedEntry,
+  type ImportDestination,
   type RestorePlacement,
   type SetStateInput,
   type SetStateResult,
@@ -21,9 +26,21 @@ import {
   type Tab,
   type TabAsset,
   type TabMeta,
+  type Template,
+  type TemplateBinding,
+  type TemplateMeta,
+  type TemplateValues,
   type UpsertInput,
 } from "./types.js";
 import { applyEdits, type HtmlEdit } from "./htmlEdit.js";
+import {
+  mergeTemplateValues,
+  normalizeTemplateInput,
+  parseTemplateValues,
+  renderTemplateTitle,
+  substituteTemplate,
+  type TemplateUpsertInput,
+} from "./templates.js";
 import { wrapHtml } from "./wrapHtml.js";
 
 type Located = { tab: Tab; where: "open" | "archive" };
@@ -41,6 +58,9 @@ export class BoardStore extends EventEmitter {
   private db: BoardDb | null = null;
   private dirty = new Set<string>();
   private removed = new Set<string>();
+  private templates = new Map<string, Template>();
+  private removedTemplates = new Set<string>();
+  private templatesDirty = false;
 
   constructor() {
     super();
@@ -50,8 +70,13 @@ export class BoardStore extends EventEmitter {
   load(): void {
     this.db = BoardDb.open(dbPath(), statePath());
     const snapshot = this.db.load();
+    for (const template of snapshot.templates) {
+      this.templates.set(template.id, template);
+    }
+    const bindings = new Map(snapshot.bindings.map((binding) => [binding.tabId, binding]));
     for (const row of snapshot.rows) {
       const tab = withStateDefaults(row.tab);
+      applyBinding(tab, bindings.get(tab.id));
       this.lastSeq = Math.max(this.lastSeq, tab.stripSeq);
       if (row.status === "open") {
         delete tab.archivedAt;
@@ -98,11 +123,12 @@ export class BoardStore extends EventEmitter {
     }
   }
 
-  snapshot(): { tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null } {
+  snapshot(): { tabs: TabMeta[]; archive: TabMeta[]; activeId: string | null; templates: TemplateMeta[] } {
     return {
       tabs: this.order.map((id) => toMeta(this.tabs.get(id)!)).filter(Boolean),
       archive: this.archiveOrder.map((id) => toMeta(this.archive.get(id)!)),
       activeId: this.activeId,
+      templates: this.listTemplates(),
     };
   }
 
@@ -137,6 +163,235 @@ export class BoardStore extends EventEmitter {
     return rankPages(this.listOpenTabs(), this.listArchiveTabs(), query, limit ?? PAGE_SEARCH_DEFAULT);
   }
 
+  listTemplates(): TemplateMeta[] {
+    return [...this.templates.values()]
+      .sort((a, b) => a.title.localeCompare(b.title) || a.createdAt - b.createdAt)
+      .map((template) => toTemplateMeta(template, this.instanceCount(template.id)));
+  }
+
+  getTemplate(idOrKey: string): Template | undefined {
+    return this.locateTemplate(idOrKey);
+  }
+
+  upsertTemplate(input: TemplateUpsertInput): { template: Template; created: boolean } {
+    const parsed = normalizeTemplateInput(input);
+    const existing = input.id
+      ? this.locateTemplate(input.id)
+      : input.key
+        ? this.locateTemplate(input.key)
+        : undefined;
+    const now = Date.now();
+    if (existing) {
+      const prevVersion = existing.stateVersion;
+      existing.title = parsed.title;
+      existing.description = parsed.description;
+      existing.html = parsed.html;
+      existing.fields = parsed.fields;
+      existing.titleTemplate = parsed.titleTemplate;
+      existing.initialState = parsed.initialState;
+      if (parsed.stateVersion !== undefined) {
+        existing.stateVersion = parsed.stateVersion;
+      }
+      existing.updatedAt = now;
+      this.markTemplateDirty(existing.id);
+      this.refreshTemplateInstances(existing, parsed.stateVersion !== undefined && parsed.stateVersion !== prevVersion);
+      this.persistSoon();
+      this.emit("template_upserted", toTemplateMeta(existing, this.instanceCount(existing.id)));
+      return { template: existing, created: false };
+    }
+    const id = newTemplateId();
+    const template: Template = {
+      id,
+      key: uniqueTemplateKey(this, input.key, parsed.title, id),
+      title: parsed.title,
+      description: parsed.description,
+      html: parsed.html,
+      fields: parsed.fields,
+      ...(parsed.titleTemplate ? { titleTemplate: parsed.titleTemplate } : {}),
+      ...(parsed.initialState ? { initialState: parsed.initialState } : {}),
+      stateVersion: parsed.stateVersion ?? 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.templates.set(id, template);
+    this.markTemplateDirty(id);
+    this.persistSoon();
+    this.emit("template_upserted", toTemplateMeta(template, 0));
+    return { template, created: true };
+  }
+
+  deleteTemplate(idOrKey: string): Template {
+    const template = this.locateTemplate(idOrKey);
+    if (!template) {
+      throw new Error(`template not found: ${idOrKey}`);
+    }
+    for (const tab of this.allTabs()) {
+      if (tab.templateId === template.id) {
+        this.unlinkTemplate(tab);
+      }
+    }
+    this.templates.delete(template.id);
+    this.removedTemplates.add(template.id);
+    this.templatesDirty = true;
+    this.persistSoon();
+    this.emit("template_deleted", template.id);
+    return template;
+  }
+
+  openFromTemplate(
+    idOrKey: string,
+    values: unknown,
+    opts?: { activate?: boolean }
+  ): { tab: Tab; created: boolean } {
+    const template = this.requireTemplate(idOrKey);
+    const parsed = parseTemplateValues(template.fields, values);
+    const title = renderTemplateTitle(template, parsed);
+    const html = this.renderBoundHtml(template, title, parsed);
+    const { tab } = this.upsert({
+      title,
+      html,
+      pin: true,
+      activate: opts?.activate !== false,
+      state: template.initialState,
+    });
+    this.bindTab(tab, template, parsed, true);
+    this.markDirty(tab.id);
+    this.persistSoon();
+    const index = this.order.indexOf(tab.id);
+    this.emit("tab_upserted", toMeta(tab), index === -1 ? undefined : index, {
+      activate: opts?.activate !== false,
+      structural: true,
+    });
+    return { tab, created: true };
+  }
+
+  setTemplateValues(idOrKey: string, values: unknown): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (!located.tab.templateId) {
+      throw new Error("this page is not bound to a template");
+    }
+    const template = this.requireTemplate(located.tab.templateId);
+    const parsed = parseTemplateValues(template.fields, values);
+    this.applyTemplateRender(located.tab, template, parsed, located.tab.templateCompatible !== false);
+    this.touchIfArchived(located);
+    this.markDirty(located.tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(located.tab), undefined, {
+      activate: false,
+      structural: true,
+    });
+    return located.tab;
+  }
+
+  reportIncompatible(idOrKey: string, reason?: string): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (!located.tab.templateId) {
+      throw new Error("this page is not bound to a template");
+    }
+    const message = (reason ?? "").trim() || "This page's data no longer matches the template.";
+    if (located.tab.templateCompatible === false && located.tab.templateIncompatibleReason === message) {
+      return located.tab;
+    }
+    located.tab.templateCompatible = false;
+    located.tab.templateIncompatibleReason = message;
+    this.touchIfArchived(located);
+    this.markDirty(located.tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(located.tab), undefined, {
+      activate: false,
+      structural: false,
+    });
+    return located.tab;
+  }
+
+  exportFile(idOrKey?: string): BoardExportFile {
+    const tabs = idOrKey
+      ? [this.requireAny(idOrKey)]
+      : [...this.listOpenTabs(), ...this.listArchiveTabs()].filter((tab) => !isAppTab(tab));
+    if (!tabs.length) {
+      throw new Error("nothing to export");
+    }
+    return buildExport(
+      tabs.map((tab) => ({
+        tab,
+        assets: readPreparedAssets(tab.id, tab.assets ?? []),
+      }))
+    );
+  }
+
+  importPages(
+    pages: ImportPageInput[],
+    destination: ImportDestination
+  ): { tabs: Tab[]; opened: number; archived: number; focusedId: string | null } {
+    if (!pages.length) {
+      throw new Error("no pages to import");
+    }
+    const drafts: Tab[] = [];
+    const reserved = new Set<string>();
+    try {
+      for (const page of pages) {
+        const tab = this.buildImportedDraft(page, reserved);
+        reserved.add(tab.key);
+        drafts.push(tab);
+      }
+    } catch (err) {
+      for (const tab of drafts) {
+        deleteTabAssets(tab.id);
+      }
+      throw err;
+    }
+
+    const opened: Tab[] = [];
+    const archived: Tab[] = [];
+    for (let i = 0; i < drafts.length; i += 1) {
+      const tab = drafts[i];
+      const page = pages[i];
+      if (shouldArchive(destination, page.archivedAt)) {
+        tab.archivedAt = typeof page.archivedAt === "number" ? page.archivedAt : this.stamp();
+        this.archive.set(tab.id, tab);
+        this.archiveOrder.unshift(tab.id);
+        archived.push(tab);
+      } else {
+        this.tabs.set(tab.id, tab);
+        opened.push(tab);
+      }
+      this.markDirty(tab.id);
+    }
+    this.sortArchive();
+    this.rebuildOrder();
+    const focused = opened[opened.length - 1];
+    if (focused) {
+      this.activeId = focused.id;
+    }
+    this.persistSoon();
+    for (const tab of archived) {
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
+    }
+    for (let i = 0; i < opened.length; i += 1) {
+      const tab = opened[i];
+      const last = i === opened.length - 1;
+      this.emit("tab_upserted", toMeta(tab), this.order.indexOf(tab.id), {
+        activate: last,
+        structural: true,
+      });
+    }
+    if (focused) {
+      this.emit("tab_focused", focused.id);
+    }
+    return {
+      tabs: drafts,
+      opened: opened.length,
+      archived: archived.length,
+      focusedId: focused?.id ?? null,
+    };
+  }
+
   getActiveId(): string | null {
     return this.activeId;
   }
@@ -168,6 +423,9 @@ export class BoardStore extends EventEmitter {
     }
 
     const existing = input.key ? this.locate(input.key) : undefined;
+    if (existing && isTemplateBound(existing.tab)) {
+      throw new Error(boundHtmlError(existing.tab, this.templateLabel(existing.tab)));
+    }
     if (existing?.where === "archive" && input.activate !== false) {
       this.restore(existing.tab.id, { placement: "append", activate: true });
     }
@@ -279,6 +537,9 @@ export class BoardStore extends EventEmitter {
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
+    if (isTemplateBound(located.tab)) {
+      throw new Error(boundHtmlError(located.tab, this.templateLabel(located.tab)));
+    }
     let nextTitle = located.tab.title;
     if (input.title !== undefined) {
       nextTitle = input.title.trim();
@@ -361,6 +622,9 @@ export class BoardStore extends EventEmitter {
       tab.title = title;
     }
     if (patch.html !== undefined) {
+      if (isTemplateBound(tab)) {
+        throw new Error(boundHtmlError(tab, this.templateLabel(tab)));
+      }
       if (!patch.html.trim()) {
         throw new Error("html is required");
       }
@@ -502,25 +766,37 @@ export class BoardStore extends EventEmitter {
       return { ok: false, state: tab.state, stateRevision: tab.stateRevision };
     }
     const next = input.replace ? { ...input.state } : { ...tab.state, ...input.state };
+    const resolved = this.applyResolveIncompatibility(tab, input.resolveIncompatibility);
     const serialized = JSON.stringify(next);
-    if (serialized === JSON.stringify(tab.state)) {
+    const stateChanged = serialized !== JSON.stringify(tab.state);
+    if (!stateChanged && !resolved) {
       return { ok: true, tab };
     }
-    const bytes = Buffer.byteLength(serialized, "utf8");
-    if (bytes > MAX_STATE_BYTES) {
-      throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
+    if (stateChanged) {
+      const bytes = Buffer.byteLength(serialized, "utf8");
+      if (bytes > MAX_STATE_BYTES) {
+        throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
+      }
+      tab.state = next;
+      tab.stateRevision += 1;
+      tab.stateUpdatedAt = Date.now();
     }
-    tab.state = next;
-    tab.stateRevision += 1;
-    tab.stateUpdatedAt = Date.now();
-    if (located.where === "archive") {
-      tab.updatedAt = tab.stateUpdatedAt;
+    if (located.where === "archive" && (stateChanged || resolved)) {
+      tab.updatedAt = Date.now();
       this.touchArchive(tab);
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
     }
     this.markDirty(tab.id);
     this.persistSoon();
-    this.emit("tab_state", tab, input.client);
+    if (stateChanged) {
+      this.emit("tab_state", tab, input.client);
+    }
+    if (resolved && located.where !== "archive") {
+      this.emit("tab_upserted", toMeta(tab), undefined, {
+        activate: false,
+        structural: false,
+      });
+    }
     return { ok: true, tab };
   }
 
@@ -722,9 +998,15 @@ export class BoardStore extends EventEmitter {
         activeId: this.activeId,
         upserts,
         removedIds: [...this.removed],
+        templates: [...this.templates.values()],
+        removedTemplateIds: [...this.removedTemplates],
+        bindings: this.collectBindings(),
+        replaceBindings: true,
       });
       this.dirty.clear();
       this.removed.clear();
+      this.removedTemplates.clear();
+      this.templatesDirty = false;
     } catch (err) {
       log("Failed to persist board state", String(err));
     }
@@ -749,6 +1031,64 @@ export class BoardStore extends EventEmitter {
       throw new Error("cannot reorder an archived tab");
     }
     return located.tab;
+  }
+
+  private requireAny(idOrKey: string): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    return located.tab;
+  }
+
+  private buildImportedDraft(page: ImportPageInput, reserved: Set<string>): Tab {
+    const title = page.title.trim();
+    if (!title) {
+      throw new Error("title is required");
+    }
+    if (!page.html || !page.html.trim()) {
+      throw new Error("html is required");
+    }
+    const html = wrapHtml(title, page.html);
+    const bytes = Buffer.byteLength(html, "utf8");
+    if (bytes > MAX_HTML_BYTES) {
+      throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
+    }
+    if (page.state) {
+      const stateBytes = Buffer.byteLength(JSON.stringify(page.state), "utf8");
+      if (stateBytes > MAX_STATE_BYTES) {
+        throw new Error(`state is too large (${stateBytes} bytes, max ${MAX_STATE_BYTES})`);
+      }
+    }
+    const id = newId();
+    let assets: TabAsset[] = [];
+    try {
+      assets = applyAssets(id, [], page.assets);
+    } catch (err) {
+      deleteTabAssets(id);
+      throw err;
+    }
+    const now = Date.now();
+    const requested = page.key && normalizeKey(page.key) !== WELCOME_KEY ? page.key : undefined;
+    const tab: Tab = {
+      id,
+      key: uniqueKey(this, requested, title, id, reserved),
+      title,
+      html,
+      pinned: Boolean(page.pinned),
+      createdAt: finiteTs(page.createdAt) ?? now,
+      updatedAt: finiteTs(page.updatedAt) ?? now,
+      stripSeq: this.nextSeq(),
+      revision: 1,
+      state: {},
+      stateRevision: 0,
+      stateUpdatedAt: 0,
+      signalRevision: 0,
+      signal: null,
+      assets,
+    };
+    seedState(tab, page.state);
+    return tab;
   }
 
   private locate(idOrKey: string): Located | undefined {
@@ -903,6 +1243,169 @@ export class BoardStore extends EventEmitter {
     this.saveTimer = setTimeout(() => this.persist(), 150);
   }
 
+  private locateTemplate(idOrKey: string): Template | undefined {
+    const byId = this.templates.get(idOrKey);
+    if (byId) {
+      return byId;
+    }
+    const key = normalizeKey(idOrKey);
+    for (const template of this.templates.values()) {
+      if (template.key === key || template.id === idOrKey) {
+        return template;
+      }
+    }
+    return undefined;
+  }
+
+  private requireTemplate(idOrKey: string): Template {
+    const template = this.locateTemplate(idOrKey);
+    if (!template) {
+      throw new Error(`template not found: ${idOrKey}`);
+    }
+    return template;
+  }
+
+  private instanceCount(templateId: string): number {
+    let count = 0;
+    for (const tab of this.allTabs()) {
+      if (tab.templateId === templateId) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private allTabs(): Tab[] {
+    return [
+      ...this.tabs.values(),
+      ...this.archive.values(),
+      ...this.deleted.map((entry) => entry.tab),
+    ];
+  }
+
+  private collectBindings(): TemplateBinding[] {
+    const bindings: TemplateBinding[] = [];
+    for (const tab of this.allTabs()) {
+      if (!tab.templateId) {
+        continue;
+      }
+      bindings.push({
+        tabId: tab.id,
+        templateId: tab.templateId,
+        values: tab.templateValues ?? {},
+        stateVersion: tab.templateStateVersion ?? 0,
+        compatible: tab.templateCompatible !== false,
+        ...(tab.templateIncompatibleReason ? { reason: tab.templateIncompatibleReason } : {}),
+      });
+    }
+    return bindings;
+  }
+
+  private markTemplateDirty(id: string): void {
+    this.templatesDirty = true;
+    this.removedTemplates.delete(id);
+  }
+
+  private templateLabel(tab: Tab): string {
+    if (!tab.templateId) {
+      return "a template";
+    }
+    const template = this.templates.get(tab.templateId);
+    return template ? template.key : tab.templateId;
+  }
+
+  private refreshTemplateInstances(template: Template, versionChanged: boolean): void {
+    for (const tab of this.allTabs()) {
+      if (tab.templateId !== template.id) {
+        continue;
+      }
+      const values = mergeTemplateValues(template.fields, tab.templateValues);
+      const compatible = versionChanged ? false : tab.templateCompatible !== false;
+      const reason = versionChanged
+        ? "The template changed and this page's data may no longer match. Ask an agent to update it."
+        : tab.templateIncompatibleReason;
+      this.applyTemplateRender(tab, template, values, compatible, reason);
+      const located = this.locate(tab.id);
+      if (located?.where === "archive") {
+        this.touchArchive(tab);
+      }
+      this.markDirty(tab.id);
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
+    }
+  }
+
+  private applyTemplateRender(
+    tab: Tab,
+    template: Template,
+    values: TemplateValues,
+    compatible: boolean,
+    reason?: string
+  ): void {
+    const title = renderTemplateTitle(template, values);
+    tab.title = title;
+    tab.html = this.renderBoundHtml(template, title, values);
+    tab.updatedAt = Date.now();
+    tab.revision += 1;
+    this.bindTab(tab, template, values, compatible, reason);
+  }
+
+  private renderBoundHtml(template: Template, title: string, values: TemplateValues): string {
+    const html = wrapHtml(title, substituteTemplate(template.html, values, true));
+    const bytes = Buffer.byteLength(html, "utf8");
+    if (bytes > MAX_HTML_BYTES) {
+      throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
+    }
+    return html;
+  }
+
+  private bindTab(
+    tab: Tab,
+    template: Template,
+    values: TemplateValues,
+    compatible: boolean,
+    reason?: string
+  ): void {
+    tab.templateId = template.id;
+    tab.templateValues = values;
+    tab.templateStateVersion = template.stateVersion;
+    tab.templateCompatible = compatible;
+    if (!compatible && reason) {
+      tab.templateIncompatibleReason = reason;
+    } else if (compatible) {
+      delete tab.templateIncompatibleReason;
+    }
+  }
+
+  private unlinkTemplate(tab: Tab): void {
+    delete tab.templateId;
+    delete tab.templateValues;
+    delete tab.templateStateVersion;
+    delete tab.templateCompatible;
+    delete tab.templateIncompatibleReason;
+    tab.updatedAt = Date.now();
+    this.markDirty(tab.id);
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+  }
+
+  private applyResolveIncompatibility(tab: Tab, resolve?: boolean): boolean {
+    if (!resolve || !tab.templateId || tab.templateCompatible !== false) {
+      return false;
+    }
+    const template = this.templates.get(tab.templateId);
+    tab.templateCompatible = true;
+    delete tab.templateIncompatibleReason;
+    if (template) {
+      tab.templateStateVersion = template.stateVersion;
+    }
+    return true;
+  }
+
+  private touchIfArchived(located: Located): void {
+    if (located.where === "archive") {
+      this.touchArchive(located.tab);
+    }
+  }
+
   private markDirty(id: string): void {
     this.dirty.add(id);
     this.removed.delete(id);
@@ -999,10 +1502,61 @@ function normalizeKey(value: string): string {
   return cleaned.slice(0, 80);
 }
 
-function uniqueKey(store: BoardStore, requested: string | undefined, title: string, id: string): string {
+function newTemplateId(): string {
+  return "tpl_" + randomBytes(4).toString("hex");
+}
+
+function uniqueTemplateKey(
+  store: BoardStore,
+  requested: string | undefined,
+  title: string,
+  id: string
+): string {
+  const taken = (key: string) => Boolean(store.getTemplate(key));
   if (requested) {
     const key = normalizeKey(requested);
-    if (key && !store.get(key)) {
+    if (key && !taken(key)) {
+      return key;
+    }
+    if (key) {
+      return `${key}-${id.slice(4)}`;
+    }
+  }
+  const base = normalizeKey(title) || "template";
+  if (!taken(base)) {
+    return base;
+  }
+  return `${base}-${id.slice(4)}`;
+}
+
+function applyBinding(tab: Tab, binding: TemplateBinding | undefined): void {
+  if (!binding) {
+    return;
+  }
+  tab.templateId = binding.templateId;
+  tab.templateValues = binding.values;
+  tab.templateStateVersion = binding.stateVersion;
+  tab.templateCompatible = binding.compatible;
+  if (binding.reason) {
+    tab.templateIncompatibleReason = binding.reason;
+  }
+}
+
+function boundHtmlError(tab: Tab, label: string): string {
+  return `This page (${tab.key}) is bound to template "${label}". Edit the template with board_template_upsert instead of changing this page's HTML.`;
+}
+
+function uniqueKey(
+  store: BoardStore,
+  requested: string | undefined,
+  title: string,
+  id: string,
+  reserved: Set<string> = new Set()
+): string {
+  const taken = (key: string) => Boolean(store.get(key)) || reserved.has(key);
+  if (requested) {
+    const key = normalizeKey(requested);
+    if (key && !taken(key)) {
       return key;
     }
     if (key) {
@@ -1010,10 +1564,27 @@ function uniqueKey(store: BoardStore, requested: string | undefined, title: stri
     }
   }
   const base = normalizeKey(title) || "page";
-  if (!store.get(base)) {
+  if (!taken(base)) {
     return base;
   }
   return `${base}-${id.slice(2)}`;
+}
+
+function shouldArchive(destination: ImportDestination, archivedAt?: number): boolean {
+  switch (destination) {
+    case "archive":
+      return true;
+    case "meta":
+      return typeof archivedAt === "number";
+    default: {
+      const _never: never = destination;
+      return _never;
+    }
+  }
+}
+
+function finiteTs(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export const store = new BoardStore();

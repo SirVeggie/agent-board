@@ -142,8 +142,9 @@ export async function startMcp(): Promise<void> {
           })
         )
         .min(1)
-        .describe("Replacements to apply in order. Each sees the result of the previous edit."),
-      title: z.string().optional().describe("Optional new tab title."),
+        .optional()
+        .describe("Replacements to apply in order. Each sees the result of the previous edit. Omit when only changing title. Refused on pages bound to a template."),
+      title: z.string().optional().describe("Optional new tab title. May be sent without edits to rename a tab, including a template-bound page."),
       background: z
         .boolean()
         .optional()
@@ -155,6 +156,9 @@ export async function startMcp(): Promise<void> {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
+      }
+      if ((!edits || edits.length === 0) && !title) {
+        return errorResult("Provide edits or title");
       }
       const activate = background !== true;
       const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/patch`, {
@@ -362,6 +366,14 @@ export async function startMcp(): Promise<void> {
         ...(dates.archivedAt ? { archivedAt: dates.archivedAt } : {}),
         html: tab.html,
         assets: tab.assets ?? [],
+        ...(tab.templateId
+          ? {
+              templateId: tab.templateId,
+              templateValues: tab.templateValues ?? {},
+              templateCompatible: tab.templateCompatible !== false,
+              note: "This page is bound to a template. Do not edit its HTML — update the template with board_template_upsert.",
+            }
+          : {}),
       });
     }
   );
@@ -531,8 +543,14 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe("Skip the revision check and overwrite whatever is there. Only for deliberately resetting a page."),
+      resolveIncompatibility: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, clear the template incompatibility overlay on this page after you have fixed its state. Only for pages bound to a template."
+        ),
     },
-    async ({ id, key, state, expectedRevision, replace, force }) => {
+    async ({ id, key, state, expectedRevision, replace, force, resolveIncompatibility }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -542,6 +560,7 @@ export async function startMcp(): Promise<void> {
         state,
         replace,
         expectedRevision: guardRevision,
+        resolveIncompatibility,
       });
       if (status === 409) {
         const conflict = data as { state: unknown; stateRevision: number };
@@ -610,6 +629,156 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_template_upsert",
+    "Create or update a reusable Agent Board template. Only use when the user explicitly asked to create or edit a board template. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
+    {
+      key: z.string().optional().describe("Stable template identity. Reusing the same key updates that template."),
+      title: z.string().describe("Name shown in the Templates sidebar."),
+      description: z.string().optional().describe("Short blurb under the name in the template list."),
+      html: z
+        .string()
+        .describe(
+          "Template HTML. Use {{fieldKey}} for form values (HTML-escaped). Page scripts can also read board.template.values."
+        ),
+      fields: z
+        .array(
+          z.object({
+            key: z.string().describe("Identifier used in {{key}} and board.template.values. JS identifier."),
+            label: z.string().describe("Label on the Open / Edit form."),
+            type: z.enum(["text", "textarea", "number", "select", "checkbox"]),
+            required: z.boolean().optional(),
+            placeholder: z.string().optional(),
+            help: z.string().optional(),
+            default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+            options: z
+              .array(z.union([z.string(), z.object({ value: z.string(), label: z.string() })]))
+              .optional()
+              .describe("Required for select. Strings are used as both value and label."),
+            min: z.number().optional(),
+            max: z.number().optional(),
+          })
+        )
+        .optional()
+        .describe("Form fields the user fills when opening or editing a page from this template."),
+      titleTemplate: z
+        .string()
+        .optional()
+        .describe('Tab title pattern, e.g. "{{title}}". Defaults to a field named title, or the template name.'),
+      initialState: z
+        .record(z.unknown())
+        .optional()
+        .describe("Seeded as board.state when a new page is opened from this template."),
+      stateVersion: z
+        .number()
+        .optional()
+        .describe("Integer >= 1. Bump when existing page data will not work with the new HTML."),
+    },
+    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion }) => {
+      const { status, data } = await api("POST", "/api/templates", {
+        key,
+        title,
+        html,
+        fields,
+        description,
+        titleTemplate,
+        initialState,
+        stateVersion,
+      });
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_template_list",
+    "List saved Agent Board templates (no HTML). Only use when the user asked to work with board templates.",
+    {},
+    async () => {
+      const { status, data } = await api("GET", "/api/templates");
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_template_get",
+    "Read a template's HTML, fields, and metadata. Only use when the user asked to work with board templates.",
+    {
+      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
+      key: z.string().optional().describe("Template key."),
+    },
+    async ({ id, key }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const { status, data } = await api("GET", `/api/templates/${encodeURIComponent(which)}`);
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_template_delete",
+    "Delete a template. Pages created from it stay, keep their last HTML, and become ordinary editable pages. Only use when the user asked to delete a board template.",
+    {
+      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
+      key: z.string().optional().describe("Template key."),
+    },
+    async ({ id, key }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const { status, data } = await api("DELETE", `/api/templates/${encodeURIComponent(which)}`);
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "board_template_open",
+    "Create a pinned page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance.",
+    {
+      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
+      key: z.string().optional().describe("Template key."),
+      values: z.record(z.unknown()).optional().describe("Form values matching the template fields."),
+    },
+    async ({ id, key, values }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const { status, data } = await api("POST", `/api/templates/${encodeURIComponent(which)}/open`, {
+        values: values ?? {},
+      });
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      const tab = (data as { tab: { id: string; key: string; title: string } }).tab;
+      const info = await health();
+      if (!info || info.viewers === 0) {
+        openBrowser(boardUrl(tab.id));
+      }
+      return jsonResult({
+        id: tab.id,
+        key: tab.key,
+        title: tab.title,
+        url: boardUrl(tab.id),
+        note: "Opened a pinned page from the template.",
+      });
     }
   );
 

@@ -4,14 +4,15 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
-import { CONTENT_HOST, HOST, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
+import { CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { parseHtmlEdits } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store } from "./store.js";
-import { isAppTab, isPlainObject, toMeta, type BoardEvent, type Tab, type TabMeta, type UpsertNotice } from "./types.js";
+import { isAppTab, isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
@@ -161,10 +162,21 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/tabs/:id/patch", (req, res) => {
     try {
+      const title = optionalString(req.body?.title);
+      const rawEdits = req.body?.edits;
+      const noEdits = rawEdits === undefined || (Array.isArray(rawEdits) && rawEdits.length === 0);
+      if (noEdits && title) {
+        const tab = store.update(req.params.id, {
+          title,
+          activate: req.body?.activate,
+        });
+        res.json({ applied: 0, archived: store.isArchived(tab.id), tab: toMeta(tab) });
+        return;
+      }
       const edits = parseHtmlEdits(req.body?.edits);
       const { tab, applied, archived } = store.patchHtml(req.params.id, {
         edits,
-        title: optionalString(req.body?.title),
+        title,
         activate: req.body?.activate,
       });
       res.json({ applied, archived, tab: toMeta(tab) });
@@ -188,6 +200,16 @@ export async function startHttp(): Promise<http.Server> {
       stateUpdatedAt: tab.stateUpdatedAt,
       signal: toSignalView(tab.signal),
       signalRevision: tab.signalRevision,
+      ...(tab.templateId
+        ? {
+            templateId: tab.templateId,
+            templateCompatible: tab.templateCompatible !== false,
+            templateValues: tab.templateValues ?? {},
+            ...(tab.templateIncompatibleReason
+              ? { templateIncompatibleReason: tab.templateIncompatibleReason }
+              : {}),
+          }
+        : {}),
     });
   });
 
@@ -231,6 +253,7 @@ export async function startHttp(): Promise<http.Server> {
         expectedRevision:
           typeof req.body?.expectedRevision === "number" ? req.body.expectedRevision : undefined,
         client: optionalString(req.body?.client),
+        resolveIncompatibility: req.body?.resolveIncompatibility === true,
       });
       if (!result.ok) {
         res.status(409).json({
@@ -364,6 +387,94 @@ export async function startHttp(): Promise<http.Server> {
     res.json({ archived, archiveCount: store.archiveCount() });
   });
 
+  app.get("/api/templates", (_req, res) => {
+    res.json({ templates: store.listTemplates() });
+  });
+
+  app.get("/api/templates/:id", (req, res) => {
+    const template = store.getTemplate(req.params.id);
+    if (!template) {
+      res.status(404).json({ error: `template not found: ${req.params.id}` });
+      return;
+    }
+    res.json({
+      template: {
+        ...toTemplateMeta(template, instanceCount(template)),
+        html: template.html,
+        ...(template.initialState ? { initialState: template.initialState } : {}),
+      },
+    });
+  });
+
+  app.post("/api/templates", (req, res) => {
+    try {
+      const { template, created } = store.upsertTemplate({
+        id: optionalString(req.body?.id),
+        key: optionalString(req.body?.key),
+        title: String(req.body?.title ?? ""),
+        description: optionalString(req.body?.description),
+        html: String(req.body?.html ?? ""),
+        fields: req.body?.fields,
+        titleTemplate: optionalString(req.body?.titleTemplate),
+        initialState: isPlainObject(req.body?.initialState) ? req.body.initialState : undefined,
+        stateVersion: typeof req.body?.stateVersion === "number" ? req.body.stateVersion : undefined,
+      });
+      res.status(created ? 201 : 200).json({
+        created,
+        template: {
+          ...toTemplateMeta(template, instanceCount(template)),
+          html: template.html,
+          ...(template.initialState ? { initialState: template.initialState } : {}),
+        },
+      });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/templates/:id", (req, res) => {
+    try {
+      const template = store.deleteTemplate(req.params.id);
+      res.json({ deleted: template.id, key: template.key });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/templates/:id/open", (req, res) => {
+    try {
+      const { tab } = store.openFromTemplate(req.params.id, req.body?.values ?? {}, {
+        activate: req.body?.activate !== false,
+      });
+      res.status(201).json({ tab: toMeta(tab) });
+    } catch (err) {
+      const message = (err as Error).message;
+      const missing = message.startsWith("template not found");
+      res.status(missing ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/tabs/:id/template-values", (req, res) => {
+    try {
+      const tab = store.setTemplateValues(req.params.id, req.body?.values ?? {});
+      res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      const message = (err as Error).message;
+      const missing = message.startsWith("tab not found") || message.startsWith("template not found");
+      res.status(missing ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/tabs/:id/template-incompatible", (req, res) => {
+    try {
+      const tab = store.reportIncompatible(req.params.id, optionalString(req.body?.reason));
+      res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.get("/view/:id/asset/:name", (req, res) => {
     const tab = store.get(req.params.id);
     const name = req.params.name;
@@ -398,6 +509,50 @@ export async function startHttp(): Promise<http.Server> {
     const filename = `${safeFilename(tab.title)}.html`;
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.type("html").send(tab.html);
+  });
+
+  app.get("/api/export/:id", (req, res) => {
+    try {
+      const file = store.exportFile(req.params.id);
+      const title = file.pages[0]?.title ?? "page";
+      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(title)}"`);
+      res.type("json").send(JSON.stringify(file));
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.get("/api/export", (_req, res) => {
+    try {
+      const file = store.exportFile();
+      res.setHeader("Content-Disposition", `attachment; filename="${exportAllFilename(file.exportedAt)}"`);
+      res.type("json").send(JSON.stringify(file));
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message === "nothing to export" ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/import", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body)) {
+        res.status(400).json({ error: "expected a file body" });
+        return;
+      }
+      const destination = parseImportDestination(req.query.destination);
+      const parsed = parseImport(req.body, importFilename(req));
+      const result = store.importPages(parsed.pages, destination);
+      res.status(201).json({
+        kind: parsed.kind,
+        imported: result.tabs.map((tab) => toMeta(tab)),
+        opened: result.opened,
+        archived: result.archived,
+        focusedId: result.focusedId,
+      });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   app.post("/api/shutdown", (_req, res) => {
@@ -462,6 +617,8 @@ export async function startHttp(): Promise<http.Server> {
       broadcast({ type: "tab_signal", id: tab.id, signal: tab.signal });
     }
   });
+  store.on("template_upserted", (template: TemplateMeta) => broadcast({ type: "template_upserted", template }));
+  store.on("template_deleted", (id: string) => broadcast({ type: "template_deleted", id }));
 
   server.requestTimeout = MAX_WAIT_MS + 30_000;
   contentServer.requestTimeout = MAX_WAIT_MS + 30_000;
@@ -549,6 +706,7 @@ function isContentHost(req: express.Request): boolean {
 
 const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
 const SIGNAL_PATH = /^\/api\/tabs\/[^/]+\/signal$/;
+const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/;
 
 function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (isContentHost(req)) {
@@ -565,6 +723,10 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
       return;
     }
     if (req.method === "POST" && SIGNAL_PATH.test(req.path)) {
+      next();
+      return;
+    }
+    if (req.method === "POST" && TEMPLATE_INCOMPATIBLE_PATH.test(req.path)) {
       next();
       return;
     }
@@ -639,7 +801,19 @@ function injectBoardRuntime(tab: Tab): string {
   if (html.includes("data-agent-board-bridge")) {
     return html;
   }
-  const boot = jsonForScript({ id: tab.id, state: tab.state, stateRevision: tab.stateRevision });
+  const boot = jsonForScript({
+    id: tab.id,
+    state: tab.state,
+    stateRevision: tab.stateRevision,
+    template: tab.templateId
+      ? {
+          id: tab.templateId,
+          values: tab.templateValues ?? {},
+          revision: tab.templateStateVersion ?? 0,
+          compatible: tab.templateCompatible !== false,
+        }
+      : null,
+  });
   const snippet = `<style data-agent-board-bridge>${BOARD_STALE_CSS}</style>
 <script>window.__BOARD_BOOT__=${boot};
 ${BOARD_BRIDGE_JS}
@@ -675,6 +849,25 @@ function jsonForScript(value: unknown): string {
 function safeFilename(title: string): string {
   const cleaned = title.replace(/[<>:"/\\|?*]+/g, " ").trim().replace(/\s+/g, "-");
   return (cleaned || "page").slice(0, 80);
+}
+
+function parseImportDestination(value: unknown): ImportDestination {
+  if (value === undefined || value === null || value === "" || value === "meta") {
+    return "meta";
+  }
+  if (value === "archive") {
+    return "archive";
+  }
+  throw new Error("destination must be meta or archive");
+}
+
+function instanceCount(template: Template): number {
+  return store.listTemplates().find((item) => item.id === template.id)?.instanceCount ?? 0;
+}
+
+function importFilename(req: express.Request): string {
+  const raw = req.get("x-filename") || "import";
+  return path.basename(raw).slice(0, 180) || "import";
 }
 
 function requestAgentFocus(tabId: string): void {

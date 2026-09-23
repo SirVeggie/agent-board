@@ -367,3 +367,165 @@ test("load drops archived welcome tabs", () => {
   assert.equal(again.get("welcome"), undefined);
   again.closeDb();
 });
+
+test("export then import restores html, state, and pin without overwriting", () => {
+  const store = loaded();
+  const { tab } = store.upsert({
+    key: "todos",
+    title: "Todos",
+    html: "<p>list</p>",
+    pin: true,
+    state: { items: ["a"] },
+  });
+  const pack = store.exportFile(tab.id);
+  assert.equal(pack.pages.length, 1);
+  assert.deepEqual(pack.pages[0].state, { items: ["a"] });
+  const copy = store.importPages(
+    pack.pages.map((page) => ({
+      key: page.key,
+      title: page.title,
+      html: page.html,
+      pinned: page.pinned,
+      state: page.state,
+    })),
+    "meta"
+  );
+  assert.equal(copy.opened, 1);
+  assert.equal(copy.archived, 0);
+  const original = store.get("todos");
+  const imported = store.get(copy.tabs[0].id);
+  assert.ok(original);
+  assert.ok(imported);
+  assert.notEqual(imported.id, original.id);
+  assert.notEqual(imported.key, "todos");
+  assert.equal(imported.title, "Todos");
+  assert.equal(imported.pinned, true);
+  assert.match(imported.html, /<p>list<\/p>/);
+  assert.deepEqual(imported.state, { items: ["a"] });
+  assert.deepEqual(original.state, { items: ["a"] });
+  store.closeDb();
+});
+
+test("import destination follows archivedAt unless forced to archive", () => {
+  const store = loaded();
+  const open = store.importPages([{ title: "Open", html: "<p>o</p>" }], "meta");
+  const fromMeta = store.importPages(
+    [{ title: "Was archived", html: "<p>a</p>", archivedAt: 50 }],
+    "meta"
+  );
+  const forced = store.importPages([{ title: "Forced", html: "<p>f</p>" }], "archive");
+  assert.equal(open.opened, 1);
+  assert.equal(fromMeta.archived, 1);
+  assert.equal(fromMeta.opened, 0);
+  assert.equal(forced.archived, 1);
+  assert.equal(store.get(fromMeta.tabs[0].id)?.archivedAt, 50);
+  assert.ok(store.get(forced.tabs[0].id)?.archivedAt);
+  assert.equal(store.list().some((tab) => tab.title === "Forced"), false);
+  store.closeDb();
+});
+
+test("export all skips the welcome page", () => {
+  const store = loaded();
+  store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });
+  store.upsert({ title: "Keep", html: "<p>k</p>" });
+  const pack = store.exportFile();
+  assert.deepEqual(
+    pack.pages.map((page) => page.title),
+    ["Keep"]
+  );
+  store.closeDb();
+});
+
+test("template open creates a pinned bound page and blocks html edits", () => {
+  const store = loaded();
+  const { template } = store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html: "<h1>{{title}}</h1><p>{{item}}</p>",
+    fields: [
+      { key: "title", label: "Title", type: "text", required: true },
+      { key: "item", label: "Item", type: "text", default: "task" },
+    ],
+    titleTemplate: "{{title}}",
+    initialState: { todos: [] },
+  });
+  const { tab } = store.openFromTemplate(template.key, { title: "Shopping" });
+  assert.equal(tab.pinned, true);
+  assert.equal(tab.title, "Shopping");
+  assert.match(tab.html, /Shopping/);
+  assert.equal(tab.templateId, template.id);
+  assert.deepEqual(tab.state, { todos: [] });
+  assert.throws(() => store.upsert({ key: tab.key, title: "X", html: "<p>nope</p>" }), /bound to template/);
+  assert.throws(() => store.patchHtml(tab.id, { edits: [{ oldString: "<h1>", newString: "<h2>" }] }), /bound to template/);
+  store.closeDb();
+});
+
+test("updating a template re-renders instances and can mark them incompatible", () => {
+  const store = loaded();
+  store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html: "<h1>{{title}}</h1>",
+    fields: [{ key: "title", label: "Title", type: "text", required: true }],
+    stateVersion: 1,
+  });
+  const { tab } = store.openFromTemplate("todo", { title: "A" });
+  store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html: "<h1>{{title}}</h1><p>v2</p>",
+    fields: [{ key: "title", label: "Title", type: "text", required: true }],
+    stateVersion: 2,
+  });
+  const again = store.get(tab.id);
+  assert.ok(again);
+  assert.match(again.html, /v2/);
+  assert.equal(again.templateCompatible, false);
+  const resolved = store.setState(tab.id, { state: { todos: [] }, resolveIncompatibility: true });
+  assert.equal(resolved.ok, true);
+  assert.equal(store.get(tab.id)?.templateCompatible, true);
+  store.closeDb();
+});
+
+test("deleting a template unlinks pages and they stay editable", () => {
+  const store = loaded();
+  store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html: "<h1>{{title}}</h1>",
+    fields: [{ key: "title", label: "Title", type: "text", required: true }],
+  });
+  const { tab } = store.openFromTemplate("todo", { title: "A" });
+  store.deleteTemplate("todo");
+  const leftover = store.get(tab.id);
+  assert.ok(leftover);
+  assert.equal(leftover.templateId, undefined);
+  const updated = store.update(tab.id, { html: "<p>free</p>", activate: false });
+  assert.match(updated.html, /<p>free<\/p>/);
+  store.closeDb();
+});
+
+test("templates persist across reload", () => {
+  const store = loaded();
+  store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html: "<h1>{{title}}</h1>",
+    fields: [{ key: "title", label: "Title", type: "text", required: true }],
+  });
+  const { tab } = store.openFromTemplate("todo", { title: "Shop" });
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.getTemplate("todo")?.title, "Todo");
+  assert.equal(again.get(tab.id)?.templateId, again.getTemplate("todo")?.id);
+  assert.equal(again.get(tab.id)?.templateValues?.title, "Shop");
+  again.closeDb();
+});
+
+test("export all with only welcome throws", () => {
+  const store = loaded();
+  store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });
+  assert.throws(() => store.exportFile(), /nothing to export/);
+  store.closeDb();
+});

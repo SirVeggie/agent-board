@@ -131,6 +131,36 @@ export function readStoredAsset(tabId: string, name: string): Buffer | undefined
   }
 }
 
+export function readPreparedAssets(tabId: string, metas: TabAsset[]): PreparedAsset[] {
+  const out: PreparedAsset[] = [];
+  for (const meta of metas) {
+    const buffer = readStoredAsset(tabId, meta.name);
+    if (!buffer) {
+      continue;
+    }
+    out.push({ name: meta.name, mimeType: meta.mimeType, buffer });
+  }
+  return out;
+}
+
+export function prepareAssetFromBuffer(name: string, mimeType: string, buffer: Buffer): PreparedAsset {
+  const safe = sanitizeAssetName(name);
+  const expected = mimeForName(safe);
+  if (!expected) {
+    throw new Error(`unsupported image type "${path.extname(safe) || safe}" (png, jpg, gif, webp, svg, ico, avif)`);
+  }
+  if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) {
+    throw new Error(`invalid asset mime type: ${mimeType}`);
+  }
+  if (buffer.length <= 0) {
+    throw new Error(`asset is empty: ${safe}`);
+  }
+  if (buffer.length > MAX_ASSET_BYTES) {
+    throw new Error(`asset is too large (${buffer.length} bytes, max ${MAX_ASSET_BYTES}): ${safe}`);
+  }
+  return { name: safe, mimeType: expected, buffer };
+}
+
 export function deleteTabAssets(tabId: string): void {
   fs.rmSync(tabAssetsDir(tabId), { recursive: true, force: true });
 }

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=29">
+  <link rel="stylesheet" href="/app.css?v=32">
   <script>
     (() => {
       const theme = localStorage.getItem("agent-board.theme");
@@ -43,6 +43,7 @@
       <div class="tabs-fade" id="tabs-fade" hidden></div>
     </div>
     <div class="actions">
+      <button type="button" id="template-edit" hidden title="Edit template values">Edit</button>
       <button type="button" id="clear" title="Archive unpinned tabs">Clear</button>
       <button type="button" id="archive-toggle" class="icon-btn" aria-label="Archive" aria-expanded="false" title="Archive">
         <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -55,12 +56,18 @@
   </header>
   <div class="workspace">
     <main>
+      <div id="template-block" class="template-block" hidden>
+        <div class="template-block-card">
+          <h2>This page needs an update</h2>
+          <p id="template-block-reason">The template changed and this page's data no longer matches. Ask the agent to fix the data.</p>
+        </div>
+      </div>
       <div id="empty" class="empty">
         <h1>Waiting for a page</h1>
         <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
         <ul class="shortcuts">
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>D</kbd></span><span>searches open and archived pages</span></li>
-          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML</span></li>
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML (markup only)</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>restores the last archived or deleted tab</span></li>
         </ul>
@@ -70,13 +77,26 @@
     <aside id="archive-pane" class="archive-pane closed" aria-hidden="true" inert>
       <div class="archive-resizer" id="archive-resizer" role="separator" aria-orientation="vertical" aria-label="Resize archive" title="Resize archive"></div>
       <div class="archive-inner">
-        <div class="archive-head">
-          <h2>Archive <span id="archive-count">0</span></h2>
-          <button type="button" id="archive-empty" title="Delete all archived tabs">Empty</button>
+        <div class="sidebar-tabs" role="tablist" aria-label="Sidebar">
+          <button type="button" class="sidebar-tab on" id="sidebar-tab-archive" role="tab" aria-selected="true">Archive</button>
+          <button type="button" class="sidebar-tab" id="sidebar-tab-templates" role="tab" aria-selected="false">Templates</button>
         </div>
-        <input type="search" id="archive-search" placeholder="Search titles and content" autocomplete="off" spellcheck="false">
-        <div id="archive-list" class="archive-list"></div>
-        <div id="archive-none" class="archive-none" hidden>No archived tabs</div>
+        <div id="sidebar-panel-archive">
+          <div class="archive-head">
+            <h2>Archive <span id="archive-count">0</span></h2>
+            <button type="button" id="archive-empty" title="Delete all archived tabs">Empty</button>
+          </div>
+          <input type="search" id="archive-search" placeholder="Search titles and content" autocomplete="off" spellcheck="false">
+          <div id="archive-list" class="archive-list"></div>
+          <div id="archive-none" class="archive-none" hidden>No archived tabs</div>
+        </div>
+        <div id="sidebar-panel-templates" hidden>
+          <div class="archive-head">
+            <h2>Templates <span id="template-count">0</span></h2>
+          </div>
+          <div id="template-list" class="archive-list"></div>
+          <div id="template-none" class="archive-none">No templates yet. Ask the agent to create one.</div>
+        </div>
       </div>
     </aside>
   </div>
@@ -99,8 +119,22 @@
           <button type="button" class="pill-toggle" id="smooth-scroll" role="switch" aria-checked="true" aria-labelledby="smooth-scroll-label"></button>
         </div>
       </section>
+      <section class="settings-section">
+        <h3>Import / Export</h3>
+        <p class="settings-hint">Ctrl+S downloads HTML only. Export includes page data and images. Drop a file here, on the tab strip, or on the archive to import.</p>
+        <div class="settings-actions">
+          <button type="button" id="import-page">Import</button>
+          <button type="button" id="export-page">Export</button>
+          <button type="button" id="export-all">Export all</button>
+        </div>
+      </section>
     </div>
   </div>
+  <input type="file" id="import-file" hidden accept=".html,.htm,.json,application/json,text/html" multiple>
+  <div id="tab-menu" class="tab-menu" hidden role="menu">
+    <button type="button" role="menuitem" id="tab-menu-export">Export</button>
+  </div>
+  <div id="notice" class="board-notice" hidden role="status" aria-live="polite"></div>
   <div id="palette" class="palette" hidden>
     <div class="palette-backdrop" id="palette-backdrop"></div>
     <div class="palette-panel" role="dialog" aria-modal="true" aria-label="Search pages">
@@ -114,6 +148,21 @@
       </div>
     </div>
   </div>
+  <div id="template-modal" class="settings" hidden>
+    <div class="settings-backdrop" id="template-modal-backdrop"></div>
+    <div class="settings-panel template-panel" role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
+      <h2 id="template-modal-title" class="settings-title">Template</h2>
+      <p id="template-modal-desc" class="settings-hint" hidden></p>
+      <form id="template-modal-form">
+        <div id="template-modal-fields" class="template-fields"></div>
+        <p id="template-modal-error" class="template-error" hidden></p>
+        <div class="settings-actions">
+          <button type="button" id="template-modal-cancel">Cancel</button>
+          <button type="submit" id="template-modal-submit">Open</button>
+        </div>
+      </form>
+    </div>
+  </div>
   <dialog id="confirm" class="confirm">
     <form method="dialog">
       <p id="confirm-message"></p>
@@ -123,6 +172,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js?v=36"></script>
+  <script src="/app.js?v=38"></script>
 </body>
 </html>

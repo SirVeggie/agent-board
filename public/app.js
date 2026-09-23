@@ -14,6 +14,25 @@
   const archiveNone = document.getElementById("archive-none");
   const archiveEmptyBtn = document.getElementById("archive-empty");
   const archiveResizer = document.getElementById("archive-resizer");
+  const sidebarTabArchive = document.getElementById("sidebar-tab-archive");
+  const sidebarTabTemplates = document.getElementById("sidebar-tab-templates");
+  const sidebarPanelArchive = document.getElementById("sidebar-panel-archive");
+  const sidebarPanelTemplates = document.getElementById("sidebar-panel-templates");
+  const templateCountEl = document.getElementById("template-count");
+  const templateList = document.getElementById("template-list");
+  const templateNone = document.getElementById("template-none");
+  const templateEditBtn = document.getElementById("template-edit");
+  const templateBlock = document.getElementById("template-block");
+  const templateBlockReason = document.getElementById("template-block-reason");
+  const templateModal = document.getElementById("template-modal");
+  const templateModalBackdrop = document.getElementById("template-modal-backdrop");
+  const templateModalTitle = document.getElementById("template-modal-title");
+  const templateModalDesc = document.getElementById("template-modal-desc");
+  const templateModalForm = document.getElementById("template-modal-form");
+  const templateModalFields = document.getElementById("template-modal-fields");
+  const templateModalError = document.getElementById("template-modal-error");
+  const templateModalCancel = document.getElementById("template-modal-cancel");
+  const templateModalSubmit = document.getElementById("template-modal-submit");
   const confirmDlg = document.getElementById("confirm");
   const confirmMessage = document.getElementById("confirm-message");
   const paletteEl = document.getElementById("palette");
@@ -27,11 +46,20 @@
   const themeList = document.getElementById("theme-list");
   const tabReorderToggle = document.getElementById("tab-reorder");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
+  const importPageBtn = document.getElementById("import-page");
+  const exportPageBtn = document.getElementById("export-page");
+  const exportAllBtn = document.getElementById("export-all");
+  const importFileInput = document.getElementById("import-file");
+  const tabMenu = document.getElementById("tab-menu");
+  const tabMenuExport = document.getElementById("tab-menu-export");
+  const noticeEl = document.getElementById("notice");
+  const tabsWrap = tabsEl.parentElement;
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
   const LIVE_FRAME_CAP = 5;
   const ARCHIVE_OPEN_KEY = "agent-board.archiveOpen";
+  const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const ARCHIVE_WIDTH_KEY = "agent-board.archiveWidth";
   const THEME_KEY = "agent-board.theme";
   const TAB_REORDER_KEY = "agent-board.tabReorder";
@@ -47,13 +75,15 @@
   const FILE_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="currentColor"/></svg>';
 
-  /** @type {{ tabs: Array<any>, archive: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean }} */
+  /** @type {{ tabs: Array<any>, archive: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean, sidebarTab: string }} */
   const state = {
     tabs: [],
     archive: [],
+    templates: [],
     activeId: null,
     connected: false,
     archiveOpen: localStorage.getItem(ARCHIVE_OPEN_KEY) === "1",
+    sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "archive",
   };
 
   /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
@@ -103,6 +133,8 @@
   let drag = null;
   let dragSuppressClick = false;
   let dragScrollTimer = 0;
+  let menuTabId = null;
+  let noticeTimer = 0;
 
   applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
@@ -163,6 +195,7 @@
       abortDrag(false);
       state.tabs = msg.tabs;
       state.archive = Array.isArray(msg.archive) ? msg.archive : [];
+      state.templates = Array.isArray(msg.templates) ? msg.templates : [];
       const hash = location.hash.replace(/^#/, "");
       const fromOpen = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
       const fromArchive = state.archive.find((tab) => tab.id === hash || tab.key === hash);
@@ -300,6 +333,27 @@
         unread.add(msg.id);
         render();
       }
+      return;
+    }
+    if (msg.type === "template_upserted") {
+      const idx = state.templates.findIndex((item) => item.id === msg.template.id);
+      if (idx === -1) {
+        state.templates.push(msg.template);
+      } else {
+        state.templates[idx] = msg.template;
+      }
+      state.templates.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+      renderChrome();
+      renderTemplates();
+      return;
+    }
+    if (msg.type === "template_deleted") {
+      state.templates = state.templates.filter((item) => item.id !== msg.id);
+      if (templateModal.dataset.templateId === msg.id) {
+        closeTemplateModal();
+      }
+      renderChrome();
+      renderTemplates();
     }
   }
 
@@ -364,6 +418,7 @@
     }
     renderChrome();
     renderArchive();
+    renderTemplates();
   }
 
   function applyArchiveWidth(px) {
@@ -544,6 +599,8 @@
 
   function renderChrome() {
     clearBtn.disabled = !state.tabs.some((tab) => !tab.pinned);
+    exportPageBtn.disabled = !state.activeId;
+    exportAllBtn.disabled = !state.tabs.some((tab) => tab.key !== "welcome") && state.archive.length === 0;
     const count = state.archive.length;
     archiveCountEl.textContent = String(count);
     archiveEmptyBtn.disabled = count === 0;
@@ -555,6 +612,19 @@
     archivePane.classList.toggle("closed", !state.archiveOpen);
     archivePane.setAttribute("aria-hidden", state.archiveOpen ? "false" : "true");
     archivePane.toggleAttribute("inert", !state.archiveOpen);
+    syncSidebarTab();
+    const active = activeTab();
+    const bound = Boolean(active?.templateId);
+    templateEditBtn.hidden = !bound;
+    const blocked = bound && active.templateCompatible === false;
+    const mainEl = document.querySelector("main");
+    mainEl.classList.toggle("template-locked", blocked);
+    templateBlock.hidden = !blocked;
+    if (blocked) {
+      templateBlockReason.textContent =
+        active.templateIncompatibleReason ||
+        "The template changed and this page's data no longer matches. Ask the agent to fix the data.";
+    }
   }
 
   function revealTab(el, smooth) {
@@ -687,6 +757,12 @@
       }
     });
     el.addEventListener("pointerdown", (event) => onTabPointerDown(event, el));
+    el.addEventListener("contextmenu", (event) => {
+      const current = lookupTab(el);
+      if (current) {
+        openTabMenu(event, current.id);
+      }
+    });
     syncTabEl(el, tab);
     return el;
   }
@@ -1182,8 +1258,10 @@
       el.className = "archive-row";
       el.role = "button";
       el.tabIndex = 0;
+      el.dataset.id = tab.id;
       el.title = tab.title;
       el.addEventListener("click", () => restoreTab(tab.id));
+      el.addEventListener("contextmenu", (event) => openTabMenu(event, tab.id));
       el.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -1245,6 +1323,246 @@
         archiveList.appendChild(snippet);
       }
     }
+  }
+
+  function syncSidebarTab() {
+    const templates = state.sidebarTab === "templates";
+    sidebarTabArchive.classList.toggle("on", !templates);
+    sidebarTabTemplates.classList.toggle("on", templates);
+    sidebarTabArchive.setAttribute("aria-selected", templates ? "false" : "true");
+    sidebarTabTemplates.setAttribute("aria-selected", templates ? "true" : "false");
+    sidebarPanelArchive.hidden = templates;
+    sidebarPanelTemplates.hidden = !templates;
+  }
+
+  function setSidebarTab(tab) {
+    state.sidebarTab = tab === "templates" ? "templates" : "archive";
+    localStorage.setItem(SIDEBAR_TAB_KEY, state.sidebarTab);
+    syncSidebarTab();
+    if (state.sidebarTab === "archive" && archiveSearch.value.trim()) {
+      scheduleSearch(0);
+    }
+    renderTemplates();
+  }
+
+  function renderTemplates() {
+    const rows = state.templates;
+    templateCountEl.textContent = String(rows.length);
+    templateList.replaceChildren();
+    templateNone.hidden = rows.length > 0;
+    for (const template of rows) {
+      const el = document.createElement("div");
+      el.className = "archive-row";
+      el.role = "button";
+      el.tabIndex = 0;
+      el.dataset.id = template.id;
+      el.title = template.title;
+      el.addEventListener("click", () => openTemplateModal(template, "create"));
+      el.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openTemplateModal(template, "create");
+        }
+      });
+
+      const icon = document.createElement("span");
+      icon.className = "fileicon";
+      icon.innerHTML = FILE_SVG;
+      el.appendChild(icon);
+
+      const text = document.createElement("span");
+      text.className = "tab-title";
+      const name = document.createElement("span");
+      name.textContent = template.title;
+      text.appendChild(name);
+      if (template.description) {
+        const desc = document.createElement("span");
+        desc.className = "template-desc";
+        desc.textContent = template.description;
+        text.appendChild(desc);
+      }
+      el.appendChild(text);
+
+      const close = document.createElement("button");
+      close.className = "tab-close";
+      close.type = "button";
+      close.textContent = "×";
+      close.title = "Delete template";
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteTemplate(template);
+      });
+      el.appendChild(close);
+      templateList.appendChild(el);
+    }
+  }
+
+  function isTemplateModalOpen() {
+    return !templateModal.hidden;
+  }
+
+  function openTemplateModal(template, mode, values) {
+    templateModal.dataset.templateId = template.id;
+    templateModal.dataset.mode = mode;
+    templateModalTitle.textContent = template.title;
+    const desc = template.description || "";
+    templateModalDesc.hidden = !desc;
+    templateModalDesc.textContent = desc;
+    templateModalError.hidden = true;
+    templateModalError.textContent = "";
+    templateModalSubmit.textContent = mode === "edit" ? "Apply" : "Open";
+    templateModalFields.replaceChildren();
+    const current = values || {};
+    for (const field of template.fields || []) {
+      templateModalFields.appendChild(buildTemplateField(field, current[field.key]));
+    }
+    if (!template.fields?.length) {
+      const empty = document.createElement("p");
+      empty.className = "settings-hint";
+      empty.textContent = "This template has no fields.";
+      templateModalFields.appendChild(empty);
+    }
+    templateModal.hidden = false;
+    const first = templateModalFields.querySelector("input, textarea, select");
+    first?.focus();
+  }
+
+  function closeTemplateModal() {
+    if (templateModal.hidden) {
+      return;
+    }
+    templateModal.hidden = true;
+    delete templateModal.dataset.templateId;
+    delete templateModal.dataset.mode;
+    templateModalFields.replaceChildren();
+  }
+
+  function buildTemplateField(field, value) {
+    const wrap = document.createElement("div");
+    wrap.className = "template-field";
+    const id = "tpl-field-" + field.key;
+    if (field.type === "checkbox") {
+      const row = document.createElement("label");
+      row.className = "template-check";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.id = id;
+      input.name = field.key;
+      input.checked = value === true || value === "true" || (value == null && field.default === true);
+      const label = document.createElement("span");
+      label.textContent = field.label;
+      row.append(input, label);
+      wrap.appendChild(row);
+    } else {
+      const label = document.createElement("label");
+      label.htmlFor = id;
+      label.textContent = field.label + (field.required ? " *" : "");
+      wrap.appendChild(label);
+      let input;
+      if (field.type === "textarea") {
+        input = document.createElement("textarea");
+      } else if (field.type === "select") {
+        input = document.createElement("select");
+        for (const option of field.options || []) {
+          const opt = document.createElement("option");
+          const item = typeof option === "string" ? { value: option, label: option } : option;
+          opt.value = item.value;
+          opt.textContent = item.label || item.value;
+          input.appendChild(opt);
+        }
+      } else {
+        input = document.createElement("input");
+        input.type = field.type === "number" ? "number" : "text";
+        if (field.type === "number") {
+          if (field.min != null) input.min = String(field.min);
+          if (field.max != null) input.max = String(field.max);
+        }
+      }
+      input.id = id;
+      input.name = field.key;
+      if (field.placeholder) {
+        input.placeholder = field.placeholder;
+      }
+      if (field.required && field.type !== "checkbox") {
+        input.required = true;
+      }
+      const fallback = value == null ? field.default : value;
+      if (fallback != null && field.type !== "checkbox") {
+        input.value = String(fallback);
+      }
+      wrap.appendChild(input);
+    }
+    if (field.help) {
+      const help = document.createElement("p");
+      help.className = "help";
+      help.textContent = field.help;
+      wrap.appendChild(help);
+    }
+    return wrap;
+  }
+
+  function readTemplateForm(template) {
+    const values = {};
+    for (const field of template.fields || []) {
+      const el = templateModalForm.elements.namedItem(field.key);
+      if (!el) {
+        continue;
+      }
+      if (field.type === "checkbox") {
+        values[field.key] = Boolean(el.checked);
+      } else if (field.type === "number") {
+        values[field.key] = el.value === "" ? "" : Number(el.value);
+      } else {
+        values[field.key] = el.value;
+      }
+    }
+    return values;
+  }
+
+  async function submitTemplateModal(event) {
+    event.preventDefault();
+    const id = templateModal.dataset.templateId;
+    const mode = templateModal.dataset.mode;
+    const template = state.templates.find((item) => item.id === id);
+    if (!template) {
+      return;
+    }
+    templateModalError.hidden = true;
+    const values = readTemplateForm(template);
+    const url =
+      mode === "edit"
+        ? `/api/tabs/${encodeURIComponent(state.activeId)}/template-values`
+        : `/api/templates/${encodeURIComponent(id)}/open`;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        templateModalError.textContent = data.error || "Could not apply template";
+        templateModalError.hidden = false;
+        return;
+      }
+      if (mode !== "edit" && data.tab?.id) {
+        pendingFocus = { id: data.tab.id, key: data.tab.key };
+      }
+      closeTemplateModal();
+    } catch {
+      templateModalError.textContent = "Could not apply template";
+      templateModalError.hidden = false;
+    }
+  }
+
+  async function deleteTemplate(template) {
+    const ok = await confirmDelete(
+      `Delete template “${template.title}”? Pages created from it stay and become ordinary pages.`
+    );
+    if (!ok) {
+      return;
+    }
+    await fetch(`/api/templates/${encodeURIComponent(template.id)}`, { method: "DELETE" });
   }
 
   function relativeTime(ms) {
@@ -1375,6 +1693,7 @@
     renderTabs();
     renderFrames();
     renderArchive();
+    renderTemplates();
   }
 
   function matchesPendingFocus(tab) {
@@ -1519,17 +1838,164 @@
     }
   }
 
+  function downloadHref(href) {
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = "";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
   function downloadActive() {
     const tab = activeTab();
     if (!tab) {
       return;
     }
-    const link = document.createElement("a");
-    link.href = `/download/${encodeURIComponent(tab.id)}`;
-    link.download = "";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    downloadHref(`/download/${encodeURIComponent(tab.id)}`);
+  }
+
+  function downloadExport(id) {
+    if (id) {
+      downloadHref(`/api/export/${encodeURIComponent(id)}`);
+      return;
+    }
+    downloadHref("/api/export");
+  }
+
+  function importNotice(opened, archived) {
+    const parts = [];
+    if (opened) {
+      parts.push(opened === 1 ? "1 open tab" : `${opened} open tabs`);
+    }
+    if (archived) {
+      parts.push(archived === 1 ? "1 archived tab" : `${archived} archived tabs`);
+    }
+    return "Imported " + parts.join(" and ");
+  }
+
+  function showNotice(text) {
+    noticeEl.textContent = text;
+    noticeEl.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = window.setTimeout(() => {
+      noticeEl.hidden = true;
+    }, 4000);
+  }
+
+  async function importFiles(fileList, destination) {
+    const files = [...fileList].filter((file) => file && file.size);
+    if (!files.length) {
+      return;
+    }
+    let opened = 0;
+    let archived = 0;
+    let focusedId = null;
+    let error = null;
+    for (const file of files) {
+      try {
+        const res = await fetch("/api/import?destination=" + encodeURIComponent(destination), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Filename": file.name || "import",
+          },
+          body: file,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          error = data.error || "Import failed";
+          continue;
+        }
+        opened += data.opened || 0;
+        archived += data.archived || 0;
+        if (data.focusedId) {
+          focusedId = data.focusedId;
+        }
+      } catch {
+        error = "Import failed";
+      }
+    }
+    if (focusedId) {
+      pendingFocus = { id: focusedId };
+      if (state.tabs.some((tab) => tab.id === focusedId)) {
+        pendingFocus = null;
+        selectTab(focusedId, { fromUser: true });
+      }
+    }
+    if (opened || archived) {
+      showNotice(importNotice(opened, archived));
+    } else if (error) {
+      showNotice(error);
+    }
+  }
+
+  function pickImportFile() {
+    importFileInput.value = "";
+    importFileInput.click();
+  }
+
+  function hasFiles(event) {
+    const types = event.dataTransfer?.types;
+    if (!types) {
+      return false;
+    }
+    return [...types].includes("Files");
+  }
+
+  function bindFileDrop(el, destination) {
+    el.addEventListener("dragenter", (event) => {
+      if (!hasFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      el.classList.add("file-drop-over");
+    });
+    el.addEventListener("dragover", (event) => {
+      if (!hasFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    });
+    el.addEventListener("dragleave", (event) => {
+      if (el.contains(event.relatedTarget)) {
+        return;
+      }
+      el.classList.remove("file-drop-over");
+    });
+    el.addEventListener("drop", (event) => {
+      if (!hasFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      el.classList.remove("file-drop-over");
+      importFiles(event.dataTransfer.files, destination);
+    });
+  }
+
+  function closeTabMenu() {
+    if (tabMenu.hidden) {
+      return;
+    }
+    tabMenu.hidden = true;
+    menuTabId = null;
+  }
+
+  function openTabMenu(event, id) {
+    event.preventDefault();
+    event.stopPropagation();
+    menuTabId = id;
+    tabMenu.hidden = false;
+    tabMenu.style.left = event.clientX + "px";
+    tabMenu.style.top = event.clientY + "px";
+    const rect = tabMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8) {
+      tabMenu.style.left = Math.max(8, window.innerWidth - rect.width - 8) + "px";
+    }
+    if (rect.bottom > window.innerHeight - 8) {
+      tabMenu.style.top = Math.max(8, window.innerHeight - rect.height - 8) + "px";
+    }
   }
 
   async function undoClose() {
@@ -1573,9 +2039,19 @@
       if (confirmDlg.open) {
         return;
       }
+      if (!tabMenu.hidden) {
+        event.preventDefault();
+        closeTabMenu();
+        return;
+      }
       if (drag) {
         event.preventDefault();
         abortDrag();
+        return;
+      }
+      if (isTemplateModalOpen()) {
+        event.preventDefault();
+        closeTemplateModal();
         return;
       }
       if (isSettingsOpen()) {
@@ -1900,12 +2376,66 @@
     event.preventDefault();
     closeSettings();
   });
+  importPageBtn.addEventListener("click", pickImportFile);
+  exportPageBtn.addEventListener("click", () => {
+    const tab = activeTab();
+    if (tab) {
+      downloadExport(tab.id);
+    }
+  });
+  exportAllBtn.addEventListener("click", () => downloadExport());
+  importFileInput.addEventListener("change", () => {
+    importFiles(importFileInput.files, "meta");
+    importFileInput.value = "";
+  });
+  tabMenuExport.addEventListener("click", () => {
+    if (menuTabId) {
+      downloadExport(menuTabId);
+    }
+    closeTabMenu();
+  });
+  tabMenu.addEventListener("contextmenu", (event) => event.preventDefault());
+  bindFileDrop(settingsEl, "meta");
+  bindFileDrop(tabsWrap, "meta");
+  bindFileDrop(archivePane, "archive");
+  document.addEventListener("dragover", (event) => {
+    if (hasFiles(event)) {
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("drop", (event) => {
+    if (hasFiles(event)) {
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!tabMenu.hidden && !tabMenu.contains(event.target)) {
+      closeTabMenu();
+    }
+  });
+  window.addEventListener("scroll", closeTabMenu, true);
   tabReorderToggle.addEventListener("click", () => toggleFlag(tabReorderToggle, TAB_REORDER_KEY));
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
   archiveToggle.addEventListener("click", () => setArchiveOpen(!state.archiveOpen));
+  sidebarTabArchive.addEventListener("click", () => setSidebarTab("archive"));
+  sidebarTabTemplates.addEventListener("click", () => setSidebarTab("templates"));
+  templateEditBtn.addEventListener("click", () => {
+    const tab = activeTab();
+    if (!tab?.templateId) {
+      return;
+    }
+    const template = state.templates.find((item) => item.id === tab.templateId);
+    if (!template) {
+      return;
+    }
+    openTemplateModal(template, "edit", tab.templateValues || {});
+  });
+  templateModalBackdrop.addEventListener("click", closeTemplateModal);
+  templateModalCancel.addEventListener("click", closeTemplateModal);
+  templateModalForm.addEventListener("submit", submitTemplateModal);
   archiveEmptyBtn.addEventListener("click", () => emptyArchive());
   archiveSearch.addEventListener("input", () => scheduleSearch());
   paletteBackdrop.addEventListener("mousedown", (event) => {

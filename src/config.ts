@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export const VERSION = "1.6.0";
+export const VERSION = "1.8.0";
 export const HOST = "127.0.0.1";
 /** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
 export const CONTENT_HOST = "127.0.0.2";
@@ -10,6 +10,7 @@ export const MAX_STATE_BYTES = 256 * 1024;
 export const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 export const MAX_ASSETS_PER_TAB = 16;
 export const MAX_ASSETS_TOTAL_BYTES = 32 * 1024 * 1024;
+export const MAX_IMPORT_BYTES = 128 * 1024 * 1024;
 export const DEFAULT_WAIT_MS = 10 * 60 * 1000;
 export const MAX_WAIT_MS = 10 * 60 * 1000;
 

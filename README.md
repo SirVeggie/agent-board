@@ -59,6 +59,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_set_state` | Write state without focusing. Unfocused open tabs and archived tabs show an unread blip. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Archive one tab, all unpinned tabs, or everything. Pass `permanent: true` to delete instead |
+| `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar) |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `board_patch` with exact `oldString`/`newString` edits instead of sending the whole document again.
 
@@ -104,7 +105,9 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 
 Tabs persist in `%LOCALAPPDATA%\agent-board\board.sqlite` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Closing a tab moves it to the **archive** (kept until you empty it or permanently delete). **Ctrl+Z** restores whichever is newer: the most recently archived tab, or one of the last 5 tabs that were permanently deleted while still open. A previous `state.json` is imported once and renamed to `state.json.bak`.
 
-The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you archive or delete them. Shift+click a tab's × permanently deletes it (confirmation in the UI). **Ctrl+S** downloads the current page as HTML.
+The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you archive or delete them. Shift+click a tab's × permanently deletes it (confirmation in the UI). **Ctrl+S** downloads the current page as HTML (markup only). Settings and the tab/archive context menu export a `.board.json` pack that includes state and images; Import (or a drop on Settings, the tab strip, or the archive) restores those files.
+
+The sidebar has **Archive** and **Templates**. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, the board blocks the page until the agent fixes the data.
 
 Port: `4747` (override with `AGENT_BOARD_PORT`). Bound to localhost only.
 

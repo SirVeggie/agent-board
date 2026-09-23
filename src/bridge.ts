@@ -374,8 +374,25 @@ export const BOARD_BRIDGE_JS = `
     signal(name);
   }, false);
 
+  var template = boot.template && typeof boot.template === "object" ? boot.template : null;
+
+  function reportIncompatible(reason) {
+    if (!tabId || !template) {
+      return;
+    }
+    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/template-incompatible", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason == null ? "" : String(reason) }),
+      keepalive: true
+    }).catch(function (err) {
+      console.error("[board] reportIncompatible failed", err);
+    });
+  }
+
   window.board = {
     id: tabId,
+    template: template,
     get state() {
       return current;
     },
@@ -386,6 +403,7 @@ export const BOARD_BRIDGE_JS = `
     bind: bind,
     flush: flush,
     signal: signal,
+    reportIncompatible: reportIncompatible,
     onChange: function (fn) {
       listeners.push(fn);
       return function () {

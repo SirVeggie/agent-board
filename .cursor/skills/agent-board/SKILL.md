@@ -335,3 +335,9 @@ If the page asks the user to do something you must continue from — submit, cho
 - `board_restore` (`id`/`key`) brings an archived tab back to the open strip (focused).
 - Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; archive the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
+
+## Templates
+
+Do **not** create, edit, or delete board templates unless the user explicitly asked. Everyday pages still use `board_show` / `board_patch`.
+
+When they do ask, read `TEMPLATES.md` in this skill folder before using `board_template_*`. A page bound to a template cannot have its HTML changed — update the template instead. You may still change that page's state, title, and pin.

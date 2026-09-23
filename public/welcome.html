@@ -60,7 +60,7 @@
     </thead>
     <tbody>
       <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Search open and archived pages</td></tr>
-      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Download the current page as HTML</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Download the current page as HTML (markup only; no data or images)</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Open this help page</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Restore the last archived tab, or the last permanently deleted open tab (up to 5), whichever is newer</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>Close the search palette, or the archive sidebar</td></tr>
@@ -80,16 +80,27 @@
     <li>This Welcome page is part of the app. Closing it dismisses it instead of archiving; <kbd>Ctrl</kbd>+<kbd>H</kbd> opens it again.</li>
     <li>Double-click a tab to pin or unpin it. Pinned tabs stay on the left. Clear archives unpinned tabs and leaves pinned tabs alone.</li>
     <li>With Tab reordering on in Settings (logo), drag a tab to move it inside the pinned or unpinned group. Drop does not switch the page. Escape cancels.</li>
+    <li>Right-click a tab or an archived row to export that page with its data and images.</li>
     <li>A dot on a tab means it was updated while you were looking at another tab.</li>
     <li>If tabs overflow, scroll the strip with the mouse wheel. Settings (logo) has a toggle for smooth scrolling.</li>
   </ul>
 
-  <h2>Archive</h2>
+  <h2>Archive and templates</h2>
   <ul>
-    <li>The archive button to the right of Clear opens the sidebar. A badge on that button means archived pages were updated, not the total count.</li>
-    <li>Click a row to restore it and switch to it. The search box matches titles, page content, and saved form data.</li>
+    <li>The archive button to the right of Clear opens the sidebar. It has two tabs: Archive and Templates. A badge on that button means archived pages were updated, not the total count.</li>
+    <li>Click an archived row to restore it and switch to it. The search box matches titles, page content, and saved form data.</li>
     <li>Close a row (× or middle-click) to delete it permanently after a confirmation. That cannot be undone. Empty deletes the whole archive.</li>
+    <li>Templates are reusable pages the agent creates when you ask. Click one to fill its form and Open a pinned copy. While that copy is selected, Edit on the right of the tab strip changes that page’s values.</li>
+    <li>Improving a template updates every page created from it. If the new version cannot use the old page data, the page is blocked until the agent fixes the data.</li>
     <li>Drag the left edge of the sidebar to resize it. <kbd>Esc</kbd> clears the search box first, then closes the sidebar.</li>
+  </ul>
+
+  <h2>Import and export</h2>
+  <ul>
+    <li><kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the current page as a plain HTML file. Interactive data and attached images are not included, so that file is a snapshot of the markup, not a working board page.</li>
+    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.board.json</code> pack: HTML, title, pin, archive flag, JSON state, and images. Export all is the same format with every user page (open and archived). The Welcome page is skipped.</li>
+    <li>Import accepts a saved HTML file, a single-page export, or an export-all file. It detects the type from the contents. Existing pages are not overwritten; a colliding key gets a suffix.</li>
+    <li>Drop a file on the settings overlay (anywhere while Settings is open), on the tab strip, or on the archive sidebar. Settings and the tab strip restore archive status from the file (default open). The archive sidebar imports everything as archived.</li>
   </ul>
 
   <h2>Persistence</h2>
