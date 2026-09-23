@@ -275,8 +275,12 @@ body {
   z-index: 30;
   color: var(--heading);
   background: var(--panel);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 8px 22px rgba(0, 0, 0, 0.45);
-  transform: scale(1.03);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 0 0 1px var(--accent-ring),
+    0 10px 26px rgba(0, 0, 0, 0.5),
+    0 0 20px rgba(var(--accent-rgb), 0.22);
+  transform: scale(1.04);
   transition: none;
 }
 
@@ -285,12 +289,25 @@ body {
   height: 32px;
   border-radius: 9px;
   border: 1px dashed var(--accent);
-  background: transparent;
+  background: rgba(var(--accent-rgb), 0.08);
+  box-shadow: inset 0 0 10px rgba(var(--accent-rgb), 0.12);
   pointer-events: none;
+  animation: drop-slot-pulse 1.2s var(--ease) infinite;
+}
+
+@keyframes drop-slot-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 body.dragging-tab {
   user-select: none;
+  cursor: grabbing;
 }
 
 body.dragging-tab iframe {
@@ -1175,20 +1192,69 @@ kbd {
   color: var(--text);
 }
 
-.tabs-wrap.file-drop-over {
-  box-shadow: inset 0 0 0 2px var(--accent-ring);
+.tabs-wrap::after,
+.archive-pane::after,
+.settings-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed transparent;
+  border-radius: inherit;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.985);
+  transition:
+    opacity 140ms var(--ease),
+    transform 140ms var(--ease);
 }
 
-.archive-pane.file-drop-over {
-  box-shadow: inset 0 0 0 2px var(--accent-ring), var(--shadow);
+.tabs-wrap.file-drop-over::after,
+.archive-pane.file-drop-over::after,
+.settings.file-drop-over .settings-panel::after {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.09);
+  opacity: 1;
+  transform: none;
+  animation: file-drop-pulse 1.5s var(--ease) infinite;
 }
 
-.settings.file-drop-over .settings-panel {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.35),
-    0 0 0 2px var(--accent-ring),
-    0 24px 64px rgba(0, 0, 0, 0.5);
+.tabs-wrap.file-drop-over::after {
+  content: "↓ Drop files to open";
+  inset: 4px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.archive-pane.file-drop-over::after {
+  content: "↓ Drop files to archive";
+}
+
+.settings.file-drop-over .settings-panel::after {
+  content: "↓ Drop files to import";
+  border-radius: 20px;
+}
+
+@keyframes file-drop-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 18px rgba(var(--accent-rgb), 0.1),
+      0 0 0 rgba(var(--accent-rgb), 0);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 28px rgba(var(--accent-rgb), 0.24),
+      0 0 18px rgba(var(--accent-rgb), 0.3);
+  }
 }
 
 .tab-menu {
