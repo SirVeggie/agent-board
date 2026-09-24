@@ -1874,7 +1874,7 @@
     downloadHref("/api/export");
   }
 
-  function importNotice(opened, archived) {
+  function importNotice(opened, archived, templates) {
     const parts = [];
     if (opened) {
       parts.push(opened === 1 ? "1 open tab" : `${opened} open tabs`);
@@ -1882,7 +1882,11 @@
     if (archived) {
       parts.push(archived === 1 ? "1 archived tab" : `${archived} archived tabs`);
     }
-    return "Imported " + parts.join(" and ");
+    if (templates) {
+      parts.push(templates === 1 ? "1 template" : `${templates} templates`);
+    }
+    const last = parts.pop();
+    return "Imported " + (parts.length ? `${parts.join(", ")} and ${last}` : last);
   }
 
   function showNotice(text) {
@@ -1907,6 +1911,7 @@
     }
     let opened = 0;
     let archived = 0;
+    let templates = 0;
     let focusedId = null;
     let error = null;
     for (const file of files) {
@@ -1926,6 +1931,7 @@
         }
         opened += data.opened || 0;
         archived += data.archived || 0;
+        templates += data.templatesCreated || 0;
         if (data.focusedId) {
           focusedId = data.focusedId;
         }
@@ -1940,8 +1946,8 @@
         selectTab(focusedId, { fromUser: true });
       }
     }
-    if (opened || archived) {
-      showNotice(importNotice(opened, archived));
+    if (opened || archived || templates) {
+      showNotice(importNotice(opened, archived, templates));
     } else if (error) {
       showNotice(error);
     }

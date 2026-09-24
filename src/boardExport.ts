@@ -1,7 +1,16 @@
 import path from "node:path";
 import { prepareAssetFromBuffer } from "./assets.js";
 import { MAX_ASSETS_PER_TAB, MAX_ASSETS_TOTAL_BYTES } from "./config.js";
-import { isPlainObject, type BoardState, type PreparedAsset, type Tab } from "./types.js";
+import { normalizeTemplateInput } from "./templates.js";
+import {
+  isPlainObject,
+  type BoardState,
+  type PreparedAsset,
+  type Tab,
+  type Template,
+  type TemplateBinding,
+  type TemplateValues,
+} from "./types.js";
 
 export const EXPORT_FORMAT = "agent-board-export";
 export const EXPORT_VERSION = 1;
@@ -11,6 +20,9 @@ export type BoardExportAsset = {
   mimeType: string;
   data: string;
 };
+
+/** templateId refers to an entry in the same file's templates list. */
+export type PageTemplateBinding = Omit<TemplateBinding, "tabId">;
 
 export type BoardExportPage = {
   key: string;
@@ -22,12 +34,14 @@ export type BoardExportPage = {
   archivedAt?: number;
   state: BoardState;
   assets: BoardExportAsset[];
+  template?: PageTemplateBinding;
 };
 
 export type BoardExportFile = {
   format: typeof EXPORT_FORMAT;
   version: number;
   exportedAt: number;
+  templates: Template[];
   pages: BoardExportPage[];
 };
 
@@ -41,18 +55,25 @@ export type ImportPageInput = {
   archivedAt?: number;
   state?: BoardState;
   assets?: PreparedAsset[];
+  template?: PageTemplateBinding;
 };
 
 export type ParsedImport = {
   kind: "export" | "html";
+  templates: Template[];
   pages: ImportPageInput[];
 };
 
-export function buildExport(entries: Array<{ tab: Tab; assets: PreparedAsset[] }>): BoardExportFile {
+export function buildExport(
+  entries: Array<{ tab: Tab; assets: PreparedAsset[] }>,
+  templates: Template[] = []
+): BoardExportFile {
+  const included = new Set(templates.map((template) => template.id));
   return {
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
     exportedAt: Date.now(),
+    templates,
     pages: entries.map(({ tab, assets }) => ({
       key: tab.key,
       title: tab.title,
@@ -67,6 +88,17 @@ export function buildExport(entries: Array<{ tab: Tab; assets: PreparedAsset[] }
         mimeType: asset.mimeType,
         data: asset.buffer.toString("base64"),
       })),
+      ...(tab.templateId && included.has(tab.templateId)
+        ? {
+            template: {
+              templateId: tab.templateId,
+              values: tab.templateValues ?? {},
+              stateVersion: tab.templateStateVersion ?? 0,
+              compatible: tab.templateCompatible !== false,
+              ...(tab.templateIncompatibleReason ? { reason: tab.templateIncompatibleReason } : {}),
+            },
+          }
+        : {}),
     })),
   };
 }
@@ -82,11 +114,12 @@ export function parseImport(input: Buffer | string, filename = ""): ParsedImport
   }
   const json = tryParseJson(text);
   if (json !== undefined) {
-    return { kind: "export", pages: pagesFromExport(json) };
+    return { kind: "export", ...contentFromExport(json) };
   }
   if (looksLikeHtml(text) || isHtmlFilename(filename)) {
     return {
       kind: "html",
+      templates: [],
       pages: [
         {
           title: titleFromHtml(text, titleFromFilename(filename)),
@@ -132,20 +165,94 @@ export function safeStem(title: string): string {
   return (cleaned || "page").slice(0, 80);
 }
 
-function pagesFromExport(value: unknown): ImportPageInput[] {
+function contentFromExport(value: unknown): Pick<ParsedImport, "templates" | "pages"> {
   if (!isExportFile(value)) {
     throw new Error("not an Agent Board export");
   }
   if (value.version !== EXPORT_VERSION) {
     throw new Error(`unsupported export version: ${value.version}`);
   }
-  if (!value.pages.length) {
-    throw new Error("export has no pages");
+  const rawTemplates: unknown = value.templates ?? [];
+  if (!Array.isArray(rawTemplates)) {
+    throw new Error("templates must be an array");
   }
-  return value.pages.map((page, index) => pageFromExport(page, index));
+  if (!value.pages.length && !rawTemplates.length) {
+    throw new Error("export has no pages or templates");
+  }
+  const templates = rawTemplates.map((raw, index) => templateFromExport(raw, index));
+  const templateIds = new Set<string>();
+  for (const template of templates) {
+    if (templateIds.has(template.id)) {
+      throw new Error(`duplicate template id: ${template.id}`);
+    }
+    templateIds.add(template.id);
+  }
+  return {
+    templates,
+    pages: value.pages.map((page, index) => pageFromExport(page, index, templateIds)),
+  };
 }
 
-function pageFromExport(raw: unknown, index: number): ImportPageInput {
+function templateFromExport(raw: unknown, index: number): Template {
+  if (!isPlainObject(raw)) {
+    throw new Error(`templates[${index}] is invalid`);
+  }
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (!id) {
+    throw new Error(`templates[${index}] is missing an id`);
+  }
+  let normalized: ReturnType<typeof normalizeTemplateInput>;
+  try {
+    normalized = normalizeTemplateInput({
+      title: typeof raw.title === "string" ? raw.title : "",
+      description: typeof raw.description === "string" ? raw.description : undefined,
+      html: typeof raw.html === "string" ? raw.html : "",
+      fields: raw.fields,
+      titleTemplate: typeof raw.titleTemplate === "string" ? raw.titleTemplate : undefined,
+      initialState: raw.initialState === undefined || raw.initialState === null ? undefined : (raw.initialState as BoardState),
+      stateVersion: raw.stateVersion === undefined ? undefined : (raw.stateVersion as number),
+    });
+  } catch (err) {
+    throw new Error(`templates[${index}]: ${(err as Error).message}`);
+  }
+  const now = Date.now();
+  return {
+    id,
+    key: typeof raw.key === "string" ? raw.key : "",
+    title: normalized.title,
+    description: normalized.description,
+    html: normalized.html,
+    fields: normalized.fields,
+    ...(normalized.titleTemplate ? { titleTemplate: normalized.titleTemplate } : {}),
+    ...(normalized.initialState ? { initialState: normalized.initialState } : {}),
+    stateVersion: normalized.stateVersion ?? 1,
+    createdAt: finiteNumber(raw.createdAt) ?? now,
+    updatedAt: finiteNumber(raw.updatedAt) ?? now,
+  };
+}
+
+function bindingFromExport(raw: unknown, pageIndex: number, templateIds: Set<string>): PageTemplateBinding | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!isPlainObject(raw)) {
+    throw new Error(`pages[${pageIndex}].template is invalid`);
+  }
+  const templateId = typeof raw.templateId === "string" ? raw.templateId : "";
+  if (!templateIds.has(templateId)) {
+    throw new Error(`pages[${pageIndex}] uses template "${templateId}", which is not in the file`);
+  }
+  const reason = typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.trim() : undefined;
+  return {
+    templateId,
+    values: isPlainObject(raw.values) ? (raw.values as TemplateValues) : {},
+    stateVersion: finiteNumber(raw.stateVersion) ?? 0,
+    compatible: raw.compatible !== false,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): ImportPageInput {
   if (!raw || typeof raw !== "object") {
     throw new Error(`pages[${index}] is invalid`);
   }
@@ -168,6 +275,7 @@ function pageFromExport(raw: unknown, index: number): ImportPageInput {
     archivedAt: finiteNumber(page.archivedAt),
     state: isPlainObject(page.state) ? page.state : {},
     assets: assetsFromExport(page.assets, index),
+    template: bindingFromExport(page.template, index, templateIds),
   };
 }
 

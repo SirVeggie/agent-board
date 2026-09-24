@@ -98,8 +98,8 @@
   <h2>Import and export</h2>
   <ul>
     <li><kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the current page as a plain HTML file. Interactive data and attached images are not included, so that file is a snapshot of the markup, not a working board page.</li>
-    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.board.json</code> pack: HTML, title, pin, archive flag, JSON state, and images. Export all is the same format with every user page (open and archived). The Welcome page is skipped.</li>
-    <li>Import accepts a saved HTML file, a single-page export, or an export-all file. It detects the type from the contents. Existing pages are not overwritten; a colliding key gets a suffix.</li>
+    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.board.json</code> pack: HTML, title, pin, archive flag, JSON state, and images. A page made from a template also carries that template and its form values. Export all is the same format with every user page (open and archived) and every template. The Welcome page is skipped.</li>
+    <li>Import accepts a saved HTML file, a single-page export, or an export-all file. It detects the type from the contents. Existing pages are not overwritten; a colliding key gets a suffix. Imported template pages stay linked to their template. If the board already has an identical template, it is reused; a template with the same name but different content is added as a separate template.</li>
     <li>Drop a file on the settings overlay (anywhere while Settings is open), on the tab strip, or on the archive sidebar. Settings and the tab strip restore archive status from the file (default open). The archive sidebar imports everything as archived.</li>
   </ul>
 

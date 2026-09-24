@@ -39,6 +39,7 @@ import {
   parseTemplateValues,
   renderTemplateTitle,
   substituteTemplate,
+  templateFingerprint,
   type TemplateUpsertInput,
 } from "./templates.js";
 import { wrapHtml } from "./wrapHtml.js";
@@ -323,29 +324,46 @@ export class BoardStore extends EventEmitter {
     const tabs = idOrKey
       ? [this.requireAny(idOrKey)]
       : [...this.listOpenTabs(), ...this.listArchiveTabs()].filter((tab) => !isAppTab(tab));
-    if (!tabs.length) {
+    const templates = idOrKey
+      ? tabs.flatMap((tab) => {
+          const template = tab.templateId ? this.templates.get(tab.templateId) : undefined;
+          return template ? [template] : [];
+        })
+      : [...this.templates.values()];
+    if (!tabs.length && !templates.length) {
       throw new Error("nothing to export");
     }
     return buildExport(
       tabs.map((tab) => ({
         tab,
         assets: readPreparedAssets(tab.id, tab.assets ?? []),
-      }))
+      })),
+      templates
     );
   }
 
-  importPages(
-    pages: ImportPageInput[],
+  /** Templates are matched by content, so importing the same file twice links to the templates created the first time. */
+  importBoard(
+    input: { templates: Template[]; pages: ImportPageInput[] },
     destination: ImportDestination
-  ): { tabs: Tab[]; opened: number; archived: number; focusedId: string | null } {
-    if (!pages.length) {
-      throw new Error("no pages to import");
+  ): {
+    tabs: Tab[];
+    opened: number;
+    archived: number;
+    focusedId: string | null;
+    templatesCreated: number;
+    templatesReused: number;
+  } {
+    const { pages } = input;
+    if (!pages.length && !input.templates.length) {
+      throw new Error("nothing to import");
     }
+    const plan = this.planTemplateImport(input.templates);
     const drafts: Tab[] = [];
     const reserved = new Set<string>();
     try {
       for (const page of pages) {
-        const tab = this.buildImportedDraft(page, reserved);
+        const tab = this.buildImportedDraft(page, reserved, plan.byFileId);
         reserved.add(tab.key);
         drafts.push(tab);
       }
@@ -356,6 +374,10 @@ export class BoardStore extends EventEmitter {
       throw err;
     }
 
+    for (const template of plan.created) {
+      this.templates.set(template.id, template);
+      this.markTemplateDirty(template.id);
+    }
     const opened: Tab[] = [];
     const archived: Tab[] = [];
     for (let i = 0; i < drafts.length; i += 1) {
@@ -393,11 +415,16 @@ export class BoardStore extends EventEmitter {
     if (focused) {
       this.emit("tab_focused", focused.id);
     }
+    for (const template of new Set(plan.byFileId.values())) {
+      this.emit("template_upserted", toTemplateMeta(template, this.instanceCount(template.id)));
+    }
     return {
       tabs: drafts,
       opened: opened.length,
       archived: archived.length,
       focusedId: focused?.id ?? null,
+      templatesCreated: plan.created.length,
+      templatesReused: plan.reused,
     };
   }
 
@@ -1076,7 +1103,47 @@ export class BoardStore extends EventEmitter {
     return located.tab;
   }
 
-  private buildImportedDraft(page: ImportPageInput, reserved: Set<string>): Tab {
+  private planTemplateImport(incoming: Template[]): {
+    byFileId: Map<string, Template>;
+    created: Template[];
+    reused: number;
+  } {
+    const byFileId = new Map<string, Template>();
+    const created: Template[] = [];
+    const reused = new Set<string>();
+    const byFingerprint = new Map<string, Template>();
+    for (const template of this.templates.values()) {
+      const fingerprint = templateFingerprint(template);
+      if (!byFingerprint.has(fingerprint)) {
+        byFingerprint.set(fingerprint, template);
+      }
+    }
+    const reservedKeys = new Set<string>();
+    for (const template of incoming) {
+      const fingerprint = templateFingerprint(template);
+      const sameId = this.templates.get(template.id);
+      const match =
+        sameId && templateFingerprint(sameId) === fingerprint ? sameId : byFingerprint.get(fingerprint);
+      if (match) {
+        byFileId.set(template.id, match);
+        if (this.templates.has(match.id)) {
+          reused.add(match.id);
+        }
+        continue;
+      }
+      const idTaken = (id: string) => this.templates.has(id) || created.some((item) => item.id === id);
+      const id = idTaken(template.id) ? newTemplateId() : template.id;
+      const key = uniqueTemplateKey(this, template.key || undefined, template.title, id, reservedKeys);
+      reservedKeys.add(key);
+      const fresh: Template = { ...template, id, key };
+      created.push(fresh);
+      byFingerprint.set(fingerprint, fresh);
+      byFileId.set(template.id, fresh);
+    }
+    return { byFileId, created, reused: reused.size };
+  }
+
+  private buildImportedDraft(page: ImportPageInput, reserved: Set<string>, templates: Map<string, Template>): Tab {
     const title = page.title.trim();
     if (!title) {
       throw new Error("title is required");
@@ -1084,6 +1151,11 @@ export class BoardStore extends EventEmitter {
     if (!page.html || !page.html.trim()) {
       throw new Error("html is required");
     }
+    const template = page.template ? templates.get(page.template.templateId) : undefined;
+    if (page.template && !template) {
+      throw new Error(`template not found: ${page.template.templateId}`);
+    }
+    const templateValues = template ? parseTemplateValues(template.fields, page.template?.values) : undefined;
     const html = wrapHtml(title, page.html);
     const bytes = Buffer.byteLength(html, "utf8");
     if (bytes > MAX_HTML_BYTES) {
@@ -1123,6 +1195,9 @@ export class BoardStore extends EventEmitter {
       assets,
     };
     seedState(tab, page.state);
+    if (template && page.template && templateValues) {
+      applyBinding(tab, { ...page.template, tabId: id, templateId: template.id, values: templateValues });
+    }
     return tab;
   }
 
@@ -1594,9 +1669,10 @@ function uniqueTemplateKey(
   store: BoardStore,
   requested: string | undefined,
   title: string,
-  id: string
+  id: string,
+  reserved: Set<string> = new Set()
 ): string {
-  const taken = (key: string) => Boolean(store.getTemplate(key));
+  const taken = (key: string) => Boolean(store.getTemplate(key)) || reserved.has(key);
   if (requested) {
     const key = normalizeKey(requested);
     if (key && !taken(key)) {

@@ -126,6 +126,21 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
   };
 }
 
+/** Same content means the same template, regardless of id, key, or timestamps. */
+export function templateFingerprint(
+  template: Pick<Template, "title" | "description" | "html" | "fields" | "titleTemplate" | "initialState" | "stateVersion">
+): string {
+  return stableJson({
+    title: template.title,
+    description: template.description,
+    html: template.html,
+    fields: template.fields,
+    titleTemplate: template.titleTemplate ?? null,
+    initialState: template.initialState ?? null,
+    stateVersion: template.stateVersion,
+  });
+}
+
 export function mergeTemplateValues(fields: TemplateField[], current: TemplateValues | undefined): TemplateValues {
   return parseTemplateValues(fields, current ?? {});
 }
@@ -292,6 +307,20 @@ function assertKnownPlaceholders(source: string, fields: TemplateField[], where:
 function optionalTrimmed(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (isPlainObject(value)) {
+    const entries = Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
 }
 
 function escapeHtml(value: string): string {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import { parseImport, serializeExport } from "./boardExport.js";
 import { RevisionConflictError } from "./htmlEdit.js";
 import { BoardStore } from "./store.js";
 import { toMeta } from "./types.js";
@@ -417,14 +418,17 @@ test("export then import restores html, state, and pin without overwriting", () 
   const pack = store.exportFile(tab.id);
   assert.equal(pack.pages.length, 1);
   assert.deepEqual(pack.pages[0].state, { items: ["a"] });
-  const copy = store.importPages(
-    pack.pages.map((page) => ({
-      key: page.key,
-      title: page.title,
-      html: page.html,
-      pinned: page.pinned,
-      state: page.state,
-    })),
+  const copy = store.importBoard(
+    {
+      templates: [],
+      pages: pack.pages.map((page) => ({
+        key: page.key,
+        title: page.title,
+        html: page.html,
+        pinned: page.pinned,
+        state: page.state,
+      })),
+    },
     "meta"
   );
   assert.equal(copy.opened, 1);
@@ -445,12 +449,12 @@ test("export then import restores html, state, and pin without overwriting", () 
 
 test("import destination follows archivedAt unless forced to archive", () => {
   const store = loaded();
-  const open = store.importPages([{ title: "Open", html: "<p>o</p>" }], "meta");
-  const fromMeta = store.importPages(
-    [{ title: "Was archived", html: "<p>a</p>", archivedAt: 50 }],
+  const open = store.importBoard({ templates: [], pages: [{ title: "Open", html: "<p>o</p>" }] }, "meta");
+  const fromMeta = store.importBoard(
+    { templates: [], pages: [{ title: "Was archived", html: "<p>a</p>", archivedAt: 50 }] },
     "meta"
   );
-  const forced = store.importPages([{ title: "Forced", html: "<p>f</p>" }], "archive");
+  const forced = store.importBoard({ templates: [], pages: [{ title: "Forced", html: "<p>f</p>" }] }, "archive");
   assert.equal(open.opened, 1);
   assert.equal(fromMeta.archived, 1);
   assert.equal(fromMeta.opened, 0);
@@ -602,6 +606,135 @@ test("templates persist across reload", () => {
   assert.equal(again.get(tab.id)?.templateId, again.getTemplate("todo")?.id);
   assert.equal(again.get(tab.id)?.templateValues?.title, "Shop");
   again.closeDb();
+});
+
+function todoTemplate(store: BoardStore, html = "<h1>{{title}}</h1>", stateVersion = 1) {
+  return store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html,
+    fields: [
+      { key: "title", label: "Title", type: "text", required: true },
+      { key: "columns", label: "Columns", type: "number", default: 3 },
+    ],
+    titleTemplate: "{{title}}",
+    initialState: { todos: [] },
+    stateVersion,
+  }).template;
+}
+
+function roundTrip(pack: ReturnType<BoardStore["exportFile"]>) {
+  return parseImport(serializeExport(pack), "pack.board.json");
+}
+
+function otherBoard(): BoardStore {
+  process.env.AGENT_BOARD_HOME = fs.mkdtempSync(path.join(dir, "other-"));
+  return loaded();
+}
+
+test("exporting a templated page includes its template and binding", () => {
+  const store = loaded();
+  const template = todoTemplate(store);
+  store.upsertTemplate({ key: "unused", title: "Unused", html: "<p>u</p>" });
+  const { tab } = store.openFromTemplate("todo", { title: "Shop", columns: 4 });
+  const single = store.exportFile(tab.id);
+  assert.deepEqual(single.templates.map((item) => item.id), [template.id]);
+  assert.deepEqual(single.pages[0].template, {
+    templateId: template.id,
+    values: { title: "Shop", columns: 4 },
+    stateVersion: 1,
+    compatible: true,
+  });
+  assert.equal(store.exportFile().templates.length, 2);
+  store.closeDb();
+});
+
+test("importing a templated page on another board recreates the template and binds the page", () => {
+  const source = loaded();
+  const template = todoTemplate(source);
+  const { tab } = source.openFromTemplate("todo", { title: "Shop", columns: 4 });
+  const parsed = roundTrip(source.exportFile(tab.id));
+  source.closeDb();
+
+  const target = otherBoard();
+  const result = target.importBoard(parsed, "meta");
+  assert.equal(result.templatesCreated, 1);
+  assert.equal(result.templatesReused, 0);
+  const created = target.getTemplate("todo");
+  assert.equal(created?.id, template.id);
+  const imported = target.get(result.tabs[0].id)!;
+  assert.equal(imported.templateId, template.id);
+  assert.deepEqual(imported.templateValues, { title: "Shop", columns: 4 });
+  assert.throws(() => target.update(imported.id, { html: "<p>x</p>" }), /bound to template/);
+  todoTemplate(target, "<h1>{{title}}</h1><p>v2</p>");
+  assert.match(target.get(imported.id)!.html, /v2/);
+  target.persist();
+  target.closeDb();
+});
+
+test("importing a template the board already has reuses it, even repeatedly", () => {
+  const store = loaded();
+  const template = todoTemplate(store);
+  const { tab } = store.openFromTemplate("todo", { title: "Shop" });
+  const parsed = roundTrip(store.exportFile(tab.id));
+  const first = store.importBoard(parsed, "meta");
+  const second = store.importBoard(parsed, "meta");
+  assert.equal(first.templatesCreated + second.templatesCreated, 0);
+  assert.equal(second.templatesReused, 1);
+  assert.equal(store.listTemplates().length, 1);
+  assert.equal(store.get(second.tabs[0].id)?.templateId, template.id);
+  assert.equal(store.listTemplates()[0].instanceCount, 3);
+  store.closeDb();
+});
+
+test("a same-id template with different content is imported as a separate template once", () => {
+  const store = loaded();
+  const template = todoTemplate(store);
+  const { tab } = store.openFromTemplate("todo", { title: "Shop" });
+  const parsed = roundTrip(store.exportFile(tab.id));
+  todoTemplate(store, "<h1>{{title}}</h1><p>local edit</p>");
+
+  const first = store.importBoard(parsed, "meta");
+  assert.equal(first.templatesCreated, 1);
+  const copy = store.get(first.tabs[0].id)!;
+  assert.notEqual(copy.templateId, template.id);
+  const copyTemplate = store.getTemplate(copy.templateId!)!;
+  assert.notEqual(copyTemplate.key, "todo");
+  assert.doesNotMatch(copy.html, /local edit/);
+
+  const second = store.importBoard(parsed, "meta");
+  assert.equal(second.templatesCreated, 0);
+  assert.equal(store.get(second.tabs[0].id)?.templateId, copyTemplate.id);
+  assert.equal(store.listTemplates().length, 2);
+  store.closeDb();
+});
+
+test("import keeps a page's incompatible flag and state version", () => {
+  const store = loaded();
+  todoTemplate(store);
+  const { tab } = store.openFromTemplate("todo", { title: "Shop" });
+  todoTemplate(store, "<h1>{{title}}</h1>", 2);
+  const parsed = roundTrip(store.exportFile(tab.id));
+  const result = store.importBoard(parsed, "meta");
+  const imported = store.get(result.tabs[0].id)!;
+  assert.equal(imported.templateCompatible, false);
+  assert.equal(imported.templateStateVersion, store.get(tab.id)?.templateStateVersion);
+  assert.match(imported.templateIncompatibleReason ?? "", /template changed/);
+  store.closeDb();
+});
+
+test("export all with only templates round-trips to another board", () => {
+  const source = loaded();
+  todoTemplate(source);
+  const parsed = roundTrip(source.exportFile());
+  assert.equal(parsed.pages.length, 0);
+  source.closeDb();
+  const target = otherBoard();
+  const result = target.importBoard(parsed, "meta");
+  assert.equal(result.templatesCreated, 1);
+  assert.equal(result.tabs.length, 0);
+  assert.equal(target.getTemplate("todo")?.title, "Todo");
+  target.closeDb();
 });
 
 test("export all with only welcome throws", () => {

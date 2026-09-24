@@ -102,6 +102,26 @@ test("parseImport rejects an unsupported version", () => {
   );
 });
 
+test("parseImport rejects a page bound to a template missing from the file", () => {
+  const file = {
+    format: EXPORT_FORMAT,
+    version: 1,
+    templates: [],
+    pages: [{ title: "A", html: "<p>a</p>", template: { templateId: "tpl_gone", values: {} } }],
+  };
+  assert.throws(() => parseImport(JSON.stringify(file)), /tpl_gone.*not in the file/);
+});
+
+test("parseImport validates exported templates", () => {
+  const file = {
+    format: EXPORT_FORMAT,
+    version: 1,
+    templates: [{ id: "tpl_1", title: "T", html: "<p>{{nope}}</p>", fields: [] }],
+    pages: [],
+  };
+  assert.throws(() => parseImport(JSON.stringify(file)), /templates\[0\]: html uses unknown field/);
+});
+
 test("parseImport rejects empty or unknown files", () => {
   assert.throws(() => parseImport("   "), /empty/);
   assert.throws(() => parseImport("just text"), /not a recognized/);

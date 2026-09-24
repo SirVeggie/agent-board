@@ -548,13 +548,15 @@ export async function startHttp(): Promise<http.Server> {
       }
       const destination = parseImportDestination(req.query.destination);
       const parsed = parseImport(req.body, importFilename(req));
-      const result = store.importPages(parsed.pages, destination);
+      const result = store.importBoard(parsed, destination);
       res.status(201).json({
         kind: parsed.kind,
         imported: result.tabs.map((tab) => toMeta(tab)),
         opened: result.opened,
         archived: result.archived,
         focusedId: result.focusedId,
+        templatesCreated: result.templatesCreated,
+        templatesReused: result.templatesReused,
       });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });

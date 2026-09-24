@@ -48,6 +48,8 @@ A page can call `board.reportIncompatible(reason)` if it detects bad data itself
 - You **may** change title (`board_patch` with `title` only), pin, and state.
 - To change structure, update the template.
 
+Exports (`.board.json`) carry the template with its pages, so an imported page stays bound. Import reuses an identical local template instead of duplicating it.
+
 ## Example: todo template
 
 Fields: `title` (text, required), `item` (text, default `task`), `items` (text, default `tasks`), `columns` (number, 1–4, default 3).
