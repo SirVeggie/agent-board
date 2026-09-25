@@ -111,6 +111,12 @@ The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you 
 
 The sidebar has **Archive** and **Templates**. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, the board blocks the page until the agent fixes the data.
 
+### Embedding a site
+
+A page whose `<head>` has `<meta name="agent-board-embed" content="URL">` is shown by pointing the tab iframe straight at that URL, instead of nesting it inside the tab page. The Embed template does this. Only `http:` and `https:` URLs outside the board's own origin count; anything else falls back to rendering the page's HTML. The stored HTML stays a small wrapper, so `board_read` and search see the URL but not the site's content.
+
+A direct frame keeps the site on the same site as the board chrome (`127.0.0.1`), so logins that use `SameSite=Lax` cookies (ComfyUI-Login, for example) keep working. Use `127.0.0.1`, not `localhost`: the browser treats them as different sites. Board shortcuts (Ctrl+S, Ctrl+D, …) don't reach the board while focus is inside the embedded site.
+
 ### Hiding a tab from the agent
 
 Right-click a tab or archive row and choose **Hide from agent**, or tick **Hide from agent** in a template's Open/Edit form. Hidden tabs show an eye icon. To the agent they don't exist: they're left out of `board_list`, `board_archive`, search, `activeId`, bulk `board_close`, and template instance counts, and every per-tab tool returns "tab not found". A `board_wait` already running on the tab ends as if the tab had closed. `board_show` with a hidden tab's key creates a separate tab instead of overwriting it. Only the board UI can change the flag; the MCP marks its requests with an `x-agent-board-client: agent` header and cannot flip it.

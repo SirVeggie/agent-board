@@ -1,3 +1,5 @@
+import { embedUrlFromHtml } from "./embed.js";
+
 export type BoardState = Record<string, unknown>;
 
 export type TabSignal = {
@@ -100,6 +102,8 @@ export type Tab = {
 
 export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision" | "stripSeq"> & {
   htmlBytes: number;
+  /** Set when the page asks to be shown as a direct iframe of this URL. */
+  embedUrl?: string;
 };
 
 export type DeletedEntry = {
@@ -197,6 +201,7 @@ export type SetStateResult =
   | { ok: false; state: BoardState; stateRevision: number };
 
 export function toMeta(tab: Tab): TabMeta {
+  const embedUrl = embedUrlFromHtml(tab.html);
   return {
     id: tab.id,
     key: tab.key,
@@ -211,6 +216,7 @@ export function toMeta(tab: Tab): TabMeta {
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
     assets: tab.assets,
     ...(tab.agentHidden ? { agentHidden: true } : {}),
+    ...(embedUrl ? { embedUrl } : {}),
     ...(tab.templateId
       ? {
           templateId: tab.templateId,

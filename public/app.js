@@ -61,6 +61,7 @@
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
+  const EMBED_ALLOW = "fullscreen; clipboard-read; clipboard-write";
   const LIVE_FRAME_CAP = 5;
   const ARCHIVE_OPEN_KEY = "agent-board.archiveOpen";
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
@@ -417,8 +418,15 @@
   }
 
   function viewUrl(tab) {
+    if (tab.embedUrl) {
+      return tab.embedUrl;
+    }
+    return `${contentOrigin()}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}`;
+  }
+
+  function contentOrigin() {
     const port = location.port ? `:${location.port}` : "";
-    return `${location.protocol}//127.0.0.2${port}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}`;
+    return `${location.protocol}//127.0.0.2${port}`;
   }
 
   function setArchiveOpen(open) {
@@ -1668,7 +1676,7 @@
       el.title = tab.title;
       el.sandbox = SANDBOX;
       framesEl.appendChild(el);
-      el.src = viewUrl(tab);
+      loadFrame(el, tab);
       entry = { el, revision: tab.revision };
       frames.set(tab.id, entry);
     } else {
@@ -1676,7 +1684,7 @@
         entry.el.title = tab.title;
       }
       if (entry.revision !== tab.revision) {
-        entry.el.src = viewUrl(tab);
+        loadFrame(entry.el, tab);
         entry.revision = tab.revision;
       }
       touchFrame(tab.id);
@@ -1692,12 +1700,18 @@
       return;
     }
     if (entry.revision !== tab.revision) {
-      entry.el.src = viewUrl(tab);
+      loadFrame(entry.el, tab);
       entry.revision = tab.revision;
     }
     if (entry.el.title !== tab.title) {
       entry.el.title = tab.title;
     }
+  }
+
+  /** `allow` only applies to the next navigation, so it has to be set before src. */
+  function loadFrame(el, tab) {
+    el.allow = tab.embedUrl ? EMBED_ALLOW : "";
+    el.src = viewUrl(tab);
   }
 
   function discardFrame(id) {
@@ -2416,7 +2430,7 @@
 
   window.addEventListener("keydown", onBoardShortcut, true);
   window.addEventListener("message", (event) => {
-    if (!frameByWindow(event.source)) {
+    if (event.origin !== contentOrigin() || !frameByWindow(event.source)) {
       return;
     }
     if (event.data?.type === "agent-board-download") {

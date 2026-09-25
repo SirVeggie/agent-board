@@ -10,7 +10,7 @@
     "mcp": "node dist/index.js",
     "dev": "tsx watch src/index.ts --daemon",
     "stop": "node dist/index.js --stop",
-    "test": "tsx --test src/htmlEdit.test.ts src/store.test.ts src/pageSearch.test.ts src/boardExport.test.ts src/templates.test.ts"
+    "test": "tsx --test src/htmlEdit.test.ts src/store.test.ts src/pageSearch.test.ts src/boardExport.test.ts src/templates.test.ts src/embed.test.ts"
   },
   "engines": {
     "node": ">=22.13"
