@@ -5,14 +5,14 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
-import { CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store } from "./store.js";
-import { isAppTab, isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice } from "./types.js";
+import { isAppTab, isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
@@ -52,6 +52,14 @@ export async function startHttp(): Promise<http.Server> {
   app.use(express.json({ limit: "3mb" }));
   app.use(express.static(publicDir));
 
+  app.param("id", (req, res, next, id: string) => {
+    if (!req.path.startsWith("/api/templates/") && store.get(id) && !store.get(id, viewerOf(req))) {
+      res.status(404).json({ error: `tab not found: ${id}` });
+      return;
+    }
+    next();
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({
       ok: true,
@@ -66,28 +74,33 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.get("/api/tabs", (req, res) => {
+    const viewer = viewerOf(req);
     const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
     if (query) {
-      const result = store.searchOpen(query);
+      const result = store.searchOpen(query, viewer);
       res.json({
         tabs: result.hits.map((hit) => ({ ...toMeta(hit.tab), snippet: hit.snippet })),
         returned: result.returned,
         remaining: result.remaining,
         matchCount: result.matchCount,
         openCount: result.archiveCount,
-        activeId: store.getActiveId(),
-        archiveCount: store.archiveCount(),
+        activeId: store.getActiveId(viewer),
+        archiveCount: store.archiveCount(viewer),
       });
       return;
     }
-    res.json({ tabs: store.list(), activeId: store.getActiveId(), archiveCount: store.archiveCount() });
+    res.json({
+      tabs: store.list(viewer),
+      activeId: store.getActiveId(viewer),
+      archiveCount: store.archiveCount(viewer),
+    });
   });
 
   app.get("/api/archive", (req, res) => {
     const query = typeof req.query.query === "string" ? req.query.query : "";
     const offset = optionalNumber(req.query.offset) ?? 0;
     const limit = optionalNumber(req.query.limit) ?? 200;
-    const result = store.searchArchive(query, offset, limit);
+    const result = store.searchArchive(query, offset, limit, viewerOf(req));
     res.json({
       tabs: result.hits.map((hit) => ({ ...toMeta(hit.tab), snippet: hit.snippet })),
       returned: result.returned,
@@ -100,7 +113,7 @@ export async function startHttp(): Promise<http.Server> {
   app.get("/api/search", (req, res) => {
     const query = typeof req.query.query === "string" ? req.query.query : "";
     const limit = optionalNumber(req.query.limit);
-    const result = store.searchPages(query, limit);
+    const result = store.searchPages(query, limit, viewerOf(req));
     res.json({
       tabs: result.hits.map((hit) => ({
         ...toMeta(hit.tab),
@@ -138,6 +151,7 @@ export async function startHttp(): Promise<http.Server> {
         pin: req.body?.pin,
         state: isPlainObject(req.body?.state) ? req.body.state : undefined,
         assets: assets.length ? assets : undefined,
+        viewer: viewerOf(req),
       });
       res.status(created ? 201 : 200).json({ created, archived, tab: toMeta(tab) });
     } catch (err) {
@@ -298,7 +312,8 @@ export async function startHttp(): Promise<http.Server> {
         throw new Error("before must be a tab id or null");
       }
       const tab = store.reorderTab(req.params.id, before);
-      res.json({ tab: toMeta(tab), tabs: store.list(), activeId: store.getActiveId() });
+      const viewer = viewerOf(req);
+      res.json({ tab: toMeta(tab), tabs: store.list(viewer), activeId: store.getActiveId(viewer) });
     } catch (err) {
       const message = (err as Error).message;
       const missing = message.startsWith("tab not found");
@@ -340,7 +355,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs/:id/restore", (req, res) => {
     try {
       const tab = store.restore(req.params.id, { placement: "append", activate: true });
-      res.json({ tab: toMeta(tab), archiveCount: store.archiveCount() });
+      res.json({ tab: toMeta(tab), archiveCount: store.archiveCount(viewerOf(req)) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
@@ -352,11 +367,12 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.delete("/api/tabs/:id", (req, res) => {
+    const viewer = viewerOf(req);
     try {
       const permanent = req.query.permanent === "true" || req.query.permanent === "1";
       if (permanent) {
         const tab = store.deletePermanent(req.params.id);
-        res.json({ deleted: [tab.id], archiveCount: store.archiveCount() });
+        res.json({ deleted: [tab.id], archiveCount: store.archiveCount(viewer) });
         return;
       }
       const existing = store.get(req.params.id);
@@ -368,33 +384,51 @@ export async function startHttp(): Promise<http.Server> {
       }
       const tab = store.archiveTab(req.params.id);
       if (store.isArchived(tab.id)) {
-        res.json({ archived: [tab.id], archiveCount: store.archiveCount() });
+        res.json({ archived: [tab.id], archiveCount: store.archiveCount(viewer) });
         return;
       }
-      res.json({ deleted: [tab.id], archiveCount: store.archiveCount() });
+      res.json({ deleted: [tab.id], archiveCount: store.archiveCount(viewer) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
   });
 
   app.delete("/api/tabs", (req, res) => {
+    const viewer = viewerOf(req);
     const permanent = req.query.permanent === "true" || req.query.permanent === "1";
     const filter = req.query.filter === "all" ? "all" : "unpinned";
     if (permanent) {
-      const ids = store.list().filter((tab) => filter === "all" || !tab.pinned).map((tab) => tab.id);
+      const ids = store.list(viewer).filter((tab) => filter === "all" || !tab.pinned).map((tab) => tab.id);
       const deleted: string[] = [];
       for (const id of ids) {
         deleted.push(store.deletePermanent(id).id);
       }
-      res.json({ deleted, archiveCount: store.archiveCount() });
+      res.json({ deleted, archiveCount: store.archiveCount(viewer) });
       return;
     }
-    const archived = store.archiveMany(filter);
-    res.json({ archived, archiveCount: store.archiveCount() });
+    const archived = store.archiveMany(filter, viewer);
+    res.json({ archived, archiveCount: store.archiveCount(viewer) });
   });
 
-  app.get("/api/templates", (_req, res) => {
-    res.json({ templates: store.listTemplates() });
+  app.post("/api/tabs/:id/agent-hidden", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the board UI can change whether the agent sees a tab" });
+      return;
+    }
+    if (typeof req.body?.hidden !== "boolean") {
+      res.status(400).json({ error: "hidden must be true or false" });
+      return;
+    }
+    try {
+      const tab = store.setAgentHidden(req.params.id, req.body.hidden);
+      res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/templates", (req, res) => {
+    res.json({ templates: store.listTemplates(viewerOf(req)) });
   });
 
   app.get("/api/templates/:id", (req, res) => {
@@ -405,7 +439,7 @@ export async function startHttp(): Promise<http.Server> {
     }
     res.json({
       template: {
-        ...toTemplateMeta(template, instanceCount(template)),
+        ...toTemplateMeta(template, instanceCount(template, viewerOf(req))),
         html: template.html,
         ...(template.initialState ? { initialState: template.initialState } : {}),
       },
@@ -428,7 +462,7 @@ export async function startHttp(): Promise<http.Server> {
       res.status(created ? 201 : 200).json({
         created,
         template: {
-          ...toTemplateMeta(template, instanceCount(template)),
+          ...toTemplateMeta(template, instanceCount(template, viewerOf(req))),
           html: template.html,
           ...(template.initialState ? { initialState: template.initialState } : {}),
         },
@@ -451,6 +485,7 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const { tab } = store.openFromTemplate(req.params.id, req.body?.values ?? {}, {
         activate: req.body?.activate !== false,
+        agentHidden: viewerOf(req) === "user" && req.body?.agentHidden === true,
       });
       res.status(201).json({ tab: toMeta(tab) });
     } catch (err) {
@@ -689,6 +724,7 @@ function handleWait(
     names,
     afterRevision: parseAfterRevision(typeof afterInput === "string" ? Number(afterInput) : afterInput),
     timeoutMs,
+    viewer: viewerOf(req),
     abort: abort.signal,
   })
     .then((result) => {
@@ -871,8 +907,12 @@ function parseImportDestination(value: unknown): ImportDestination {
   throw new Error("destination must be meta or archive");
 }
 
-function instanceCount(template: Template): number {
-  return store.listTemplates().find((item) => item.id === template.id)?.instanceCount ?? 0;
+function instanceCount(template: Template, viewer: Viewer): number {
+  return store.listTemplates(viewer).find((item) => item.id === template.id)?.instanceCount ?? 0;
+}
+
+function viewerOf(req: express.Request): Viewer {
+  return req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" : "user";
 }
 
 function importFilename(req: express.Request): string {

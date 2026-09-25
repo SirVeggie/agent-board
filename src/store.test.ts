@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, test } from "node:test";
 import { parseImport, serializeExport } from "./boardExport.js";
 import { RevisionConflictError } from "./htmlEdit.js";
@@ -742,4 +743,82 @@ test("export all with only welcome throws", () => {
   store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });
   assert.throws(() => store.exportFile(), /nothing to export/);
   store.closeDb();
+});
+
+test("tabs hidden from the agent vanish from every agent listing", () => {
+  const store = loaded();
+  store.upsert({ key: "open", title: "Open secret", html: "<p>alpha</p>" });
+  store.upsert({ key: "shown", title: "Shown", html: "<p>alpha</p>" });
+  store.upsert({ key: "old", title: "Old secret", html: "<p>alpha</p>" });
+  store.archiveTab("old");
+  store.focus("open");
+  store.setAgentHidden("open", true);
+  store.setAgentHidden("old", true);
+
+  assert.deepEqual(store.list("agent").map((tab) => tab.key), ["shown"]);
+  assert.equal(store.list("user").length, 2);
+  assert.equal(store.archiveCount("agent"), 0);
+  assert.equal(store.archiveCount("user"), 1);
+  assert.equal(store.getActiveId("agent"), null);
+  assert.equal(store.getActiveId("user"), store.get("open")?.id);
+  assert.equal(store.get("open", "agent"), undefined);
+  assert.equal(store.get("old", "agent"), undefined);
+  assert.deepEqual(store.searchOpen("alpha", "agent").hits.map((hit) => hit.tab.key), ["shown"]);
+  assert.equal(store.searchArchive("alpha", 0, 20, "agent").matchCount, 0);
+  assert.deepEqual(store.searchPages("alpha", undefined, "agent").hits.map((hit) => hit.tab.key), ["shown"]);
+  store.closeDb();
+});
+
+test("an agent writing a hidden tab's key gets a separate tab", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Private", html: "<p>mine</p>" });
+  store.setAgentHidden("page", true);
+  const { tab, created } = store.upsert({ key: "page", title: "Agent", html: "<p>theirs</p>", viewer: "agent" });
+  assert.equal(created, true);
+  assert.notEqual(tab.key, "page");
+  assert.match(store.get("page")!.html, /mine/);
+  store.closeDb();
+});
+
+test("agent bulk close skips hidden tabs", () => {
+  const store = loaded();
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>" });
+  store.setAgentHidden("a", true);
+  store.archiveMany("all", "agent");
+  assert.deepEqual(titles(store), ["A"]);
+  store.closeDb();
+});
+
+test("hide-from-agent persists and survives export and import", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>p</p>" });
+  store.setAgentHidden("page", true);
+  store.closeDb();
+
+  const again = loaded();
+  assert.equal(again.get("page")?.agentHidden, true);
+  const parsed = parseImport(serializeExport(again.exportFile("page")));
+  const copy = again.importBoard(parsed, "meta");
+  assert.equal(copy.tabs[0].agentHidden, true);
+  again.setAgentHidden("page", false);
+  assert.equal(again.get("page", "agent")?.key, "page");
+  again.closeDb();
+});
+
+test("opening a board without tabs.agent_hidden adds the column", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>p</p>" });
+  store.closeDb();
+  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  db.exec("ALTER TABLE tabs DROP COLUMN agent_hidden");
+  db.close();
+
+  const again = loaded();
+  assert.equal(again.get("page")?.agentHidden, undefined);
+  again.setAgentHidden("page", true);
+  again.closeDb();
+  const third = loaded();
+  assert.equal(third.get("page")?.agentHidden, true);
+  third.closeDb();
 });

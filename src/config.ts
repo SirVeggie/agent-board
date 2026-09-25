@@ -13,6 +13,9 @@ export const MAX_ASSETS_TOTAL_BYTES = 32 * 1024 * 1024;
 export const MAX_IMPORT_BYTES = 128 * 1024 * 1024;
 export const DEFAULT_WAIT_MS = 10 * 60 * 1000;
 export const MAX_WAIT_MS = 10 * 60 * 1000;
+/** The MCP marks its requests with this header so tabs hidden from the agent stay invisible to them. */
+export const CLIENT_HEADER = "x-agent-board-client";
+export const AGENT_CLIENT = "agent";
 
 export function baseUrl(): string {
   return `http://${HOST}:${PORT}`;

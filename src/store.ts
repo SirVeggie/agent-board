@@ -16,6 +16,7 @@ import {
   isTemplateBound,
   toMeta,
   toTemplateMeta,
+  visibleTo,
   type BoardState,
   type DeletedEntry,
   type ImportDestination,
@@ -31,6 +32,7 @@ import {
   type TemplateMeta,
   type TemplateValues,
   type UpsertInput,
+  type Viewer,
 } from "./types.js";
 import { applyEdits, assertRevision, type HtmlEdit, type HtmlEditResult } from "./htmlEdit.js";
 import {
@@ -142,41 +144,63 @@ export class BoardStore extends EventEmitter {
     };
   }
 
-  list(): TabMeta[] {
-    return this.snapshot().tabs;
+  list(viewer: Viewer = "user"): TabMeta[] {
+    return this.listOpenTabs(viewer).map(toMeta);
   }
 
-  archiveCount(): number {
-    return this.archiveOrder.length;
+  archiveCount(viewer: Viewer = "user"): number {
+    return this.listArchiveTabs(viewer).length;
   }
 
-  listOpenTabs(): Tab[] {
-    return this.order.map((id) => this.tabs.get(id)!).filter(Boolean);
+  listOpenTabs(viewer: Viewer = "user"): Tab[] {
+    return this.order
+      .map((id) => this.tabs.get(id)!)
+      .filter((tab) => tab && visibleTo(tab, viewer));
   }
 
-  listArchiveTabs(): Tab[] {
-    return this.archiveOrder.map((id) => this.archive.get(id)!);
+  listArchiveTabs(viewer: Viewer = "user"): Tab[] {
+    return this.archiveOrder.map((id) => this.archive.get(id)!).filter((tab) => visibleTo(tab, viewer));
   }
 
-  searchOpen(query: string): ArchiveSearchResult {
-    const tabs = this.listOpenTabs();
+  searchOpen(query: string, viewer: Viewer = "user"): ArchiveSearchResult {
+    const tabs = this.listOpenTabs(viewer);
     return searchArchive(tabs, query, 0, Math.max(tabs.length, 1));
   }
 
-  searchArchive(query: string, offset = 0, limit = ARCHIVE_PAGE_DEFAULT): ArchiveSearchResult {
+  searchArchive(query: string, offset = 0, limit = ARCHIVE_PAGE_DEFAULT, viewer: Viewer = "user"): ArchiveSearchResult {
     const off = Math.max(0, Math.floor(offset));
     const lim = Math.max(1, Math.floor(limit));
-    return searchArchive(this.listArchiveTabs(), query, off, lim);
+    return searchArchive(this.listArchiveTabs(viewer), query, off, lim);
   }
 
-  searchPages(query: string, limit?: number): PageSearchResult {
-    return rankPages(this.listOpenTabs(), this.listArchiveTabs(), query, limit ?? PAGE_SEARCH_DEFAULT);
+  searchPages(query: string, limit?: number, viewer: Viewer = "user"): PageSearchResult {
+    return rankPages(this.listOpenTabs(viewer), this.listArchiveTabs(viewer), query, limit ?? PAGE_SEARCH_DEFAULT);
   }
 
-  listTemplates(): TemplateMeta[] {
+  listTemplates(viewer: Viewer = "user"): TemplateMeta[] {
     return [...this.templates.values()]
       .sort((a, b) => a.title.localeCompare(b.title) || a.createdAt - b.createdAt)
-      .map((template) => toTemplateMeta(template, this.instanceCount(template.id)));
+      .map((template) => toTemplateMeta(template, this.instanceCount(template.id, viewer)));
+  }
+
+  setAgentHidden(idOrKey: string, hidden: boolean): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const tab = located.tab;
+    if (Boolean(tab.agentHidden) === hidden) {
+      return tab;
+    }
+    if (hidden) {
+      tab.agentHidden = true;
+    } else {
+      delete tab.agentHidden;
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
   }
 
   getTemplate(idOrKey: string): Template | undefined {
@@ -251,7 +275,7 @@ export class BoardStore extends EventEmitter {
   openFromTemplate(
     idOrKey: string,
     values: unknown,
-    opts?: { activate?: boolean }
+    opts?: { activate?: boolean; agentHidden?: boolean }
   ): { tab: Tab; created: boolean } {
     const template = this.requireTemplate(idOrKey);
     const parsed = parseTemplateValues(template.fields, values);
@@ -264,6 +288,9 @@ export class BoardStore extends EventEmitter {
       activate: opts?.activate !== false,
       state: template.initialState,
     });
+    if (opts?.agentHidden) {
+      tab.agentHidden = true;
+    }
     this.bindTab(tab, template, parsed, true);
     this.markDirty(tab.id);
     this.persistSoon();
@@ -428,12 +455,14 @@ export class BoardStore extends EventEmitter {
     };
   }
 
-  getActiveId(): string | null {
-    return this.activeId;
+  getActiveId(viewer: Viewer = "user"): string | null {
+    const active = this.activeId ? this.tabs.get(this.activeId) : undefined;
+    return active && visibleTo(active, viewer) ? active.id : null;
   }
 
-  get(idOrKey: string): Tab | undefined {
-    return this.locate(idOrKey)?.tab;
+  get(idOrKey: string, viewer: Viewer = "user"): Tab | undefined {
+    const tab = this.locate(idOrKey)?.tab;
+    return tab && visibleTo(tab, viewer) ? tab : undefined;
   }
 
   isArchived(idOrKey: string): boolean {
@@ -458,7 +487,8 @@ export class BoardStore extends EventEmitter {
       throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
     }
 
-    const existing = input.key ? this.locate(input.key) : undefined;
+    const viewer = input.viewer ?? "user";
+    const existing = input.key ? this.locateFor(input.key, viewer) : undefined;
     if (existing && isTemplateBound(existing.tab)) {
       throw new Error(boundHtmlError(existing.tab, this.templateLabel(existing.tab)));
     }
@@ -466,7 +496,7 @@ export class BoardStore extends EventEmitter {
       this.restore(existing.tab.id, { placement: "append", activate: true });
     }
 
-    const located = input.key ? this.locate(input.key) : undefined;
+    const located = input.key ? this.locateFor(input.key, viewer) : undefined;
     const now = Date.now();
     if (located?.where === "archive") {
       const tab = located.tab;
@@ -925,11 +955,10 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
-  archiveMany(filter: "all" | "unpinned"): string[] {
-    const ids = this.order.filter((id) => {
-      const tab = this.tabs.get(id);
-      return tab && (filter === "all" || !tab.pinned);
-    });
+  archiveMany(filter: "all" | "unpinned", viewer: Viewer = "user"): string[] {
+    const ids = this.listOpenTabs(viewer)
+      .filter((tab) => filter === "all" || !tab.pinned)
+      .map((tab) => tab.id);
     const archived: string[] = [];
     for (const id of ids) {
       this.archiveTab(id);
@@ -1193,6 +1222,7 @@ export class BoardStore extends EventEmitter {
       signalRevision: 0,
       signal: null,
       assets,
+      ...(page.agentHidden ? { agentHidden: true } : {}),
     };
     seedState(tab, page.state);
     if (template && page.template && templateValues) {
@@ -1224,6 +1254,11 @@ export class BoardStore extends EventEmitter {
       }
     }
     return undefined;
+  }
+
+  private locateFor(idOrKey: string, viewer: Viewer): Located | undefined {
+    const located = this.locate(idOrKey);
+    return located && visibleTo(located.tab, viewer) ? located : undefined;
   }
 
   private setPinned(tab: Tab, pinned: boolean): void {
@@ -1411,10 +1446,10 @@ export class BoardStore extends EventEmitter {
     return template;
   }
 
-  private instanceCount(templateId: string): number {
+  private instanceCount(templateId: string, viewer: Viewer = "user"): number {
     let count = 0;
     for (const tab of this.allTabs()) {
-      if (tab.templateId === templateId) {
+      if (tab.templateId === templateId && visibleTo(tab, viewer)) {
         count += 1;
       }
     }

@@ -35,6 +35,7 @@ export type BoardExportPage = {
   state: BoardState;
   assets: BoardExportAsset[];
   template?: PageTemplateBinding;
+  agentHidden?: boolean;
 };
 
 export type BoardExportFile = {
@@ -56,6 +57,7 @@ export type ImportPageInput = {
   state?: BoardState;
   assets?: PreparedAsset[];
   template?: PageTemplateBinding;
+  agentHidden?: boolean;
 };
 
 export type ParsedImport = {
@@ -88,6 +90,7 @@ export function buildExport(
         mimeType: asset.mimeType,
         data: asset.buffer.toString("base64"),
       })),
+      ...(tab.agentHidden ? { agentHidden: true } : {}),
       ...(tab.templateId && included.has(tab.templateId)
         ? {
             template: {
@@ -276,6 +279,7 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
     state: isPlainObject(page.state) ? page.state : {},
     assets: assetsFromExport(page.assets, index),
     template: bindingFromExport(page.template, index, templateIds),
+    ...(page.agentHidden === true ? { agentHidden: true } : {}),
   };
 }
 

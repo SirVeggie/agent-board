@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { baseUrl } from "./config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, baseUrl } from "./config.js";
 import { log } from "./log.js";
 
 export async function health(): Promise<{
@@ -58,7 +58,10 @@ export async function api(
 ): Promise<{ status: number; data: unknown }> {
   const res = await fetch(`${baseUrl()}${pathname}`, {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: {
+      [CLIENT_HEADER]: AGENT_CLIENT,
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
   });

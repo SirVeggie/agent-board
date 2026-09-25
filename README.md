@@ -111,6 +111,12 @@ The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you 
 
 The sidebar has **Archive** and **Templates**. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, the board blocks the page until the agent fixes the data.
 
+### Hiding a tab from the agent
+
+Right-click a tab or archive row and choose **Hide from agent**, or tick **Hide from agent** in a template's Open/Edit form. Hidden tabs show an eye icon. To the agent they don't exist: they're left out of `board_list`, `board_archive`, search, `activeId`, bulk `board_close`, and template instance counts, and every per-tab tool returns "tab not found". A `board_wait` already running on the tab ends as if the tab had closed. `board_show` with a hidden tab's key creates a separate tab instead of overwriting it. Only the board UI can change the flag; the MCP marks its requests with an `x-agent-board-client: agent` header and cannot flip it.
+
+This is a guardrail on the board's tools, not a sandbox. An agent with a shell or browser could still call the HTTP API without the header, or open the embedded URL itself.
+
 Port: `4747` (override with `AGENT_BOARD_PORT`). Bound to localhost only.
 
 Tab pages load in an iframe from **http://127.0.0.2:4747** so they can use `localStorage` without accessing the board chrome or API. Refresh the board after upgrading so the new iframe sandbox takes effect.

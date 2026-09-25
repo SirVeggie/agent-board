@@ -33,6 +33,7 @@
   const templateModalError = document.getElementById("template-modal-error");
   const templateModalCancel = document.getElementById("template-modal-cancel");
   const templateModalSubmit = document.getElementById("template-modal-submit");
+  const templateModalAgentHidden = document.getElementById("template-modal-agent-hidden");
   const confirmDlg = document.getElementById("confirm");
   const confirmMessage = document.getElementById("confirm-message");
   const paletteEl = document.getElementById("palette");
@@ -52,6 +53,7 @@
   const importFileInput = document.getElementById("import-file");
   const tabMenu = document.getElementById("tab-menu");
   const tabMenuExport = document.getElementById("tab-menu-export");
+  const tabMenuAgent = document.getElementById("tab-menu-agent");
   const noticeEl = document.getElementById("notice");
   const persistBanner = document.getElementById("persist-banner");
   const persistBannerDetail = document.getElementById("persist-banner-detail");
@@ -76,6 +78,9 @@
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.6 1.4l5 5-1.4 1.4-.9-.2-2.3 2.3.2 2.5-1.5 1.5-2.4-2.4-3.1 3.1-.8-.8 3.1-3.1-2.4-2.4 1.5-1.5 2.5.2 2.3-2.3-.2-.9z" fill="currentColor"/></svg>';
   const FILE_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="currentColor"/></svg>';
+  const AGENT_HIDDEN_SVG =
+    '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/><path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  const AGENT_HIDDEN_TITLE = "Hidden from the agent";
 
   /** @type {{ tabs: Array<any>, archive: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean, sidebarTab: string }} */
   const state = {
@@ -691,6 +696,18 @@
     } else if (pin) {
       pin.remove();
     }
+    let hidden = el.querySelector(".tab-agent-hidden");
+    if (tab.agentHidden) {
+      if (!hidden) {
+        hidden = document.createElement("span");
+        hidden.className = "tab-agent-hidden";
+        hidden.title = AGENT_HIDDEN_TITLE;
+        hidden.innerHTML = AGENT_HIDDEN_SVG;
+        el.insertBefore(hidden, el.querySelector(".tab-title"));
+      }
+    } else if (hidden) {
+      hidden.remove();
+    }
     let dot = el.querySelector(".tab-updated");
     if (unread.has(tab.id) && tab.id !== state.activeId) {
       if (!dot) {
@@ -1295,7 +1312,10 @@
 
       const icon = document.createElement("span");
       icon.className = "fileicon";
-      icon.innerHTML = FILE_SVG;
+      icon.innerHTML = tab.agentHidden ? AGENT_HIDDEN_SVG : FILE_SVG;
+      if (tab.agentHidden) {
+        icon.title = AGENT_HIDDEN_TITLE;
+      }
       el.appendChild(icon);
 
       if (unreadArchive.has(tab.id)) {
@@ -1433,6 +1453,7 @@
       empty.textContent = "This template has no fields.";
       templateModalFields.appendChild(empty);
     }
+    templateModalAgentHidden.checked = mode === "edit" && Boolean(activeTab()?.agentHidden);
     templateModal.hidden = false;
     const first = templateModalFields.querySelector("input, textarea, select");
     first?.focus();
@@ -1540,21 +1561,28 @@
     }
     templateModalError.hidden = true;
     const values = readTemplateForm(template);
-    const url =
-      mode === "edit"
-        ? `/api/tabs/${encodeURIComponent(state.activeId)}/template-values`
-        : `/api/templates/${encodeURIComponent(id)}/open`;
+    const agentHidden = templateModalAgentHidden.checked;
+    const editing = mode === "edit" ? activeTab() : null;
+    if (mode === "edit" && !editing) {
+      return;
+    }
+    const url = editing
+      ? `/api/tabs/${encodeURIComponent(editing.id)}/template-values`
+      : `/api/templates/${encodeURIComponent(id)}/open`;
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify(editing ? { values } : { values, agentHidden }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         templateModalError.textContent = data.error || "Could not apply template";
         templateModalError.hidden = false;
         return;
+      }
+      if (editing && Boolean(editing.agentHidden) !== agentHidden) {
+        await setAgentHidden(editing.id, agentHidden);
       }
       if (mode !== "edit" && data.tab?.id) {
         pendingFocus = { id: data.tab.id, key: data.tab.key };
@@ -1814,6 +1842,18 @@
     await fetch("/api/archive", { method: "DELETE" });
   }
 
+  function findAnyTab(id) {
+    return state.tabs.find((tab) => tab.id === id) || state.archive.find((tab) => tab.id === id) || null;
+  }
+
+  async function setAgentHidden(id, hidden) {
+    await fetch(`/api/tabs/${encodeURIComponent(id)}/agent-hidden`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden }),
+    });
+  }
+
   async function setPinned(id, pin) {
     await fetch(`/api/tabs/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -2009,6 +2049,7 @@
     event.preventDefault();
     event.stopPropagation();
     menuTabId = id;
+    tabMenuAgent.textContent = findAnyTab(id)?.agentHidden ? "Show to agent" : "Hide from agent";
     tabMenu.hidden = false;
     tabMenu.style.left = event.clientX + "px";
     tabMenu.style.top = event.clientY + "px";
@@ -2414,6 +2455,13 @@
   tabMenuExport.addEventListener("click", () => {
     if (menuTabId) {
       downloadExport(menuTabId);
+    }
+    closeTabMenu();
+  });
+  tabMenuAgent.addEventListener("click", () => {
+    const tab = menuTabId ? findAnyTab(menuTabId) : null;
+    if (tab) {
+      setAgentHidden(tab.id, !tab.agentHidden);
     }
     closeTabMenu();
   });

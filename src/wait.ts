@@ -1,6 +1,6 @@
 import { parseAfterRevision, signalMatches } from "./signal.js";
 import { store } from "./store.js";
-import type { BoardState, Tab, TabSignal } from "./types.js";
+import { visibleTo, type BoardState, type Tab, type TabSignal, type Viewer } from "./types.js";
 
 export type WaitResult = {
   timedOut: boolean;
@@ -18,14 +18,16 @@ export function waitForSignal(opts: {
   names: string[];
   afterRevision?: unknown;
   timeoutMs: number;
+  viewer: Viewer;
   abort?: AbortSignal;
 }): Promise<WaitResult> {
   const afterRevision = parseAfterRevision(opts.afterRevision);
-  const initial = store.get(opts.idOrKey);
+  const initial = store.get(opts.idOrKey, opts.viewer);
   if (!initial) {
     return Promise.reject(new Error(`tab not found: ${opts.idOrKey}`));
   }
   const tabId = initial.id;
+  const tabKey = initial.key;
   if (signalMatches(initial, opts.names, afterRevision)) {
     return Promise.resolve(toWaitResult(initial, false, false, false));
   }
@@ -47,6 +49,20 @@ export function waitForSignal(opts: {
     };
 
     const check = (tab: Tab | undefined, timedOut: boolean, closed: boolean, archived: boolean) => {
+      const current = store.get(tabId);
+      if (current && !visibleTo(current, opts.viewer)) {
+        finish({
+          timedOut: false,
+          closed: true,
+          archived: false,
+          id: tabId,
+          key: tabKey,
+          signal: null,
+          state: {},
+          stateRevision: 0,
+        });
+        return;
+      }
       if (archived) {
         const current = tab ?? last;
         finish({

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
-import { ensureTemplateSchema } from "./dbMigrate.js";
+import { ensureAgentHiddenColumn, ensureTemplateSchema } from "./dbMigrate.js";
 import { isPlainObject, type BoardState, type Tab, type TabSignal, type Template, type TemplateBinding } from "./types.js";
 
 export const SCHEMA_VERSION = 1;
@@ -57,6 +57,7 @@ type TabRow = {
   signal_revision: number;
   signal: string | null;
   assets: string;
+  agent_hidden: number;
 };
 
 type LegacyPersisted = {
@@ -91,7 +92,8 @@ CREATE TABLE IF NOT EXISTS tabs (
   state_updated_at INTEGER NOT NULL DEFAULT 0,
   signal_revision INTEGER NOT NULL DEFAULT 0,
   signal TEXT,
-  assets TEXT NOT NULL DEFAULT '[]'
+  assets TEXT NOT NULL DEFAULT '[]',
+  agent_hidden INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tabs_status_archived ON tabs(status, archived_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tabs_status_deleted ON tabs(status, deleted_at DESC);
@@ -122,11 +124,11 @@ const UPSERT_SQL = `
 INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, archived_at, deleted_at,
-  revision, state_revision, state_updated_at, signal_revision, signal, assets
+  revision, state_revision, state_updated_at, signal_revision, signal, assets, agent_hidden
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -145,7 +147,8 @@ ON CONFLICT(id) DO UPDATE SET
   state_updated_at = excluded.state_updated_at,
   signal_revision = excluded.signal_revision,
   signal = excluded.signal,
-  assets = excluded.assets
+  assets = excluded.assets,
+  agent_hidden = excluded.agent_hidden
 `;
 
 const UPSERT_TEMPLATE_SQL = `
@@ -348,6 +351,7 @@ export class BoardDb {
         throw new Error(`board.sqlite schema ${version} cannot be opened by this daemon`);
       }
       ensureTemplateSchema(db);
+      ensureAgentHiddenColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -388,6 +392,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.signalRevision,
     tab.signal ? JSON.stringify(tab.signal) : null,
     JSON.stringify(tab.assets ?? []),
+    tab.agentHidden ? 1 : 0,
   ];
 }
 
@@ -442,6 +447,9 @@ function rowToStored(row: TabRow): StoredTab {
     signal,
     assets,
   };
+  if (row.agent_hidden) {
+    tab.agentHidden = true;
+  }
   if (row.status === "archived") {
     tab.archivedAt = row.archived_at ?? row.updated_at;
   }

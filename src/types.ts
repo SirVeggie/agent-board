@@ -94,6 +94,8 @@ export type Tab = {
   templateStateVersion?: number;
   templateCompatible?: boolean;
   templateIncompatibleReason?: string;
+  /** Only the board UI can set this. Agent requests treat the tab as nonexistent. */
+  agentHidden?: boolean;
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision" | "stripSeq"> & {
@@ -112,6 +114,22 @@ export const WELCOME_KEY = "welcome";
 
 export function isAppTab(tab: { key: string }): boolean {
   return tab.key === WELCOME_KEY;
+}
+
+/** Who is asking: the board UI (and tab pages), or an agent through the MCP. */
+export type Viewer = "user" | "agent";
+
+export function visibleTo(tab: { agentHidden?: boolean }, viewer: Viewer): boolean {
+  switch (viewer) {
+    case "user":
+      return true;
+    case "agent":
+      return !tab.agentHidden;
+    default: {
+      const _never: never = viewer;
+      return _never;
+    }
+  }
 }
 
 export type UpsertNotice = {
@@ -150,6 +168,8 @@ export type UpsertInput = {
   pin?: boolean;
   state?: BoardState;
   assets?: PreparedAsset[];
+  /** An agent writing a key owned by a hidden tab gets a new tab instead. */
+  viewer?: Viewer;
 };
 
 export type SetStateInput = {
@@ -190,6 +210,7 @@ export function toMeta(tab: Tab): TabMeta {
     stateUpdatedAt: tab.stateUpdatedAt,
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
     assets: tab.assets,
+    ...(tab.agentHidden ? { agentHidden: true } : {}),
     ...(tab.templateId
       ? {
           templateId: tab.templateId,

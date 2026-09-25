@@ -312,6 +312,13 @@ body.dragging-tab iframe {
   align-items: center;
 }
 
+.tab-agent-hidden {
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 button.tab-close {
   appearance: none;
   border: 0;
@@ -1144,6 +1151,11 @@ kbd {
 .template-check input {
   width: auto;
   height: auto;
+}
+
+.template-agent-hidden {
+  margin: 0 0 12px;
+  color: var(--muted);
 }
 
 .template-field .help {
