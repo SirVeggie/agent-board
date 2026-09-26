@@ -52,8 +52,10 @@
   const exportAllBtn = document.getElementById("export-all");
   const importFileInput = document.getElementById("import-file");
   const tabMenu = document.getElementById("tab-menu");
+  const tabMenuPin = document.getElementById("tab-menu-pin");
   const tabMenuExport = document.getElementById("tab-menu-export");
   const tabMenuAgent = document.getElementById("tab-menu-agent");
+  const tabMenuCopyId = document.getElementById("tab-menu-copy-id");
   const noticeEl = document.getElementById("notice");
   const persistBanner = document.getElementById("persist-banner");
   const persistBannerDetail = document.getElementById("persist-banner-detail");
@@ -764,7 +766,7 @@
         return;
       }
       if (event.detail > 1) {
-        setPinned(current.id, !current.pinned);
+        copyTabId(current.id);
         return;
       }
       selectTab(current.id, { fromUser: true });
@@ -1876,6 +1878,15 @@
     });
   }
 
+  async function copyTabId(id) {
+    try {
+      await navigator.clipboard.writeText(`Agent Board tab ${id}`);
+      showNotice(`Copied ${id}`);
+    } catch {
+      showNotice("Could not copy to clipboard");
+    }
+  }
+
   async function openWelcome() {
     const html = await fetch("/welcome.html").then((res) => res.text());
     pendingFocus = { key: "welcome" };
@@ -2063,17 +2074,21 @@
     event.preventDefault();
     event.stopPropagation();
     menuTabId = id;
+    const openTab = state.tabs.find((tab) => tab.id === id);
+    tabMenuPin.hidden = !openTab;
+    tabMenuPin.textContent = openTab?.pinned ? "Unpin" : "Pin";
     tabMenuAgent.textContent = findAnyTab(id)?.agentHidden ? "Show to agent" : "Hide from agent";
     tabMenu.hidden = false;
-    tabMenu.style.left = event.clientX + "px";
-    tabMenu.style.top = event.clientY + "px";
-    const rect = tabMenu.getBoundingClientRect();
-    if (rect.right > window.innerWidth - 8) {
-      tabMenu.style.left = Math.max(8, window.innerWidth - rect.width - 8) + "px";
-    }
-    if (rect.bottom > window.innerHeight - 8) {
-      tabMenu.style.top = Math.max(8, window.innerHeight - rect.height - 8) + "px";
-    }
+    const anchor = event.currentTarget.getBoundingClientRect();
+    const { offsetWidth: width, offsetHeight: height } = tabMenu;
+    const gap = 4;
+    const margin = 8;
+    const above = anchor.bottom + gap + height > window.innerHeight - margin;
+    const top = above ? anchor.top - gap - height : anchor.bottom + gap;
+    const left = Math.min(anchor.left, window.innerWidth - width - margin);
+    tabMenu.dataset.side = above ? "above" : "below";
+    tabMenu.style.left = Math.max(margin, left) + "px";
+    tabMenu.style.top = Math.max(margin, top) + "px";
   }
 
   async function undoClose() {
@@ -2466,6 +2481,19 @@
     importFiles(importFileInput.files, "meta");
     importFileInput.value = "";
   });
+  tabMenuPin.addEventListener("click", () => {
+    const tab = menuTabId ? state.tabs.find((item) => item.id === menuTabId) : null;
+    if (tab) {
+      setPinned(tab.id, !tab.pinned);
+    }
+    closeTabMenu();
+  });
+  tabMenuCopyId.addEventListener("click", () => {
+    if (menuTabId) {
+      copyTabId(menuTabId);
+    }
+    closeTabMenu();
+  });
   tabMenuExport.addEventListener("click", () => {
     if (menuTabId) {
       downloadExport(menuTabId);
@@ -2499,6 +2527,7 @@
     }
   });
   window.addEventListener("scroll", closeTabMenu, true);
+  window.addEventListener("blur", closeTabMenu);
   tabReorderToggle.addEventListener("click", () => toggleFlag(tabReorderToggle, TAB_REORDER_KEY));
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   clearBtn.addEventListener("click", async () => {

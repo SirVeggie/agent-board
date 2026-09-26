@@ -25,6 +25,8 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 
 ## Find a page
 
+**By pasted id**: the user can copy a tab reference from the board, which looks like `Agent Board tab t_1a2b3c4d`. Pass the `t_…` part as `id` straight to `board_read`, `board_patch`, etc. It works for open and archived tabs; no search needed.
+
 The user names pages by **title** (“my Jira issues page”). Keys are slugs you invented earlier. Never guess a key.
 
 **By title** (usual):

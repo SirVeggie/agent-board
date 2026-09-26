@@ -1276,13 +1276,23 @@ kbd {
 }
 
 .tab-menu {
+  --menu-shift: -4px;
   position: fixed;
   z-index: 60;
-  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  min-width: 128px;
   padding: 4px;
   border-radius: 10px;
   background: var(--panel);
   box-shadow: var(--shadow), 0 12px 32px rgba(0, 0, 0, 0.45);
+  transform-origin: top left;
+  animation: tab-menu-in 120ms var(--ease);
+}
+
+.tab-menu[data-side="above"] {
+  --menu-shift: 4px;
+  transform-origin: bottom left;
 }
 
 .tab-menu[hidden] {
@@ -1290,11 +1300,19 @@ kbd {
 }
 
 .tab-menu button {
-  width: 100%;
   justify-content: flex-start;
-  height: 30px;
+  height: 28px;
+  padding: 0 10px;
   background: transparent;
   box-shadow: none;
+  white-space: nowrap;
+}
+
+@keyframes tab-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--menu-shift)) scale(0.97);
+  }
 }
 
 .tab-menu button:hover {
@@ -1366,5 +1384,9 @@ button.pill-toggle[aria-checked="true"]::after {
   button,
   button.pill-toggle::after {
     transition: none;
+  }
+
+  .tab-menu {
+    animation: none;
   }
 }
