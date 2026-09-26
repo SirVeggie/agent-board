@@ -368,7 +368,7 @@ If the page asks the user to do something you must continue from — submit, cho
 ## Pin, open, close
 
 - `board_pin` / `board_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `board_show` `pin`.
-- `board_close` closes one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Closed pages stay in the Library. Pass `permanent: true` to delete instead; the user can undo the last 10 deletes (a bulk delete counts as one).
+- `board_close` closes one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Closed pages stay in the Library. Pass `permanent: true` to delete instead; deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one).
 - `board_open` (`id`/`key`) opens a closed page on the strip (focused).
 - Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.

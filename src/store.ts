@@ -9,7 +9,7 @@ import { BoardDb, type StoredFolder, type StoredTab } from "./db.js";
 import { log } from "./log.js";
 import { normalizeSignalName } from "./signal.js";
 import {
-  DELETE_LIMIT,
+  TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
   WELCOME_KEY,
   isAppTab,
@@ -33,6 +33,7 @@ import {
   type TemplateBinding,
   type TemplateMeta,
   type TemplateValues,
+  type TrashBatch,
   type UpsertInput,
   type Viewer,
 } from "./types.js";
@@ -63,6 +64,7 @@ export class BoardStore extends EventEmitter {
   private activeId: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private trashTimer: ReturnType<typeof setInterval> | null = null;
   private persistError: string | null = null;
   private lastStamp = 0;
   private lastSeq = 0;
@@ -121,7 +123,13 @@ export class BoardStore extends EventEmitter {
       }
     }
     this.deleted = [...batches.values()].sort((a, b) => a.deletedAt - b.deletedAt);
-    this.trimDeleted();
+    this.expireTrash();
+    this.trashTimer = setInterval(() => {
+      if (this.expireTrash()) {
+        this.persistSoon();
+      }
+    }, 60 * 60 * 1000);
+    this.trashTimer.unref?.();
     this.repairLibraryRefs();
     this.rebuildOrder();
     this.lastStamp = Math.max(
@@ -1169,9 +1177,58 @@ export class BoardStore extends EventEmitter {
     }
     if (batch && (!newestClosed || batch.deletedAt >= (newestClosed.closedAt ?? 0))) {
       this.deleted.pop();
-      return { tab: this.restoreBatch(batch) };
+      const tab = this.restoreBatch(batch);
+      this.emit("trash");
+      return { tab };
     }
     return { tab: this.restoreTab(newestClosed!, "index", true) };
+  }
+
+  /** Deleted batches, newest first. */
+  listTrash(viewer: Viewer = "user"): TrashBatch[] {
+    return this.deleted
+      .map((batch) => ({
+        id: batch.id,
+        deletedAt: batch.deletedAt,
+        expiresAt: batch.deletedAt + TRASH_TTL_MS,
+        tabs: batch.tabs.filter((tab) => visibleTo(tab, viewer)).map(toMeta),
+        folders: batch.folders,
+      }))
+      .filter((batch) => batch.tabs.length || batch.folders.length)
+      .reverse();
+  }
+
+  /** Put a trashed page, or a trashed folder with what it held, back in the Library (closed). */
+  restoreFromTrash(id: string): { tabs: Tab[]; folders: Folder[] } {
+    const part = this.takeFromTrash(id);
+    for (const tab of part.tabs) {
+      if (typeof tab.closedAt !== "number") {
+        tab.closedAt = this.stamp();
+      }
+    }
+    this.restoreBatch(part);
+    this.emit("trash");
+    return { tabs: part.tabs, folders: part.folders };
+  }
+
+  /** Delete a trashed page, or a trashed folder with what it held, for good. */
+  purgeFromTrash(id: string): number {
+    const part = this.takeFromTrash(id);
+    this.dropForever(part);
+    this.persistSoon();
+    this.emit("trash");
+    return part.tabs.length;
+  }
+
+  emptyTrash(): number {
+    let count = 0;
+    for (const batch of this.deleted.splice(0)) {
+      count += batch.tabs.length;
+      this.dropForever(batch);
+    }
+    this.persistSoon();
+    this.emit("trash");
+    return count;
   }
 
   createFolder(input: { name: string; parentId?: string | null; index?: number }): Folder {
@@ -1340,6 +1397,10 @@ export class BoardStore extends EventEmitter {
   }
 
   closeDb(): void {
+    if (this.trashTimer) {
+      clearInterval(this.trashTimer);
+      this.trashTimer = null;
+    }
     this.persist();
     if (this.persistRetryTimer) {
       clearTimeout(this.persistRetryTimer);
@@ -2095,23 +2156,75 @@ export class BoardStore extends EventEmitter {
     for (const tab of batch.tabs) {
       this.markDirty(tab.id);
     }
-    this.trimDeleted();
+    this.expireTrash();
+    this.emit("trash");
   }
 
-  private trimDeleted(): void {
-    while (this.deleted.length > DELETE_LIMIT) {
-      const gone = this.deleted.shift()!;
-      for (const tab of gone.tabs) {
-        this.removed.add(tab.id);
-        this.dirty.delete(tab.id);
-        if (!this.tabs.has(tab.id) && !this.closed.has(tab.id)) {
-          deleteTabAssets(tab.id);
-        }
-      }
-      if (gone.folders.length) {
-        this.foldersDirty = true;
+  /** Drop batches older than the Trash keeps. True when something went. */
+  private expireTrash(): boolean {
+    const cutoff = Date.now() - TRASH_TTL_MS;
+    let dropped = false;
+    while (this.deleted.length && this.deleted[0].deletedAt < cutoff) {
+      this.dropForever(this.deleted.shift()!);
+      dropped = true;
+    }
+    if (dropped) {
+      this.emit("trash");
+    }
+    return dropped;
+  }
+
+  /** Forget pages and folders already taken out of the Trash. */
+  private dropForever(gone: DeletedBatch): void {
+    for (const tab of gone.tabs) {
+      this.removed.add(tab.id);
+      this.dirty.delete(tab.id);
+      if (!this.tabs.has(tab.id) && !this.closed.has(tab.id)) {
+        deleteTabAssets(tab.id);
       }
     }
+    if (gone.folders.length) {
+      this.foldersDirty = true;
+    }
+  }
+
+  /** Remove a page, or a folder subtree and its pages, from its Trash batch and return them as a batch. */
+  private takeFromTrash(id: string): DeletedBatch {
+    const at = this.deleted.findIndex(
+      (batch) => batch.tabs.some((tab) => tab.id === id) || batch.folders.some((folder) => folder.id === id)
+    );
+    if (at === -1) {
+      throw new Error(`not in the trash: ${id}`);
+    }
+    const batch = this.deleted[at];
+    const part: DeletedBatch = { id: batch.id, deletedAt: batch.deletedAt, tabs: [], folders: [] };
+    const folderIds = new Set<string>();
+    if (batch.folders.some((folder) => folder.id === id)) {
+      folderIds.add(id);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const folder of batch.folders) {
+          if (!folderIds.has(folder.id) && folder.parentId && folderIds.has(folder.parentId)) {
+            folderIds.add(folder.id);
+            grew = true;
+          }
+        }
+      }
+      part.folders = batch.folders.filter((folder) => folderIds.has(folder.id));
+      part.tabs = batch.tabs.filter((tab) => tab.folderId && folderIds.has(tab.folderId));
+    } else {
+      part.tabs = batch.tabs.filter((tab) => tab.id === id);
+    }
+    batch.folders = batch.folders.filter((folder) => !part.folders.includes(folder));
+    batch.tabs = batch.tabs.filter((tab) => !part.tabs.includes(tab));
+    if (!batch.tabs.length && !batch.folders.length) {
+      this.deleted.splice(at, 1);
+    }
+    if (part.folders.length) {
+      this.foldersDirty = true;
+    }
+    return part;
   }
 
   private stamp(): number {

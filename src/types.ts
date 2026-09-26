@@ -132,7 +132,18 @@ export type DeletedBatch = {
   folders: Folder[];
 };
 
-export const DELETE_LIMIT = 10;
+/** Deleted pages and folders stay in the Trash this long, then go for good. */
+export const TRASH_DAYS = 7;
+export const TRASH_TTL_MS = TRASH_DAYS * 24 * 60 * 60 * 1000;
+
+/** A delete batch as the Trash lists it. */
+export type TrashBatch = {
+  id: string;
+  deletedAt: number;
+  expiresAt: number;
+  tabs: TabMeta[];
+  folders: Folder[];
+};
 
 export const USER_TITLE_HOLD_MS = 24 * 60 * 60 * 1000;
 
@@ -183,6 +194,7 @@ export type BoardEvent =
   | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string }
   | { type: "tab_signal"; id: string; signal: TabSignal }
   | { type: "folders"; folders: Folder[] }
+  | { type: "trash" }
   | { type: "template_upserted"; template: TemplateMeta }
   | { type: "template_deleted"; id: string }
   | { type: "persist_error"; error: string }

@@ -498,6 +498,31 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.get("/api/trash", (req, res) => {
+    res.json({ batches: store.listTrash(viewerOf(req)) });
+  });
+
+  app.post("/api/trash/:id/restore", (req, res) => {
+    try {
+      const { tabs, folders } = store.restoreFromTrash(req.params.id);
+      res.json({ restored: tabs.map((tab) => tab.id), folders: folders.map((folder) => folder.id) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/trash/:id", (req, res) => {
+    try {
+      res.json({ purged: store.purgeFromTrash(req.params.id) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/trash", (_req, res) => {
+    res.json({ purged: store.emptyTrash() });
+  });
+
   app.post("/api/library/delete-stale", (req, res) => {
     try {
       const days = optionalNumber(req.body?.days) ?? 30;
@@ -754,6 +779,7 @@ export async function startHttp(): Promise<http.Server> {
   });
   store.on("tab_deleted", (id: string) => broadcast({ type: "tab_deleted", id }));
   store.on("folders", (folders: Folder[]) => broadcast({ type: "folders", folders }));
+  store.on("trash", () => broadcast({ type: "trash" }));
   store.on("tab_state", (tab: Tab, client?: string) =>
     broadcast({
       type: "tab_state",

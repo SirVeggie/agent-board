@@ -949,21 +949,83 @@ test("lifting a folder moves its contents up a level", () => {
   store.closeDb();
 });
 
-test("a bulk delete counts as a single bin entry and the bin keeps 10", () => {
+test("a bulk delete counts as a single Trash entry and the Trash has no count cap", () => {
   const store = loaded();
-  for (let i = 0; i < 12; i += 1) {
+  for (let i = 0; i < 15; i += 1) {
     store.upsert({ key: `p${i}`, title: `P${i}`, html: "<p>x</p>" });
   }
   store.deleteMany(["p0", "p1", "p2"]);
-  for (let i = 3; i < 12; i += 1) {
+  for (let i = 3; i < 15; i += 1) {
     store.deletePermanent(`p${i}`);
   }
-  for (let i = 11; i >= 3; i -= 1) {
+  assert.equal(store.listTrash().length, 13);
+  assert.deepEqual(store.listTrash()[0].tabs.map((tab) => tab.key), ["p14"]);
+  for (let i = 14; i >= 3; i -= 1) {
     store.restoreLast();
   }
   store.restoreLast();
-  assert.equal(store.list().length, 12);
+  assert.equal(store.list().length, 15);
+  assert.equal(store.listTrash().length, 0);
   store.closeDb();
+});
+
+test("the Trash drops deletes older than 7 days on load", () => {
+  const store = loaded();
+  store.upsert({ key: "old", title: "Old", html: "<p>o</p>" });
+  store.upsert({ key: "new", title: "New", html: "<p>n</p>" });
+  store.deletePermanent("old");
+  store.deletePermanent("new");
+  store.closeDb();
+  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  db.prepare("UPDATE tabs SET deleted_at = ? WHERE key = 'old'").run(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  db.close();
+  const again = loaded();
+  assert.deepEqual(
+    again.listTrash().flatMap((batch) => batch.tabs.map((tab) => tab.key)),
+    ["new"]
+  );
+  again.closeDb();
+  const check = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const rows = check.prepare("SELECT key FROM tabs").all() as Array<{ key: string }>;
+  check.close();
+  assert.deepEqual(rows.map((row) => row.key), ["new"]);
+});
+
+test("restoring one page from a Trash batch puts it back closed and leaves the rest", () => {
+  const store = loaded();
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>" });
+  const [a] = store.deleteMany(["a", "b"]);
+  store.restoreFromTrash(a.id);
+  assert.equal(store.isClosed("a"), true);
+  assert.equal(store.isOpen("a"), false);
+  assert.deepEqual(store.listTrash()[0].tabs.map((tab) => tab.key), ["b"]);
+  store.closeDb();
+});
+
+test("a trashed folder restores or purges with what it held", () => {
+  const store = loaded();
+  const folder = store.createFolder({ name: "F" });
+  const inner = store.createFolder({ name: "Inner", parentId: folder.id });
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>", folder: "F" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>", folder: "F/Inner" });
+  store.upsert({ key: "c", title: "C", html: "<p>c</p>" });
+  store.deleteFolder(folder.id, "delete");
+  store.restoreFromTrash(inner.id);
+  assert.deepEqual(store.listFolders().map((item) => [item.name, item.parentId]), [["Inner", null]]);
+  assert.equal(store.get("b")?.folderId, inner.id);
+  assert.equal(store.isClosed("b"), true);
+  assert.equal(store.get("a"), undefined);
+  assert.equal(store.purgeFromTrash(folder.id), 1);
+  assert.equal(store.listTrash().length, 0);
+  store.deletePermanent("c");
+  assert.equal(store.emptyTrash(), 1);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.listTrash().length, 0);
+  assert.deepEqual(again.listFolders().map((item) => item.name), ["Inner"]);
+  again.closeDb();
 });
 
 test("a user rename holds the title against agent writes and bumps the revision", () => {

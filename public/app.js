@@ -13,6 +13,10 @@
   const sidebarTabTemplates = document.getElementById("sidebar-tab-templates");
   const sidebarPanelLibrary = document.getElementById("sidebar-panel-library");
   const sidebarPanelTemplates = document.getElementById("sidebar-panel-templates");
+  const sidebarPanelTrash = document.getElementById("sidebar-panel-trash");
+  const sidebarTabs = document.getElementById("sidebar-tabs");
+  const sidebarBack = document.getElementById("sidebar-back");
+  const trashBack = document.getElementById("trash-back");
   const templateCountEl = document.getElementById("template-count");
   const templateList = document.getElementById("template-list");
   const templateNone = document.getElementById("template-none");
@@ -64,7 +68,7 @@
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "2.0.0";
+  const BOARD_VERSION = "2.1.0";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
   const TOGGLE_HOVER_OPEN_MS = 500;
@@ -85,7 +89,7 @@
     '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/><path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   const AGENT_HIDDEN_TITLE = "Hidden from the agent";
 
-  /** @type {{ tabs: Array<any>, closed: Array<any>, folders: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, sideOpen: boolean, sidebarTab: string }} */
+  /** @type {{ tabs: Array<any>, closed: Array<any>, folders: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, sideOpen: boolean, sidebarTab: string, trashOpen: boolean }} */
   const state = {
     tabs: [],
     closed: [],
@@ -95,6 +99,8 @@
     connected: false,
     sideOpen: localStorage.getItem(SIDE_OPEN_KEY) === "1",
     sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "library",
+    /** The Trash view replaces the sidebar tabs until Back. */
+    trashOpen: false,
   };
 
   /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
@@ -171,20 +177,28 @@
     showNotice,
     choose,
     confirm: (message) => confirmDelete(message),
+    openTrash,
     setPaneOpen: (open) => {
-      if (state.sidebarTab !== "library") {
+      if (state.sidebarTab !== "library" || state.trashOpen) {
         setSidebarTab("library");
       }
       if (state.sideOpen !== open) {
         setSideOpen(open);
       }
     },
-    paneOpen: () => state.sideOpen && state.sidebarTab === "library",
+    paneOpen: libraryShown,
     rerender: () => render(),
     hoverCard,
     stripSlot,
     clearStripSlot,
     icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE },
+  });
+  const trash = window.createTrash({
+    showNotice,
+    confirm: (message) => confirmDelete(message),
+    openMenu: library.openMenu,
+    closeMenu: library.closeMenu,
+    icons: { file: FILE_SVG, ...library.icons },
   });
 
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
@@ -268,6 +282,10 @@
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       renderChrome();
       library.render();
+      return;
+    }
+    if (msg.type === "trash") {
+      trash.refresh();
       return;
     }
     if (msg.type === "persist_error") {
@@ -982,7 +1000,7 @@
       libraryToggle.classList.remove("drag-hover");
       return;
     }
-    if (toggleHoverTimer || (state.sideOpen && state.sidebarTab === "library")) {
+    if (toggleHoverTimer || libraryShown()) {
       return;
     }
     libraryToggle.classList.add("drag-hover");
@@ -1399,17 +1417,52 @@
     }
   }
 
+  function libraryShown() {
+    return state.sideOpen && state.sidebarTab === "library" && !state.trashOpen;
+  }
+
   function syncSidebarTab() {
     const templates = state.sidebarTab === "templates";
+    const inTrash = state.trashOpen;
+    sidebarTabs.hidden = inTrash;
+    sidebarBack.hidden = !inTrash;
+    sidebarPanelTrash.hidden = !inTrash;
     sidebarTabLibrary.classList.toggle("on", !templates);
     sidebarTabTemplates.classList.toggle("on", templates);
     sidebarTabLibrary.setAttribute("aria-selected", templates ? "false" : "true");
     sidebarTabTemplates.setAttribute("aria-selected", templates ? "true" : "false");
-    sidebarPanelLibrary.hidden = templates;
-    sidebarPanelTemplates.hidden = !templates;
+    sidebarPanelLibrary.hidden = templates || inTrash;
+    sidebarPanelTemplates.hidden = !templates || inTrash;
+  }
+
+  function openTrash() {
+    library.closeMenu();
+    state.trashOpen = true;
+    syncSidebarTab();
+    trash.setVisible(true);
+    if (!state.sideOpen) {
+      setSideOpen(true);
+    }
+    trash.focus();
+  }
+
+  function closeTrash() {
+    if (!state.trashOpen) {
+      return;
+    }
+    state.trashOpen = false;
+    trash.setVisible(false);
+    syncSidebarTab();
+    if (state.sidebarTab === "library") {
+      library.refreshSearch();
+    }
   }
 
   function setSidebarTab(tab) {
+    if (state.trashOpen) {
+      state.trashOpen = false;
+      trash.setVisible(false);
+    }
     state.sidebarTab = tab === "templates" ? "templates" : "library";
     localStorage.setItem(SIDEBAR_TAB_KEY, state.sidebarTab);
     syncSidebarTab();
@@ -2213,6 +2266,11 @@
         closePalette();
         return;
       }
+      if (state.sideOpen && state.trashOpen) {
+        event.preventDefault();
+        closeTrash();
+        return;
+      }
       if (state.sideOpen && library.searchFocused()) {
         event.preventDefault();
         library.clearSearch();
@@ -2224,7 +2282,7 @@
       }
       return;
     }
-    if (isFindKey(event) && state.sideOpen && state.sidebarTab === "library" && !isTypingTarget(event.target)) {
+    if (isFindKey(event) && libraryShown() && !isTypingTarget(event.target)) {
       event.preventDefault();
       library.focusSearch();
       return;
@@ -2537,6 +2595,10 @@
   libraryToggle.addEventListener("click", () => setSideOpen(!state.sideOpen));
   sidebarTabLibrary.addEventListener("click", () => setSidebarTab("library"));
   sidebarTabTemplates.addEventListener("click", () => setSidebarTab("templates"));
+  trashBack.addEventListener("click", () => {
+    closeTrash();
+    document.getElementById("library-more")?.focus({ preventScroll: true });
+  });
   templateEditBtn.addEventListener("click", () => {
     const tab = activeTab();
     if (!tab?.templateId) {

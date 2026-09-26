@@ -596,7 +596,7 @@ window.createLibrary = function createLibrary(host) {
     }
     const n = stale.length;
     const ok = await host.confirm(
-      `Delete ${n} closed page${n === 1 ? "" : "s"} untouched for ${STALE_DAYS} days? Ctrl+Z restores them.`
+      `Delete ${n} closed page${n === 1 ? "" : "s"} untouched for ${STALE_DAYS} days? They stay in the Trash for 7 days.`
     );
     if (!ok) {
       return;
@@ -881,6 +881,7 @@ window.createLibrary = function createLibrary(host) {
       { label: "Collapse all", disabled: model.folders.length === 0, action: () => setAllCollapsed(true) },
       "sep",
       { label: `Delete pages untouched for ${STALE_DAYS} days…`, action: () => deleteStale() },
+      { label: "Trash", action: () => host.openTrash() },
       "sep",
       { label: "Export all", action: () => host.downloadAll() },
     ]);
@@ -1642,7 +1643,9 @@ window.createLibrary = function createLibrary(host) {
     render,
     reveal,
     pageMenu,
+    openMenu,
     closeMenu,
+    icons: { folder: FOLDER_SVG, chevron: CHEVRON_SVG },
     menuOpen: () => !menu.hidden,
     clearSearch,
     focusSearch() {

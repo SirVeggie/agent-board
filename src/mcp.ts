@@ -678,7 +678,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_close",
-    "Close Agent Board tabs (same as the UI close button). The pages stay in the Library and can be reopened with board_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); the user can undo the last 10 deletes with Ctrl+Z, and a bulk delete counts as one.",
+    "Close Agent Board tabs (same as the UI close button). The pages stay in the Library and can be reopened with board_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one).",
     {
       id: z.string().optional().describe("Tab id to close or delete."),
       key: z.string().optional().describe("Tab key to close or delete."),

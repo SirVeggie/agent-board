@@ -85,7 +85,13 @@
     <aside id="side-pane" class="side-pane closed" aria-hidden="true" inert>
       <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" title="Resize sidebar"></div>
       <div class="side-inner">
-        <div class="sidebar-tabs" role="tablist" aria-label="Sidebar">
+        <div class="sidebar-back" id="sidebar-back" hidden>
+          <button type="button" id="trash-back" class="sidebar-tab" title="Back to the Library (Esc)">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M13 8H3.5M7.5 3.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Back
+          </button>
+        </div>
+        <div class="sidebar-tabs" id="sidebar-tabs" role="tablist" aria-label="Sidebar">
           <button type="button" class="sidebar-tab on" id="sidebar-tab-library" role="tab" aria-selected="true">Library</button>
           <button type="button" class="sidebar-tab" id="sidebar-tab-templates" role="tab" aria-selected="false">Templates</button>
         </div>
@@ -102,6 +108,15 @@
           <input type="search" id="library-search" placeholder="Search titles and content" autocomplete="off" spellcheck="false">
           <div id="library-list" class="side-list lib-list" role="tree" aria-label="Library"></div>
           <div id="library-none" class="side-none" hidden>Pages you show appear here</div>
+        </div>
+        <div id="sidebar-panel-trash" hidden>
+          <div class="side-head">
+            <h2>Trash <span id="trash-count">0</span></h2>
+            <button type="button" id="trash-empty" title="Permanently delete everything in the Trash">Empty</button>
+          </div>
+          <div class="side-meta trash-hint">Deleted pages stay here for 7 days, then go for good.</div>
+          <div id="trash-list" class="side-list lib-list" role="tree" aria-label="Trash"></div>
+          <div id="trash-none" class="side-none" hidden>The Trash is empty</div>
         </div>
         <div id="sidebar-panel-templates" hidden>
           <div class="side-head">
@@ -196,7 +211,8 @@
     </form>
   </dialog>
   <script src="/hovercard.js?v=1"></script>
-  <script src="/library.js?v=2"></script>
-  <script src="/app.js?v=42"></script>
+  <script src="/library.js?v=3"></script>
+  <script src="/trash.js?v=1"></script>
+  <script src="/app.js?v=43"></script>
 </body>
 </html>

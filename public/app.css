@@ -504,7 +504,35 @@ main.template-locked iframe {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
 }
 
+.sidebar-back {
+  display: flex;
+  padding: 10px 12px 0;
+  flex-shrink: 0;
+}
+
+.sidebar-back[hidden] {
+  display: none;
+}
+
+.sidebar-back .sidebar-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 10px;
+  color: var(--text);
+}
+
+.sidebar-back .sidebar-tab:hover {
+  color: var(--heading);
+}
+
+.sidebar-tabs[hidden] {
+  display: none;
+}
+
 #sidebar-panel-library,
+#sidebar-panel-trash,
 #sidebar-panel-templates {
   flex: 1;
   min-height: 0;
@@ -513,6 +541,7 @@ main.template-locked iframe {
 }
 
 #sidebar-panel-library[hidden],
+#sidebar-panel-trash[hidden],
 #sidebar-panel-templates[hidden] {
   display: none;
 }
@@ -788,6 +817,22 @@ body.resizing-side .side-pane {
   font: inherit;
   outline: none;
   box-shadow: 0 0 0 1px var(--accent-ring);
+}
+
+.trash-hint {
+  padding-top: 0;
+}
+
+.trash-row {
+  cursor: default;
+}
+
+.lib-folder.trash-row {
+  cursor: pointer;
+}
+
+button.trash-restore:hover {
+  color: var(--accent);
 }
 
 .lib-row.renaming .tab-close {
