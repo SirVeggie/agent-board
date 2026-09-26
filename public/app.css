@@ -849,6 +849,8 @@ body.dragging-lib iframe {
   box-shadow: var(--accent-glow);
   opacity: 0;
   pointer-events: none;
+  /* Own compositor layer: repainting in place left stale copies behind mid-transition. */
+  will-change: transform, opacity;
   transition: transform 90ms var(--ease), width 90ms var(--ease), opacity 90ms ease;
 }
 
