@@ -265,7 +265,7 @@ body {
   box-shadow: var(--accent-glow);
 }
 
-.tabs.reorder-on .tab {
+.tabs .tab {
   touch-action: none;
 }
 

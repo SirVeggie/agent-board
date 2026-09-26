@@ -47,7 +47,6 @@
   const settingsBackdrop = document.getElementById("settings-backdrop");
   const settingsToggle = document.getElementById("settings-toggle");
   const themeList = document.getElementById("theme-list");
-  const tabReorderToggle = document.getElementById("tab-reorder");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
@@ -73,7 +72,6 @@
   const TEMPLATE_CARD_DELAY = 700;
   const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "agent-board.theme";
-  const TAB_REORDER_KEY = "agent-board.tabReorder";
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
   const DEFAULT_THEME = "neutral";
   const THEMES = [
@@ -203,9 +201,7 @@
 
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
-  applyFlag(tabReorderToggle, TAB_REORDER_KEY, true);
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
-  syncReorderClass();
   renderThemeList();
 
   function connect() {
@@ -589,19 +585,9 @@
     const on = !flagOn(el);
     el.setAttribute("aria-checked", on ? "true" : "false");
     localStorage.setItem(key, on ? "1" : "0");
-    if (el === tabReorderToggle) {
-      if (!on) {
-        abortDrag();
-      }
-      syncReorderClass();
-    }
     if (el === smoothScrollToggle && !on) {
       stopTabScroll();
     }
-  }
-
-  function syncReorderClass() {
-    tabsEl.classList.toggle("reorder-on", flagOn(tabReorderToggle));
   }
 
   function smoothTabScroll() {
@@ -931,7 +917,7 @@
   }
 
   function onTabPointerDown(event, el) {
-    if (event.button !== 0 || !flagOn(tabReorderToggle) || drag) {
+    if (event.button !== 0 || drag) {
       return;
     }
     if (event.target.closest(".tab-close")) {
@@ -2587,7 +2573,6 @@
       event.preventDefault();
     }
   });
-  tabReorderToggle.addEventListener("click", () => toggleFlag(tabReorderToggle, TAB_REORDER_KEY));
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
