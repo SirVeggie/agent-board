@@ -198,15 +198,15 @@ window.createLibrary = function createLibrary(host) {
   }
 
   function renderTree(folderId, depth) {
-    for (const page of pagesOf(folderId)) {
-      list.appendChild(pageRow(page, depth));
-    }
     for (const folder of foldersOf(folderId)) {
       const open = !collapsed.has(folder.id);
       list.appendChild(folderRow(folder, depth, open));
       if (open) {
         renderTree(folder.id, depth + 1);
       }
+    }
+    for (const page of pagesOf(folderId)) {
+      list.appendChild(pageRow(page, depth));
     }
   }
 
@@ -1188,7 +1188,8 @@ window.createLibrary = function createLibrary(host) {
     if (folderId && own.has(folderId)) {
       return { noop: true };
     }
-    return { folderId, index: 0, into: folderId ?? ROOT };
+    const index = foldersOf(folderId).filter((f) => f.id !== drag.id).length;
+    return { folderId, index, into: folderId ?? ROOT };
   }
 
   function setTarget(target) {

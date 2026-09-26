@@ -1788,14 +1788,14 @@ export class BoardStore extends EventEmitter {
     return this.listFolders().filter((folder) => folder.parentId === parentId && folder.id !== exceptId);
   }
 
-  /** Pages depth-first: each folder's pages, then its subfolders. */
+  /** Pages depth-first: each folder's subfolders, then its own pages. */
   private treeOrder(): Tab[] {
     const out: Tab[] = [];
     const walk = (folderId: string | null) => {
-      out.push(...this.pagesIn(folderId));
       for (const folder of this.foldersIn(folderId)) {
         walk(folder.id);
       }
+      out.push(...this.pagesIn(folderId));
     };
     walk(null);
     return out;
