@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { safeStem } from "./boardExport.js";
-import { baseUrl, contentBaseUrl } from "./config.js";
+import { VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBrowser } from "./openBrowser.js";
@@ -34,7 +34,7 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "2.0.0",
+    version: VERSION,
   });
 
   server.tool(

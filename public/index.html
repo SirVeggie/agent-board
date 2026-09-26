@@ -47,9 +47,8 @@
       <button type="button" id="clear" title="Close unpinned tabs">Clear</button>
       <button type="button" id="library-toggle" class="icon-btn" aria-label="Library" aria-expanded="false" title="Library">
         <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <rect x="1.5" y="2.5" width="3" height="11" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/>
-          <rect x="5.5" y="2.5" width="3" height="11" rx="0.8" fill="currentColor"/>
-          <path d="M10 3.6l2.5-.7 2.3 9.9-2.5.7z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          <rect x="1.5" y="2" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <rect x="9.5" y="2.5" width="4.5" height="11" fill="currentColor"/>
         </svg>
         <span id="library-badge" class="badge" hidden></span>
       </button>
@@ -58,6 +57,10 @@
   <div id="persist-banner" class="persist-banner" hidden role="alert">
     <p><strong>Could not save the board.</strong> Changes live only in this session until this is fixed. Ask an agent to look at it, or export the page.</p>
     <p id="persist-banner-detail" class="persist-banner-detail"></p>
+  </div>
+  <div id="version-banner" class="persist-banner" hidden role="alert">
+    <p><strong>The board daemon is out of date.</strong> This page needs a newer daemon, so closing, opening, and the Library will not work. Restart it with <code>npm run stop</code> in the agent-board folder; the next agent board call starts the new one.</p>
+    <p id="version-banner-detail" class="persist-banner-detail"></p>
   </div>
   <div class="workspace">
     <main>
@@ -193,7 +196,7 @@
     </form>
   </dialog>
   <script src="/hovercard.js?v=1"></script>
-  <script src="/library.js?v=1"></script>
-  <script src="/app.js?v=41"></script>
+  <script src="/library.js?v=2"></script>
+  <script src="/app.js?v=42"></script>
 </body>
 </html>

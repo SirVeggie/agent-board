@@ -217,7 +217,10 @@ window.createLibrary = function createLibrary(host) {
     if (rows.length) {
       const meta = document.createElement("div");
       meta.className = "side-meta";
-      meta.textContent = `${rows.length} of ${hitTotal} pages`;
+      meta.textContent =
+        rows.length < hitTotal
+          ? `Showing ${rows.length} of ${hitTotal} matches`
+          : `${hitTotal} matching page${hitTotal === 1 ? "" : "s"}`;
       list.appendChild(meta);
     }
     for (const hit of rows) {
@@ -510,6 +513,13 @@ window.createLibrary = function createLibrary(host) {
     }).catch(() => ({ ok: false, json: async () => ({}) }));
   }
 
+  async function openFolderPages(id, firstId) {
+    const res = await send("POST", `/api/folders/${encodeURIComponent(id)}/open`);
+    if (res.ok && firstId) {
+      host.focusWhenOpened(firstId);
+    }
+  }
+
   async function createFolder(parentId = null) {
     if (query) {
       clearSearch();
@@ -520,6 +530,7 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const { folder } = await res.json();
+    host.addFolder(folder);
     host.setPaneOpen(true);
     if (parentId) {
       expandChain(parentId);
@@ -724,7 +735,7 @@ window.createLibrary = function createLibrary(host) {
     }
     const data = await res.json();
     hits = data.tabs || [];
-    hitTotal = data.total ?? hits.length;
+    hitTotal = data.matchCount ?? hits.length;
     render();
   }
 
@@ -847,7 +858,7 @@ window.createLibrary = function createLibrary(host) {
     const closedHere = own.filter((page) => !host.isOpen(page.id)).length;
     const openHere = own.length - closedHere;
     openMenu(point, [
-      { label: "Open pages", disabled: closedHere === 0, action: () => send("POST", `/api/folders/${encodeURIComponent(id)}/open`) },
+      { label: "Open pages", disabled: closedHere === 0, action: () => openFolderPages(id, own[0]?.id) },
       openHere > 0 && { label: "Close open tabs", action: () => send("POST", `/api/folders/${encodeURIComponent(id)}/close`) },
       "sep",
       { label: "New folder inside", action: () => createFolder(id) },
@@ -927,7 +938,9 @@ window.createLibrary = function createLibrary(host) {
           host.showNotice("Could not create a folder");
           return;
         }
-        target = (await res.json()).folder.id;
+        const { folder } = await res.json();
+        host.addFolder(folder);
+        target = folder.id;
         model = buildModel();
       }
       expandChain(target);
@@ -1638,7 +1651,7 @@ window.createLibrary = function createLibrary(host) {
     searchFocused: () => document.activeElement === search && Boolean(search.value),
     refreshSearch() {
       if (query) {
-        scheduleSearch(0);
+        scheduleSearch(250);
       }
     },
     /** Esc: menu, then an active drag, then an inline rename. True when consumed. */

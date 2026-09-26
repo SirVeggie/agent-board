@@ -723,7 +723,7 @@ export async function startHttp(): Promise<http.Server> {
   wss.on("connection", (socket) => {
     sockets.add(socket);
     viewers.add(socket);
-    send(socket, { type: "snapshot", ...store.snapshot() });
+    send(socket, { type: "snapshot", version: VERSION, ...store.snapshot() });
     socket.on("message", (raw) => {
       let msg: { type?: string; selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown };
       try {
@@ -747,7 +747,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   store.on("tab_upserted", (tab: TabMeta, index?: number, notice?: UpsertNotice) => {
-    broadcast({ type: "tab_upserted", tab, index });
+    broadcast({ type: "tab_upserted", tab, index, structural: notice?.structural !== false });
     if (notice?.activate && notice.structural) {
       requestAgentFocus(tab.id);
     }

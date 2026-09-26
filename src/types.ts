@@ -168,6 +168,7 @@ export type UpsertNotice = {
 export type BoardEvent =
   | {
       type: "snapshot";
+      version: string;
       tabs: TabMeta[];
       closed: TabMeta[];
       folders: Folder[];
@@ -175,7 +176,7 @@ export type BoardEvent =
       templates: TemplateMeta[];
       persistError: string | null;
     }
-  | { type: "tab_upserted"; tab: TabMeta; index?: number }
+  | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean }
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }
   | { type: "tab_focus_request"; id: string }

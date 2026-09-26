@@ -63,6 +63,8 @@
   const SIDE_OPEN_KEY = "agent-board.archiveOpen";
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
+  /** Must match VERSION in src/config.ts. */
+  const BOARD_VERSION = "2.0.0";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
   const TOGGLE_HOVER_OPEN_MS = 500;
@@ -147,12 +149,18 @@
   const library = window.createLibrary({
     pages: libraryPages,
     folders: () => state.folders,
+    addFolder: (folder) => {
+      if (!state.folders.some((item) => item.id === folder.id)) {
+        state.folders = [...state.folders, folder];
+      }
+    },
     activeId: () => state.activeId,
     isOpen: (id) => state.tabs.some((tab) => tab.id === id),
     isUnread: (id) => unreadLibrary.has(id),
     findAny: findAnyTab,
     selectTab: (id) => selectTab(id, { fromUser: true }),
     openPage,
+    focusWhenOpened,
     closeTab: (id) => closeTab(id),
     setPinned,
     setAgentHidden,
@@ -235,6 +243,7 @@
 
   function applyEvent(msg) {
     if (msg.type === "snapshot") {
+      showVersionMismatch(msg.version);
       abortDrag(false);
       state.tabs = msg.tabs;
       state.closed = Array.isArray(msg.closed) ? msg.closed : [];
@@ -271,7 +280,7 @@
     }
     if (msg.type === "tab_upserted") {
       if (isClosedMeta(msg.tab)) {
-        upsertClosed(msg.tab);
+        upsertClosed(msg.tab, msg.structural);
         if (drag && drag.id === msg.tab.id) {
           abortDrag(false);
         }
@@ -281,7 +290,7 @@
       }
       const idx = state.tabs.findIndex((tab) => tab.id === msg.tab.id);
       const prev = idx === -1 ? null : state.tabs[idx];
-      const structural = !prev || prev.revision !== msg.tab.revision;
+      const structural = !prev || (msg.structural !== false && prev.revision !== msg.tab.revision);
       state.closed = state.closed.filter((tab) => tab.id !== msg.tab.id);
       unreadLibrary.delete(msg.tab.id);
       if (idx === -1) {
@@ -305,6 +314,9 @@
       }
       if (structural) {
         refreshFrame(msg.tab);
+        library.refreshSearch();
+      } else {
+        syncFrameMeta(msg.tab);
       }
       if (!state.activeId && state.tabs.length) {
         state.activeId = msg.tab.id;
@@ -413,7 +425,7 @@
   }
 
   /** A page whose tab is closed. Blips the Library only when its content or state changed, not on moves or pins. */
-  function upsertClosed(tab) {
+  function upsertClosed(tab, structural) {
     state.tabs = state.tabs.filter((item) => item.id !== tab.id);
     unread.delete(tab.id);
     discardFrame(tab.id);
@@ -422,7 +434,7 @@
       state.closed.push(tab);
     } else {
       const prev = state.closed[idx];
-      if (prev.revision !== tab.revision || prev.stateRevision !== tab.stateRevision) {
+      if ((structural !== false && prev.revision !== tab.revision) || prev.stateRevision !== tab.stateRevision) {
         unreadLibrary.add(tab.id);
       }
       state.closed[idx] = tab;
@@ -1695,6 +1707,18 @@
     return entry;
   }
 
+  /** Keep the iframe's title and stored revision in sync without reloading (pin, rename, Library move). */
+  function syncFrameMeta(tab) {
+    const entry = frames.get(tab.id);
+    if (!entry) {
+      return;
+    }
+    entry.revision = tab.revision;
+    if (entry.el.title !== tab.title) {
+      entry.el.title = tab.title;
+    }
+  }
+
   function refreshFrame(tab) {
     const entry = frames.get(tab.id);
     if (!entry) {
@@ -2010,6 +2034,13 @@
     );
   }
 
+  function showVersionMismatch(version) {
+    const banner = document.getElementById("version-banner");
+    banner.hidden = version === BOARD_VERSION;
+    document.getElementById("version-banner-detail").textContent =
+      `Daemon: ${version || "1.9.0 or older"}. This page: ${BOARD_VERSION}.`;
+  }
+
   function showPersistError(error) {
     const message = typeof error === "string" ? error.trim() : "";
     persistBanner.hidden = !message;
@@ -2116,10 +2147,19 @@
     }
     noticeEl.hidden = true;
     const data = await res.json();
-    const id = data?.tab?.id;
-    if (id && state.tabs.some((tab) => tab.id === id)) {
-      selectTab(id, { fromUser: true });
+    if (data?.tab && !data.tab.closedAt) {
+      focusWhenOpened(data.tab.id);
     }
+  }
+
+  /** The HTTP reply and the WebSocket upsert race; select now if the tab already arrived, else when it does. */
+  function focusWhenOpened(id) {
+    if (state.tabs.some((tab) => tab.id === id)) {
+      pendingFocus = null;
+      selectTab(id, { fromUser: true });
+      return;
+    }
+    pendingFocus = { id };
   }
 
   function isTypingTarget(el) {

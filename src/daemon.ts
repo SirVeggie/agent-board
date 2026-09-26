@@ -1,26 +1,23 @@
 import { spawn } from "node:child_process";
-import { AGENT_CLIENT, CLIENT_HEADER, baseUrl } from "./config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, VERSION, baseUrl } from "./config.js";
 import { log } from "./log.js";
 
-export async function health(): Promise<{
+type Health = {
   ok: boolean;
+  version?: string;
   url: string;
   viewers: number;
   tabs: number;
   activeId: string | null;
-} | null> {
+};
+
+export async function health(): Promise<Health | null> {
   try {
     const res = await fetch(`${baseUrl()}/api/health`, { signal: AbortSignal.timeout(800) });
     if (!res.ok) {
       return null;
     }
-    return (await res.json()) as {
-      ok: boolean;
-      url: string;
-      viewers: number;
-      tabs: number;
-      activeId: string | null;
-    };
+    return (await res.json()) as Health;
   } catch {
     return null;
   }
@@ -28,8 +25,13 @@ export async function health(): Promise<{
 
 export async function ensureDaemon(): Promise<string> {
   const url = baseUrl();
-  if (await health()) {
+  const running = await health();
+  if (running?.version === VERSION) {
     return url;
+  }
+  if (running) {
+    log(`Replacing agent-board daemon ${running.version ?? "unknown"} with ${VERSION}`);
+    await stopDaemon();
   }
   log("Starting agent-board daemon");
   const args = process.argv.slice(1).filter((arg) => arg !== "--daemon" && arg !== "--stop");
@@ -48,6 +50,22 @@ export async function ensureDaemon(): Promise<string> {
     }
   }
   throw new Error(`Agent Board daemon did not start at ${url}`);
+}
+
+/** A daemon from another build answers health but speaks a different API, so it must be replaced. */
+async function stopDaemon(): Promise<void> {
+  try {
+    await api("POST", "/api/shutdown", undefined, { timeoutMs: 2000 });
+  } catch {
+    /* it may exit before answering */
+  }
+  for (let i = 0; i < 40; i += 1) {
+    await sleep(100);
+    if (!(await health())) {
+      return;
+    }
+  }
+  throw new Error(`Agent Board daemon at ${baseUrl()} did not stop`);
 }
 
 export async function api(
