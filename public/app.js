@@ -64,6 +64,7 @@
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
   const TAB_CARD_DELAY = 450;
+  const TEMPLATE_CARD_DELAY = 700;
   const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "agent-board.theme";
   const TAB_REORDER_KEY = "agent-board.tabReorder";
@@ -1417,7 +1418,8 @@
       el.role = "button";
       el.tabIndex = 0;
       el.dataset.id = template.id;
-      el.title = template.title;
+      el.dataset.kind = "template";
+      el.ariaLabel = template.title;
       el.addEventListener("click", () => openTemplateModal(template, "create"));
       el.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -1454,6 +1456,7 @@
         deleteTemplate(template);
       });
       el.appendChild(close);
+      hoverCard.bind(el, TEMPLATE_CARD_DELAY);
       templateList.appendChild(el);
     }
   }
@@ -1847,6 +1850,18 @@
   }
 
   function describeForCard(el) {
+    if (el.dataset.kind === "template") {
+      const template = state.templates.find((item) => item.id === el.dataset.id);
+      return template
+        ? {
+            title: template.title,
+            id: template.id,
+            description: template.description || "",
+            createdAt: template.createdAt,
+            updatedAt: template.updatedAt,
+          }
+        : null;
+    }
     const tab = findAnyTab(el.dataset.id);
     if (!tab) {
       return null;

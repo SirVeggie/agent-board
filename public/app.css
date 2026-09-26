@@ -1693,6 +1693,13 @@ kbd {
   opacity: 0.75;
 }
 
+.hover-card-desc {
+  margin-top: 7px;
+  color: var(--text);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .hover-card-rows {
   display: grid;
   grid-template-columns: auto 1fr;

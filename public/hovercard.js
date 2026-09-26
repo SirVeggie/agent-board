@@ -1,6 +1,6 @@
 /**
- * Shared hover card for strip tabs and Library rows.
- * `describe(el)` returns `{ title, id, createdAt, updatedAt, folder }` or null.
+ * Shared hover card for strip tabs, Library rows, and templates.
+ * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder? }` or null.
  */
 window.createHoverCard = function createHoverCard({ describe }) {
   const card = document.createElement("div");
@@ -86,6 +86,12 @@ window.createHoverCard = function createHoverCard({ describe }) {
     id.className = "hover-card-id";
     id.textContent = info.id;
     card.append(title, id);
+    if (info.description) {
+      const description = document.createElement("div");
+      description.className = "hover-card-desc";
+      description.textContent = info.description;
+      card.appendChild(description);
+    }
     const rows = document.createElement("dl");
     rows.className = "hover-card-rows";
     addRow(rows, "Created", info.createdAt);
