@@ -5,18 +5,13 @@
   const emptyEl = document.getElementById("empty");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
-  const archiveToggle = document.getElementById("archive-toggle");
-  const archiveBadge = document.getElementById("archive-badge");
-  const archivePane = document.getElementById("archive-pane");
-  const archiveCountEl = document.getElementById("archive-count");
-  const archiveSearch = document.getElementById("archive-search");
-  const archiveList = document.getElementById("archive-list");
-  const archiveNone = document.getElementById("archive-none");
-  const archiveEmptyBtn = document.getElementById("archive-empty");
-  const archiveResizer = document.getElementById("archive-resizer");
-  const sidebarTabArchive = document.getElementById("sidebar-tab-archive");
+  const libraryToggle = document.getElementById("library-toggle");
+  const libraryBadge = document.getElementById("library-badge");
+  const sidePane = document.getElementById("side-pane");
+  const sideResizer = document.getElementById("side-resizer");
+  const sidebarTabLibrary = document.getElementById("sidebar-tab-library");
   const sidebarTabTemplates = document.getElementById("sidebar-tab-templates");
-  const sidebarPanelArchive = document.getElementById("sidebar-panel-archive");
+  const sidebarPanelLibrary = document.getElementById("sidebar-panel-library");
   const sidebarPanelTemplates = document.getElementById("sidebar-panel-templates");
   const templateCountEl = document.getElementById("template-count");
   const templateList = document.getElementById("template-list");
@@ -36,6 +31,9 @@
   const templateModalAgentHidden = document.getElementById("template-modal-agent-hidden");
   const confirmDlg = document.getElementById("confirm");
   const confirmMessage = document.getElementById("confirm-message");
+  const choiceDlg = document.getElementById("choice");
+  const choiceMessage = document.getElementById("choice-message");
+  const choiceActions = document.getElementById("choice-actions");
   const paletteEl = document.getElementById("palette");
   const paletteBackdrop = document.getElementById("palette-backdrop");
   const paletteInput = document.getElementById("palette-input");
@@ -51,12 +49,9 @@
   const exportPageBtn = document.getElementById("export-page");
   const exportAllBtn = document.getElementById("export-all");
   const importFileInput = document.getElementById("import-file");
-  const tabMenu = document.getElementById("tab-menu");
-  const tabMenuPin = document.getElementById("tab-menu-pin");
-  const tabMenuExport = document.getElementById("tab-menu-export");
-  const tabMenuAgent = document.getElementById("tab-menu-agent");
-  const tabMenuCopyId = document.getElementById("tab-menu-copy-id");
   const noticeEl = document.getElementById("notice");
+  const noticeText = document.getElementById("notice-text");
+  const noticeUndo = document.getElementById("notice-undo");
   const persistBanner = document.getElementById("persist-banner");
   const persistBannerDetail = document.getElementById("persist-banner-detail");
   const tabsWrap = tabsEl.parentElement;
@@ -65,9 +60,11 @@
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
   const EMBED_ALLOW = "fullscreen; clipboard-read; clipboard-write";
   const LIVE_FRAME_CAP = 5;
-  const ARCHIVE_OPEN_KEY = "agent-board.archiveOpen";
+  const SIDE_OPEN_KEY = "agent-board.archiveOpen";
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
-  const ARCHIVE_WIDTH_KEY = "agent-board.archiveWidth";
+  const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
+  const TAB_CARD_DELAY = 450;
+  const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "agent-board.theme";
   const TAB_REORDER_KEY = "agent-board.tabReorder";
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
@@ -85,32 +82,29 @@
     '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/><path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   const AGENT_HIDDEN_TITLE = "Hidden from the agent";
 
-  /** @type {{ tabs: Array<any>, archive: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, archiveOpen: boolean, sidebarTab: string }} */
+  /** @type {{ tabs: Array<any>, closed: Array<any>, folders: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, sideOpen: boolean, sidebarTab: string }} */
   const state = {
     tabs: [],
-    archive: [],
+    closed: [],
+    folders: [],
     templates: [],
     activeId: null,
     connected: false,
-    archiveOpen: localStorage.getItem(ARCHIVE_OPEN_KEY) === "1",
-    sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "archive",
+    sideOpen: localStorage.getItem(SIDE_OPEN_KEY) === "1",
+    sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "library",
   };
 
   /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
   const frames = new Map();
   /** @type {Set<string>} */
   const unread = new Set();
-  /** @type {Set<string>} */
-  const unreadArchive = new Set();
+  /** Closed pages changed in the background; the blip shows on the Library button. */
+  const unreadLibrary = new Set();
 
   /** @type {WebSocket | null} */
   let socket = null;
   let lastInteractedAt = 0;
   let lastEditAt = 0;
-  let searchTimer = 0;
-  /** @type {Array<any> | null} */
-  let searchHits = null;
-  let searchMeta = null;
   let paletteTimer = 0;
   let paletteReq = 0;
   /** @type {Array<any>} */
@@ -143,10 +137,48 @@
   let drag = null;
   let dragSuppressClick = false;
   let dragScrollTimer = 0;
-  let menuTabId = null;
+  let toggleHoverTimer = 0;
   let noticeTimer = 0;
+  /** @type {HTMLElement | null} */
+  let stripSlotEl = null;
 
-  applyArchiveWidth(Number(localStorage.getItem(ARCHIVE_WIDTH_KEY)) || 280);
+  const hoverCard = window.createHoverCard({ describe: describeForCard });
+  const library = window.createLibrary({
+    pages: libraryPages,
+    folders: () => state.folders,
+    activeId: () => state.activeId,
+    isOpen: (id) => state.tabs.some((tab) => tab.id === id),
+    isUnread: (id) => unreadLibrary.has(id),
+    findAny: findAnyTab,
+    selectTab: (id) => selectTab(id, { fromUser: true }),
+    openPage,
+    closeTab: (id) => closeTab(id),
+    setPinned,
+    setAgentHidden,
+    copyTabId,
+    downloadExport,
+    downloadFolderExport: (id) => downloadHref(`/api/export/folder/${encodeURIComponent(id)}`),
+    downloadAll: () => downloadExport(),
+    showNotice,
+    choose,
+    confirm: (message) => confirmDelete(message),
+    setPaneOpen: (open) => {
+      if (state.sidebarTab !== "library") {
+        setSidebarTab("library");
+      }
+      if (state.sideOpen !== open) {
+        setSideOpen(open);
+      }
+    },
+    paneOpen: () => state.sideOpen && state.sidebarTab === "library",
+    rerender: () => render(),
+    hoverCard,
+    stripSlot,
+    clearStripSlot,
+    icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE },
+  });
+
+  applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
   applyFlag(tabReorderToggle, TAB_REORDER_KEY, true);
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
@@ -196,29 +228,36 @@
     reportViewer();
   }
 
-  function isArchivedMeta(tab) {
-    return Boolean(tab?.archivedAt);
+  function isClosedMeta(tab) {
+    return Boolean(tab?.closedAt);
   }
 
   function applyEvent(msg) {
     if (msg.type === "snapshot") {
       abortDrag(false);
       state.tabs = msg.tabs;
-      state.archive = Array.isArray(msg.archive) ? msg.archive : [];
+      state.closed = Array.isArray(msg.closed) ? msg.closed : [];
+      state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       state.templates = Array.isArray(msg.templates) ? msg.templates : [];
       const hash = location.hash.replace(/^#/, "");
       const fromOpen = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
-      const fromArchive = state.archive.find((tab) => tab.id === hash || tab.key === hash);
+      const fromClosed = state.closed.find((tab) => tab.id === hash || tab.key === hash);
       state.activeId = fromOpen ? fromOpen.id : msg.activeId;
       unread.clear();
-      unreadArchive.clear();
+      unreadLibrary.clear();
       syncHash();
       render();
       reportViewer();
       showPersistError(msg.persistError);
-      if (fromArchive && !fromOpen) {
-        restoreTab(fromArchive.id);
+      if (fromClosed && !fromOpen) {
+        openPage(fromClosed.id);
       }
+      return;
+    }
+    if (msg.type === "folders") {
+      state.folders = Array.isArray(msg.folders) ? msg.folders : [];
+      renderChrome();
+      library.render();
       return;
     }
     if (msg.type === "persist_error") {
@@ -230,17 +269,20 @@
       return;
     }
     if (msg.type === "tab_upserted") {
-      if (isArchivedMeta(msg.tab)) {
-        const existed = state.archive.some((item) => item.id === msg.tab.id);
-        upsertArchive(msg.tab, existed);
+      if (isClosedMeta(msg.tab)) {
+        upsertClosed(msg.tab);
+        if (drag && drag.id === msg.tab.id) {
+          abortDrag(false);
+        }
         render();
+        library.refreshSearch();
         return;
       }
       const idx = state.tabs.findIndex((tab) => tab.id === msg.tab.id);
       const prev = idx === -1 ? null : state.tabs[idx];
       const structural = !prev || prev.revision !== msg.tab.revision;
-      state.archive = state.archive.filter((tab) => tab.id !== msg.tab.id);
-      unreadArchive.delete(msg.tab.id);
+      state.closed = state.closed.filter((tab) => tab.id !== msg.tab.id);
+      unreadLibrary.delete(msg.tab.id);
       if (idx === -1) {
         const at = Number.isInteger(msg.index) ? Math.max(0, Math.min(msg.index, state.tabs.length)) : state.tabs.length;
         state.tabs.splice(at, 0, msg.tab);
@@ -278,7 +320,7 @@
         }
         renderChrome();
         renderFrames();
-        renderArchive();
+        library.render();
       } else {
         render();
       }
@@ -287,14 +329,14 @@
       }
       return;
     }
-    if (msg.type === "tab_closed") {
+    if (msg.type === "tab_deleted") {
       if (drag && drag.id === msg.id) {
         abortDrag(false);
       }
       state.tabs = state.tabs.filter((tab) => tab.id !== msg.id);
-      state.archive = state.archive.filter((tab) => tab.id !== msg.id);
+      state.closed = state.closed.filter((tab) => tab.id !== msg.id);
       unread.delete(msg.id);
-      unreadArchive.delete(msg.id);
+      unreadLibrary.delete(msg.id);
       discardFrame(msg.id);
       if (state.activeId === msg.id) {
         state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
@@ -303,21 +345,9 @@
         }
         syncHash();
       }
-      if (archiveSearch.value.trim()) {
-        scheduleSearch(0);
-      }
+      library.refreshSearch();
       render();
       reportViewer();
-      return;
-    }
-    if (msg.type === "archive_cleared") {
-      for (const tab of state.archive) {
-        unreadArchive.delete(tab.id);
-      }
-      state.archive = [];
-      searchHits = null;
-      searchMeta = null;
-      render();
       return;
     }
     if (msg.type === "tab_focus_request") {
@@ -328,12 +358,17 @@
     }
     if (msg.type === "tab_state") {
       const tab = state.tabs.find((item) => item.id === msg.id);
-      if (tab) {
-        tab.stateRevision = msg.stateRevision;
+      const closed = state.closed.find((item) => item.id === msg.id);
+      for (const item of [tab, closed]) {
+        if (item) {
+          item.stateRevision = msg.stateRevision;
+          item.stateUpdatedAt = Date.now();
+        }
       }
-      const archived = state.archive.find((item) => item.id === msg.id);
-      if (archived) {
-        archived.stateRevision = msg.stateRevision;
+      if (closed) {
+        unreadLibrary.add(msg.id);
+        renderChrome();
+        library.render();
       }
       const entry = frames.get(msg.id);
       if (entry?.el.contentWindow) {
@@ -376,19 +411,20 @@
     }
   }
 
-  function upsertArchive(tab, markUnread) {
+  /** A page whose tab is closed. Blips the Library only when its content or state changed, not on moves or pins. */
+  function upsertClosed(tab) {
     state.tabs = state.tabs.filter((item) => item.id !== tab.id);
     unread.delete(tab.id);
     discardFrame(tab.id);
-    const idx = state.archive.findIndex((item) => item.id === tab.id);
+    const idx = state.closed.findIndex((item) => item.id === tab.id);
     if (idx === -1) {
-      state.archive.unshift(tab);
+      state.closed.push(tab);
     } else {
-      state.archive[idx] = tab;
-    }
-    state.archive.sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
-    if (markUnread) {
-      unreadArchive.add(tab.id);
+      const prev = state.closed[idx];
+      if (prev.revision !== tab.revision || prev.stateRevision !== tab.stateRevision) {
+        unreadLibrary.add(tab.id);
+      }
+      state.closed[idx] = tab;
     }
     if (state.activeId === tab.id) {
       state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
@@ -397,9 +433,11 @@
       }
       syncHash();
     }
-    if (archiveSearch.value.trim()) {
-      scheduleSearch(0);
-    }
+  }
+
+  /** Every Library page: open tabs and closed pages, without the help page. */
+  function libraryPages() {
+    return [...state.tabs, ...state.closed].filter((tab) => tab.key !== "welcome");
   }
 
   function syncHash() {
@@ -431,26 +469,21 @@
     return `${location.protocol}//127.0.0.2${port}`;
   }
 
-  function setArchiveOpen(open) {
-    state.archiveOpen = Boolean(open);
-    localStorage.setItem(ARCHIVE_OPEN_KEY, state.archiveOpen ? "1" : "0");
-    archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
-    archiveToggle.classList.toggle("on", state.archiveOpen);
-    archivePane.classList.toggle("closed", !state.archiveOpen);
-    archivePane.setAttribute("aria-hidden", state.archiveOpen ? "false" : "true");
-    archivePane.toggleAttribute("inert", !state.archiveOpen);
-    if (state.archiveOpen && archiveSearch.value.trim()) {
-      scheduleSearch(0);
+  function setSideOpen(open) {
+    state.sideOpen = Boolean(open);
+    localStorage.setItem(SIDE_OPEN_KEY, state.sideOpen ? "1" : "0");
+    if (state.sideOpen) {
+      library.refreshSearch();
     }
     renderChrome();
-    renderArchive();
+    library.render();
     renderTemplates();
   }
 
-  function applyArchiveWidth(px) {
+  function applySideWidth(px) {
     const width = Math.max(220, Math.min(480, px));
-    document.documentElement.style.setProperty("--archive-width", width + "px");
-    localStorage.setItem(ARCHIVE_WIDTH_KEY, String(width));
+    document.documentElement.style.setProperty("--side-width", width + "px");
+    localStorage.setItem(SIDE_WIDTH_KEY, String(width));
   }
 
   function loadTheme() {
@@ -626,18 +659,15 @@
   function renderChrome() {
     clearBtn.disabled = !state.tabs.some((tab) => !tab.pinned);
     exportPageBtn.disabled = !state.activeId;
-    exportAllBtn.disabled = !state.tabs.some((tab) => tab.key !== "welcome") && state.archive.length === 0;
-    const count = state.archive.length;
-    archiveCountEl.textContent = String(count);
-    archiveEmptyBtn.disabled = count === 0;
-    const unread = unreadArchive.size;
-    archiveBadge.hidden = unread === 0;
-    archiveBadge.textContent = unread > 99 ? "99+" : String(unread);
-    archiveToggle.setAttribute("aria-expanded", state.archiveOpen ? "true" : "false");
-    archiveToggle.classList.toggle("on", state.archiveOpen);
-    archivePane.classList.toggle("closed", !state.archiveOpen);
-    archivePane.setAttribute("aria-hidden", state.archiveOpen ? "false" : "true");
-    archivePane.toggleAttribute("inert", !state.archiveOpen);
+    exportAllBtn.disabled = libraryPages().length === 0;
+    const blips = unreadLibrary.size;
+    libraryBadge.hidden = blips === 0;
+    libraryBadge.textContent = blips > 99 ? "99+" : String(blips);
+    libraryToggle.setAttribute("aria-expanded", state.sideOpen ? "true" : "false");
+    libraryToggle.classList.toggle("on", state.sideOpen);
+    sidePane.classList.toggle("closed", !state.sideOpen);
+    sidePane.setAttribute("aria-hidden", state.sideOpen ? "false" : "true");
+    sidePane.toggleAttribute("inert", !state.sideOpen);
     syncSidebarTab();
     const active = activeTab();
     const bound = Boolean(active?.templateId);
@@ -688,18 +718,12 @@
     if (drag?.moved && drag.id === tab.id) {
       el.classList.add("dragging");
     }
-    el.title =
-      unread.has(tab.id) && tab.id !== state.activeId
-        ? tab.title + " (updated)"
-        : tab.pinned
-          ? tab.title + " (pinned)"
-          : tab.title;
+    el.setAttribute("aria-label", tab.title);
     let pin = el.querySelector(".tab-pin");
     if (tab.pinned) {
       if (!pin) {
         pin = document.createElement("span");
         pin.className = "tab-pin";
-        pin.title = "Pinned";
         pin.innerHTML = PIN_SVG;
         el.insertBefore(pin, el.firstChild);
       }
@@ -711,7 +735,7 @@
       if (!hidden) {
         hidden = document.createElement("span");
         hidden.className = "tab-agent-hidden";
-        hidden.title = AGENT_HIDDEN_TITLE;
+        hidden.setAttribute("aria-label", AGENT_HIDDEN_TITLE);
         hidden.innerHTML = AGENT_HIDDEN_SVG;
         el.insertBefore(hidden, el.querySelector(".tab-title"));
       }
@@ -723,7 +747,7 @@
       if (!dot) {
         dot = document.createElement("span");
         dot.className = "tab-updated";
-        dot.title = "Updated in the background";
+        dot.setAttribute("aria-label", "Updated in the background");
         const titleEl = el.querySelector(".tab-title");
         el.insertBefore(dot, titleEl);
       }
@@ -798,9 +822,10 @@
     el.addEventListener("contextmenu", (event) => {
       const current = lookupTab(el);
       if (current) {
-        openTabMenu(event, current.id);
+        library.pageMenu(event, current.id);
       }
     });
+    hoverCard.bind(el, TAB_CARD_DELAY);
     syncTabEl(el, tab);
     return el;
   }
@@ -885,10 +910,6 @@
     if (!tab) {
       return;
     }
-    const groupCount = state.tabs.filter((item) => item.pinned === tab.pinned).length;
-    if (groupCount < 2) {
-      return;
-    }
     drag = {
       id: tab.id,
       pointerId: event.pointerId,
@@ -926,8 +947,39 @@
     }
     event.preventDefault();
     positionDraggedTab(event.clientX, event.clientY);
+    trackToggleHover(event.clientX, event.clientY);
+    const tab = state.tabs.find((item) => item.id === drag.id);
+    const overLibrary = Boolean(tab && tab.key !== "welcome" && library.stripDragMove(tab, event.clientX, event.clientY));
+    drag.el.classList.toggle("to-library", overLibrary);
+    if (overLibrary) {
+      updateDragScroll(Number.NaN);
+      return;
+    }
     updateDragScroll(event.clientX);
     moveDropSlot();
+  }
+
+  /** Hovering the Library button mid-drag opens the Library so the tab can be filed. */
+  function trackToggleHover(x, y) {
+    const box = libraryToggle.getBoundingClientRect();
+    const over = x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+    if (!over) {
+      clearTimeout(toggleHoverTimer);
+      toggleHoverTimer = 0;
+      libraryToggle.classList.remove("drag-hover");
+      return;
+    }
+    if (toggleHoverTimer || (state.sideOpen && state.sidebarTab === "library")) {
+      return;
+    }
+    libraryToggle.classList.add("drag-hover");
+    toggleHoverTimer = window.setTimeout(() => {
+      libraryToggle.classList.remove("drag-hover");
+      if (drag?.moved) {
+        setSidebarTab("library");
+        setSideOpen(true);
+      }
+    }, TOGGLE_HOVER_OPEN_MS);
   }
 
   function beginTabDrag(event) {
@@ -938,8 +990,8 @@
     const rect = el.getBoundingClientRect();
     drag.moved = true;
     stopTabScroll();
-    drag.offsetX = event.clientX - rect.left;
-    drag.offsetY = event.clientY - rect.top;
+    drag.offsetX = drag.startX - rect.left;
+    drag.offsetY = drag.startY - rect.top;
     drag.width = rect.width;
     const placeholder = document.createElement("div");
     placeholder.className = "tab-drop-slot";
@@ -964,6 +1016,7 @@
     }
     tabsEl.classList.add("reordering");
     document.body.classList.add("dragging-tab");
+    hoverCard.suspend();
     positionDraggedTab(event.clientX, event.clientY);
     moveDropSlot();
   }
@@ -1168,6 +1221,10 @@
       clearInterval(dragScrollTimer);
       dragScrollTimer = 0;
     }
+    clearTimeout(toggleHoverTimer);
+    toggleHoverTimer = 0;
+    libraryToggle.classList.remove("drag-hover");
+    hoverCard.resume();
     window.removeEventListener("pointermove", onTabPointerMove);
     window.removeEventListener("pointerup", onTabPointerUp);
     window.removeEventListener("pointercancel", onTabPointerUp);
@@ -1184,7 +1241,7 @@
     } catch {
       /* already released */
     }
-    el.classList.remove("dragging");
+    el.classList.remove("dragging", "to-library");
     el.style.position = "";
     el.style.left = "";
     el.style.top = "";
@@ -1208,6 +1265,7 @@
     }
     const origin = drag.originOrder;
     const moved = drag.moved;
+    library.stripDragCancel();
     stopDragVisual();
     drag = null;
     if (restore && moved) {
@@ -1234,13 +1292,22 @@
       drag = null;
       return;
     }
+    const draggedTab = state.tabs.find((tab) => tab.id === id);
+    const filed = Boolean(draggedTab && library.stripDragDrop(draggedTab));
     stopDragVisual();
     drag = null;
     dragSuppressClick = true;
     window.setTimeout(() => {
       dragSuppressClick = false;
     }, 0);
+    if (filed) {
+      restoreTabOrder(origin);
+    }
     renderTabs();
+    if (filed) {
+      tabEls.get(id)?.classList.add("filing");
+      return;
+    }
     if (!changed) {
       return;
     }
@@ -1260,128 +1327,81 @@
     }
   }
 
-  function visibleArchive() {
-    if (state.archive.length === 0) {
-      return [];
+  /**
+   * Library row dragged over the strip: shows a drop slot in the page's pin group.
+   * Returns where it would open, or null when the pointer is not over the strip.
+   */
+  function stripSlot(x, y, page) {
+    const box = tabsWrap.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top - 10 || y > box.bottom + 10) {
+      clearStripSlot();
+      return null;
     }
-    if (searchHits) {
-      return searchHits;
+    const pinned = Boolean(page.pinned);
+    const group = state.tabs.filter((tab) => Boolean(tab.pinned) === pinned && tab.id !== page.id);
+    const before =
+      group.find((tab) => {
+        const el = tabEls.get(tab.id);
+        if (!el) {
+          return false;
+        }
+        const r = layoutBox(el);
+        return x < (r.left + r.right) / 2;
+      }) || null;
+    let anchor = before ? tabEls.get(before.id) : null;
+    let after = null;
+    if (!anchor) {
+      const last = group[group.length - 1];
+      after = last ? tabEls.get(last.id) : null;
+      if (!after && pinned) {
+        anchor = tabsEl.firstElementChild;
+      }
     }
-    return state.archive;
+    if (!stripSlotEl) {
+      stripSlotEl = document.createElement("div");
+      stripSlotEl.className = "tab-drop-slot strip-open-slot";
+    }
+    const slot = stripSlotEl;
+    const inPlace = after ? after.nextElementSibling === slot : anchor ? anchor.previousElementSibling === slot : slot.parentNode === tabsEl && !slot.nextElementSibling;
+    if (!inPlace) {
+      flipStrip(() => {
+        if (after) {
+          after.after(slot);
+        } else if (anchor && anchor !== slot) {
+          anchor.before(slot);
+        } else {
+          tabsEl.appendChild(slot);
+        }
+      });
+    }
+    tabsWrap.classList.add("strip-drop-over");
+    return { before: before ? before.id : null };
   }
 
-  function renderArchive() {
-    if (state.archive.length === 0) {
-      searchHits = null;
-      searchMeta = null;
-    }
-    const rows = visibleArchive();
-    archiveList.replaceChildren();
-    const querying = Boolean(archiveSearch.value.trim()) && searchHits;
-    const empty = state.archive.length === 0;
-    const noMatch = Boolean(querying) && rows.length === 0;
-    archiveNone.hidden = !(empty || noMatch);
-    archiveNone.textContent = empty ? "No archived tabs" : "No matching tabs";
-    if (searchMeta && archiveSearch.value.trim()) {
-      const meta = document.createElement("div");
-      meta.className = "archive-meta";
-      meta.textContent =
-        searchMeta.remaining > 0
-          ? `${searchMeta.returned} of ${searchMeta.matchCount} matches · ${searchMeta.archiveCount} in archive`
-          : `${searchMeta.matchCount} of ${searchMeta.archiveCount} in archive`;
-      archiveList.appendChild(meta);
-    }
-    for (const tab of rows) {
-      const el = document.createElement("div");
-      el.className = "archive-row";
-      el.role = "button";
-      el.tabIndex = 0;
-      el.dataset.id = tab.id;
-      el.title = tab.title;
-      el.addEventListener("click", () => restoreTab(tab.id));
-      el.addEventListener("contextmenu", (event) => openTabMenu(event, tab.id));
-      el.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          restoreTab(tab.id);
-        }
-      });
-      el.addEventListener("auxclick", (event) => {
-        if (event.button !== 1) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        closeTab(tab.id, { permanent: true, fromArchive: true });
-      });
-      el.addEventListener("mousedown", (event) => {
-        if (event.button === 1) {
-          event.preventDefault();
-        }
-      });
-
-      const icon = document.createElement("span");
-      icon.className = "fileicon";
-      icon.innerHTML = tab.agentHidden ? AGENT_HIDDEN_SVG : FILE_SVG;
-      if (tab.agentHidden) {
-        icon.title = AGENT_HIDDEN_TITLE;
-      }
-      el.appendChild(icon);
-
-      if (unreadArchive.has(tab.id)) {
-        const dot = document.createElement("span");
-        dot.className = "tab-updated";
-        dot.title = "Updated in the archive";
-        el.appendChild(dot);
-      }
-
-      const title = document.createElement("span");
-      title.className = "tab-title";
-      title.textContent = tab.title;
-      el.appendChild(title);
-
-      const when = document.createElement("span");
-      when.className = "archive-when";
-      when.textContent = relativeTime(tab.archivedAt);
-      when.title = tab.archivedAt ? new Date(tab.archivedAt).toLocaleString() : "";
-      el.appendChild(when);
-
-      const close = document.createElement("button");
-      close.className = "tab-close";
-      close.type = "button";
-      close.textContent = "×";
-      close.addEventListener("click", (event) => {
-        event.stopPropagation();
-        closeTab(tab.id, { permanent: true, fromArchive: true });
-      });
-      el.appendChild(close);
-      archiveList.appendChild(el);
-
-      if (tab.snippet) {
-        const snippet = document.createElement("div");
-        snippet.className = "archive-snippet";
-        snippet.textContent = tab.snippet;
-        archiveList.appendChild(snippet);
-      }
+  function clearStripSlot() {
+    tabsWrap.classList.remove("strip-drop-over");
+    const slot = stripSlotEl;
+    if (slot?.isConnected) {
+      flipStrip(() => slot.remove());
     }
   }
 
   function syncSidebarTab() {
     const templates = state.sidebarTab === "templates";
-    sidebarTabArchive.classList.toggle("on", !templates);
+    sidebarTabLibrary.classList.toggle("on", !templates);
     sidebarTabTemplates.classList.toggle("on", templates);
-    sidebarTabArchive.setAttribute("aria-selected", templates ? "false" : "true");
+    sidebarTabLibrary.setAttribute("aria-selected", templates ? "false" : "true");
     sidebarTabTemplates.setAttribute("aria-selected", templates ? "true" : "false");
-    sidebarPanelArchive.hidden = templates;
+    sidebarPanelLibrary.hidden = templates;
     sidebarPanelTemplates.hidden = !templates;
   }
 
   function setSidebarTab(tab) {
-    state.sidebarTab = tab === "templates" ? "templates" : "archive";
+    state.sidebarTab = tab === "templates" ? "templates" : "library";
     localStorage.setItem(SIDEBAR_TAB_KEY, state.sidebarTab);
     syncSidebarTab();
-    if (state.sidebarTab === "archive" && archiveSearch.value.trim()) {
-      scheduleSearch(0);
+    if (state.sidebarTab === "library") {
+      library.refreshSearch();
     }
     renderTemplates();
   }
@@ -1393,7 +1413,7 @@
     templateNone.hidden = rows.length > 0;
     for (const template of rows) {
       const el = document.createElement("div");
-      el.className = "archive-row";
+      el.className = "side-row";
       el.role = "button";
       el.tabIndex = 0;
       el.dataset.id = template.id;
@@ -1614,30 +1634,6 @@
     await fetch(`/api/templates/${encodeURIComponent(template.id)}`, { method: "DELETE" });
   }
 
-  function relativeTime(ms) {
-    if (!ms) {
-      return "";
-    }
-    const delta = Date.now() - ms;
-    const sec = Math.round(delta / 1000);
-    if (sec < 45) {
-      return "just now";
-    }
-    const min = Math.round(sec / 60);
-    if (min < 60) {
-      return min + "m ago";
-    }
-    const hr = Math.round(min / 60);
-    if (hr < 24) {
-      return hr + "h ago";
-    }
-    const day = Math.round(hr / 24);
-    if (day < 14) {
-      return day + "d ago";
-    }
-    return new Date(ms).toLocaleDateString();
-  }
-
   function isPinned(id) {
     return Boolean(state.tabs.find((tab) => tab.id === id)?.pinned);
   }
@@ -1747,7 +1743,7 @@
     renderChrome();
     renderTabs();
     renderFrames();
-    renderArchive();
+    library.render();
     renderTemplates();
   }
 
@@ -1804,62 +1800,94 @@
     });
   }
 
-  async function closeTab(id, { permanent = false, fromArchive = false } = {}) {
-    const open = state.tabs.find((tab) => tab.id === id);
-    const archived = state.archive.find((tab) => tab.id === id);
-    const tab = open || archived;
-    if (tab?.key === "welcome") {
+  /** Closing keeps the page in the Library; `permanent` deletes it (Ctrl+Z or the notice undoes it). */
+  async function closeTab(id, { permanent = false } = {}) {
+    const tab = findAnyTab(id);
+    if (tab?.key === "welcome" || !permanent) {
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
       return;
     }
-    if (permanent || fromArchive) {
-      const title = tab?.title || "this tab";
-      const ok = await confirmDelete(
-        fromArchive
-          ? `Delete “${title}” permanently? This cannot be undone.`
-          : `Delete “${title}” permanently? Ctrl+Z can restore it if it was still open (last 5).`
-      );
-      if (!ok) {
-        return;
-      }
-      await fetch(`/api/tabs/${encodeURIComponent(id)}?permanent=true`, { method: "DELETE" });
-      return;
+    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}?permanent=true`, { method: "DELETE" });
+    if (res.ok) {
+      showNotice(`Deleted “${tab?.title || "page"}”`, { undo: true });
     }
-    await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
-  async function restoreTab(id) {
-    unreadArchive.delete(id);
-    pendingFocus = { id };
-    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/restore`, { method: "POST" });
-    if (!res.ok) {
+  /** Gives a Library page a tab (or focuses it). `before` places it in the strip; null means the end of its group. */
+  async function openPage(id, { activate = true, before } = {}) {
+    unreadLibrary.delete(id);
+    if (activate) {
+      pendingFocus = { id };
+    }
+    const body = { activate };
+    if (before !== undefined) {
+      body.before = before;
+    }
+    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    if (!res?.ok) {
       if (pendingFocus?.id === id) {
         pendingFocus = null;
       }
       return;
     }
-    if (pendingFocus?.id === id && state.tabs.some((tab) => tab.id === id)) {
+    if (activate && pendingFocus?.id === id && state.tabs.some((tab) => tab.id === id)) {
       pendingFocus = null;
       selectTab(id, { fromUser: true });
     }
-  }
-
-  async function emptyArchive() {
-    const n = state.archive.length;
-    if (!n) {
-      return;
-    }
-    const ok = await confirmDelete(
-      `Delete all ${n} archived tab${n === 1 ? "" : "s"} permanently? This cannot be undone.`
-    );
-    if (!ok) {
-      return;
-    }
-    await fetch("/api/archive", { method: "DELETE" });
+    renderChrome();
+    library.render();
   }
 
   function findAnyTab(id) {
-    return state.tabs.find((tab) => tab.id === id) || state.archive.find((tab) => tab.id === id) || null;
+    return state.tabs.find((tab) => tab.id === id) || state.closed.find((tab) => tab.id === id) || null;
+  }
+
+  function describeForCard(el) {
+    const tab = findAnyTab(el.dataset.id);
+    if (!tab) {
+      return null;
+    }
+    return {
+      title: tab.title,
+      id: tab.id,
+      createdAt: tab.createdAt,
+      updatedAt: Math.max(tab.updatedAt || 0, tab.stateUpdatedAt || 0),
+      folder: tab.folderId ? library.pathOf(tab.folderId) : "",
+    };
+  }
+
+  function choose(message, buttons) {
+    choiceMessage.textContent = message;
+    choiceActions.replaceChildren();
+    const cancel = document.createElement("button");
+    cancel.type = "submit";
+    cancel.value = "cancel";
+    cancel.textContent = "Cancel";
+    choiceActions.appendChild(cancel);
+    for (const item of buttons) {
+      const btn = document.createElement("button");
+      btn.type = "submit";
+      btn.value = item.value;
+      btn.textContent = item.label;
+      if (item.danger) {
+        btn.className = "danger";
+      }
+      choiceActions.appendChild(btn);
+    }
+    choiceDlg.returnValue = "cancel";
+    choiceDlg.showModal();
+    cancel.focus();
+    return new Promise((resolve) => {
+      choiceDlg.addEventListener(
+        "close",
+        () => resolve(choiceDlg.returnValue && choiceDlg.returnValue !== "cancel" ? choiceDlg.returnValue : null),
+        { once: true }
+      );
+    });
   }
 
   async function setAgentHidden(id, hidden) {
@@ -1939,13 +1967,13 @@
     downloadHref("/api/export");
   }
 
-  function importNotice(opened, archived, templates) {
+  function importNotice(opened, closed, templates) {
     const parts = [];
     if (opened) {
       parts.push(opened === 1 ? "1 open tab" : `${opened} open tabs`);
     }
-    if (archived) {
-      parts.push(archived === 1 ? "1 archived tab" : `${archived} archived tabs`);
+    if (closed) {
+      parts.push(closed === 1 ? "1 page into the Library" : `${closed} pages into the Library`);
     }
     if (templates) {
       parts.push(templates === 1 ? "1 template" : `${templates} templates`);
@@ -1954,13 +1982,17 @@
     return "Imported " + (parts.length ? `${parts.join(", ")} and ${last}` : last);
   }
 
-  function showNotice(text) {
-    noticeEl.textContent = text;
+  function showNotice(text, { undo = false } = {}) {
+    noticeText.textContent = text;
+    noticeUndo.hidden = !undo;
     noticeEl.hidden = false;
     clearTimeout(noticeTimer);
-    noticeTimer = window.setTimeout(() => {
-      noticeEl.hidden = true;
-    }, 4000);
+    noticeTimer = window.setTimeout(
+      () => {
+        noticeEl.hidden = true;
+      },
+      undo ? 7000 : 4000
+    );
   }
 
   function showPersistError(error) {
@@ -1975,7 +2007,7 @@
       return;
     }
     let opened = 0;
-    let archived = 0;
+    let closed = 0;
     let templates = 0;
     let focusedId = null;
     let error = null;
@@ -1995,7 +2027,7 @@
           continue;
         }
         opened += data.opened || 0;
-        archived += data.archived || 0;
+        closed += data.closed || 0;
         templates += data.templatesCreated || 0;
         if (data.focusedId) {
           focusedId = data.focusedId;
@@ -2011,8 +2043,8 @@
         selectTab(focusedId, { fromUser: true });
       }
     }
-    if (opened || archived || templates) {
-      showNotice(importNotice(opened, archived, templates));
+    if (opened || closed || templates) {
+      showNotice(importNotice(opened, closed, templates));
     } else if (error) {
       showNotice(error);
     }
@@ -2062,43 +2094,15 @@
     });
   }
 
-  function closeTabMenu() {
-    if (tabMenu.hidden) {
-      return;
-    }
-    tabMenu.hidden = true;
-    menuTabId = null;
-  }
-
-  function openTabMenu(event, id) {
-    event.preventDefault();
-    event.stopPropagation();
-    menuTabId = id;
-    const openTab = state.tabs.find((tab) => tab.id === id);
-    tabMenuPin.hidden = !openTab;
-    tabMenuPin.textContent = openTab?.pinned ? "Unpin" : "Pin";
-    tabMenuAgent.textContent = findAnyTab(id)?.agentHidden ? "Show to agent" : "Hide from agent";
-    tabMenu.hidden = false;
-    const anchor = event.currentTarget.getBoundingClientRect();
-    const { offsetWidth: width, offsetHeight: height } = tabMenu;
-    const gap = 4;
-    const margin = 8;
-    const above = anchor.bottom + gap + height > window.innerHeight - margin;
-    const top = above ? anchor.top - gap - height : anchor.bottom + gap;
-    const left = Math.min(anchor.left, window.innerWidth - width - margin);
-    tabMenu.dataset.side = above ? "above" : "below";
-    tabMenu.style.left = Math.max(margin, left) + "px";
-    tabMenu.style.top = Math.max(margin, top) + "px";
-  }
-
   async function undoClose() {
     const res = await fetch("/api/undo", { method: "POST" });
     if (!res.ok) {
       return;
     }
+    noticeEl.hidden = true;
     const data = await res.json();
     const id = data?.tab?.id;
-    if (id) {
+    if (id && state.tabs.some((tab) => tab.id === id)) {
       selectTab(id, { fromUser: true });
     }
   }
@@ -2125,16 +2129,13 @@
   }
 
   function onBoardShortcut(event) {
-    if (confirmDlg.open) {
+    if (confirmDlg.open || choiceDlg.open) {
       return;
     }
     if (event.key === "Escape") {
-      if (confirmDlg.open) {
-        return;
-      }
-      if (!tabMenu.hidden) {
+      if (library.onEscape()) {
         event.preventDefault();
-        closeTabMenu();
+        event.stopPropagation();
         return;
       }
       if (drag) {
@@ -2157,24 +2158,20 @@
         closePalette();
         return;
       }
-      if (state.archiveOpen && document.activeElement === archiveSearch && archiveSearch.value) {
+      if (state.sideOpen && library.searchFocused()) {
         event.preventDefault();
-        archiveSearch.value = "";
-        searchHits = null;
-        searchMeta = null;
-        renderArchive();
+        library.clearSearch();
         return;
       }
-      if (state.archiveOpen) {
+      if (state.sideOpen) {
         event.preventDefault();
-        setArchiveOpen(false);
+        setSideOpen(false);
       }
       return;
     }
-    if (isFindKey(event) && state.archiveOpen && !isTypingTarget(event.target)) {
+    if (isFindKey(event) && state.sideOpen && state.sidebarTab === "library" && !isTypingTarget(event.target)) {
       event.preventDefault();
-      archiveSearch.focus();
-      archiveSearch.select();
+      library.focusSearch();
       return;
     }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) {
@@ -2227,29 +2224,6 @@
     return null;
   }
 
-  function scheduleSearch(delay = 250) {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(runSearch, delay);
-  }
-
-  async function runSearch() {
-    const query = archiveSearch.value.trim();
-    if (!query) {
-      searchHits = null;
-      searchMeta = null;
-      renderArchive();
-      return;
-    }
-    const res = await fetch(`/api/archive?query=${encodeURIComponent(query)}&limit=200`);
-    if (!res.ok) {
-      return;
-    }
-    const data = await res.json();
-    searchHits = data.tabs || [];
-    searchMeta = data;
-    renderArchive();
-  }
-
   function isPaletteOpen() {
     return !paletteEl.hidden;
   }
@@ -2279,9 +2253,10 @@
   }
 
   function showLocalPaletteRows() {
+    const recentClosed = [...state.closed].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0)).slice(0, 15);
     paletteHits = [
-      ...state.tabs.map((tab) => ({ ...tab, archived: false })),
-      ...state.archive.slice(0, 15).map((tab) => ({ ...tab, archived: true })),
+      ...state.tabs.map((tab) => ({ ...tab, open: true })),
+      ...recentClosed.map((tab) => ({ ...tab, open: false })),
     ];
     paletteIndex = 0;
     renderPalette();
@@ -2349,8 +2324,12 @@
       if (tab.qualityLabel) {
         chips.appendChild(paletteChip(tab.qualityLabel));
       }
-      if (tab.archived) {
-        chips.appendChild(paletteChip("Archived"));
+      if (!tab.open) {
+        chips.appendChild(paletteChip("Closed"));
+      }
+      const folder = tab.folderId ? library.pathOf(tab.folderId) : "";
+      if (folder) {
+        chips.appendChild(paletteChip(folder, "folder"));
       }
       if (chips.childElementCount) {
         main.appendChild(chips);
@@ -2405,8 +2384,8 @@
       return;
     }
     closePalette();
-    if (tab.archived || tab.archivedAt) {
-      restoreTab(tab.id);
+    if (!state.tabs.some((item) => item.id === tab.id)) {
+      openPage(tab.id);
       return;
     }
     selectTab(tab.id, { fromUser: true });
@@ -2481,36 +2460,10 @@
     importFiles(importFileInput.files, "meta");
     importFileInput.value = "";
   });
-  tabMenuPin.addEventListener("click", () => {
-    const tab = menuTabId ? state.tabs.find((item) => item.id === menuTabId) : null;
-    if (tab) {
-      setPinned(tab.id, !tab.pinned);
-    }
-    closeTabMenu();
-  });
-  tabMenuCopyId.addEventListener("click", () => {
-    if (menuTabId) {
-      copyTabId(menuTabId);
-    }
-    closeTabMenu();
-  });
-  tabMenuExport.addEventListener("click", () => {
-    if (menuTabId) {
-      downloadExport(menuTabId);
-    }
-    closeTabMenu();
-  });
-  tabMenuAgent.addEventListener("click", () => {
-    const tab = menuTabId ? findAnyTab(menuTabId) : null;
-    if (tab) {
-      setAgentHidden(tab.id, !tab.agentHidden);
-    }
-    closeTabMenu();
-  });
-  tabMenu.addEventListener("contextmenu", (event) => event.preventDefault());
+  noticeUndo.addEventListener("click", () => undoClose());
   bindFileDrop(settingsEl, "meta");
   bindFileDrop(tabsWrap, "meta");
-  bindFileDrop(archivePane, "archive");
+  bindFileDrop(sidePane, "closed");
   document.addEventListener("dragover", (event) => {
     if (hasFiles(event)) {
       event.preventDefault();
@@ -2521,20 +2474,13 @@
       event.preventDefault();
     }
   });
-  document.addEventListener("pointerdown", (event) => {
-    if (!tabMenu.hidden && !tabMenu.contains(event.target)) {
-      closeTabMenu();
-    }
-  });
-  window.addEventListener("scroll", closeTabMenu, true);
-  window.addEventListener("blur", closeTabMenu);
   tabReorderToggle.addEventListener("click", () => toggleFlag(tabReorderToggle, TAB_REORDER_KEY));
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
-  archiveToggle.addEventListener("click", () => setArchiveOpen(!state.archiveOpen));
-  sidebarTabArchive.addEventListener("click", () => setSidebarTab("archive"));
+  libraryToggle.addEventListener("click", () => setSideOpen(!state.sideOpen));
+  sidebarTabLibrary.addEventListener("click", () => setSidebarTab("library"));
   sidebarTabTemplates.addEventListener("click", () => setSidebarTab("templates"));
   templateEditBtn.addEventListener("click", () => {
     const tab = activeTab();
@@ -2550,8 +2496,6 @@
   templateModalBackdrop.addEventListener("click", closeTemplateModal);
   templateModalCancel.addEventListener("click", closeTemplateModal);
   templateModalForm.addEventListener("submit", submitTemplateModal);
-  archiveEmptyBtn.addEventListener("click", () => emptyArchive());
-  archiveSearch.addEventListener("input", () => scheduleSearch());
   paletteBackdrop.addEventListener("mousedown", (event) => {
     event.preventDefault();
     closePalette();
@@ -2586,37 +2530,37 @@
     }
   });
 
-  archiveResizer.addEventListener("pointerdown", (event) => {
+  sideResizer.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) {
       return;
     }
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = archivePane.getBoundingClientRect().width;
-    archiveResizer.setPointerCapture(event.pointerId);
-    document.body.classList.add("resizing-archive");
+    const startWidth = sidePane.getBoundingClientRect().width;
+    sideResizer.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-side");
 
     function onMove(move) {
       if (move.pointerId !== event.pointerId) {
         return;
       }
-      applyArchiveWidth(startWidth - (move.clientX - startX));
+      applySideWidth(startWidth - (move.clientX - startX));
     }
     function onUp(up) {
       if (up.pointerId !== event.pointerId) {
         return;
       }
-      archiveResizer.removeEventListener("pointermove", onMove);
-      archiveResizer.removeEventListener("pointerup", onUp);
-      archiveResizer.removeEventListener("pointercancel", onUp);
-      if (archiveResizer.hasPointerCapture(event.pointerId)) {
-        archiveResizer.releasePointerCapture(event.pointerId);
+      sideResizer.removeEventListener("pointermove", onMove);
+      sideResizer.removeEventListener("pointerup", onUp);
+      sideResizer.removeEventListener("pointercancel", onUp);
+      if (sideResizer.hasPointerCapture(event.pointerId)) {
+        sideResizer.releasePointerCapture(event.pointerId);
       }
-      document.body.classList.remove("resizing-archive");
+      document.body.classList.remove("resizing-side");
     }
-    archiveResizer.addEventListener("pointermove", onMove);
-    archiveResizer.addEventListener("pointerup", onUp);
-    archiveResizer.addEventListener("pointercancel", onUp);
+    sideResizer.addEventListener("pointermove", onMove);
+    sideResizer.addEventListener("pointerup", onUp);
+    sideResizer.addEventListener("pointercancel", onUp);
   });
 
   window.addEventListener("hashchange", () => {
@@ -2629,13 +2573,13 @@
       selectTab(open.id, { fromUser: true });
       return;
     }
-    const archived = state.archive.find((item) => item.id === id || item.key === id);
-    if (archived) {
-      restoreTab(archived.id);
+    const closed = state.closed.find((item) => item.id === id || item.key === id);
+    if (closed) {
+      openPage(closed.id);
     }
   });
 
-  setArchiveOpen(state.archiveOpen);
+  setSideOpen(state.sideOpen);
   connect();
   render();
 })();

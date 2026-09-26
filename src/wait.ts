@@ -4,14 +4,18 @@ import { visibleTo, type BoardState, type Tab, type TabSignal, type Viewer } fro
 
 export type WaitResult = {
   timedOut: boolean;
+  /** The page was deleted (or hidden from the agent). */
+  deleted: boolean;
+  /** The page's tab was closed; the page is still in the Library. */
   closed: boolean;
-  archived: boolean;
   id: string;
   key: string;
   signal: TabSignal | null;
   state: BoardState;
   stateRevision: number;
 };
+
+type Outcome = "signal" | "timeout" | "deleted" | "closed";
 
 export function waitForSignal(opts: {
   idOrKey: string;
@@ -29,10 +33,10 @@ export function waitForSignal(opts: {
   const tabId = initial.id;
   const tabKey = initial.key;
   if (signalMatches(initial, opts.names, afterRevision)) {
-    return Promise.resolve(toWaitResult(initial, false, false, false));
+    return Promise.resolve(toWaitResult(initial, "signal"));
   }
-  if (store.isArchived(tabId)) {
-    return Promise.resolve(toWaitResult(initial, false, false, true));
+  if (store.isClosed(tabId)) {
+    return Promise.resolve(toWaitResult(initial, "closed"));
   }
 
   return new Promise((resolve) => {
@@ -48,108 +52,44 @@ export function waitForSignal(opts: {
       resolve(result);
     };
 
-    const check = (tab: Tab | undefined, timedOut: boolean, closed: boolean, archived: boolean) => {
+    const check = (timedOut: boolean) => {
       const current = store.get(tabId);
-      if (current && !visibleTo(current, opts.viewer)) {
-        finish({
-          timedOut: false,
-          closed: true,
-          archived: false,
-          id: tabId,
-          key: tabKey,
-          signal: null,
-          state: {},
-          stateRevision: 0,
-        });
+      if (!current || !visibleTo(current, opts.viewer)) {
+        finish(
+          current
+            ? { ...emptyResult(tabId, tabKey), deleted: true }
+            : toWaitResult(last, "deleted")
+        );
         return;
       }
-      if (archived) {
-        const current = tab ?? last;
-        finish({
-          timedOut: false,
-          closed: false,
-          archived: true,
-          id: tabId,
-          key: current.key,
-          signal: snapshotSignal(current.signal),
-          state: { ...current.state },
-          stateRevision: current.stateRevision,
-        });
+      last = current;
+      if (store.isClosed(tabId)) {
+        finish(toWaitResult(current, "closed"));
         return;
       }
-      if (!tab) {
-        finish({
-          timedOut: false,
-          closed: true,
-          archived: false,
-          id: tabId,
-          key: last.key,
-          signal: snapshotSignal(last.signal),
-          state: { ...last.state },
-          stateRevision: last.stateRevision,
-        });
-        return;
-      }
-      last = tab;
-      if (closed) {
-        finish({
-          timedOut: false,
-          closed: true,
-          archived: false,
-          id: tabId,
-          key: tab.key,
-          signal: snapshotSignal(tab.signal),
-          state: { ...tab.state },
-          stateRevision: tab.stateRevision,
-        });
-        return;
-      }
-      if (signalMatches(tab, opts.names, afterRevision)) {
-        finish(toWaitResult(tab, false, false, false));
+      if (signalMatches(current, opts.names, afterRevision)) {
+        finish(toWaitResult(current, "signal"));
         return;
       }
       if (timedOut) {
-        finish(toWaitResult(tab, true, false, false));
+        finish(toWaitResult(current, "timeout"));
       }
     };
 
-    const onSignal = (tab: Tab) => {
-      if (tab.id === tabId) {
-        check(tab, false, false, false);
-      }
-    };
-
-    const onClose = (id: string) => {
+    const onEvent = (tabOrId: Tab | string) => {
+      const id = typeof tabOrId === "string" ? tabOrId : tabOrId.id;
       if (id === tabId) {
-        check(store.get(tabId), false, true, false);
+        check(false);
       }
     };
+    const onAbort = () => check(true);
 
-    const onArchived = (id: string) => {
-      if (id === tabId) {
-        check(store.get(tabId) ?? last, false, false, true);
-      }
-    };
+    const timer = setTimeout(() => check(true), opts.timeoutMs);
+    const poll = setInterval(() => check(false), 50);
 
-    const onAbort = () => {
-      check(store.get(tabId) ?? last, true, false, false);
-    };
-
-    const timer = setTimeout(() => {
-      check(store.get(tabId), true, false, store.isArchived(tabId));
-    }, opts.timeoutMs);
-
-    const poll = setInterval(() => {
-      if (store.isArchived(tabId)) {
-        check(store.get(tabId) ?? last, false, false, true);
-        return;
-      }
-      check(store.get(tabId), false, false, false);
-    }, 50);
-
-    store.on("tab_signal", onSignal);
-    store.on("tab_closed", onClose);
-    store.on("tab_archived", onArchived);
+    store.on("tab_signal", onEvent);
+    store.on("tab_deleted", onEvent);
+    store.on("tab_closed", onEvent);
     if (opts.abort) {
       if (opts.abort.aborted) {
         onAbort();
@@ -158,24 +98,28 @@ export function waitForSignal(opts: {
       }
     }
 
-    check(store.get(tabId), false, false, false);
+    check(false);
 
     function cleanup() {
       clearTimeout(timer);
       clearInterval(poll);
-      store.off("tab_signal", onSignal);
-      store.off("tab_closed", onClose);
-      store.off("tab_archived", onArchived);
+      store.off("tab_signal", onEvent);
+      store.off("tab_deleted", onEvent);
+      store.off("tab_closed", onEvent);
       opts.abort?.removeEventListener("abort", onAbort);
     }
   });
 }
 
-function toWaitResult(tab: Tab, timedOut: boolean, closed: boolean, archived: boolean): WaitResult {
+function emptyResult(id: string, key: string): WaitResult {
+  return { timedOut: false, deleted: false, closed: false, id, key, signal: null, state: {}, stateRevision: 0 };
+}
+
+function toWaitResult(tab: Tab, outcome: Outcome): WaitResult {
   return {
-    timedOut,
-    closed,
-    archived,
+    timedOut: outcome === "timeout",
+    deleted: outcome === "deleted",
+    closed: outcome === "closed",
     id: tab.id,
     key: tab.key,
     signal: snapshotSignal(tab.signal),

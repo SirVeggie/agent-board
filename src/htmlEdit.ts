@@ -17,17 +17,17 @@ export class HtmlEditError extends Error {
 }
 
 export class RevisionConflictError extends Error {
-  constructor(expected: number, actual: number) {
+  constructor(expected: number, actual: number, note?: string) {
     super(
-      `tab changed since revision ${expected} (now ${actual}). board_read it again (toFile: true for a fresh checkout) and reapply your change.`
+      `tab changed since revision ${expected} (now ${actual}).${note ? ` ${note}` : ""} board_read it again (toFile: true for a fresh checkout) and reapply your change.`
     );
     this.name = "RevisionConflictError";
   }
 }
 
-export function assertRevision(actual: number, expected: number | undefined): void {
+export function assertRevision(actual: number, expected: number | undefined, note?: string): void {
   if (expected !== undefined && expected !== actual) {
-    throw new RevisionConflictError(expected, actual);
+    throw new RevisionConflictError(expected, actual, note);
   }
 }
 

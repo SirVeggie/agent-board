@@ -15,20 +15,20 @@ export function toLocalIso(ms: number): string {
   );
 }
 
-export function withAgentDates<T extends { createdAt: number; updatedAt: number; archivedAt?: number; stateUpdatedAt?: number }>(
+export function withAgentDates<T extends { createdAt: number; updatedAt: number; closedAt?: number; stateUpdatedAt?: number }>(
   tab: T
-): Omit<T, "createdAt" | "updatedAt" | "archivedAt" | "stateUpdatedAt"> & {
+): Omit<T, "createdAt" | "updatedAt" | "closedAt" | "stateUpdatedAt"> & {
   createdAt: string;
   updatedAt: string;
-  archivedAt?: string;
+  closedAt?: string;
   stateUpdatedAt?: string;
 } {
-  const { createdAt, updatedAt, archivedAt, stateUpdatedAt, ...rest } = tab;
+  const { createdAt, updatedAt, closedAt, stateUpdatedAt, ...rest } = tab;
   return {
     ...rest,
     createdAt: toLocalIso(createdAt),
     updatedAt: toLocalIso(updatedAt),
-    ...(archivedAt ? { archivedAt: toLocalIso(archivedAt) } : {}),
+    ...(closedAt ? { closedAt: toLocalIso(closedAt) } : {}),
     ...(typeof stateUpdatedAt === "number" && stateUpdatedAt > 0 ? { stateUpdatedAt: toLocalIso(stateUpdatedAt) } : {}),
   };
 }

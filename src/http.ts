@@ -11,8 +11,8 @@ import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
-import { store } from "./store.js";
-import { isAppTab, isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { store, type FolderDeleteMode } from "./store.js";
+import { isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
@@ -67,7 +67,7 @@ export async function startHttp(): Promise<http.Server> {
       url: baseUrl(),
       viewers: viewerCount(),
       tabs: store.list().length,
-      archiveCount: store.archiveCount(),
+      closedCount: store.closedCount(),
       activeId: store.getActiveId(),
       uptimeMs: Date.now() - startedAt,
     });
@@ -79,34 +79,43 @@ export async function startHttp(): Promise<http.Server> {
     if (query) {
       const result = store.searchOpen(query, viewer);
       res.json({
-        tabs: result.hits.map((hit) => ({ ...toMeta(hit.tab), snippet: hit.snippet })),
+        tabs: result.hits.map((hit) => ({ ...libraryMeta(hit.tab), snippet: hit.snippet })),
         returned: result.returned,
         remaining: result.remaining,
         matchCount: result.matchCount,
-        openCount: result.archiveCount,
+        openCount: result.total,
         activeId: store.getActiveId(viewer),
-        archiveCount: store.archiveCount(viewer),
+        closedCount: store.closedCount(viewer),
       });
       return;
     }
     res.json({
-      tabs: store.list(viewer),
+      tabs: store.listOpenTabs(viewer).map(libraryMeta),
       activeId: store.getActiveId(viewer),
-      archiveCount: store.archiveCount(viewer),
+      closedCount: store.closedCount(viewer),
     });
   });
 
-  app.get("/api/archive", (req, res) => {
+  app.get("/api/library", (req, res) => {
     const query = typeof req.query.query === "string" ? req.query.query : "";
     const offset = optionalNumber(req.query.offset) ?? 0;
     const limit = optionalNumber(req.query.limit) ?? 200;
-    const result = store.searchArchive(query, offset, limit, viewerOf(req));
+    const folderPath = typeof req.query.folder === "string" ? req.query.folder.trim() : "";
+    let folderId: string | null | undefined;
+    if (folderPath) {
+      folderId = folderPath === "/" ? null : store.findFolderPath(folderPath);
+      if (folderId === undefined) {
+        res.status(404).json({ error: `folder not found: ${folderPath}` });
+        return;
+      }
+    }
+    const result = store.searchLibrary(query, { offset, limit, folderId, viewer: viewerOf(req) });
     res.json({
-      tabs: result.hits.map((hit) => ({ ...toMeta(hit.tab), snippet: hit.snippet })),
+      tabs: result.hits.map((hit) => ({ ...libraryMeta(hit.tab), snippet: hit.snippet })),
       returned: result.returned,
       remaining: result.remaining,
       matchCount: result.matchCount,
-      archiveCount: result.archiveCount,
+      total: result.total,
     });
   });
 
@@ -116,8 +125,7 @@ export async function startHttp(): Promise<http.Server> {
     const result = store.searchPages(query, limit, viewerOf(req));
     res.json({
       tabs: result.hits.map((hit) => ({
-        ...toMeta(hit.tab),
-        archived: hit.archived,
+        ...libraryMeta(hit.tab),
         location: hit.location,
         quality: hit.quality,
         locationLabel: hit.location ? locationLabel(hit.location) : null,
@@ -137,13 +145,13 @@ export async function startHttp(): Promise<http.Server> {
       res.status(404).json({ error: `tab not found: ${req.params.id}` });
       return;
     }
-    res.json(tab);
+    res.json({ ...tab, folder: store.folderPath(tab.folderId) });
   });
 
   app.post("/api/tabs", (req, res) => {
     try {
       const assets = prepareAssets(parseAssetInputs(req.body?.assets));
-      const { tab, created, archived } = store.upsert({
+      const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
         html: String(req.body?.html ?? ""),
@@ -151,9 +159,10 @@ export async function startHttp(): Promise<http.Server> {
         pin: req.body?.pin,
         state: isPlainObject(req.body?.state) ? req.body.state : undefined,
         assets: assets.length ? assets : undefined,
+        folder: optionalString(req.body?.folder),
         viewer: viewerOf(req),
       });
-      res.status(created ? 201 : 200).json({ created, archived, tab: toMeta(tab) });
+      res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(tab) });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -161,16 +170,42 @@ export async function startHttp(): Promise<http.Server> {
 
   app.patch("/api/tabs/:id", (req, res) => {
     try {
-      const tab = store.update(req.params.id, {
+      const { tab, titleKept } = store.update(req.params.id, {
         title: optionalString(req.body?.title),
         html: optionalString(req.body?.html),
         pin: typeof req.body?.pin === "boolean" ? req.body.pin : undefined,
         activate: req.body?.activate,
+        viewer: viewerOf(req),
       });
+      res.json({ titleKept, tab: libraryMeta(tab) });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/tabs/:id/rename", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the board UI can rename a page this way" });
+      return;
+    }
+    try {
+      const tab = store.renamePage(req.params.id, String(req.body?.title ?? ""));
       res.json({ tab: toMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  app.post("/api/tabs/:id/move", (req, res) => {
+    try {
+      const folderId = parseFolderRef(req.body?.folderId);
+      const index = optionalNumber(req.body?.index) ?? 0;
+      const tab = store.movePage(req.params.id, folderId, index, { close: req.body?.close === true });
+      res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      sendStoreError(res, err);
     }
   });
 
@@ -183,22 +218,24 @@ export async function startHttp(): Promise<http.Server> {
       const rawEdits = req.body?.edits;
       const noEdits = rawEdits === undefined || (Array.isArray(rawEdits) && rawEdits.length === 0);
       if (noEdits && html === undefined && title) {
-        const tab = store.update(req.params.id, {
+        const { tab, titleKept } = store.update(req.params.id, {
           title,
           activate: req.body?.activate,
           expectedRevision,
+          viewer: viewerOf(req),
         });
-        res.json({ applied: 0, archived: store.isArchived(tab.id), tab: toMeta(tab) });
+        res.json({ applied: 0, closed: store.isClosed(tab.id), titleKept, tab: libraryMeta(tab) });
         return;
       }
-      const { tab, applied, archived } = store.patchHtml(req.params.id, {
+      const { tab, applied, closed, titleKept } = store.patchHtml(req.params.id, {
         edits: noEdits ? undefined : parseHtmlEdits(rawEdits),
         html,
         title,
         activate: req.body?.activate,
         expectedRevision,
+        viewer: viewerOf(req),
       });
-      res.json({ applied, archived, tab: toMeta(tab) });
+      res.json({ applied, closed, titleKept, tab: libraryMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
       const status = message.startsWith("tab not found") ? 404 : err instanceof RevisionConflictError ? 409 : 400;
@@ -344,26 +381,23 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/undo", (_req, res) => {
     try {
-      const tab = store.restoreLast();
-      res.json({ tab: toMeta(tab) });
+      const { tab } = store.restoreLast();
+      res.json({ tab: tab ? toMeta(tab) : null });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message === "nothing to restore" ? 404 : 400).json({ error: message });
     }
   });
 
-  app.post("/api/tabs/:id/restore", (req, res) => {
+  app.post("/api/tabs/:id/open", (req, res) => {
     try {
-      const tab = store.restore(req.params.id, { placement: "append", activate: true });
-      res.json({ tab: toMeta(tab), archiveCount: store.archiveCount(viewerOf(req)) });
+      const rawBefore = req.body?.before;
+      const before = rawBefore === null ? null : typeof rawBefore === "string" && rawBefore.trim() ? rawBefore.trim() : undefined;
+      const tab = store.openPage(req.params.id, { activate: req.body?.activate !== false, before });
+      res.json({ tab: libraryMeta(tab), closedCount: store.closedCount(viewerOf(req)) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
-  });
-
-  app.delete("/api/archive", (_req, res) => {
-    const deleted = store.emptyArchive();
-    res.json({ deleted, archiveCount: 0 });
   });
 
   app.delete("/api/tabs/:id", (req, res) => {
@@ -372,22 +406,15 @@ export async function startHttp(): Promise<http.Server> {
       const permanent = req.query.permanent === "true" || req.query.permanent === "1";
       if (permanent) {
         const tab = store.deletePermanent(req.params.id);
-        res.json({ deleted: [tab.id], archiveCount: store.archiveCount(viewer) });
+        res.json({ deleted: [tab.id], closedCount: store.closedCount(viewer) });
         return;
       }
-      const existing = store.get(req.params.id);
-      if (store.isArchived(req.params.id) && existing && !isAppTab(existing)) {
-        res.status(400).json({
-          error: "tab is archived; restore it or pass permanent=true to delete",
-        });
+      const tab = store.closeTab(req.params.id);
+      if (store.isClosed(tab.id)) {
+        res.json({ closed: [tab.id], closedCount: store.closedCount(viewer) });
         return;
       }
-      const tab = store.archiveTab(req.params.id);
-      if (store.isArchived(tab.id)) {
-        res.json({ archived: [tab.id], archiveCount: store.archiveCount(viewer) });
-        return;
-      }
-      res.json({ deleted: [tab.id], archiveCount: store.archiveCount(viewer) });
+      res.json({ deleted: [tab.id], closedCount: store.closedCount(viewer) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
@@ -399,15 +426,85 @@ export async function startHttp(): Promise<http.Server> {
     const filter = req.query.filter === "all" ? "all" : "unpinned";
     if (permanent) {
       const ids = store.list(viewer).filter((tab) => filter === "all" || !tab.pinned).map((tab) => tab.id);
-      const deleted: string[] = [];
-      for (const id of ids) {
-        deleted.push(store.deletePermanent(id).id);
-      }
-      res.json({ deleted, archiveCount: store.archiveCount(viewer) });
+      const deleted = store.deleteMany(ids).map((tab) => tab.id);
+      res.json({ deleted, closedCount: store.closedCount(viewer) });
       return;
     }
-    const archived = store.archiveMany(filter, viewer);
-    res.json({ archived, archiveCount: store.archiveCount(viewer) });
+    const closed = store.closeMany(filter, viewer);
+    res.json({ closed, closedCount: store.closedCount(viewer) });
+  });
+
+  app.get("/api/folders", (_req, res) => {
+    res.json({ folders: store.listFolders() });
+  });
+
+  app.post("/api/folders", (req, res) => {
+    try {
+      const folder = store.createFolder({
+        name: String(req.body?.name ?? ""),
+        parentId: parseFolderRef(req.body?.parentId),
+        index: optionalNumber(req.body?.index),
+      });
+      res.status(201).json({ folder });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.patch("/api/folders/:fid", (req, res) => {
+    try {
+      res.json({ folder: store.renameFolder(req.params.fid, String(req.body?.name ?? "")) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.post("/api/folders/:fid/move", (req, res) => {
+    try {
+      const folder = store.moveFolder(
+        req.params.fid,
+        parseFolderRef(req.body?.parentId),
+        optionalNumber(req.body?.index) ?? 0
+      );
+      res.json({ folder });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.delete("/api/folders/:fid", (req, res) => {
+    try {
+      const mode: FolderDeleteMode = req.query.mode === "delete" ? "delete" : "lift";
+      const { deleted, moved } = store.deleteFolder(req.params.fid, mode);
+      res.json({ deleted: deleted.map((tab) => tab.id), moved: moved.map((tab) => tab.id) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.post("/api/folders/:fid/open", (req, res) => {
+    try {
+      res.json({ opened: store.openFolder(req.params.fid).map((tab) => tab.id) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.post("/api/folders/:fid/close", (req, res) => {
+    try {
+      res.json({ closed: store.closeFolder(req.params.fid).map((tab) => tab.id) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.post("/api/library/delete-stale", (req, res) => {
+    try {
+      const days = optionalNumber(req.body?.days) ?? 30;
+      res.json({ deleted: store.deleteStale(days).map((tab) => tab.id) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
   });
 
   app.post("/api/tabs/:id/agent-hidden", (req, res) => {
@@ -552,9 +649,20 @@ export async function startHttp(): Promise<http.Server> {
     res.type("html").send(tab.html);
   });
 
+  app.get("/api/export/folder/:fid", (req, res) => {
+    try {
+      const file = store.exportFile({ folderId: req.params.fid });
+      const name = store.folderPath(req.params.fid) ?? "folder";
+      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(name.replaceAll("/", " - "))}"`);
+      res.type("json").send(JSON.stringify(file));
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
   app.get("/api/export/:id", (req, res) => {
     try {
-      const file = store.exportFile(req.params.id);
+      const file = store.exportFile({ id: req.params.id });
       const title = file.pages[0]?.title ?? "page";
       res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(title)}"`);
       res.type("json").send(JSON.stringify(file));
@@ -588,7 +696,7 @@ export async function startHttp(): Promise<http.Server> {
         kind: parsed.kind,
         imported: result.tabs.map((tab) => toMeta(tab)),
         opened: result.opened,
-        archived: result.archived,
+        closed: result.closed,
         focusedId: result.focusedId,
         templatesCreated: result.templatesCreated,
         templatesReused: result.templatesReused,
@@ -644,8 +752,8 @@ export async function startHttp(): Promise<http.Server> {
       requestAgentFocus(tab.id);
     }
   });
-  store.on("tab_closed", (id: string) => broadcast({ type: "tab_closed", id }));
-  store.on("archive_cleared", () => broadcast({ type: "archive_cleared" }));
+  store.on("tab_deleted", (id: string) => broadcast({ type: "tab_deleted", id }));
+  store.on("folders", (folders: Folder[]) => broadcast({ type: "folders", folders }));
   store.on("tab_state", (tab: Tab, client?: string) =>
     broadcast({
       type: "tab_state",
@@ -677,6 +785,27 @@ export async function startHttp(): Promise<http.Server> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/** TabMeta plus the page's Library folder path for agents and search results. */
+function libraryMeta(tab: Tab): TabMeta & { open: boolean; folder: string | null } {
+  return { ...toMeta(tab), open: !tab.closedAt, folder: store.folderPath(tab.folderId) };
+}
+
+function parseFolderRef(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error("folderId must be a folder id or null");
+  }
+  return value;
+}
+
+function sendStoreError(res: express.Response, err: unknown): void {
+  const message = (err as Error).message;
+  const missing = message.startsWith("tab not found") || message.startsWith("folder not found");
+  res.status(missing ? 404 : 400).json({ error: message });
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -790,8 +919,10 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   next();
 }
 
+const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js"]);
+
 function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  if (req.path === "/" || req.path === "/index.html" || req.path === "/app.js" || req.path === "/app.css") {
+  if (SHELL_PATHS.has(req.path)) {
     res.setHeader("Cache-Control", "no-store");
   }
   next();
@@ -901,10 +1032,10 @@ function parseImportDestination(value: unknown): ImportDestination {
   if (value === undefined || value === null || value === "" || value === "meta") {
     return "meta";
   }
-  if (value === "archive") {
-    return "archive";
+  if (value === "closed") {
+    return "closed";
   }
-  throw new Error("destination must be meta or archive");
+  throw new Error("destination must be meta or closed");
 }
 
 function instanceCount(template: Template, viewer: Viewer): number {

@@ -59,38 +59,42 @@
       <tr><th>Key</th><th>Action</th></tr>
     </thead>
     <tbody>
-      <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Search open and archived pages</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Search every page in the Library</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Download the current page as HTML (markup only; no data or images)</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Open this help page</td></tr>
-      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Restore the last archived tab, or the last permanently deleted open tab (up to 5), whichever is newer</td></tr>
-      <tr><td><kbd>Esc</kbd></td><td>Close the search palette, or the archive sidebar</td></tr>
-      <tr><td><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Focus archive search when the sidebar is open (<kbd>Shift</kbd>+<kbd>7</kbd> on Nordic layouts)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Reopen the last closed tab, or undo the last delete (up to 10), whichever is newer</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Close the search palette, or the Library sidebar</td></tr>
+      <tr><td><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Focus Library search when the sidebar is open (<kbd>Shift</kbd>+<kbd>7</kbd> on Nordic layouts)</td></tr>
     </tbody>
   </table>
 
   <h2>Search</h2>
   <ul>
-    <li><kbd>Ctrl</kbd>+<kbd>D</kbd> opens a palette over the board. Type to search titles, page content, and saved form data across open and archived tabs.</li>
-    <li>With an empty query it lists open tabs, then recent archived ones. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens (restores an archived tab and switches to it), <kbd>Esc</kbd> closes.</li>
+    <li><kbd>Ctrl</kbd>+<kbd>D</kbd> opens a palette over the board. Type to search titles, page content, and saved form data across every page in the Library.</li>
+    <li>With an empty query it lists open tabs, then recently closed pages. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens the page (as a tab if it was closed), <kbd>Esc</kbd> closes.</li>
   </ul>
 
   <h2>Tabs</h2>
   <ul>
-    <li>Middle-click a tab to archive it. Pinned tabs ignore middle-click; use ×. Shift+click × (or Shift+middle-click) permanently deletes after a confirmation. <kbd>Ctrl</kbd>+<kbd>Z</kbd> can restore that deletion if the tab was still open (last 5).</li>
-    <li>This Welcome page is part of the app. Closing it dismisses it instead of archiving; <kbd>Ctrl</kbd>+<kbd>H</kbd> opens it again.</li>
-    <li>Right-click a tab to pin or unpin it. Pinned tabs stay on the left. Clear archives unpinned tabs and leaves pinned tabs alone.</li>
+    <li>Closing a tab (× or middle-click) keeps the page in the Library. Pinned tabs ignore middle-click; use ×. Shift+click × (or Shift+middle-click) deletes the page; the notice that appears has Undo, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> works too (last 10 deletes).</li>
+    <li>This Welcome page is part of the app. Closing it dismisses it; <kbd>Ctrl</kbd>+<kbd>H</kbd> opens it again.</li>
+    <li>Right-click a tab to pin or unpin it. Pinned tabs stay on the left. Clear closes unpinned tabs and leaves pinned tabs alone.</li>
+    <li>Hover a tab for its full title, id, created and updated times, and Library folder.</li>
     <li>Double-click a tab (or right-click → Copy ID) to copy a reference like <code>Agent Board tab t_1a2b3c4d</code>. Paste it into a chat so the agent knows exactly which page you mean.</li>
     <li>With Tab reordering on in Settings (logo), drag a tab to move it inside the pinned or unpinned group. Drop does not switch the page. Escape cancels.</li>
-    <li>Right-click a tab or an archived row to export that page with its data and images.</li>
+    <li>Right-click a tab or a Library row to export that page with its data and images.</li>
     <li>A dot on a tab means it was updated while you were looking at another tab.</li>
     <li>If tabs overflow, scroll the strip with the mouse wheel. Settings (logo) has a toggle for smooth scrolling.</li>
   </ul>
 
-  <h2>Archive and templates</h2>
+  <h2>Library and templates</h2>
   <ul>
-    <li>The archive button to the right of Clear opens the sidebar. It has two tabs: Archive and Templates. A badge on that button means archived pages were updated, not the total count.</li>
-    <li>Click an archived row to restore it and switch to it. The search box matches titles, page content, and saved form data.</li>
-    <li>Close a row (× or middle-click) to delete it permanently after a confirmation. That cannot be undone. Empty deletes the whole archive.</li>
+    <li>The Library button to the right of Clear opens the sidebar. It has two tabs: Library and Templates. A badge on that button means closed pages were updated, not the total count.</li>
+    <li>The Library holds every page, open or closed. Open pages have an accent bar and a brighter title; the current tab's row is filled. Pinned pages have a faint warm tint.</li>
+    <li>Click a page to open it or switch to it; middle-click opens it in the background. Click a folder to expand or collapse it; right-click it to open or close all its pages, rename, move, export, or delete it.</li>
+    <li>Drag rows to reorder them or move them into folders (hover a collapsed folder to expand it). Drag a Library page onto the tab strip to open it at that spot, or drag a tab into the Library to file it and close the tab. While dragging a tab, hover the Library button to open the sidebar.</li>
+    <li>Double-click or <kbd>F2</kbd> renames a page or folder. Agents keep their hands off a title you set for 24 hours. <kbd>Alt</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> nudges the focused row, <kbd>Delete</kbd> deletes it.</li>
+    <li>Deleting a folder offers to move its contents up or delete everything. A folder delete, or any bulk delete, is one undo step.</li>
     <li>Templates are reusable pages the agent creates when you ask. Click one to fill its form and Open a pinned copy. While that copy is selected, Edit on the right of the tab strip changes that page’s values.</li>
     <li>Improving a template updates every page created from it. If the new version cannot use the old page data, the page is blocked until the agent fixes the data.</li>
     <li>Drag the left edge of the sidebar to resize it. <kbd>Esc</kbd> clears the search box first, then closes the sidebar.</li>
@@ -99,13 +103,13 @@
   <h2>Import and export</h2>
   <ul>
     <li><kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the current page as a plain HTML file. Interactive data and attached images are not included, so that file is a snapshot of the markup, not a working board page.</li>
-    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.board.json</code> pack: HTML, title, pin, archive flag, JSON state, and images. A page made from a template also carries that template and its form values. Export all is the same format with every user page (open and archived) and every template. The Welcome page is skipped.</li>
+    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.board.json</code> pack: HTML, title, pin, open or closed, Library folder and position, JSON state, and images. A page made from a template also carries that template and its form values. Export all is the same format with every user page and every template; right-click a folder to export just that folder. The Welcome page is skipped.</li>
     <li>Import accepts a saved HTML file, a single-page export, or an export-all file. It detects the type from the contents. Existing pages are not overwritten; a colliding key gets a suffix. Imported template pages stay linked to their template. If the board already has an identical template, it is reused; a template with the same name but different content is added as a separate template.</li>
-    <li>Drop a file on the settings overlay (anywhere while Settings is open), on the tab strip, or on the archive sidebar. Settings and the tab strip restore archive status from the file (default open). The archive sidebar imports everything as archived.</li>
+    <li>Drop a file on the settings overlay (anywhere while Settings is open), on the tab strip, or on the Library sidebar. Settings and the tab strip keep the open or closed status from the file (default open). The Library sidebar imports everything closed.</li>
   </ul>
 
   <h2>Persistence</h2>
-  <p>Open tabs, the archive, each tab's page state, and the last 5 permanently deleted open tabs are saved to <code>%LOCALAPPDATA%\agent-board\board.sqlite</code>, so they survive Cursor and Agent Board restarts. The archive is not capped; it stays until you empty it or delete rows. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
+  <p>The Library, its folders, open tabs, each page's state, and the last 10 deletes are saved to <code>%LOCALAPPDATA%\agent-board\board.sqlite</code>, so they survive Cursor and Agent Board restarts. The Library is not capped; pages stay until you delete them. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
   <p class="muted">Ask the agent to present an investigation, analysis, or design here instead of writing a throwaway HTML file.</p>
 </body>
 </html>

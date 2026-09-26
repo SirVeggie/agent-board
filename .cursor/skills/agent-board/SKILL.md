@@ -1,6 +1,6 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_patch, board_screenshot, board_list, board_archive, board_restore, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_patch, board_screenshot, board_list, board_library, board_open, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
 ---
 
 # Agent Board
@@ -9,7 +9,11 @@ A localhost tabbed HTML viewer the user keeps open. Drive it with the `agent-boa
 
 If `board_show` is missing, the MCP is not connected — tell the user to reload MCP / check `~/.cursor/mcp.json`, and fall back to a concise chat summary.
 
-If `board_list` exists but `board_archive` or `board_patch` does not, the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the archive.
+If `board_list` exists but `board_library` or `board_patch` does not (or you only see `board_archive` / `board_restore`), the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the Library.
+
+## Library model
+
+The **Library** holds every page on the board, organized by the user into folders and a manual order. The tab strip is just the pages that are currently **open**. Closing a tab keeps the page in the Library; only a delete removes it. The user owns the organization: never move pages between folders or reorder them.
 
 ## When to use it
 
@@ -25,22 +29,22 @@ Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
 
 ## Find a page
 
-**By pasted id**: the user can copy a tab reference from the board, which looks like `Agent Board tab t_1a2b3c4d`. Pass the `t_…` part as `id` straight to `board_read`, `board_patch`, etc. It works for open and archived tabs; no search needed.
+**By pasted id**: the user can copy a tab reference from the board, which looks like `Agent Board tab t_1a2b3c4d`. Pass the `t_…` part as `id` straight to `board_read`, `board_patch`, etc. It works for open and closed pages; no search needed.
 
 The user names pages by **title** (“my Jira issues page”). Keys are slugs you invented earlier. Never guess a key.
 
 **By title** (usual):
 
-1. `board_list` — every **open** tab. Each row has `id`, `key`, **`title`**. Scan titles.
-2. If it is not there and `archiveCount` > 0, `board_archive` (no query: newest first, default 20, max 50; if `remaining` > 0, pass `offset`).
+1. `board_list` — every **open** tab. Each row has `id`, `key`, **`title`**, `folder`. Scan titles.
+2. If it is not there and `closedCount` > 0, `board_library` (no query: Library order, default 20, max 50; if `remaining` > 0, pass `offset`). Pass `folder: "CLIMS/Releases"` when the user names a folder.
 
-**By content** (body or JSON state, or the title scan missed it): call `board_list({ query })` and `board_archive({ query })` **in the same turn** with the same keywords. They do not search each other’s tabs.
+**By content** (body or JSON state, or the title scan missed it): `board_library({ query })`. It searches every page, open or closed; each row says whether it is `open` and which `folder` it is in.
 
-Then `board_read` with that `id` or `key` when you need the HTML (works on archived tabs without restoring). The HTML comes back as its own unescaped text block after the metadata — copy `oldString`s from it verbatim. Prefer `board_patch` over rewriting what you read. For a large page, check it out to a file instead (see below).
+Then `board_read` with that `id` or `key` when you need the HTML (works on closed pages without opening them). The HTML comes back as its own unescaped text block after the metadata — copy `oldString`s from it verbatim. Prefer `board_patch` over rewriting what you read. For a large page, check it out to a file instead (see below).
 
 **Search keywords.** Use 1–3 distinctive words (`jira`, `clims-18595`, a phrase from the page or its state). Do not paste the whole utterance (`my jira issues page`). Filler like *my / page / tab / the* is ignored; every remaining word must match. Both tools search **title, key, visible page text, and JSON state**. Title matches rank first.
 
-Do not dump the archive into context. Page it (default 20, max 50). The archive is not capped.
+Do not dump the Library into context. Page it (default 20, max 50). The Library is not capped.
 
 ## Show or update
 
@@ -52,8 +56,11 @@ Before writing HTML or calling `board_show` / `board_patch`, mention in a new li
 - `title`: short tab label
 - `html`: a complete HTML document with inline CSS, or a fragment (the board wraps fragments)
 - `assets`: omit unless the page needs images
-- `background`: omit when the user should look at this tab (default: focus, restore if archived, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or during a **project design** screenshot loop they should not see yet.
+- `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or during a **project design** screenshot loop they should not see yet.
 - `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
+- `folder`: omit unless the user asked for the page to go in a folder (`"CLIMS/Releases"`, created if missing). New pages land at the top of the Library root. It only applies when the page is created; re-showing never moves a page.
+
+If the result has `titleKept: true`, the user renamed that page in the last 24 hours and your `title` was ignored. Keep using their title; do not fight it.
 
 **Small markup edits** to a page that already exists: `board_patch` (see below). Do not `board_show` the whole document again.
 
@@ -61,14 +68,14 @@ Do not pass a second tool to open or refresh. Do not pass `activate` — that fl
 
 | User said | Call | After |
 | --- | --- | --- |
-| show me / put it on the board | `board_show` (default) | Focused. Archived key is restored to the strip. |
-| update in the background / don’t switch | `board_show` or `board_patch` with `background: true` | Open: unread blip on that tab. Archived: stays archived, unread blip on Archive. |
+| show me / put it on the board | `board_show` (default) | Focused. A closed page is opened on the strip. |
+| update in the background / don’t switch | `board_show` or `board_patch` with `background: true` | Open: unread blip on that tab. Closed: stays closed, unread blip on Library. |
 | tweak a section / fix a line / add a paragraph | `board_patch` | Same focus rules as show. Does not rewrite the rest of the page. |
 | a small follow-up about what’s already on the page | nothing — answer in chat | Leave the tab as-is. |
-| bring it back / restore | `board_restore` | Strip, focused. |
-| change todos / notes / checklist | `board_set_state` | Never focuses. Unread blip if they are not on that tab (open or archived). |
+| bring it back / open it | `board_open` | Strip, focused. |
+| change todos / notes / checklist | `board_set_state` | Never focuses. Unread blip if they are not on that tab (open or closed). |
 
-If `board_show` or `board_patch` returns `archived: true`, tell the user the blip is on Archive, not the tab strip.
+If `board_show` or `board_patch` returns `open: false`, tell the user the blip is on Library, not the tab strip.
 
 Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
 
@@ -127,7 +134,7 @@ Not allowed:
 - replacing all or most of the page content
 - replacing the page with a continuation
 
-If the content page would change a lot, it is better to make a new page, otherwise the user loses the ability to refer back to some older information if they want. If the subject remains the same and is a continuation, instead of replacing the page directly, archive the old page (`board_close`) and create a new one with a new `key`.
+If the content page would change a lot, it is better to make a new page, otherwise the user loses the ability to refer back to some older information if they want. If the subject remains the same and is a continuation, instead of replacing the page directly, close the old tab (`board_close`, which keeps it in the Library) and create a new one with a new `key`.
 
 ## HTML
 
@@ -272,8 +279,8 @@ Do **not** signal on every keystroke, bind, or `onChange`. Do **not** wait for `
 ### After the wait
 
 - `timedOut: true` — tell the user you are still waiting, then call `board_wait` again with the **same** `afterSignalRevision` you used (omit / `0` if this was the first wait after `board_show`).
-- `archived: true` — the tab was archived; restore it with `board_restore` if you still need the handshake, or stop.
-- `closed: true` — the tab was permanently deleted; stop.
+- `closed: true` — the tab was closed (the page is still in the Library); reopen it with `board_open` if you still need the handshake, or stop.
+- `deleted: true` — the page was deleted; stop.
 - `signal` is set — continue from `state`. Branch on `signal.name` when you waited for more than one outcome.
 
 Waiting again on the **same** page without `board_show`: pass `afterSignalRevision` = the previous `signal.revision`, or you instantly get the old signal. After a new `board_show`, omit it.
@@ -352,18 +359,18 @@ document.addEventListener("keydown", (event) => {
 ## Reading and writing page state
 
 - `board_get_state` (`id` or `key`) returns `state`, `stateRevision`, and the last `signal`. Use it when you are **not** blocked on the user (they said “look at my notes”). Do not poll it.
-- `board_set_state` merges the keys you pass, so send only what you are changing. An open page applies it live without reloading. It does **not** focus the tab and does **not** restore an archived tab. Unfocused open tabs and archived tabs show an unread blip.
+- `board_set_state` merges the keys you pass, so send only what you are changing. An open page applies it live without reloading. It does **not** focus the tab and does **not** open a closed page. Unfocused open tabs and closed pages show an unread blip.
 - Pass `expectedRevision` from your last read. If the user changed the page in between, the write is refused and the error carries their current state — merge your change into it and retry with the revision it reports. Do not reach for `force`; it exists for deliberately resetting a page.
 - Read state before acting on a page the user has had time to touch. Do not assume the state you wrote earlier is still current.
 
 If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `board_wait` **next, in the same turn**, with the same signal name the page fires. Do not poll `board_get_state`.
 
-## Pin, archive, close
+## Pin, open, close
 
 - `board_pin` / `board_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `board_show` `pin`.
-- `board_close` archives one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Pass `permanent: true` to delete instead of archiving.
-- `board_restore` (`id`/`key`) brings an archived tab back to the open strip (focused).
-- Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; archive the old tab first so the previous page stays recoverable.
+- `board_close` closes one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Closed pages stay in the Library. Pass `permanent: true` to delete instead; the user can undo the last 10 deletes (a bulk delete counts as one).
+- `board_open` (`id`/`key`) opens a closed page on the strip (focused).
+- Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
 
 ## Templates

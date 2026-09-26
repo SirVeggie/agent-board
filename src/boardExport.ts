@@ -31,7 +31,10 @@ export type BoardExportPage = {
   pinned: boolean;
   createdAt: number;
   updatedAt: number;
-  archivedAt?: number;
+  closedAt?: number;
+  /** Library folder like "CLIMS/Releases"; omitted for the root. */
+  folderPath?: string;
+  libPos?: number;
   state: BoardState;
   assets: BoardExportAsset[];
   template?: PageTemplateBinding;
@@ -53,7 +56,9 @@ export type ImportPageInput = {
   pinned?: boolean;
   createdAt?: number;
   updatedAt?: number;
-  archivedAt?: number;
+  closedAt?: number;
+  folderPath?: string;
+  libPos?: number;
   state?: BoardState;
   assets?: PreparedAsset[];
   template?: PageTemplateBinding;
@@ -67,7 +72,7 @@ export type ParsedImport = {
 };
 
 export function buildExport(
-  entries: Array<{ tab: Tab; assets: PreparedAsset[] }>,
+  entries: Array<{ tab: Tab; assets: PreparedAsset[]; folderPath?: string | null }>,
   templates: Template[] = []
 ): BoardExportFile {
   const included = new Set(templates.map((template) => template.id));
@@ -76,14 +81,16 @@ export function buildExport(
     version: EXPORT_VERSION,
     exportedAt: Date.now(),
     templates,
-    pages: entries.map(({ tab, assets }) => ({
+    pages: entries.map(({ tab, assets, folderPath }) => ({
       key: tab.key,
       title: tab.title,
       html: tab.html,
       pinned: Boolean(tab.pinned),
       createdAt: tab.createdAt,
       updatedAt: tab.updatedAt,
-      ...(typeof tab.archivedAt === "number" ? { archivedAt: tab.archivedAt } : {}),
+      ...(typeof tab.closedAt === "number" ? { closedAt: tab.closedAt } : {}),
+      ...(folderPath ? { folderPath } : {}),
+      libPos: tab.libPos,
       state: isPlainObject(tab.state) ? tab.state : {},
       assets: assets.map((asset) => ({
         name: asset.name,
@@ -275,7 +282,9 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
     pinned: page.pinned === true,
     createdAt: finiteNumber(page.createdAt),
     updatedAt: finiteNumber(page.updatedAt),
-    archivedAt: finiteNumber(page.archivedAt),
+    closedAt: finiteNumber(page.closedAt),
+    ...(typeof page.folderPath === "string" && page.folderPath.trim() ? { folderPath: page.folderPath } : {}),
+    libPos: finiteNumber(page.libPos),
     state: isPlainObject(page.state) ? page.state : {},
     assets: assetsFromExport(page.assets, index),
     template: bindingFromExport(page.template, index, templateIds),

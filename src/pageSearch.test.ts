@@ -21,7 +21,7 @@ function tab(over: Partial<Tab> & Pick<Tab, "title">): Tab {
     signalRevision: 0,
     signal: null,
     assets: [],
-    ...(over.archivedAt ? { archivedAt: over.archivedAt } : {}),
+    libPos: 0,
     ...over,
   };
 }
@@ -100,28 +100,28 @@ test("title wins over a stronger content match", () => {
   assert.equal(result.hits[0].tab.title, "red blue notes");
 });
 
-test("content ranks above data, and open ranks above archived on ties", () => {
+test("content ranks above data, and open ranks above closed on ties", () => {
   const open = [
     tab({ title: "State page", html: "<p>nope</p>", state: { note: "unique-token" }, updatedAt: 10 }),
     tab({ title: "Body page", html: "<p>unique-token lives here</p>", updatedAt: 5 }),
   ];
-  const archived = [tab({ title: "Old body", html: "<p>unique-token lives here</p>", archivedAt: 1, updatedAt: 20 })];
-  const result = searchPages(open, archived, "unique-token");
+  const closed = [tab({ title: "Old body", html: "<p>unique-token lives here</p>", closedAt: 1, updatedAt: 20 })];
+  const result = searchPages(open, closed, "unique-token");
   assert.deepEqual(titles(result), ["Body page", "Old body", "State page"]);
   assert.equal(hit(result, "Body page").location, "content");
   assert.equal(hit(result, "State page").location, "data");
-  assert.equal(hit(result, "Old body").archived, true);
+  assert.equal(hit(result, "Old body").open, false);
 });
 
-test("empty query lists open tabs then archived", () => {
+test("empty query lists open tabs then closed", () => {
   const result = searchPages(
     [tab({ title: "Open A" }), tab({ title: "Open B" })],
-    [tab({ title: "Archived", archivedAt: 2 })],
+    [tab({ title: "Closed", closedAt: 2 })],
     "  "
   );
-  assert.deepEqual(titles(result), ["Open A", "Open B", "Archived"]);
+  assert.deepEqual(titles(result), ["Open A", "Open B", "Closed"]);
   assert.equal(result.hits[0].location, null);
-  assert.equal(result.hits[2].archived, true);
+  assert.equal(result.hits[2].open, false);
 });
 
 test("key match is not reported as a title match", () => {

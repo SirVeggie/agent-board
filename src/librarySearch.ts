@@ -1,7 +1,7 @@
 import type { Tab } from "./types.js";
 
-export const ARCHIVE_PAGE_DEFAULT = 20;
-export const ARCHIVE_PAGE_MAX = 50;
+export const LIBRARY_PAGE_DEFAULT = 20;
+export const LIBRARY_PAGE_MAX = 50;
 
 /** Dropped from search queries so “my jira issues page” still matches “My Jira issues”. */
 const QUERY_STOPWORDS = new Set([
@@ -26,18 +26,18 @@ const QUERY_STOPWORDS = new Set([
   "show",
 ]);
 
-export type ArchiveSearchHit = {
+export type LibrarySearchHit = {
   tab: Tab;
   snippet: string | null;
   score: number;
 };
 
-export type ArchiveSearchResult = {
-  hits: ArchiveSearchHit[];
+export type LibrarySearchResult = {
+  hits: LibrarySearchHit[];
   returned: number;
   remaining: number;
   matchCount: number;
-  archiveCount: number;
+  total: number;
 };
 
 export function htmlToText(html: string): string {
@@ -65,28 +65,26 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-export function clampArchivePage(offset: unknown, limit: unknown): { offset: number; limit: number } {
+export function clampLibraryPage(offset: unknown, limit: unknown): { offset: number; limit: number } {
   const off = typeof offset === "number" && Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
-  const raw = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : ARCHIVE_PAGE_DEFAULT;
-  return { offset: off, limit: Math.min(ARCHIVE_PAGE_MAX, Math.max(1, raw)) };
+  const raw = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : LIBRARY_PAGE_DEFAULT;
+  return { offset: off, limit: Math.min(LIBRARY_PAGE_MAX, Math.max(1, raw)) };
 }
 
-export function searchArchive(
+/** Without a query, pages keep the order they were passed in. */
+export function searchLibrary(
   tabs: Tab[],
   query: string,
   offset: number,
   limit: number
-): ArchiveSearchResult {
-  const archiveCount = tabs.length;
+): LibrarySearchResult {
+  const total = tabs.length;
   const toks = queryTokens(query);
-  const ranked: ArchiveSearchHit[] = toks.length
+  const ranked: LibrarySearchHit[] = toks.length
     ? tabs
         .map((tab) => scoreTab(tab, toks))
-        .filter((hit): hit is ArchiveSearchHit => hit !== null)
-        .sort(
-          (a, b) =>
-            b.score - a.score || (b.tab.archivedAt ?? b.tab.updatedAt) - (a.tab.archivedAt ?? a.tab.updatedAt)
-        )
+        .filter((hit): hit is LibrarySearchHit => hit !== null)
+        .sort((a, b) => b.score - a.score || b.tab.updatedAt - a.tab.updatedAt)
     : tabs.map((tab) => ({ tab, snippet: null, score: 0 }));
 
   const slice = ranked.slice(offset, offset + limit);
@@ -95,7 +93,7 @@ export function searchArchive(
     returned: slice.length,
     remaining: Math.max(0, ranked.length - offset - slice.length),
     matchCount: ranked.length,
-    archiveCount,
+    total,
   };
 }
 
@@ -113,7 +111,7 @@ function stateText(tab: Tab): string {
   }
 }
 
-function scoreTab(tab: Tab, toks: string[]): ArchiveSearchHit | null {
+function scoreTab(tab: Tab, toks: string[]): LibrarySearchHit | null {
   const title = normalize(tab.title);
   const key = normalize(tab.key);
   const body = normalize(htmlToText(tab.html));

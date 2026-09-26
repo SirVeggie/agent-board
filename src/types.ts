@@ -70,6 +70,17 @@ export type TemplateBinding = {
   reason?: string;
 };
 
+export type Folder = {
+  id: string;
+  /** null is the Library root. */
+  parentId: string | null;
+  name: string;
+  /** Order among sibling folders; sparse, compare only. */
+  pos: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type Tab = {
   id: string;
   key: string;
@@ -77,9 +88,16 @@ export type Tab = {
   html: string;
   pinned: boolean;
   createdAt: number;
+  /** Last content change: HTML, title, or template values. Not pins, signals, opening, or moving. */
   updatedAt: number;
-  /** Set while the tab is in the archive; omitted when open. */
-  archivedAt?: number;
+  /** Set while the page has no tab in the strip; omitted when open. */
+  closedAt?: number;
+  /** Library folder; omitted for the root. */
+  folderId?: string;
+  /** Order among sibling pages in the folder; sparse, compare only. */
+  libPos: number;
+  /** When the user last renamed the page; agent titles are ignored for USER_TITLE_HOLD_MS after. */
+  userTitleAt?: number;
   /** Strip coordinate. Owned by the tab; omitted from agent-facing meta. */
   stripSeq: number;
   revision: number;
@@ -106,12 +124,17 @@ export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision" |
   embedUrl?: string;
 };
 
-export type DeletedEntry = {
-  tab: Tab;
+/** One delete operation. A folder delete is one batch however many pages it held. */
+export type DeletedBatch = {
+  id: string;
   deletedAt: number;
+  tabs: Tab[];
+  folders: Folder[];
 };
 
-export const DELETE_LIMIT = 5;
+export const DELETE_LIMIT = 10;
+
+export const USER_TITLE_HOLD_MS = 24 * 60 * 60 * 1000;
 
 /** Reserved for the in-app help page. Closing it discards the tab instead of archiving. */
 export const WELCOME_KEY = "welcome";
@@ -146,19 +169,19 @@ export type BoardEvent =
   | {
       type: "snapshot";
       tabs: TabMeta[];
-      archive: TabMeta[];
+      closed: TabMeta[];
+      folders: Folder[];
       activeId: string | null;
       templates: TemplateMeta[];
       persistError: string | null;
     }
   | { type: "tab_upserted"; tab: TabMeta; index?: number }
-  | { type: "tab_closed"; id: string }
-  | { type: "tab_archived"; id: string }
+  | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }
   | { type: "tab_focus_request"; id: string }
   | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string }
   | { type: "tab_signal"; id: string; signal: TabSignal }
-  | { type: "archive_cleared" }
+  | { type: "folders"; folders: Folder[] }
   | { type: "template_upserted"; template: TemplateMeta }
   | { type: "template_deleted"; id: string }
   | { type: "persist_error"; error: string }
@@ -172,6 +195,8 @@ export type UpsertInput = {
   pin?: boolean;
   state?: BoardState;
   assets?: PreparedAsset[];
+  /** Folder path like "CLIMS/Releases" for a newly created page. Ignored for existing keys. */
+  folder?: string;
   /** An agent writing a key owned by a hidden tab gets a new tab instead. */
   viewer?: Viewer;
 };
@@ -192,8 +217,8 @@ export type SignalInput = {
 
 export type RestorePlacement = "append" | "index";
 
-/** Where imported pages land. `meta` follows each page's archivedAt (missing → open). */
-export type ImportDestination = "meta" | "archive";
+/** Where imported pages land. `meta` follows each page's closedAt (missing → open). */
+export type ImportDestination = "meta" | "closed";
 
 /** A stale expectedRevision resolves to ok:false carrying the current state so the caller can merge and retry. */
 export type SetStateResult =
@@ -209,7 +234,10 @@ export function toMeta(tab: Tab): TabMeta {
     pinned: tab.pinned,
     createdAt: tab.createdAt,
     updatedAt: tab.updatedAt,
-    ...(tab.archivedAt ? { archivedAt: tab.archivedAt } : {}),
+    ...(tab.closedAt ? { closedAt: tab.closedAt } : {}),
+    ...(tab.folderId ? { folderId: tab.folderId } : {}),
+    libPos: tab.libPos,
+    ...(tab.userTitleAt ? { userTitleAt: tab.userTitleAt } : {}),
     revision: tab.revision,
     stateRevision: tab.stateRevision,
     stateUpdatedAt: tab.stateUpdatedAt,

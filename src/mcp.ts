@@ -11,7 +11,7 @@ import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBrowser } from "./openBrowser.js";
 import { clampWaitMs, parseSignalNames } from "./signal.js";
-import { clampArchivePage } from "./archiveSearch.js";
+import { clampLibraryPage } from "./librarySearch.js";
 import { withAgentDates } from "./dates.js";
 import type { Tab, TabAsset, TabMeta } from "./types.js";
 
@@ -34,12 +34,12 @@ export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
     name: "agent-board",
-    version: "1.6.0",
+    version: "2.0.0",
   });
 
   server.tool(
     "board_show",
-    "Present an HTML page on the local Agent Board. Creates a tab or replaces the tab with the same key (open or archived). Default: focus the tab, restore it if archived, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; an archived tab stays archived with an Archive blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer board_patch instead of rewriting html.",
+    "Present an HTML page on the local Agent Board. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; a closed page stays closed with a Library blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer board_patch instead of rewriting html.",
     {
       key: z
         .string()
@@ -68,9 +68,15 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe(
-          "If true, do not focus this tab and do not bring the board window forward. Use when the user said update in the background, stay where I am, or don’t switch tabs, and for private screenshot loops. Open tab: unread blip on that tab. Archived tab: stays archived, unread blip on Archive. Omit (default) when the user should look at this tab — that also restores an archived key to the strip."
+          "If true, do not focus this tab and do not bring the board window forward. Use when the user said update in the background, stay where I am, or don’t switch tabs, and for private screenshot loops. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
         ),
       pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned will keep it."),
+      folder: z
+        .string()
+        .optional()
+        .describe(
+          "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Omit unless the user asked for a folder."
+        ),
       state: z
         .record(z.unknown())
         .optional()
@@ -78,7 +84,7 @@ export async function startMcp(): Promise<void> {
           "Initial state for an interactive page, readable in the page as board.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
         ),
     },
-    async ({ key, title, html, assets, pin, state, background }) => {
+    async ({ key, title, html, assets, pin, state, background, folder }) => {
       const activate = background !== true;
       let resolvedAssets: { path: string; name?: string }[] = [];
       try {
@@ -93,14 +99,20 @@ export async function startMcp(): Promise<void> {
         activate,
         pin,
         state,
+        folder,
         assets: resolvedAssets.length ? resolvedAssets : undefined,
       });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const created = Boolean((data as { created?: boolean }).created);
-      const archived = Boolean((data as { archived?: boolean }).archived);
-      const tab = (data as { tab: { id: string; key: string; title: string; assets?: TabAsset[] } }).tab;
+      const payload = data as {
+        created?: boolean;
+        closed?: boolean;
+        titleKept?: boolean;
+        tab: { id: string; key: string; title: string; folder: string | null; assets?: TabAsset[] };
+      };
+      const { tab } = payload;
+      const closed = Boolean(payload.closed);
       if (activate) {
         const info = await health();
         if (!info || info.viewers === 0) {
@@ -108,26 +120,24 @@ export async function startMcp(): Promise<void> {
         }
       }
       return jsonResult({
-        created,
-        archived,
+        created: Boolean(payload.created),
+        open: !closed,
         id: tab.id,
         key: tab.key,
         title: tab.title,
+        folder: tab.folder,
+        ...(payload.titleKept ? { titleKept: true } : {}),
         url: boardUrl(tab.id),
         viewUrl: viewUrl(tab.id),
         assets: tab.assets ?? [],
-        note: archived
-          ? "Updated in the archive (background). The unread blip is on Archive, not the tab strip. Use board_restore to bring it back."
-          : activate
-            ? "Shown on Agent Board. Do not write this HTML to a workspace file."
-            : "Updated in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.",
+        note: showNote(closed, activate, payload.titleKept, "Shown", "Updated"),
       });
     }
   );
 
   server.tool(
     "board_patch",
-    "Patch snippets on an existing Agent Board page without rewriting the whole HTML. The tab must already exist (open or archived) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not clear wait signals or page state. Default: focus the tab (and restore it if archived). Pass background: true to patch without focusing. Prefer this over board_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with board_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
+    "Patch snippets on an existing Agent Board page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not clear wait signals or page state. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over board_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with board_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -160,12 +170,17 @@ export async function startMcp(): Promise<void> {
         .describe(
           "Refuse the change if the page's revision is no longer this one (someone else edited it). Pass the revision from board_read or the previous board_patch."
         ),
-      title: z.string().optional().describe("Optional new tab title. May be sent without edits to rename a tab, including a template-bound page."),
+      title: z
+        .string()
+        .optional()
+        .describe(
+          "Optional new tab title. May be sent without edits to rename a tab, including a template-bound page. Ignored for 24h after the user renamed the page themselves (the result then has titleKept: true)."
+        ),
       background: z
         .boolean()
         .optional()
         .describe(
-          "If true, do not focus this tab and do not bring the board window forward. Open tab: unread blip on that tab. Archived tab: stays archived, unread blip on Archive. Omit (default) when the user should look at this tab — that also restores an archived key to the strip."
+          "If true, do not focus this tab and do not bring the board window forward. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
         ),
     },
     async ({ id, key, edits, htmlPath, expectedRevision, title, background }) => {
@@ -201,8 +216,9 @@ export async function startMcp(): Promise<void> {
       }
       const payload = data as {
         applied: number;
-        archived: boolean;
-        tab: { id: string; key: string; title: string; revision: number; htmlBytes: number };
+        closed: boolean;
+        titleKept?: boolean;
+        tab: { id: string; key: string; title: string; revision: number; htmlBytes: number; folder: string | null };
       };
       if (activate) {
         const info = await health();
@@ -212,26 +228,24 @@ export async function startMcp(): Promise<void> {
       }
       return jsonResult({
         applied: payload.applied,
-        archived: payload.archived,
+        open: !payload.closed,
         id: payload.tab.id,
         key: payload.tab.key,
         title: payload.tab.title,
+        folder: payload.tab.folder,
+        ...(payload.titleKept ? { titleKept: true } : {}),
         revision: payload.tab.revision,
         htmlBytes: payload.tab.htmlBytes,
         url: boardUrl(payload.tab.id),
         viewUrl: viewUrl(payload.tab.id),
-        note: payload.archived
-          ? "Patched in the archive (background). The unread blip is on Archive, not the tab strip. Use board_restore to bring it back."
-          : activate
-            ? "Patched on Agent Board. Do not write this HTML to a workspace file."
-            : "Patched in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.",
+        note: showNote(payload.closed, activate, payload.titleKept, "Patched", "Patched"),
       });
     }
   );
 
   server.tool(
     "board_list",
-    "List or search open tabs only. Omit query to list every open tab (id, key, title, pinned, dates, size) plus activeId and archiveCount — not paged. Pass query to search title, key, visible page text, and JSON state (same rules as board_archive). Archived tabs are never included; if the page is missing and archiveCount > 0, also call board_archive with the same query. Do not invent a key. If board_archive is missing, the MCP is stale — tell the user to reload it.",
+    "List or search open tabs only. Omit query to list every open tab (id, key, title, folder, pinned, dates, size) plus activeId and closedCount — not paged. Pass query to search title, key, visible page text, and JSON state (same rules as board_library). Closed pages are never included; if the page is missing and closedCount > 0, call board_library with the same query (it searches every page). Do not invent a key. If board_library is missing, the MCP is stale — tell the user to reload it.",
     {
       query: z
         .string()
@@ -253,13 +267,13 @@ export async function startMcp(): Promise<void> {
       const payload = data as {
         tabs: Array<TabMeta & { snippet?: string | null }>;
         activeId: string | null;
-        archiveCount?: number;
+        closedCount?: number;
         matchCount?: number;
         returned?: number;
         remaining?: number;
         openCount?: number;
       };
-      const archiveCount = payload.archiveCount ?? 0;
+      const closedCount = payload.closedCount ?? 0;
       const searched = Boolean(query?.trim());
       return jsonResult({
         tabs: (payload.tabs ?? []).map((tab) => {
@@ -267,7 +281,7 @@ export async function startMcp(): Promise<void> {
           return searched ? { ...dates, snippet: tab.snippet ?? null } : dates;
         }),
         activeId: payload.activeId,
-        archiveCount,
+        closedCount,
         ...(searched
           ? {
               returned: payload.returned,
@@ -277,75 +291,80 @@ export async function startMcp(): Promise<void> {
             }
           : {}),
         note: searched
-          ? `Searched open tabs only (${payload.matchCount ?? 0} match(es) of ${payload.openCount ?? 0}). Archived tabs are not included` +
-            (archiveCount > 0
-              ? ` — also call board_archive with the same query (${archiveCount} in the archive).`
+          ? `Searched open tabs only (${payload.matchCount ?? 0} match(es) of ${payload.openCount ?? 0}). Closed pages are not included` +
+            (closedCount > 0
+              ? ` — call board_library with the same query to search every page (${closedCount} closed).`
               : ".")
-          : archiveCount > 0
-            ? `${archiveCount} archived tab(s) are not listed here. Call board_archive to page them, or pass query to search open tabs (title, key, page text, state).`
+          : closedCount > 0
+            ? `${closedCount} closed page(s) are not listed here. Call board_library to page or search the whole Library.`
             : undefined,
       });
     }
   );
 
   server.tool(
-    "board_archive",
-    "Page or search archived tabs only. Each row includes id, key, title, dates, and a snippet when searching. Omit query to list by archived date, newest first (default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Open tabs are not searched — use board_list with the same query for those. If remaining > 0, pass offset to get the next page. Do not dump the whole archive into context.",
+    "board_library",
+    "Page or search the Library: every page on the board, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context.",
     {
       query: z
         .string()
         .optional()
         .describe(
-          "Keywords to search archived tabs. Prefer distinctive title words (jira). Every remaining word must match. Searches title, key, page text, and JSON state. Omit to list by archived date."
+          "Keywords to search pages. Prefer distinctive title words (jira). Every remaining word must match. Searches title, key, page text, and JSON state. Omit to list in Library order."
         ),
-      offset: z.number().optional().describe("Skip this many matching tabs. Default 0."),
+      folder: z
+        .string()
+        .optional()
+        .describe("Folder path like \"CLIMS/Releases\" to limit results to that folder and its subfolders."),
+      offset: z.number().optional().describe("Skip this many matching pages. Default 0."),
       limit: z
         .number()
         .optional()
         .describe("Page size. Default 20, maximum 50."),
     },
-    async ({ query, offset, limit }) => {
-      const page = clampArchivePage(offset, limit);
+    async ({ query, folder, offset, limit }) => {
+      const page = clampLibraryPage(offset, limit);
       const params = new URLSearchParams();
       if (query?.trim()) {
         params.set("query", query.trim());
       }
+      if (folder?.trim()) {
+        params.set("folder", folder.trim());
+      }
       params.set("offset", String(page.offset));
       params.set("limit", String(page.limit));
-      const { status, data } = await api("GET", `/api/archive?${params.toString()}`);
+      const { status, data } = await api("GET", `/api/library?${params.toString()}`);
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const payload = data as {
-        tabs: Array<TabMeta & { snippet?: string | null }>;
+        tabs: Array<TabMeta & { snippet?: string | null; open: boolean; folder: string | null }>;
         returned: number;
         remaining: number;
         matchCount: number;
-        archiveCount: number;
+        total: number;
       };
+      const searched = Boolean(query?.trim());
       return jsonResult({
         tabs: (payload.tabs ?? []).map((tab) => {
           const dates = withAgentDates(tab);
-          return {
-            ...dates,
-            snippet: tab.snippet ?? null,
-          };
+          return searched ? { ...dates, snippet: tab.snippet ?? null } : dates;
         }),
         returned: payload.returned,
         remaining: payload.remaining,
         matchCount: payload.matchCount,
-        archiveCount: payload.archiveCount,
+        total: payload.total,
         note:
-          payload.matchCount === payload.archiveCount
-            ? `Returned ${payload.returned} of ${payload.archiveCount} archived tabs; ${payload.remaining} after this page.`
-            : `Returned ${payload.returned} of ${payload.matchCount} matches (${payload.archiveCount} tabs in the archive); ${payload.remaining} matches after this page.`,
+          payload.matchCount === payload.total
+            ? `Returned ${payload.returned} of ${payload.total} pages; ${payload.remaining} after this page.`
+            : `Returned ${payload.returned} of ${payload.matchCount} matches (${payload.total} pages); ${payload.remaining} matches after this page.`,
       });
     }
   );
 
   server.tool(
-    "board_restore",
-    "Bring an archived tab back to the open tab strip (appended at the end and focused). Identify the tab by id or key from board_archive.",
+    "board_open",
+    "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from board_library. The page stays where it is in the Library.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -355,22 +374,22 @@ export async function startMcp(): Promise<void> {
       if (!which) {
         return errorResult("Provide id or key");
       }
-      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/restore`);
+      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/open`, { activate: true });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const payload = data as { tab: TabMeta; archiveCount: number };
+      const payload = data as { tab: TabMeta & { folder: string | null }; closedCount: number };
       return jsonResult({
         ...withAgentDates(payload.tab),
-        archiveCount: payload.archiveCount,
-        note: "Restored to the open tab strip.",
+        closedCount: payload.closedCount,
+        note: "Open in the tab strip.",
       });
     }
   );
 
   server.tool(
     "board_read",
-    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and archived tabs without restoring. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your file tools (Read, Grep, StrReplace), then check it in with board_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
+    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your file tools (Read, Grep, StrReplace), then check it in with board_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -390,19 +409,20 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const tab = data as Tab;
+      const tab = data as Tab & { folder: string | null };
       const dates = withAgentDates(tab);
       const meta = {
         id: tab.id,
         key: tab.key,
         title: tab.title,
+        folder: tab.folder,
         pinned: tab.pinned,
-        archived: Boolean(tab.archivedAt),
+        open: !tab.closedAt,
         revision: tab.revision,
         htmlBytes: Buffer.byteLength(tab.html, "utf8"),
         createdAt: dates.createdAt,
         updatedAt: dates.updatedAt,
-        ...(dates.archivedAt ? { archivedAt: dates.archivedAt } : {}),
+        ...(dates.closedAt ? { closedAt: dates.closedAt } : {}),
         viewUrl: viewUrl(tab.id),
         assets: tab.assets ?? [],
         ...(tab.templateId
@@ -441,7 +461,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_screenshot",
-    "Capture a screenshot of a board page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or archived). Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
+    "Capture a screenshot of a board page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or closed). Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -512,7 +532,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_get_state",
-    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, archived, or the browser is open. Do not poll this tool while waiting for the user — use board_wait.",
+    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, closed, or the browser is open. Do not poll this tool while waiting for the user — use board_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -532,7 +552,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_wait",
-    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 10 minutes. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If archived is true, the tab moved to the archive — restore it or stop. If closed is true, the tab was permanently deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
+    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 10 minutes. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with board_open or stop. If deleted is true, the page was deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -587,7 +607,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_set_state",
-    "Update the state of an interactive board page without focusing it or restoring it from the archive. An open page applies the write live without reloading. An unfocused open tab and an archived tab both show an unread blip. Keys merge into the existing state, so send only what you are changing. Pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft).",
+    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Keys merge into the existing state, so send only what you are changing. Pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft).",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -658,16 +678,16 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_close",
-    "Archive Agent Board tabs (same as the UI close button). Pass id or key for one tab, or unpinned/all for bulk archive. Pass permanent: true to delete instead of archiving (no confirmation). Permanent delete of an open tab can be undone with Ctrl+Z for the last 5; deleting from the archive cannot.",
+    "Close Agent Board tabs (same as the UI close button). The pages stay in the Library and can be reopened with board_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); the user can undo the last 10 deletes with Ctrl+Z, and a bulk delete counts as one.",
     {
-      id: z.string().optional().describe("Tab id to archive or delete."),
-      key: z.string().optional().describe("Tab key to archive or delete."),
-      unpinned: z.boolean().optional().describe("If true, archive (or permanently delete) every tab that is not pinned."),
-      all: z.boolean().optional().describe("If true, archive (or permanently delete) every tab including pinned ones."),
+      id: z.string().optional().describe("Tab id to close or delete."),
+      key: z.string().optional().describe("Tab key to close or delete."),
+      unpinned: z.boolean().optional().describe("If true, close (or permanently delete) every open tab that is not pinned."),
+      all: z.boolean().optional().describe("If true, close (or permanently delete) every open tab including pinned ones."),
       permanent: z
         .boolean()
         .optional()
-        .describe("If true, delete instead of moving to the archive. Default false."),
+        .describe("If true, delete the page instead of just closing its tab. Default false."),
     },
     async ({ id, key, unpinned, all, permanent }) => {
       const extra = permanent ? "permanent=true" : "";
@@ -866,6 +886,15 @@ async function pinResult(which: string | undefined, pin: boolean) {
     title: tab.title,
     pinned: tab.pinned,
   });
+}
+
+function showNote(closed: boolean, activate: boolean, titleKept: boolean | undefined, shown: string, updated: string): string {
+  const base = closed
+    ? `${updated} in the Library (tab closed). The unread blip is on Library, not the tab strip. Use board_open to bring it back.`
+    : activate
+      ? `${shown} on Agent Board. Do not write this HTML to a workspace file.`
+      : `${updated} in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.`;
+  return titleKept ? `${base} The user renamed this page recently, so its title was kept.` : base;
 }
 
 function resolveAssetPaths(assets: Array<string | { path: string; name?: string }> | undefined) {

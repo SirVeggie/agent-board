@@ -58,10 +58,12 @@ test("parseImport reads a single-page export including state and assets", () => 
         title: "Todos",
         html: "<!DOCTYPE html><html><body>list</body></html>",
         pinned: true,
-        archivedAt: 99,
+        closedAt: 99,
+        libPos: 3,
         state: { items: [1] },
       }),
       assets: [{ name: "dot.png", mimeType: "image/png", buffer: png }],
+      folderPath: "Work/Lists",
     },
   ]);
   const parsed = parseImport(serializeExport(file), "todos.board.json");
@@ -71,7 +73,9 @@ test("parseImport reads a single-page export including state and assets", () => 
   assert.equal(page.key, "todos");
   assert.equal(page.title, "Todos");
   assert.equal(page.pinned, true);
-  assert.equal(page.archivedAt, 99);
+  assert.equal(page.closedAt, 99);
+  assert.equal(page.folderPath, "Work/Lists");
+  assert.equal(page.libPos, 3);
   assert.deepEqual(page.state, { items: [1] });
   assert.equal(page.assets?.length, 1);
   assert.equal(page.assets?.[0].name, "dot.png");

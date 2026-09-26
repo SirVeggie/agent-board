@@ -2,17 +2,44 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
-import { ensureAgentHiddenColumn, ensureTemplateSchema } from "./dbMigrate.js";
-import { isPlainObject, type BoardState, type Tab, type TabSignal, type Template, type TemplateBinding } from "./types.js";
+import { ensureTemplateSchema, migrateV1ToLibrarySchema } from "./dbMigrate.js";
+import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
+import {
+  isPlainObject,
+  type BoardState,
+  type Folder,
+  type Tab,
+  type TabSignal,
+  type Template,
+  type TemplateBinding,
+} from "./types.js";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
-export type TabStatus = "open" | "archived" | "deleted";
+export type TabStatus = "open" | "closed" | "deleted";
 
 export type StoredTab = {
   tab: Tab;
   status: TabStatus;
   deletedAt?: number;
+  deletedBatch?: string;
+};
+
+export type StoredFolder = {
+  folder: Folder;
+  deletedAt?: number;
+  deletedBatch?: string;
+};
+
+type FolderRow = {
+  id: string;
+  parent_id: string | null;
+  name: string;
+  pos: number;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  deleted_batch: string | null;
 };
 
 type TemplateRow = {
@@ -49,7 +76,7 @@ type TabRow = {
   strip_seq: number;
   created_at: number;
   updated_at: number;
-  archived_at: number | null;
+  closed_at: number | null;
   deleted_at: number | null;
   revision: number;
   state_revision: number;
@@ -58,6 +85,10 @@ type TabRow = {
   signal: string | null;
   assets: string;
   agent_hidden: number;
+  folder_id: string | null;
+  lib_pos: number;
+  deleted_batch: string | null;
+  user_title_at: number | null;
 };
 
 type LegacyPersisted = {
@@ -67,36 +98,15 @@ type LegacyPersisted = {
   deleted?: Array<{ tab?: LegacyTab; index?: number; deletedAt?: number }>;
 };
 
-type LegacyTab = Partial<Tab> & { id?: string; html?: string };
+type LegacyTab = Partial<Tab> & { id?: string; html?: string; archivedAt?: number };
 
 const CREATE_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS tabs (
-  id TEXT PRIMARY KEY,
-  key TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL,
-  html TEXT NOT NULL,
-  state TEXT NOT NULL DEFAULT '{}',
-  pinned INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL CHECK (status IN ('open','archived','deleted')),
-  strip_seq INTEGER NOT NULL UNIQUE,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  archived_at INTEGER,
-  deleted_at INTEGER,
-  revision INTEGER NOT NULL,
-  state_revision INTEGER NOT NULL,
-  state_updated_at INTEGER NOT NULL DEFAULT 0,
-  signal_revision INTEGER NOT NULL DEFAULT 0,
-  signal TEXT,
-  assets TEXT NOT NULL DEFAULT '[]',
-  agent_hidden INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_tabs_status_archived ON tabs(status, archived_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tabs_status_deleted ON tabs(status, deleted_at DESC);
+${TABS_TABLE_SQL}
+${FOLDERS_TABLE_SQL}
 CREATE TABLE IF NOT EXISTS templates (
   id TEXT PRIMARY KEY,
   key TEXT NOT NULL UNIQUE,
@@ -123,12 +133,14 @@ CREATE TABLE IF NOT EXISTS template_bindings (
 const UPSERT_SQL = `
 INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
-  created_at, updated_at, archived_at, deleted_at,
-  revision, state_revision, state_updated_at, signal_revision, signal, assets, agent_hidden
+  created_at, updated_at, closed_at, deleted_at,
+  revision, state_revision, state_updated_at, signal_revision, signal, assets, agent_hidden,
+  folder_id, lib_pos, deleted_batch, user_title_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -140,7 +152,7 @@ ON CONFLICT(id) DO UPDATE SET
   strip_seq = excluded.strip_seq,
   created_at = excluded.created_at,
   updated_at = excluded.updated_at,
-  archived_at = excluded.archived_at,
+  closed_at = excluded.closed_at,
   deleted_at = excluded.deleted_at,
   revision = excluded.revision,
   state_revision = excluded.state_revision,
@@ -148,7 +160,16 @@ ON CONFLICT(id) DO UPDATE SET
   signal_revision = excluded.signal_revision,
   signal = excluded.signal,
   assets = excluded.assets,
-  agent_hidden = excluded.agent_hidden
+  agent_hidden = excluded.agent_hidden,
+  folder_id = excluded.folder_id,
+  lib_pos = excluded.lib_pos,
+  deleted_batch = excluded.deleted_batch,
+  user_title_at = excluded.user_title_at
+`;
+
+const INSERT_FOLDER_SQL = `
+INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const UPSERT_TEMPLATE_SQL = `
@@ -191,6 +212,8 @@ export class BoardDb {
   private upsertBindingStmt;
   private deleteBindingStmt;
   private clearBindingsStmt;
+  private insertFolderStmt;
+  private clearFoldersStmt;
 
   constructor(private readonly db: DatabaseSync) {
     this.upsertStmt = db.prepare(UPSERT_SQL);
@@ -204,6 +227,8 @@ export class BoardDb {
     this.upsertBindingStmt = db.prepare(UPSERT_BINDING_SQL);
     this.deleteBindingStmt = db.prepare("DELETE FROM template_bindings WHERE tab_id = ?");
     this.clearBindingsStmt = db.prepare("DELETE FROM template_bindings");
+    this.insertFolderStmt = db.prepare(INSERT_FOLDER_SQL);
+    this.clearFoldersStmt = db.prepare("DELETE FROM folders");
   }
 
   static open(sqlitePath: string, jsonPath: string): BoardDb {
@@ -241,6 +266,7 @@ export class BoardDb {
   load(): {
     activeId: string | null;
     rows: StoredTab[];
+    folders: StoredFolder[];
     templates: Template[];
     bindings: TemplateBinding[];
   } {
@@ -248,11 +274,13 @@ export class BoardDb {
       | { v: string }
       | undefined;
     const rows = this.db.prepare("SELECT * FROM tabs").all() as TabRow[];
+    const folders = (this.db.prepare("SELECT * FROM folders").all() as FolderRow[]).map(rowToFolder);
     const templates = (this.db.prepare("SELECT * FROM templates").all() as TemplateRow[]).map(rowToTemplate);
     const bindings = (this.db.prepare("SELECT * FROM template_bindings").all() as BindingRow[]).map(rowToBinding);
     return {
       activeId: active?.v ?? null,
       rows: rows.map(rowToStored),
+      folders,
       templates,
       bindings,
     };
@@ -262,6 +290,8 @@ export class BoardDb {
     activeId: string | null;
     upserts: StoredTab[];
     removedIds: string[];
+    /** Replaces every folder row when present. */
+    folders?: StoredFolder[];
     templates?: Template[];
     removedTemplateIds?: string[];
     bindings?: TemplateBinding[];
@@ -279,6 +309,12 @@ export class BoardDb {
       this.parkDirtyStripSeqs(input.upserts);
       for (const row of input.upserts) {
         this.upsertStmt.run(...storedToParams(row));
+      }
+      if (input.folders) {
+        this.clearFoldersStmt.run();
+        for (const stored of input.folders) {
+          this.insertFolderStmt.run(...folderToParams(stored));
+        }
       }
       for (const id of input.removedTemplateIds ?? []) {
         this.deleteTemplateStmt.run(id);
@@ -347,11 +383,12 @@ export class BoardDb {
       if (version > SCHEMA_VERSION) {
         throw new Error(`board.sqlite schema ${version} is newer than this daemon (${SCHEMA_VERSION})`);
       }
-      if (version < SCHEMA_VERSION) {
+      if (version === 1) {
+        migrateV1ToLibrarySchema(db);
+      } else if (version < SCHEMA_VERSION) {
         throw new Error(`board.sqlite schema ${version} cannot be opened by this daemon`);
       }
       ensureTemplateSchema(db);
-      ensureAgentHiddenColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -371,8 +408,10 @@ function configure(db: DatabaseSync): void {
   db.exec("PRAGMA busy_timeout = 5000");
 }
 
+/** A deleted page keeps closedAt when it was closed, so undo knows whether to reopen its tab. */
 function storedToParams(row: StoredTab): SQLInputValue[] {
-  const { tab, status, deletedAt } = row;
+  const { tab, status, deletedAt, deletedBatch } = row;
+  const closedAt = status === "open" ? null : (tab.closedAt ?? (status === "closed" ? tab.updatedAt : null));
   return [
     tab.id,
     tab.key,
@@ -384,7 +423,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.stripSeq,
     tab.createdAt,
     tab.updatedAt,
-    status === "archived" ? (tab.archivedAt ?? tab.updatedAt) : null,
+    closedAt,
     status === "deleted" ? (deletedAt ?? tab.updatedAt) : null,
     tab.revision,
     tab.stateRevision,
@@ -393,11 +432,44 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.signal ? JSON.stringify(tab.signal) : null,
     JSON.stringify(tab.assets ?? []),
     tab.agentHidden ? 1 : 0,
+    tab.folderId ?? null,
+    tab.libPos,
+    status === "deleted" ? (deletedBatch ?? null) : null,
+    tab.userTitleAt ?? null,
   ];
 }
 
+function folderToParams(stored: StoredFolder): SQLInputValue[] {
+  const { folder, deletedAt, deletedBatch } = stored;
+  return [
+    folder.id,
+    folder.parentId,
+    folder.name,
+    folder.pos,
+    folder.createdAt,
+    folder.updatedAt,
+    deletedAt ?? null,
+    deletedAt !== undefined ? (deletedBatch ?? null) : null,
+  ];
+}
+
+function rowToFolder(row: FolderRow): StoredFolder {
+  return {
+    folder: {
+      id: row.id,
+      parentId: row.parent_id ?? null,
+      name: row.name,
+      pos: Number(row.pos) || 0,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    },
+    ...(row.deleted_at !== null ? { deletedAt: row.deleted_at } : {}),
+    ...(row.deleted_batch ? { deletedBatch: row.deleted_batch } : {}),
+  };
+}
+
 function rowToStored(row: TabRow): StoredTab {
-  if (row.status !== "open" && row.status !== "archived" && row.status !== "deleted") {
+  if (row.status !== "open" && row.status !== "closed" && row.status !== "deleted") {
     throw new Error(`invalid tab status: ${row.status}`);
   }
   let state: BoardState = {};
@@ -438,6 +510,7 @@ function rowToStored(row: TabRow): StoredTab {
     pinned: Boolean(row.pinned),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    libPos: Number(row.lib_pos) || 0,
     stripSeq: row.strip_seq,
     revision: row.revision,
     state,
@@ -450,13 +523,23 @@ function rowToStored(row: TabRow): StoredTab {
   if (row.agent_hidden) {
     tab.agentHidden = true;
   }
-  if (row.status === "archived") {
-    tab.archivedAt = row.archived_at ?? row.updated_at;
+  if (row.folder_id) {
+    tab.folderId = row.folder_id;
+  }
+  if (row.user_title_at) {
+    tab.userTitleAt = row.user_title_at;
+  }
+  if (row.status === "closed") {
+    tab.closedAt = row.closed_at ?? row.updated_at;
+  } else if (row.status === "deleted" && row.closed_at) {
+    tab.closedAt = row.closed_at;
   }
   return {
     tab,
     status: row.status,
-    ...(row.status === "deleted" ? { deletedAt: row.deleted_at ?? row.updated_at } : {}),
+    ...(row.status === "deleted"
+      ? { deletedAt: row.deleted_at ?? row.updated_at, ...(row.deleted_batch ? { deletedBatch: row.deleted_batch } : {}) }
+      : {}),
   };
 }
 
@@ -470,7 +553,7 @@ export function legacyToStored(parsed: LegacyPersisted): StoredTab[] {
       continue;
     }
     seen.add(tab.id);
-    delete tab.archivedAt;
+    delete tab.closedAt;
     rows.push({ tab, status: "open" });
   }
   for (const entry of parsed.archive ?? []) {
@@ -479,8 +562,8 @@ export function legacyToStored(parsed: LegacyPersisted): StoredTab[] {
       continue;
     }
     seen.add(tab.id);
-    tab.archivedAt = typeof tab.archivedAt === "number" ? tab.archivedAt : tab.updatedAt;
-    rows.push({ tab, status: "archived" });
+    tab.closedAt = typeof entry.tab?.archivedAt === "number" ? entry.tab.archivedAt : tab.updatedAt;
+    rows.push({ tab, status: "closed" });
   }
   for (const entry of parsed.deleted ?? []) {
     const tab = coerceLegacyTab(entry.tab, ++seq);
@@ -488,7 +571,7 @@ export function legacyToStored(parsed: LegacyPersisted): StoredTab[] {
       continue;
     }
     seen.add(tab.id);
-    delete tab.archivedAt;
+    delete tab.closedAt;
     rows.push({
       tab,
       status: "deleted",
@@ -518,7 +601,7 @@ function coerceLegacyTab(raw: LegacyTab | undefined, seq: number): Tab | undefin
     pinned: Boolean(raw.pinned),
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : Date.now(),
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : Date.now(),
-    ...(typeof raw.archivedAt === "number" ? { archivedAt: raw.archivedAt } : {}),
+    libPos: seq,
     stripSeq: seq,
     revision: typeof raw.revision === "number" ? raw.revision : 1,
     state: isPlainObject(raw.state) ? raw.state : {},

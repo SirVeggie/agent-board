@@ -2,14 +2,15 @@ import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
 import { buildExport, type BoardExportFile, type ImportPageInput } from "./boardExport.js";
-import { searchArchive, ARCHIVE_PAGE_DEFAULT, type ArchiveSearchResult } from "./archiveSearch.js";
+import { searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
 import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
 import { MAX_HTML_BYTES, MAX_STATE_BYTES, dbPath, statePath } from "./config.js";
-import { BoardDb, type StoredTab } from "./db.js";
+import { BoardDb, type StoredFolder, type StoredTab } from "./db.js";
 import { log } from "./log.js";
 import { normalizeSignalName } from "./signal.js";
 import {
   DELETE_LIMIT,
+  USER_TITLE_HOLD_MS,
   WELCOME_KEY,
   isAppTab,
   isPlainObject,
@@ -18,7 +19,8 @@ import {
   toTemplateMeta,
   visibleTo,
   type BoardState,
-  type DeletedEntry,
+  type DeletedBatch,
+  type Folder,
   type ImportDestination,
   type RestorePlacement,
   type SetStateInput,
@@ -46,14 +48,18 @@ import {
 } from "./templates.js";
 import { wrapHtml } from "./wrapHtml.js";
 
-type Located = { tab: Tab; where: "open" | "archive" };
+type Located = { tab: Tab; where: "open" | "closed" };
+
+export type FolderDeleteMode = "lift" | "delete";
+
+const FOLDER_NAME_MAX = 120;
 
 export class BoardStore extends EventEmitter {
   private tabs = new Map<string, Tab>();
   private order: string[] = [];
-  private archive = new Map<string, Tab>();
-  private archiveOrder: string[] = [];
-  private deleted: DeletedEntry[] = [];
+  private closed = new Map<string, Tab>();
+  private folders = new Map<string, Folder>();
+  private deleted: DeletedBatch[] = [];
   private activeId: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -63,6 +69,7 @@ export class BoardStore extends EventEmitter {
   private db: BoardDb | null = null;
   private dirty = new Set<string>();
   private removed = new Set<string>();
+  private foldersDirty = false;
   private templates = new Map<string, Template>();
   private removedTemplates = new Set<string>();
   private templatesDirty = false;
@@ -79,42 +86,48 @@ export class BoardStore extends EventEmitter {
       this.templates.set(template.id, template);
     }
     const bindings = new Map(snapshot.bindings.map((binding) => [binding.tabId, binding]));
+    const batches = new Map<string, DeletedBatch>();
+    const batchOf = (id: string, at: number): DeletedBatch => {
+      let batch = batches.get(id);
+      if (!batch) {
+        batch = { id, deletedAt: at, tabs: [], folders: [] };
+        batches.set(id, batch);
+      }
+      batch.deletedAt = Math.max(batch.deletedAt, at);
+      return batch;
+    };
     for (const row of snapshot.rows) {
       const tab = withStateDefaults(row.tab);
       applyBinding(tab, bindings.get(tab.id));
       this.lastSeq = Math.max(this.lastSeq, tab.stripSeq);
       if (row.status === "open") {
-        delete tab.archivedAt;
+        delete tab.closedAt;
         this.tabs.set(tab.id, tab);
       } else if (isAppTab(tab)) {
         this.removed.add(tab.id);
-      } else if (row.status === "archived") {
-        tab.archivedAt = typeof tab.archivedAt === "number" ? tab.archivedAt : tab.updatedAt;
-        this.archive.set(tab.id, tab);
-        this.archiveOrder.push(tab.id);
+      } else if (row.status === "closed") {
+        tab.closedAt = typeof tab.closedAt === "number" ? tab.closedAt : tab.updatedAt;
+        this.closed.set(tab.id, tab);
       } else {
-        this.deleted.push({
-          tab,
-          deletedAt: typeof row.deletedAt === "number" ? row.deletedAt : tab.updatedAt,
-        });
+        const at = typeof row.deletedAt === "number" ? row.deletedAt : tab.updatedAt;
+        batchOf(row.deletedBatch ?? tab.id, at).tabs.push(tab);
       }
     }
-    this.deleted.sort((a, b) => a.deletedAt - b.deletedAt);
-    if (this.deleted.length > DELETE_LIMIT) {
-      const extra = this.deleted.splice(0, this.deleted.length - DELETE_LIMIT);
-      for (const gone of extra) {
-        this.removed.add(gone.tab.id);
-        if (!this.tabs.has(gone.tab.id) && !this.archive.has(gone.tab.id)) {
-          deleteTabAssets(gone.tab.id);
-        }
+    for (const stored of snapshot.folders) {
+      if (stored.deletedAt === undefined) {
+        this.folders.set(stored.folder.id, stored.folder);
+      } else {
+        batchOf(stored.deletedBatch ?? stored.folder.id, stored.deletedAt).folders.push(stored.folder);
       }
     }
+    this.deleted = [...batches.values()].sort((a, b) => a.deletedAt - b.deletedAt);
+    this.trimDeleted();
+    this.repairLibraryRefs();
     this.rebuildOrder();
-    this.sortArchive();
     this.lastStamp = Math.max(
       this.lastStamp,
-      ...[...this.archive.values()].map((tab) => tab.archivedAt ?? 0),
-      ...this.deleted.map((entry) => entry.deletedAt)
+      ...[...this.closed.values()].map((tab) => tab.closedAt ?? 0),
+      ...this.deleted.map((batch) => batch.deletedAt)
     );
     this.activeId =
       snapshot.activeId && this.tabs.has(snapshot.activeId) ? snapshot.activeId : (this.order[0] ?? null);
@@ -123,21 +136,23 @@ export class BoardStore extends EventEmitter {
     } catch (err) {
       log("Failed to clean orphan assets", String(err));
     }
-    if (this.removed.size) {
+    if (this.removed.size || this.foldersDirty || this.dirty.size) {
       this.persistSoon();
     }
   }
 
   snapshot(): {
     tabs: TabMeta[];
-    archive: TabMeta[];
+    closed: TabMeta[];
+    folders: Folder[];
     activeId: string | null;
     templates: TemplateMeta[];
     persistError: string | null;
   } {
     return {
-      tabs: this.order.map((id) => toMeta(this.tabs.get(id)!)).filter(Boolean),
-      archive: this.archiveOrder.map((id) => toMeta(this.archive.get(id)!)),
+      tabs: this.order.map((id) => toMeta(this.tabs.get(id)!)),
+      closed: [...this.closed.values()].sort(byLibPos).map(toMeta),
+      folders: this.listFolders(),
       activeId: this.activeId,
       templates: this.listTemplates(),
       persistError: this.persistError,
@@ -148,8 +163,14 @@ export class BoardStore extends EventEmitter {
     return this.listOpenTabs(viewer).map(toMeta);
   }
 
-  archiveCount(viewer: Viewer = "user"): number {
-    return this.listArchiveTabs(viewer).length;
+  closedCount(viewer: Viewer = "user"): number {
+    let count = 0;
+    for (const tab of this.closed.values()) {
+      if (visibleTo(tab, viewer)) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   listOpenTabs(viewer: Viewer = "user"): Tab[] {
@@ -158,23 +179,63 @@ export class BoardStore extends EventEmitter {
       .filter((tab) => tab && visibleTo(tab, viewer));
   }
 
-  listArchiveTabs(viewer: Viewer = "user"): Tab[] {
-    return this.archiveOrder.map((id) => this.archive.get(id)!).filter((tab) => visibleTo(tab, viewer));
+  listClosedTabs(viewer: Viewer = "user"): Tab[] {
+    return [...this.closed.values()].filter((tab) => visibleTo(tab, viewer)).sort(byClosedDesc);
   }
 
-  searchOpen(query: string, viewer: Viewer = "user"): ArchiveSearchResult {
+  listFolders(): Folder[] {
+    return [...this.folders.values()].sort((a, b) => a.pos - b.pos);
+  }
+
+  /** Library path like "CLIMS/Releases", or null for the root. */
+  folderPath(folderId: string | undefined | null): string | null {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    let at = folderId ? this.folders.get(folderId) : undefined;
+    while (at && !seen.has(at.id)) {
+      seen.add(at.id);
+      names.unshift(at.name);
+      at = at.parentId ? this.folders.get(at.parentId) : undefined;
+    }
+    return names.length ? names.join("/") : null;
+  }
+
+  /** Existing folder for a path, without creating anything. Undefined when any part is missing. */
+  findFolderPath(path: string): string | null | undefined {
+    let parentId: string | null = null;
+    for (const name of splitFolderPath(path)) {
+      const match: Folder | undefined = this.foldersIn(parentId).find((folder) => sameName(folder.name, name));
+      if (!match) {
+        return undefined;
+      }
+      parentId = match.id;
+    }
+    return parentId;
+  }
+
+  searchOpen(query: string, viewer: Viewer = "user"): LibrarySearchResult {
     const tabs = this.listOpenTabs(viewer);
-    return searchArchive(tabs, query, 0, Math.max(tabs.length, 1));
+    return rankLibrary(tabs, query, 0, Math.max(tabs.length, 1));
   }
 
-  searchArchive(query: string, offset = 0, limit = ARCHIVE_PAGE_DEFAULT, viewer: Viewer = "user"): ArchiveSearchResult {
-    const off = Math.max(0, Math.floor(offset));
-    const lim = Math.max(1, Math.floor(limit));
-    return searchArchive(this.listArchiveTabs(viewer), query, off, lim);
+  /** Every page, open or closed, in Library tree order unless a query ranks them. */
+  searchLibrary(
+    query: string,
+    opts: { offset?: number; limit?: number; folderId?: string | null; viewer?: Viewer } = {}
+  ): LibrarySearchResult {
+    const viewer = opts.viewer ?? "user";
+    const off = Math.max(0, Math.floor(opts.offset ?? 0));
+    const lim = Math.max(1, Math.floor(opts.limit ?? LIBRARY_PAGE_DEFAULT));
+    let pages = this.treeOrder().filter((tab) => visibleTo(tab, viewer));
+    if (opts.folderId !== undefined) {
+      const scope = opts.folderId === null ? null : this.subtreeFolderIds(opts.folderId);
+      pages = pages.filter((tab) => (scope === null ? !tab.folderId : Boolean(tab.folderId && scope.has(tab.folderId))));
+    }
+    return rankLibrary(pages, query, off, lim);
   }
 
   searchPages(query: string, limit?: number, viewer: Viewer = "user"): PageSearchResult {
-    return rankPages(this.listOpenTabs(viewer), this.listArchiveTabs(viewer), query, limit ?? PAGE_SEARCH_DEFAULT);
+    return rankPages(this.listOpenTabs(viewer), this.listClosedTabs(viewer), query, limit ?? PAGE_SEARCH_DEFAULT);
   }
 
   listTemplates(viewer: Viewer = "user"): TemplateMeta[] {
@@ -184,11 +245,7 @@ export class BoardStore extends EventEmitter {
   }
 
   setAgentHidden(idOrKey: string, hidden: boolean): Tab {
-    const located = this.locate(idOrKey);
-    if (!located) {
-      throw new Error(`tab not found: ${idOrKey}`);
-    }
-    const tab = located.tab;
+    const tab = this.requireAny(idOrKey);
     if (Boolean(tab.agentHidden) === hidden) {
       return tab;
     }
@@ -303,59 +360,60 @@ export class BoardStore extends EventEmitter {
   }
 
   setTemplateValues(idOrKey: string, values: unknown): Tab {
-    const located = this.locate(idOrKey);
-    if (!located) {
-      throw new Error(`tab not found: ${idOrKey}`);
-    }
-    if (!located.tab.templateId) {
+    const tab = this.requireAny(idOrKey);
+    if (!tab.templateId) {
       throw new Error("this page is not bound to a template");
     }
-    const template = this.requireTemplate(located.tab.templateId);
+    const template = this.requireTemplate(tab.templateId);
     const parsed = parseTemplateValues(template.fields, values);
-    this.applyTemplateRender(located.tab, template, parsed, located.tab.templateCompatible !== false);
-    this.touchIfArchived(located);
-    this.markDirty(located.tab.id);
+    this.applyTemplateRender(tab, template, parsed, tab.templateCompatible !== false);
+    this.markDirty(tab.id);
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(located.tab), undefined, {
+    this.emit("tab_upserted", toMeta(tab), undefined, {
       activate: false,
       structural: true,
     });
-    return located.tab;
+    return tab;
   }
 
   reportIncompatible(idOrKey: string, reason?: string): Tab {
-    const located = this.locate(idOrKey);
-    if (!located) {
-      throw new Error(`tab not found: ${idOrKey}`);
-    }
-    if (!located.tab.templateId) {
+    const tab = this.requireAny(idOrKey);
+    if (!tab.templateId) {
       throw new Error("this page is not bound to a template");
     }
     const message = (reason ?? "").trim() || "This page's data no longer matches the template.";
-    if (located.tab.templateCompatible === false && located.tab.templateIncompatibleReason === message) {
-      return located.tab;
+    if (tab.templateCompatible === false && tab.templateIncompatibleReason === message) {
+      return tab;
     }
-    located.tab.templateCompatible = false;
-    located.tab.templateIncompatibleReason = message;
-    this.touchIfArchived(located);
-    this.markDirty(located.tab.id);
+    tab.templateCompatible = false;
+    tab.templateIncompatibleReason = message;
+    this.markDirty(tab.id);
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(located.tab), undefined, {
+    this.emit("tab_upserted", toMeta(tab), undefined, {
       activate: false,
       structural: false,
     });
-    return located.tab;
+    return tab;
   }
 
-  exportFile(idOrKey?: string): BoardExportFile {
-    const tabs = idOrKey
-      ? [this.requireAny(idOrKey)]
-      : [...this.listOpenTabs(), ...this.listArchiveTabs()].filter((tab) => !isAppTab(tab));
-    const templates = idOrKey
-      ? tabs.flatMap((tab) => {
-          const template = tab.templateId ? this.templates.get(tab.templateId) : undefined;
-          return template ? [template] : [];
-        })
+  /** One page, one folder subtree, or the whole Library. */
+  exportFile(scope: { id?: string; folderId?: string } = {}): BoardExportFile {
+    let tabs: Tab[];
+    if (scope.id) {
+      tabs = [this.requireAny(scope.id)];
+    } else if (scope.folderId) {
+      if (!this.folders.has(scope.folderId)) {
+        throw new Error(`folder not found: ${scope.folderId}`);
+      }
+      const ids = this.subtreeFolderIds(scope.folderId);
+      tabs = this.treeOrder().filter((tab) => tab.folderId && ids.has(tab.folderId));
+    } else {
+      tabs = this.treeOrder();
+    }
+    const templates = scope.id || scope.folderId
+      ? [...new Set(tabs.map((tab) => tab.templateId).filter((id): id is string => Boolean(id)))]
+          .map((id) => this.templates.get(id))
+          .filter((template): template is Template => Boolean(template))
       : [...this.templates.values()];
     if (!tabs.length && !templates.length) {
       throw new Error("nothing to export");
@@ -364,6 +422,7 @@ export class BoardStore extends EventEmitter {
       tabs.map((tab) => ({
         tab,
         assets: readPreparedAssets(tab.id, tab.assets ?? []),
+        folderPath: this.folderPath(tab.folderId),
       })),
       templates
     );
@@ -376,7 +435,7 @@ export class BoardStore extends EventEmitter {
   ): {
     tabs: Tab[];
     opened: number;
-    archived: number;
+    closed: number;
     focusedId: string | null;
     templatesCreated: number;
     templatesReused: number;
@@ -405,30 +464,33 @@ export class BoardStore extends EventEmitter {
       this.templates.set(template.id, template);
       this.markTemplateDirty(template.id);
     }
+    const foldersBefore = this.folders.size;
+    this.placeImported(drafts, pages);
     const opened: Tab[] = [];
-    const archived: Tab[] = [];
+    const closed: Tab[] = [];
     for (let i = 0; i < drafts.length; i += 1) {
       const tab = drafts[i];
       const page = pages[i];
-      if (shouldArchive(destination, page.archivedAt)) {
-        tab.archivedAt = typeof page.archivedAt === "number" ? page.archivedAt : this.stamp();
-        this.archive.set(tab.id, tab);
-        this.archiveOrder.unshift(tab.id);
-        archived.push(tab);
+      if (shouldClose(destination, page.closedAt)) {
+        tab.closedAt = typeof page.closedAt === "number" ? page.closedAt : this.stamp();
+        this.closed.set(tab.id, tab);
+        closed.push(tab);
       } else {
         this.tabs.set(tab.id, tab);
         opened.push(tab);
       }
       this.markDirty(tab.id);
     }
-    this.sortArchive();
     this.rebuildOrder();
     const focused = opened[opened.length - 1];
     if (focused) {
       this.activeId = focused.id;
     }
     this.persistSoon();
-    for (const tab of archived) {
+    if (this.folders.size !== foldersBefore) {
+      this.emitFolders();
+    }
+    for (const tab of closed) {
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
     }
     for (let i = 0; i < opened.length; i += 1) {
@@ -448,7 +510,7 @@ export class BoardStore extends EventEmitter {
     return {
       tabs: drafts,
       opened: opened.length,
-      archived: archived.length,
+      closed: closed.length,
       focusedId: focused?.id ?? null,
       templatesCreated: plan.created.length,
       templatesReused: plan.reused,
@@ -465,26 +527,21 @@ export class BoardStore extends EventEmitter {
     return tab && visibleTo(tab, viewer) ? tab : undefined;
   }
 
-  isArchived(idOrKey: string): boolean {
-    return this.locate(idOrKey)?.where === "archive";
+  isClosed(idOrKey: string): boolean {
+    return this.locate(idOrKey)?.where === "closed";
   }
 
   isOpen(idOrKey: string): boolean {
     return this.locate(idOrKey)?.where === "open";
   }
 
-  upsert(input: UpsertInput): { tab: Tab; created: boolean; archived: boolean } {
-    const title = input.title.trim();
-    if (!title) {
+  upsert(input: UpsertInput): { tab: Tab; created: boolean; closed: boolean; titleKept?: string } {
+    const requestedTitle = input.title.trim();
+    if (!requestedTitle) {
       throw new Error("title is required");
     }
     if (!input.html || !input.html.trim()) {
       throw new Error("html is required");
-    }
-    const html = wrapHtml(title, input.html);
-    const bytes = Buffer.byteLength(html, "utf8");
-    if (bytes > MAX_HTML_BYTES) {
-      throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
     }
 
     const viewer = input.viewer ?? "user";
@@ -492,13 +549,20 @@ export class BoardStore extends EventEmitter {
     if (existing && isTemplateBound(existing.tab)) {
       throw new Error(boundHtmlError(existing.tab, this.templateLabel(existing.tab)));
     }
-    if (existing?.where === "archive" && input.activate !== false) {
+    const kept = existing ? this.heldTitle(existing.tab, requestedTitle, viewer) : undefined;
+    const title = kept ? existing!.tab.title : requestedTitle;
+    const html = wrapHtml(title, input.html);
+    const bytes = Buffer.byteLength(html, "utf8");
+    if (bytes > MAX_HTML_BYTES) {
+      throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
+    }
+    if (existing?.where === "closed" && input.activate !== false) {
       this.restore(existing.tab.id, { placement: "append", activate: true });
     }
 
     const located = input.key ? this.locateFor(input.key, viewer) : undefined;
     const now = Date.now();
-    if (located?.where === "archive") {
+    if (located?.where === "closed") {
       const tab = located.tab;
       tab.assets = applyAssets(tab.id, tab.assets ?? [], input.assets);
       tab.title = title;
@@ -510,14 +574,13 @@ export class BoardStore extends EventEmitter {
       if (input.pin !== undefined) {
         tab.pinned = input.pin;
       }
-      this.touchArchive(tab);
       this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), undefined, {
         activate: false,
         structural: true,
       });
-      return { tab, created: false, archived: true };
+      return { tab, created: false, closed: true, ...(kept ? { titleKept: kept } : {}) };
     }
 
     if (located?.where === "open") {
@@ -548,7 +611,7 @@ export class BoardStore extends EventEmitter {
       if (input.activate !== false) {
         this.emit("tab_focused", tab.id);
       }
-      return { tab, created: false, archived: false };
+      return { tab, created: false, closed: false, ...(kept ? { titleKept: kept } : {}) };
     }
 
     const id = newId();
@@ -559,6 +622,8 @@ export class BoardStore extends EventEmitter {
       deleteTabAssets(id);
       throw err;
     }
+    const foldersBefore = this.folders.size;
+    const folderId = input.folder ? this.ensureFolderPath(input.folder) : null;
     const tab: Tab = {
       id,
       key: uniqueKey(this, input.key, title, id),
@@ -567,6 +632,8 @@ export class BoardStore extends EventEmitter {
       pinned: Boolean(input.pin),
       createdAt: now,
       updatedAt: now,
+      ...(folderId ? { folderId } : {}),
+      libPos: this.pagePosAt(folderId, 0),
       stripSeq: this.nextSeq(),
       revision: 1,
       state: {},
@@ -585,6 +652,9 @@ export class BoardStore extends EventEmitter {
     }
     this.markDirty(id);
     this.persistSoon();
+    if (this.folders.size !== foldersBefore) {
+      this.emitFolders();
+    }
     this.emit("tab_upserted", toMeta(tab), createdAt, {
       activate: input.activate !== false,
       structural: true,
@@ -592,7 +662,7 @@ export class BoardStore extends EventEmitter {
     if (input.activate !== false) {
       this.emit("tab_focused", id);
     }
-    return { tab, created: true, archived: false };
+    return { tab, created: true, closed: false };
   }
 
   patchHtml(
@@ -604,8 +674,9 @@ export class BoardStore extends EventEmitter {
       title?: string;
       activate?: boolean;
       expectedRevision?: number;
+      viewer?: Viewer;
     }
-  ): { tab: Tab; applied: number; archived: boolean } {
+  ): { tab: Tab; applied: number; closed: boolean; titleKept?: string } {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
@@ -613,19 +684,23 @@ export class BoardStore extends EventEmitter {
     if (isTemplateBound(located.tab)) {
       throw new Error(boundHtmlError(located.tab, this.templateLabel(located.tab)));
     }
-    assertRevision(located.tab.revision, input.expectedRevision);
+    this.assertTabRevision(located.tab, input.expectedRevision);
     let nextTitle = located.tab.title;
+    let kept: string | undefined;
     if (input.title !== undefined) {
-      nextTitle = input.title.trim();
-      if (!nextTitle) {
+      const requested = input.title.trim();
+      if (!requested) {
         throw new Error("title is required");
       }
+      kept = this.heldTitle(located.tab, requested, input.viewer ?? "user");
+      nextTitle = kept ? located.tab.title : requested;
     }
     const result = replaceOrEdit(located.tab, input);
     const bytes = Buffer.byteLength(result.html, "utf8");
     if (bytes > MAX_HTML_BYTES) {
       throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
     }
+    const keptField = kept ? { titleKept: kept } : {};
 
     const htmlChanged = result.html !== located.tab.html;
     const titleChanged = nextTitle !== located.tab.title;
@@ -633,11 +708,12 @@ export class BoardStore extends EventEmitter {
       return {
         tab: located.tab,
         applied: result.applied,
-        archived: located.where === "archive",
+        closed: located.where === "closed",
+        ...keptField,
       };
     }
 
-    if (located.where === "archive" && input.activate !== false) {
+    if (located.where === "closed" && input.activate !== false) {
       this.restore(located.tab.id, { placement: "append", activate: true });
     }
     const found = this.locate(idOrKey);
@@ -649,12 +725,11 @@ export class BoardStore extends EventEmitter {
     tab.html = result.html;
     tab.updatedAt = Date.now();
     tab.revision += 1;
-    if (found.where === "archive") {
-      this.touchArchive(tab);
+    if (found.where === "closed") {
       this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
-      return { tab, applied: result.applied, archived: true };
+      return { tab, applied: result.applied, closed: true, ...keptField };
     }
     if (input.activate !== false) {
       this.activeId = tab.id;
@@ -668,19 +743,37 @@ export class BoardStore extends EventEmitter {
     if (input.activate !== false) {
       this.emit("tab_focused", tab.id);
     }
-    return { tab, applied: result.applied, archived: false };
+    return { tab, applied: result.applied, closed: false, ...keptField };
   }
 
   update(
     idOrKey: string,
-    patch: { title?: string; html?: string; pin?: boolean; activate?: boolean; expectedRevision?: number }
-  ): Tab {
+    patch: {
+      title?: string;
+      html?: string;
+      pin?: boolean;
+      activate?: boolean;
+      expectedRevision?: number;
+      viewer?: Viewer;
+    }
+  ): { tab: Tab; titleKept?: string } {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
-    assertRevision(located.tab.revision, patch.expectedRevision);
-    if (located.where === "archive" && patch.activate !== false) {
+    this.assertTabRevision(located.tab, patch.expectedRevision);
+    let title: string | undefined;
+    let kept: string | undefined;
+    if (patch.title !== undefined) {
+      const requested = patch.title.trim();
+      if (!requested) {
+        throw new Error("title is required");
+      }
+      kept = this.heldTitle(located.tab, requested, patch.viewer ?? "user");
+      title = kept ? undefined : requested;
+    }
+    const structural = title !== undefined || patch.html !== undefined;
+    if (located.where === "closed" && patch.activate !== false && structural) {
       this.restore(located.tab.id, { placement: "append", activate: true });
     }
     const found = this.locate(idOrKey);
@@ -689,11 +782,7 @@ export class BoardStore extends EventEmitter {
     }
     const tab = found.tab;
     let pinIndex: number | undefined;
-    if (patch.title !== undefined) {
-      const title = patch.title.trim();
-      if (!title) {
-        throw new Error("title is required");
-      }
+    if (title !== undefined) {
       tab.title = title;
     }
     if (patch.html !== undefined) {
@@ -715,19 +804,18 @@ export class BoardStore extends EventEmitter {
     } else if (patch.pin !== undefined) {
       tab.pinned = patch.pin;
     }
-    tab.updatedAt = Date.now();
-    const structural = patch.title !== undefined || patch.html !== undefined;
     if (structural) {
+      tab.updatedAt = Date.now();
       tab.revision += 1;
     }
-    if (found.where === "archive") {
-      this.touchArchive(tab);
+    const keptField = kept ? { titleKept: kept } : {};
+    if (found.where === "closed") {
       this.markDirty(tab.id);
       this.persistSoon();
-      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
-      return tab;
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural });
+      return { tab, ...keptField };
     }
-    if (patch.activate !== false) {
+    if (patch.activate !== false && structural) {
       this.activeId = tab.id;
     }
     this.markDirty(tab.id);
@@ -739,6 +827,27 @@ export class BoardStore extends EventEmitter {
     if (patch.activate !== false && structural) {
       this.emit("tab_focused", tab.id);
     }
+    return { tab, ...keptField };
+  }
+
+  /** A title the user typed. Bumps the revision and holds off agent titles for USER_TITLE_HOLD_MS. */
+  renamePage(idOrKey: string, title: string): Tab {
+    const tab = this.requireAny(idOrKey);
+    const next = title.trim();
+    if (!next) {
+      throw new Error("title is required");
+    }
+    if (next === tab.title) {
+      return tab;
+    }
+    const now = Date.now();
+    tab.title = next;
+    tab.userTitleAt = now;
+    tab.updatedAt = now;
+    tab.revision += 1;
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     return tab;
   }
 
@@ -856,17 +965,12 @@ export class BoardStore extends EventEmitter {
       tab.stateRevision += 1;
       tab.stateUpdatedAt = Date.now();
     }
-    if (located.where === "archive" && (stateChanged || resolved)) {
-      tab.updatedAt = Date.now();
-      this.touchArchive(tab);
-      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
-    }
     this.markDirty(tab.id);
     this.persistSoon();
     if (stateChanged) {
       this.emit("tab_state", tab, input.client);
     }
-    if (resolved && located.where !== "archive") {
+    if (located.where === "closed" || resolved) {
       this.emit("tab_upserted", toMeta(tab), undefined, {
         activate: false,
         structural: false,
@@ -901,10 +1005,6 @@ export class BoardStore extends EventEmitter {
     }
     tab.signalRevision += 1;
     tab.signal = { name, revision: tab.signalRevision, at: Date.now() };
-    tab.updatedAt = Date.now();
-    if (located.where === "archive") {
-      this.touchArchive(tab);
-    }
     this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_signal", tab);
@@ -916,7 +1016,7 @@ export class BoardStore extends EventEmitter {
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
-    if (located.where === "archive") {
+    if (located.where === "closed") {
       return this.restore(located.tab.id, { placement: "append", activate: true });
     }
     this.activeId = located.tab.id;
@@ -925,7 +1025,8 @@ export class BoardStore extends EventEmitter {
     return located.tab;
   }
 
-  archiveTab(idOrKey: string): Tab {
+  /** Remove a page's tab from the strip. The page stays where it is in the Library. */
+  closeTab(idOrKey: string): Tab {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
@@ -933,40 +1034,71 @@ export class BoardStore extends EventEmitter {
     if (isAppTab(located.tab)) {
       return this.discardAppTab(located.tab);
     }
-    if (located.where === "archive") {
+    if (located.where === "closed") {
       return located.tab;
     }
     const tab = located.tab;
     this.tabs.delete(tab.id);
     this.rebuildOrder();
-    const stamped = this.stamp();
-    tab.archivedAt = stamped;
-    tab.updatedAt = stamped;
-    this.archive.set(tab.id, tab);
-    this.archiveOrder.unshift(tab.id);
+    tab.closedAt = this.stamp();
+    this.closed.set(tab.id, tab);
     if (this.activeId === tab.id) {
       this.activeId = this.order[this.order.length - 1] ?? null;
     }
     this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
-    this.emit("tab_archived", tab.id);
+    this.emit("tab_closed", tab.id);
     this.emit("tab_focused", this.activeId);
     return tab;
   }
 
-  archiveMany(filter: "all" | "unpinned", viewer: Viewer = "user"): string[] {
+  closeMany(filter: "all" | "unpinned", viewer: Viewer = "user"): string[] {
     const ids = this.listOpenTabs(viewer)
       .filter((tab) => filter === "all" || !tab.pinned)
       .map((tab) => tab.id);
-    const archived: string[] = [];
+    const closed: string[] = [];
     for (const id of ids) {
-      this.archiveTab(id);
-      if (this.archive.has(id)) {
-        archived.push(id);
+      this.closeTab(id);
+      if (this.closed.has(id)) {
+        closed.push(id);
       }
     }
-    return archived;
+    return closed;
+  }
+
+  /** Open or closed pages to the deleted bin as one undoable batch. */
+  deleteMany(idsOrKeys: string[]): Tab[] {
+    const batch: DeletedBatch = { id: newBatchId(), deletedAt: this.stamp(), tabs: [], folders: [] };
+    const wasActive = this.activeId;
+    for (const idOrKey of idsOrKeys) {
+      const located = this.locate(idOrKey);
+      if (!located) {
+        continue;
+      }
+      if (isAppTab(located.tab)) {
+        this.discardAppTab(located.tab);
+        continue;
+      }
+      this.detach(located);
+      batch.tabs.push(located.tab);
+    }
+    if (!batch.tabs.length) {
+      return [];
+    }
+    this.pushDeleted(batch);
+    this.rebuildOrder();
+    if (this.activeId && !this.tabs.has(this.activeId)) {
+      this.activeId = this.order[this.order.length - 1] ?? null;
+    }
+    this.persistSoon();
+    for (const tab of batch.tabs) {
+      this.emit("tab_deleted", tab.id);
+    }
+    if (wasActive !== this.activeId) {
+      this.emit("tab_focused", this.activeId);
+    }
+    return batch.tabs;
   }
 
   deletePermanent(idOrKey: string): Tab {
@@ -977,79 +1109,185 @@ export class BoardStore extends EventEmitter {
     if (isAppTab(located.tab)) {
       return this.discardAppTab(located.tab);
     }
-    if (located.where === "archive") {
-      return this.deleteFromArchive(located.tab.id);
-    }
-    const tab = located.tab;
-    this.tabs.delete(tab.id);
-    this.rebuildOrder();
-    delete tab.archivedAt;
-    this.pushDeleted({ tab, deletedAt: this.stamp() });
-    if (this.activeId === tab.id) {
-      this.activeId = this.order[this.order.length - 1] ?? null;
-    }
-    this.markDirty(tab.id);
-    this.persistSoon();
-    this.emit("tab_closed", tab.id);
-    this.emit("tab_focused", this.activeId);
-    return tab;
+    this.deleteMany([located.tab.id]);
+    return located.tab;
   }
 
-  emptyArchive(): string[] {
-    const ids = [...this.archiveOrder];
-    for (const id of ids) {
-      const tab = this.archive.get(id);
-      this.archive.delete(id);
-      this.removed.add(id);
-      this.dirty.delete(id);
-      if (tab && !this.tabs.has(id) && !this.deleted.some((item) => item.tab.id === id)) {
-        deleteTabAssets(id);
-      }
+  /** Closed pages whose content and close time are both older than `days`, as one batch. */
+  deleteStale(days: number): Tab[] {
+    if (!Number.isFinite(days) || days <= 0) {
+      throw new Error("days must be a positive number");
     }
-    this.archiveOrder = [];
-    this.persistSoon();
-    this.emit("archive_cleared");
-    return ids;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const stale = [...this.closed.values()].filter(
+      (tab) => Math.max(tab.updatedAt, tab.stateUpdatedAt, tab.closedAt ?? 0) < cutoff
+    );
+    return this.deleteMany(stale.map((tab) => tab.id));
   }
 
   restore(idOrKey: string, opts?: { placement?: RestorePlacement; activate?: boolean }): Tab {
     const id = this.locate(idOrKey)?.tab.id ?? idOrKey;
-    const tab = this.archive.get(id);
+    const tab = this.closed.get(id);
     if (!tab) {
-      throw new Error(`archived tab not found: ${idOrKey}`);
+      throw new Error(`closed page not found: ${idOrKey}`);
     }
     return this.restoreTab(tab, opts?.placement ?? "append", opts?.activate !== false);
   }
 
-  restoreLast(): Tab {
-    const newestArchive = this.archiveOrder[0] ? this.archive.get(this.archiveOrder[0]) : undefined;
-    let newestDeleted: DeletedEntry | undefined;
-    let deletedIndex = -1;
-    for (let i = 0; i < this.deleted.length; i += 1) {
-      const entry = this.deleted[i];
-      if (!newestDeleted || entry.deletedAt >= newestDeleted.deletedAt) {
-        newestDeleted = entry;
-        deletedIndex = i;
+  /** Give a page a tab (or reuse its tab), optionally placed before another tab in the same pin group. */
+  openPage(idOrKey: string, opts: { activate?: boolean; before?: string | null } = {}): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const activate = opts.activate !== false;
+    const tab =
+      located.where === "closed" ? this.restoreTab(located.tab, "append", activate) : located.tab;
+    if (opts.before !== undefined) {
+      const other = opts.before ? this.tabs.get(opts.before) : undefined;
+      if (opts.before === null || (other && other.pinned === tab.pinned && other.id !== tab.id)) {
+        this.reorderTab(tab.id, opts.before);
       }
     }
-    const archiveAt = newestArchive?.archivedAt ?? 0;
-    const deletedAt = newestDeleted?.deletedAt ?? 0;
-    if (!newestArchive && !newestDeleted) {
+    if (located.where === "open" && activate) {
+      this.focus(tab.id);
+    }
+    return tab;
+  }
+
+  /** Ctrl+Z: the newer of the last delete batch and the last closed page. */
+  restoreLast(): { tab: Tab | null } {
+    let newestClosed: Tab | undefined;
+    for (const tab of this.closed.values()) {
+      if (!newestClosed || (tab.closedAt ?? 0) > (newestClosed.closedAt ?? 0)) {
+        newestClosed = tab;
+      }
+    }
+    const batch = this.deleted[this.deleted.length - 1];
+    if (!newestClosed && !batch) {
       throw new Error("nothing to restore");
     }
-    if (newestDeleted && (!newestArchive || deletedAt >= archiveAt)) {
-      this.deleted.splice(deletedIndex, 1);
-      return this.reopen(newestDeleted.tab, "index", true);
+    if (batch && (!newestClosed || batch.deletedAt >= (newestClosed.closedAt ?? 0))) {
+      this.deleted.pop();
+      return { tab: this.restoreBatch(batch) };
     }
-    return this.restoreTab(newestArchive!, "index", true);
+    return { tab: this.restoreTab(newestClosed!, "index", true) };
   }
 
-  close(idOrKey: string): Tab {
-    return this.archiveTab(idOrKey);
+  createFolder(input: { name: string; parentId?: string | null; index?: number }): Folder {
+    const parentId = input.parentId ?? null;
+    if (parentId && !this.folders.has(parentId)) {
+      throw new Error(`folder not found: ${parentId}`);
+    }
+    const now = Date.now();
+    const folder: Folder = {
+      id: newFolderId(),
+      parentId,
+      name: cleanFolderName(input.name),
+      pos: this.folderPosAt(parentId, input.index ?? Number.POSITIVE_INFINITY),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.folders.set(folder.id, folder);
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    return folder;
   }
 
-  closeMany(filter: "all" | "unpinned"): string[] {
-    return this.archiveMany(filter);
+  renameFolder(id: string, name: string): Folder {
+    const folder = this.requireFolder(id);
+    const next = cleanFolderName(name);
+    if (next !== folder.name) {
+      folder.name = next;
+      folder.updatedAt = Date.now();
+      this.foldersDirty = true;
+      this.persistSoon();
+      this.emitFolders();
+    }
+    return folder;
+  }
+
+  moveFolder(id: string, parentId: string | null, index: number): Folder {
+    const folder = this.requireFolder(id);
+    if (parentId) {
+      this.requireFolder(parentId);
+      if (this.subtreeFolderIds(folder.id).has(parentId)) {
+        throw new Error("cannot move a folder into itself");
+      }
+    }
+    folder.parentId = parentId;
+    folder.pos = this.folderPosAt(parentId, index, folder.id);
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    return folder;
+  }
+
+  movePage(idOrKey: string, folderId: string | null, index: number, opts: { close?: boolean } = {}): Tab {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (isAppTab(located.tab)) {
+      throw new Error("the help page is not part of the Library");
+    }
+    if (folderId) {
+      this.requireFolder(folderId);
+    }
+    const tab = located.tab;
+    tab.libPos = this.pagePosAt(folderId, index, tab.id);
+    if (folderId) {
+      tab.folderId = folderId;
+    } else {
+      delete tab.folderId;
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    if (opts.close && located.where === "open") {
+      return this.closeTab(tab.id);
+    }
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
+  }
+
+  /** `lift` moves the folder's contents up to its parent; `delete` bins the whole subtree as one batch. */
+  deleteFolder(id: string, mode: FolderDeleteMode): { deleted: Tab[]; moved: Tab[] } {
+    const folder = this.requireFolder(id);
+    switch (mode) {
+      case "lift":
+        return { deleted: [], moved: this.liftFolder(folder) };
+      case "delete":
+        return { deleted: this.deleteFolderTree(folder), moved: [] };
+      default: {
+        const _never: never = mode;
+        return _never;
+      }
+    }
+  }
+
+  /** Open the folder's own pages in Library order and focus the first. */
+  openFolder(id: string): Tab[] {
+    this.requireFolder(id);
+    const pages = this.pagesIn(id);
+    const opened: Tab[] = [];
+    for (const tab of pages) {
+      if (this.closed.has(tab.id)) {
+        opened.push(this.restoreTab(tab, "append", false));
+      }
+    }
+    const first = pages[0];
+    if (first) {
+      this.focus(first.id);
+    }
+    return opened;
+  }
+
+  closeFolder(id: string): Tab[] {
+    this.requireFolder(id);
+    return this.pagesIn(id)
+      .filter((tab) => this.tabs.has(tab.id) && !isAppTab(tab))
+      .map((tab) => this.closeTab(tab.id));
   }
 
   persist(): void {
@@ -1077,6 +1315,7 @@ export class BoardStore extends EventEmitter {
         activeId: this.activeId,
         upserts,
         removedIds: [...this.removed],
+        ...(this.foldersDirty ? { folders: this.collectFolders() } : {}),
         templates: [...this.templates.values()],
         removedTemplateIds: [...this.removedTemplates],
         bindings: this.collectBindings(),
@@ -1086,6 +1325,7 @@ export class BoardStore extends EventEmitter {
       this.removed.clear();
       this.removedTemplates.clear();
       this.templatesDirty = false;
+      this.foldersDirty = false;
       if (this.persistError) {
         this.persistError = null;
         this.emit("persist_ok");
@@ -1119,7 +1359,7 @@ export class BoardStore extends EventEmitter {
       throw new Error(`tab not found: ${idOrKey}`);
     }
     if (located.where !== "open") {
-      throw new Error("cannot reorder an archived tab");
+      throw new Error("cannot reorder a closed page");
     }
     return located.tab;
   }
@@ -1130,6 +1370,33 @@ export class BoardStore extends EventEmitter {
       throw new Error(`tab not found: ${idOrKey}`);
     }
     return located.tab;
+  }
+
+  private requireFolder(id: string): Folder {
+    const folder = this.folders.get(id);
+    if (!folder) {
+      throw new Error(`folder not found: ${id}`);
+    }
+    return folder;
+  }
+
+  /** Why an agent's title was ignored, or undefined when it applies. */
+  private heldTitle(tab: Tab, requested: string, viewer: Viewer): string | undefined {
+    if (viewer !== "agent" || requested === tab.title || !this.titleHeld(tab)) {
+      return undefined;
+    }
+    return `renamed by the user ${agoText(Date.now() - tab.userTitleAt!)}`;
+  }
+
+  private titleHeld(tab: Tab): boolean {
+    return typeof tab.userTitleAt === "number" && Date.now() - tab.userTitleAt < USER_TITLE_HOLD_MS;
+  }
+
+  private assertTabRevision(tab: Tab, expected: number | undefined): void {
+    const note = this.titleHeld(tab)
+      ? `The user renamed this page to "${tab.title}" ${agoText(Date.now() - tab.userTitleAt!)}.`
+      : undefined;
+    assertRevision(tab.revision, expected, note);
   }
 
   private planTemplateImport(incoming: Template[]): {
@@ -1214,6 +1481,7 @@ export class BoardStore extends EventEmitter {
       pinned: Boolean(page.pinned),
       createdAt: finiteTs(page.createdAt) ?? now,
       updatedAt: finiteTs(page.updatedAt) ?? now,
+      libPos: 0,
       stripSeq: this.nextSeq(),
       revision: 1,
       state: {},
@@ -1231,14 +1499,36 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
+  /** Imported pages go to the top of their folder, keeping the file's order. */
+  private placeImported(drafts: Tab[], pages: ImportPageInput[]): void {
+    const groups = new Map<string | null, Array<{ tab: Tab; libPos: number; index: number }>>();
+    drafts.forEach((tab, index) => {
+      const page = pages[index];
+      const folderId = page.folderPath ? this.ensureFolderPath(page.folderPath) : null;
+      if (folderId) {
+        tab.folderId = folderId;
+      }
+      const list = groups.get(folderId) ?? [];
+      list.push({ tab, libPos: finiteTs(page.libPos) ?? index, index });
+      groups.set(folderId, list);
+    });
+    for (const [folderId, list] of groups) {
+      list.sort((a, b) => a.libPos - b.libPos || a.index - b.index);
+      const top = this.pagesIn(folderId)[0]?.libPos ?? 0;
+      list.forEach((item, i) => {
+        item.tab.libPos = top - list.length + i;
+      });
+    }
+  }
+
   private locate(idOrKey: string): Located | undefined {
     const openById = this.tabs.get(idOrKey);
     if (openById) {
       return { tab: openById, where: "open" };
     }
-    const archivedById = this.archive.get(idOrKey);
-    if (archivedById) {
-      return { tab: archivedById, where: "archive" };
+    const closedById = this.closed.get(idOrKey);
+    if (closedById) {
+      return { tab: closedById, where: "closed" };
     }
     const key = normalizeKey(idOrKey);
     for (const id of this.order) {
@@ -1247,10 +1537,9 @@ export class BoardStore extends EventEmitter {
         return { tab, where: "open" };
       }
     }
-    for (const id of this.archiveOrder) {
-      const tab = this.archive.get(id);
-      if (tab && tab.key === key) {
-        return { tab, where: "archive" };
+    for (const tab of this.closed.values()) {
+      if (tab.key === key) {
+        return { tab, where: "closed" };
       }
     }
     return undefined;
@@ -1267,20 +1556,16 @@ export class BoardStore extends EventEmitter {
   }
 
   private restoreTab(tab: Tab, placement: RestorePlacement, activate: boolean): Tab {
-    this.archive.delete(tab.id);
-    this.archiveOrder = this.archiveOrder.filter((id) => id !== tab.id);
+    this.closed.delete(tab.id);
     return this.reopen(tab, placement, activate);
   }
 
   private reopen(tab: Tab, placement: RestorePlacement, activate: boolean): Tab {
-    if (this.tabs.has(tab.id) || this.archive.has(tab.id)) {
+    if (this.tabs.has(tab.id) || this.closed.has(tab.id)) {
       throw new Error(`tab already open: ${tab.id}`);
     }
-    const keyOwner = this.locate(tab.key);
-    if (keyOwner && keyOwner.tab.id !== tab.id) {
-      tab.key = uniqueKey(this, tab.key, tab.title, tab.id);
-    }
-    delete tab.archivedAt;
+    this.claimKey(tab);
+    delete tab.closedAt;
     switch (placement) {
       case "append":
         tab.stripSeq = this.nextSeq();
@@ -1307,16 +1592,71 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
-  /** Drop an in-app page (help) without archiving or keeping it on the Ctrl+Z stack. */
+  /** Put a deleted batch back where it was: folders first, then pages open or closed as they were. */
+  private restoreBatch(batch: DeletedBatch): Tab | null {
+    for (const folder of batch.folders) {
+      if (folder.parentId && !this.folders.has(folder.parentId) && !batch.folders.some((f) => f.id === folder.parentId)) {
+        folder.parentId = null;
+      }
+      this.folders.set(folder.id, folder);
+    }
+    if (batch.folders.length) {
+      this.foldersDirty = true;
+      this.emitFolders();
+    }
+    let focus: Tab | null = null;
+    for (const tab of batch.tabs) {
+      if (tab.folderId && !this.folders.has(tab.folderId)) {
+        delete tab.folderId;
+      }
+      if (typeof tab.closedAt === "number") {
+        this.claimKey(tab);
+        this.closed.set(tab.id, tab);
+        this.markDirty(tab.id);
+        this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
+        focus ??= tab;
+      } else {
+        const reopened = this.reopen(tab, "index", false);
+        if (!focus || this.closed.has(focus.id)) {
+          focus = reopened;
+        }
+      }
+    }
+    if (focus && this.tabs.has(focus.id)) {
+      this.activeId = focus.id;
+      this.emit("tab_focused", focus.id);
+    }
+    this.persistSoon();
+    return focus;
+  }
+
+  private claimKey(tab: Tab): void {
+    const keyOwner = this.locate(tab.key);
+    if (keyOwner && keyOwner.tab.id !== tab.id) {
+      tab.key = uniqueKey(this, tab.key, tab.title, tab.id);
+    }
+  }
+
+  /** Take a page out of the strip or the closed set without deciding where it goes. */
+  private detach(located: Located): void {
+    const tab = located.tab;
+    if (located.where === "open") {
+      this.tabs.delete(tab.id);
+      delete tab.closedAt;
+    } else {
+      this.closed.delete(tab.id);
+    }
+    this.markDirty(tab.id);
+  }
+
+  /** Drop an in-app page (help) without closing it into the Library or keeping it on the Ctrl+Z stack. */
   private discardAppTab(tab: Tab): Tab {
     const wasActive = this.activeId === tab.id;
     const wasOpen = this.tabs.has(tab.id);
     this.tabs.delete(tab.id);
-    this.archive.delete(tab.id);
-    this.archiveOrder = this.archiveOrder.filter((id) => id !== tab.id);
-    this.deleted = this.deleted.filter((entry) => entry.tab.id !== tab.id);
+    this.closed.delete(tab.id);
     this.rebuildOrder();
-    delete tab.archivedAt;
+    delete tab.closedAt;
     if (wasActive) {
       this.activeId = this.order[this.order.length - 1] ?? null;
     }
@@ -1324,43 +1664,189 @@ export class BoardStore extends EventEmitter {
     this.dirty.delete(tab.id);
     deleteTabAssets(tab.id);
     this.persistSoon();
-    this.emit("tab_closed", tab.id);
+    this.emit("tab_deleted", tab.id);
     if (wasOpen) {
       this.emit("tab_focused", this.activeId);
     }
     return tab;
   }
 
-  private deleteFromArchive(id: string): Tab {
-    const tab = this.archive.get(id);
-    if (!tab) {
-      throw new Error(`tab not found: ${id}`);
-    }
-    this.archive.delete(id);
-    this.archiveOrder = this.archiveOrder.filter((item) => item !== id);
-    this.removed.add(id);
-    this.dirty.delete(id);
-    if (!this.tabs.has(id) && !this.deleted.some((item) => item.tab.id === id)) {
-      deleteTabAssets(id);
-    }
-    this.persistSoon();
-    this.emit("tab_closed", id);
-    return tab;
-  }
-
-  private touchArchive(tab: Tab): void {
-    const stamped = this.stamp();
-    tab.archivedAt = stamped;
-    tab.updatedAt = stamped;
-    this.archiveOrder = [tab.id, ...this.archiveOrder.filter((id) => id !== tab.id)];
-  }
-
-  private sortArchive(): void {
-    this.archiveOrder.sort((a, b) => {
-      const left = this.archive.get(a)?.archivedAt ?? 0;
-      const right = this.archive.get(b)?.archivedAt ?? 0;
-      return right - left;
+  private liftFolder(folder: Folder): Tab[] {
+    const parentId = folder.parentId;
+    const siblings = this.foldersIn(parentId);
+    const at = siblings.findIndex((item) => item.id === folder.id);
+    const lo = siblings[at - 1]?.pos ?? folder.pos - 1;
+    const hi = siblings[at + 1]?.pos ?? folder.pos + 1;
+    const children = this.foldersIn(folder.id);
+    children.forEach((child, i) => {
+      child.parentId = parentId;
+      child.pos = lo + ((hi - lo) * (i + 1)) / (children.length + 1);
     });
+    const pages = this.pagesIn(folder.id);
+    const last = this.pagesIn(parentId).at(-1)?.libPos ?? 0;
+    pages.forEach((tab, i) => {
+      if (parentId) {
+        tab.folderId = parentId;
+      } else {
+        delete tab.folderId;
+      }
+      tab.libPos = last + 1 + i;
+      this.markDirty(tab.id);
+    });
+    this.folders.delete(folder.id);
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    for (const tab of pages) {
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    }
+    return pages;
+  }
+
+  private deleteFolderTree(folder: Folder): Tab[] {
+    const ids = this.subtreeFolderIds(folder.id);
+    const folders = this.listFolders().filter((item) => ids.has(item.id));
+    folders.sort((a, b) => this.folderDepth(a) - this.folderDepth(b));
+    const pages = this.libraryTabs().filter((tab) => tab.folderId && ids.has(tab.folderId));
+    const deleted = this.deleteMany(pages.map((tab) => tab.id));
+    let batch = this.deleted[this.deleted.length - 1];
+    if (!deleted.length || !batch || batch.tabs[0]?.id !== deleted[0].id) {
+      batch = { id: newBatchId(), deletedAt: this.stamp(), tabs: [], folders: [] };
+      this.pushDeleted(batch);
+    }
+    batch.folders.push(...folders);
+    for (const item of folders) {
+      this.folders.delete(item.id);
+    }
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    return deleted;
+  }
+
+  private folderDepth(folder: Folder): number {
+    let depth = 0;
+    let at = folder.parentId ? this.folders.get(folder.parentId) : undefined;
+    while (at && depth < 64) {
+      depth += 1;
+      at = at.parentId ? this.folders.get(at.parentId) : undefined;
+    }
+    return depth;
+  }
+
+  private subtreeFolderIds(rootId: string): Set<string> {
+    const ids = new Set<string>([rootId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const folder of this.folders.values()) {
+        if (folder.parentId && ids.has(folder.parentId) && !ids.has(folder.id)) {
+          ids.add(folder.id);
+          grew = true;
+        }
+      }
+    }
+    return ids;
+  }
+
+  /** Walks a "A/B" path from the root, creating folders that don't exist yet. */
+  private ensureFolderPath(path: string): string | null {
+    let parentId: string | null = null;
+    for (const name of splitFolderPath(path)) {
+      const match: Folder | undefined = this.foldersIn(parentId).find((folder) => sameName(folder.name, name));
+      if (match) {
+        parentId = match.id;
+        continue;
+      }
+      const now = Date.now();
+      const folder: Folder = {
+        id: newFolderId(),
+        parentId,
+        name: cleanFolderName(name),
+        pos: this.folderPosAt(parentId, Number.POSITIVE_INFINITY),
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.folders.set(folder.id, folder);
+      this.foldersDirty = true;
+      parentId = folder.id;
+    }
+    return parentId;
+  }
+
+  private libraryTabs(): Tab[] {
+    return [...this.tabs.values(), ...this.closed.values()].filter((tab) => !isAppTab(tab));
+  }
+
+  private pagesIn(folderId: string | null, exceptId?: string): Tab[] {
+    return this.libraryTabs()
+      .filter((tab) => (tab.folderId ?? null) === folderId && tab.id !== exceptId)
+      .sort(byLibPos);
+  }
+
+  private foldersIn(parentId: string | null, exceptId?: string): Folder[] {
+    return this.listFolders().filter((folder) => folder.parentId === parentId && folder.id !== exceptId);
+  }
+
+  /** Pages depth-first: each folder's pages, then its subfolders. */
+  private treeOrder(): Tab[] {
+    const out: Tab[] = [];
+    const walk = (folderId: string | null) => {
+      out.push(...this.pagesIn(folderId));
+      for (const folder of this.foldersIn(folderId)) {
+        walk(folder.id);
+      }
+    };
+    walk(null);
+    return out;
+  }
+
+  private pagePosAt(folderId: string | null, index: number, exceptId?: string): number {
+    let siblings = this.pagesIn(folderId, exceptId);
+    let pos = slotPos(siblings.map((tab) => tab.libPos), index);
+    if (Number.isNaN(pos)) {
+      siblings.forEach((tab, i) => {
+        tab.libPos = i;
+        this.markDirty(tab.id);
+        this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+      });
+      siblings = this.pagesIn(folderId, exceptId);
+      pos = slotPos(siblings.map((tab) => tab.libPos), index);
+    }
+    return pos;
+  }
+
+  private folderPosAt(parentId: string | null, index: number, exceptId?: string): number {
+    const siblings = this.foldersIn(parentId, exceptId);
+    let pos = slotPos(siblings.map((folder) => folder.pos), index);
+    if (Number.isNaN(pos)) {
+      siblings.forEach((folder, i) => {
+        folder.pos = i;
+      });
+      this.foldersDirty = true;
+      pos = slotPos(siblings.map((folder) => folder.pos), index);
+    }
+    return pos;
+  }
+
+  /** Pages pointing at a folder that no longer exists go to the root; orphaned folders too. */
+  private repairLibraryRefs(): void {
+    for (const folder of this.folders.values()) {
+      if (folder.parentId && (!this.folders.has(folder.parentId) || folder.parentId === folder.id)) {
+        folder.parentId = null;
+        this.foldersDirty = true;
+      }
+    }
+    for (const tab of this.libraryTabs()) {
+      if (tab.folderId && !this.folders.has(tab.folderId)) {
+        delete tab.folderId;
+        this.markDirty(tab.id);
+      }
+    }
+  }
+
+  private emitFolders(): void {
+    this.emit("folders", this.listFolders());
   }
 
   private rebuildOrder(): void {
@@ -1403,8 +1889,8 @@ export class BoardStore extends EventEmitter {
     const seen = new Set<number>();
     const tabs = [
       ...this.order.map((id) => this.tabs.get(id)),
-      ...this.archiveOrder.map((id) => this.archive.get(id)),
-      ...this.deleted.map((entry) => entry.tab),
+      ...this.closed.values(),
+      ...this.deleted.flatMap((batch) => batch.tabs),
     ];
     let changed = false;
     for (const tab of tabs) {
@@ -1457,11 +1943,7 @@ export class BoardStore extends EventEmitter {
   }
 
   private allTabs(): Tab[] {
-    return [
-      ...this.tabs.values(),
-      ...this.archive.values(),
-      ...this.deleted.map((entry) => entry.tab),
-    ];
+    return [...this.tabs.values(), ...this.closed.values(), ...this.deleted.flatMap((batch) => batch.tabs)];
   }
 
   private collectBindings(): TemplateBinding[] {
@@ -1480,6 +1962,15 @@ export class BoardStore extends EventEmitter {
       });
     }
     return bindings;
+  }
+
+  private collectFolders(): StoredFolder[] {
+    return [
+      ...[...this.folders.values()].map((folder) => ({ folder })),
+      ...this.deleted.flatMap((batch) =>
+        batch.folders.map((folder) => ({ folder, deletedAt: batch.deletedAt, deletedBatch: batch.id }))
+      ),
+    ];
   }
 
   private markTemplateDirty(id: string): void {
@@ -1506,10 +1997,6 @@ export class BoardStore extends EventEmitter {
         ? "The template changed and this page's data may no longer match. Ask an agent to update it."
         : tab.templateIncompatibleReason;
       this.applyTemplateRender(tab, template, values, compatible, reason);
-      const located = this.locate(tab.id);
-      if (located?.where === "archive") {
-        this.touchArchive(tab);
-      }
       this.markDirty(tab.id);
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
     }
@@ -1563,7 +2050,6 @@ export class BoardStore extends EventEmitter {
     delete tab.templateStateVersion;
     delete tab.templateCompatible;
     delete tab.templateIncompatibleReason;
-    tab.updatedAt = Date.now();
     this.markDirty(tab.id);
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
   }
@@ -1581,12 +2067,6 @@ export class BoardStore extends EventEmitter {
     return true;
   }
 
-  private touchIfArchived(located: Located): void {
-    if (located.where === "archive") {
-      this.touchArchive(located.tab);
-    }
-  }
-
   private markDirty(id: string): void {
     this.dirty.add(id);
     this.removed.delete(id);
@@ -1597,28 +2077,39 @@ export class BoardStore extends EventEmitter {
     if (open) {
       return { tab: open, status: "open" };
     }
-    const archived = this.archive.get(id);
-    if (archived) {
-      return { tab: archived, status: "archived" };
+    const closed = this.closed.get(id);
+    if (closed) {
+      return { tab: closed, status: "closed" };
     }
-    const deleted = this.deleted.find((entry) => entry.tab.id === id);
-    if (deleted) {
-      return { tab: deleted.tab, status: "deleted", deletedAt: deleted.deletedAt };
+    for (const batch of this.deleted) {
+      const tab = batch.tabs.find((item) => item.id === id);
+      if (tab) {
+        return { tab, status: "deleted", deletedAt: batch.deletedAt, deletedBatch: batch.id };
+      }
     }
     return undefined;
   }
 
-  private pushDeleted(entry: DeletedEntry): void {
-    this.deleted.push(entry);
-    this.markDirty(entry.tab.id);
-    if (this.deleted.length > DELETE_LIMIT) {
-      const removed = this.deleted.splice(0, this.deleted.length - DELETE_LIMIT);
-      for (const gone of removed) {
-        this.removed.add(gone.tab.id);
-        this.dirty.delete(gone.tab.id);
-        if (!this.tabs.has(gone.tab.id) && !this.archive.has(gone.tab.id)) {
-          deleteTabAssets(gone.tab.id);
+  private pushDeleted(batch: DeletedBatch): void {
+    this.deleted.push(batch);
+    for (const tab of batch.tabs) {
+      this.markDirty(tab.id);
+    }
+    this.trimDeleted();
+  }
+
+  private trimDeleted(): void {
+    while (this.deleted.length > DELETE_LIMIT) {
+      const gone = this.deleted.shift()!;
+      for (const tab of gone.tabs) {
+        this.removed.add(tab.id);
+        this.dirty.delete(tab.id);
+        if (!this.tabs.has(tab.id) && !this.closed.has(tab.id)) {
+          deleteTabAssets(tab.id);
         }
+      }
+      if (gone.folders.length) {
+        this.foldersDirty = true;
       }
     }
   }
@@ -1631,12 +2122,75 @@ export class BoardStore extends EventEmitter {
   }
 
   private knownAssetTabIds(): string[] {
-    return [...this.tabs.keys(), ...this.archive.keys(), ...this.deleted.map((entry) => entry.tab.id)];
+    return this.allTabs().map((tab) => tab.id);
   }
 }
 
 function newId(): string {
   return "t_" + randomBytes(4).toString("hex");
+}
+
+function newFolderId(): string {
+  return "f_" + randomBytes(4).toString("hex");
+}
+
+function newBatchId(): string {
+  return "d_" + randomBytes(4).toString("hex");
+}
+
+function byLibPos(a: Tab, b: Tab): number {
+  return a.libPos - b.libPos;
+}
+
+function byClosedDesc(a: Tab, b: Tab): number {
+  return (b.closedAt ?? 0) - (a.closedAt ?? 0);
+}
+
+/**
+ * A position for inserting at `index` among sorted `positions`. NaN when two
+ * neighbours are too close to split, which tells the caller to renumber.
+ */
+function slotPos(positions: number[], index: number): number {
+  if (!positions.length) {
+    return 0;
+  }
+  if (index <= 0) {
+    return positions[0] - 1;
+  }
+  if (index >= positions.length) {
+    return positions[positions.length - 1] + 1;
+  }
+  const a = positions[index - 1];
+  const b = positions[index];
+  const mid = (a + b) / 2;
+  return mid > a && mid < b ? mid : Number.NaN;
+}
+
+function splitFolderPath(path: string): string[] {
+  return path
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function sameName(a: string, b: string): boolean {
+  return a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
+}
+
+function cleanFolderName(name: string): string {
+  const cleaned = String(name ?? "").replace(/\s+/g, " ").trim().slice(0, FOLDER_NAME_MAX);
+  return cleaned || "New folder";
+}
+
+function agoText(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) {
+    return "just now";
+  }
+  if (min < 60) {
+    return `${min}m ago`;
+  }
+  return `${Math.round(min / 60)}h ago`;
 }
 
 function withStateDefaults(tab: Tab): Tab {
@@ -1650,6 +2204,7 @@ function withStateDefaults(tab: Tab): Tab {
       : null;
   return {
     ...tab,
+    libPos: typeof tab.libPos === "number" && Number.isFinite(tab.libPos) ? tab.libPos : 0,
     stripSeq: typeof tab.stripSeq === "number" ? tab.stripSeq : 0,
     state: isPlainObject(tab.state) ? tab.state : {},
     stateRevision: typeof tab.stateRevision === "number" ? tab.stateRevision : 0,
@@ -1765,12 +2320,12 @@ function uniqueKey(
   return `${base}-${id.slice(2)}`;
 }
 
-function shouldArchive(destination: ImportDestination, archivedAt?: number): boolean {
+function shouldClose(destination: ImportDestination, closedAt?: number): boolean {
   switch (destination) {
-    case "archive":
+    case "closed":
       return true;
     case "meta":
-      return typeof archivedAt === "number";
+      return typeof closedAt === "number";
     default: {
       const _never: never = destination;
       return _never;

@@ -1,4 +1,4 @@
-import { htmlToText } from "./archiveSearch.js";
+import { htmlToText } from "./librarySearch.js";
 import type { Tab } from "./types.js";
 
 export const PAGE_SEARCH_DEFAULT = 40;
@@ -9,7 +9,7 @@ export type MatchQuality = "phrase" | "ordered" | "all" | "partial";
 
 export type PageSearchHit = {
   tab: Tab;
-  archived: boolean;
+  open: boolean;
   location: MatchLocation | null;
   quality: MatchQuality | null;
   matchedParts: number;
@@ -39,7 +39,7 @@ const QUALITY_RANK: Record<MatchQuality, number> = {
 
 export function searchPages(
   open: Tab[],
-  archived: Tab[],
+  closed: Tab[],
   query: string,
   limit = PAGE_SEARCH_DEFAULT
 ): PageSearchResult {
@@ -48,15 +48,15 @@ export function searchPages(
   const q = query.trim();
   if (!q) {
     const all = [
-      ...open.map((tab) => recentHit(tab, false)),
-      ...archived.map((tab) => recentHit(tab, true)),
+      ...open.map((tab) => recentHit(tab, true)),
+      ...closed.map((tab) => recentHit(tab, false)),
     ];
     const hits = all.slice(0, lim);
     return { hits, returned: hits.length, matchCount: all.length };
   }
 
   const parts = queryParts(q);
-  const ranked = [...open.map((tab) => scoreTab(tab, q, parts, false)), ...archived.map((tab) => scoreTab(tab, q, parts, true))]
+  const ranked = [...open.map((tab) => scoreTab(tab, q, parts, true)), ...closed.map((tab) => scoreTab(tab, q, parts, false))]
     .filter((hit): hit is PageSearchHit => hit !== null)
     .sort(compareHits);
 
@@ -98,10 +98,10 @@ export function qualityLabel(quality: MatchQuality, matchedParts: number, totalP
   }
 }
 
-function recentHit(tab: Tab, archived: boolean): PageSearchHit {
+function recentHit(tab: Tab, open: boolean): PageSearchHit {
   return {
     tab,
-    archived,
+    open,
     location: null,
     quality: null,
     matchedParts: 0,
@@ -126,8 +126,8 @@ function compareHits(a: PageSearchHit, b: PageSearchHit): number {
       return bRatio - aRatio;
     }
   }
-  if (a.archived !== b.archived) {
-    return a.archived ? 1 : -1;
+  if (a.open !== b.open) {
+    return a.open ? -1 : 1;
   }
   return (b.tab.updatedAt ?? 0) - (a.tab.updatedAt ?? 0);
 }
@@ -146,7 +146,7 @@ function queryParts(query: string): string[] {
     .filter(Boolean);
 }
 
-function scoreTab(tab: Tab, query: string, parts: string[], archived: boolean): PageSearchHit | null {
+function scoreTab(tab: Tab, query: string, parts: string[], open: boolean): PageSearchHit | null {
   const fields: Array<{ location: MatchLocation; hay: string; raw: string }> = [
     { location: "title", hay: normalize(tab.title), raw: tab.title },
     { location: "key", hay: normalize(tab.key), raw: tab.key },
@@ -161,7 +161,7 @@ function scoreTab(tab: Tab, query: string, parts: string[], archived: boolean): 
     }
     return {
       tab,
-      archived,
+      open,
       location: field.location,
       quality: match.quality,
       matchedParts: match.matchedParts,

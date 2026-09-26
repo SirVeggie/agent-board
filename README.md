@@ -47,18 +47,18 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 | Tool | Purpose |
 | --- | --- |
-| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state` and `assets`). Default focuses the tab (and restores it if archived). Pass `background: true` to update without focusing: unread blip on an open tab, or on Archive if the tab is archived. |
+| `board_show` | Create or replace a page (`key` + `title` + `html`, optional `state`, `assets`, and `folder` for new pages). Default focuses the tab (and opens it if it was closed). Pass `background: true` to update without focusing: unread blip on an open tab, or on Library if the page is closed. Returns `titleKept: true` when the user renamed the page in the last 24h and the new title was ignored. |
 | `board_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`), or replace the whole HTML from a checked-out file (`htmlPath`). Optional `expectedRevision` refuses the change if the page moved. Same background/focus rules as show. Does not create a tab or reset state or wait signals. |
 | `board_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
-| `board_list` | List open tabs (`id`, `key`, `title`, …) plus `archiveCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
-| `board_archive` | Page archived tabs (default 20, max 50) or search with `query` over title, key, page text, and JSON state. Open tabs are not searched. |
-| `board_restore` | Bring an archived tab back to the open strip |
-| `board_read` | Read a tab's HTML so it can be revised (open or archived). `toFile: true` checks it out to a temp file for editing with file tools instead |
+| `board_list` | List open tabs (`id`, `key`, `title`, `folder`, …) plus `closedCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
+| `board_library` | Page the whole Library in the user's order (default 20, max 50), or search every page with `query` over title, key, page text, and JSON state. `folder` limits it to one folder and its subfolders. |
+| `board_open` | Open a closed page on the strip |
+| `board_read` | Read a page's HTML so it can be revised (open or closed). `toFile: true` checks it out to a temp file for editing with file tools instead |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
 | `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
-| `board_set_state` | Write state without focusing. Unfocused open tabs and archived tabs show an unread blip. |
+| `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
-| `board_close` | Archive one tab, all unpinned tabs, or everything. Pass `permanent: true` to delete instead |
+| `board_close` | Close one tab, all unpinned tabs, or everything; the pages stay in the Library. Pass `permanent: true` to delete instead |
 | `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar) |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `board_patch` with exact `oldString`/`newString` edits instead of sending the whole document again. For a large page, `board_read` with `toFile: true`, edit the file, then `board_patch` with `htmlPath` and `expectedRevision`.
@@ -105,11 +105,11 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 
 ## Data
 
-Tabs persist in `%LOCALAPPDATA%\agent-board\board.sqlite` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Closing a tab moves it to the **archive** (kept until you empty it or permanently delete). **Ctrl+Z** restores whichever is newer: the most recently archived tab, or one of the last 5 tabs that were permanently deleted while still open. A previous `state.json` is imported once and renamed to `state.json.bak`.
+Tabs persist in `%LOCALAPPDATA%\agent-board\board.sqlite` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Every page lives in the **Library** until you delete it; closing a tab only takes it off the strip. **Ctrl+Z** undoes whichever is newer: the most recent close (reopens the tab), or one of the last 10 deletes. A folder delete or any other bulk delete is one undo step. A previous `state.json` is imported once and renamed to `state.json.bak`.
 
-The browser **Clear** button archives unpinned tabs. Pinned tabs stay until you archive or delete them. Shift+click a tab's × permanently deletes it (confirmation in the UI). **Ctrl+S** downloads the current page as HTML (markup only). Settings and the tab/archive context menu export a `.board.json` pack that includes state, images, and the templates behind any template pages (Export all includes every template); Import (or a drop on Settings, the tab strip, or the archive) restores those files.
+The browser **Clear** button closes unpinned tabs. Pinned tabs stay until you close or delete them. Shift+click a tab's × deletes the page (the notice has Undo). **Ctrl+S** downloads the current page as HTML (markup only). Settings and the tab/Library context menus export a `.board.json` pack that includes state, images, Library folder and position, and the templates behind any template pages (Export all includes every template; a folder's menu exports just that folder); Import (or a drop on Settings, the tab strip, or the Library) restores those files.
 
-The sidebar has **Archive** and **Templates**. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, the board blocks the page until the agent fixes the data.
+The sidebar has **Library** and **Templates**. The Library is a tree of folders and pages in your own order: drag rows to reorder or file them, drag a page onto the strip to open it there, or drag a tab into the Library to file it and close it. Open pages have an accent bar, the current tab's row is filled, and pinned pages get a faint warm tint. Hovering a tab or Library row shows its full title, id, created and updated times, and folder. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, the board blocks the page until the agent fixes the data.
 
 ### Embedding a site
 
@@ -119,7 +119,7 @@ A direct frame keeps the site on the same site as the board chrome (`127.0.0.1`)
 
 ### Hiding a tab from the agent
 
-Right-click a tab or archive row and choose **Hide from agent**, or tick **Hide from agent** in a template's Open/Edit form. Hidden tabs show an eye icon. To the agent they don't exist: they're left out of `board_list`, `board_archive`, search, `activeId`, bulk `board_close`, and template instance counts, and every per-tab tool returns "tab not found". A `board_wait` already running on the tab ends as if the tab had closed. `board_show` with a hidden tab's key creates a separate tab instead of overwriting it. Only the board UI can change the flag; the MCP marks its requests with an `x-agent-board-client: agent` header and cannot flip it.
+Right-click a tab or Library row and choose **Hide from agent**, or tick **Hide from agent** in a template's Open/Edit form. Hidden tabs show an eye icon. To the agent they don't exist: they're left out of `board_list`, `board_library`, search, `activeId`, bulk `board_close`, and template instance counts, and every per-tab tool returns "tab not found". A `board_wait` already running on the tab ends as if the tab had closed. `board_show` with a hidden tab's key creates a separate tab instead of overwriting it. Only the board UI can change the flag; the MCP marks its requests with an `x-agent-board-client: agent` header and cannot flip it.
 
 This is a guardrail on the board's tools, not a sandbox. An agent with a shell or browser could still call the HTTP API without the header, or open the embedded URL itself.
 

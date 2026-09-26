@@ -89,19 +89,19 @@ test("Ctrl+Z keeps strip_seq so the tab returns to its hole", () => {
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
-  store.archiveTab("b");
+  store.closeTab("b");
   assert.deepEqual(titles(store), ["A", "C"]);
   store.restoreLast();
   assert.deepEqual(titles(store), ["A", "B", "C"]);
   store.closeDb();
 });
 
-test("restore from archive assigns a new seq and appends", () => {
+test("opening a closed page assigns a new seq and appends", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
-  store.archiveTab("b");
+  store.closeTab("b");
   store.restore("b", { placement: "append", activate: false });
   assert.deepEqual(titles(store), ["A", "C", "B"]);
   store.closeDb();
@@ -163,12 +163,12 @@ test("swapStripSeq rejects a cross-group pair", () => {
   store.closeDb();
 });
 
-test("swapStripSeq rejects an archived tab", () => {
+test("swapStripSeq rejects a closed page", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
-  store.archiveTab("a");
-  assert.throws(() => store.swapStripSeq("a", "b"), /archived/);
+  store.closeTab("a");
+  assert.throws(() => store.swapStripSeq("a", "b"), /closed/);
   store.closeDb();
 });
 
@@ -232,13 +232,13 @@ test("reorderTab stays inside the pinned group", () => {
   store.closeDb();
 });
 
-test("reorderTab does not steal an archived tab's strip hole", () => {
+test("reorderTab does not steal a closed tab's strip hole", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
   store.upsert({ title: "D", html: "<p>d</p>" });
-  store.archiveTab("b");
+  store.closeTab("b");
   store.reorderTab("a", null);
   assert.deepEqual(titles(store), ["C", "D", "A"]);
   store.restoreLast();
@@ -248,12 +248,12 @@ test("reorderTab does not steal an archived tab's strip hole", () => {
   store.closeDb();
 });
 
-test("pin does not steal an archived tab's strip_seq", () => {
+test("pin does not steal a closed tab's strip_seq", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
-  store.archiveTab("a");
+  store.closeTab("a");
   store.update("c", { pin: true, activate: false });
   store.update("c", { pin: false, activate: false });
   store.restoreLast();
@@ -315,44 +315,44 @@ test("migrates state.json once into board.sqlite", () => {
   again.closeDb();
 });
 
-test("closing welcome discards it instead of archiving", () => {
+test("closing welcome discards it instead of keeping it in the Library", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });
-  store.archiveTab("welcome");
+  store.closeTab("welcome");
   assert.deepEqual(titles(store), ["A"]);
-  assert.equal(store.archiveCount(), 0);
+  assert.equal(store.closedCount(), 0);
   assert.equal(store.get("welcome"), undefined);
   assert.throws(() => store.restoreLast(), /nothing to restore/);
   store.closeDb();
 });
 
-test("Ctrl+Z after closing welcome restores a real archived tab", () => {
+test("Ctrl+Z after closing welcome reopens a real closed tab", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });
-  store.archiveTab("a");
-  store.archiveTab("welcome");
-  assert.equal(store.archiveCount(), 1);
+  store.closeTab("a");
+  store.closeTab("welcome");
+  assert.equal(store.closedCount(), 1);
   store.restoreLast();
   assert.deepEqual(titles(store), ["A"]);
   store.closeDb();
 });
 
-test("Clear discards welcome and archives other unpinned tabs", () => {
+test("Clear discards welcome and closes other unpinned tabs", () => {
   const store = loaded();
   store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });
   store.upsert({ title: "A", html: "<p>a</p>" });
-  const archived = store.archiveMany("unpinned");
+  const closed = store.closeMany("unpinned");
   assert.equal(store.get("welcome"), undefined);
-  assert.equal(archived.length, 1);
-  assert.equal(store.archiveCount(), 1);
-  assert.equal(store.listArchiveTabs()[0].title, "A");
-  assert.equal(store.listArchiveTabs()[0].id, archived[0]);
+  assert.equal(closed.length, 1);
+  assert.equal(store.closedCount(), 1);
+  assert.equal(store.listClosedTabs()[0].title, "A");
+  assert.equal(store.listClosedTabs()[0].id, closed[0]);
   store.closeDb();
 });
 
-test("load drops archived welcome tabs", () => {
+test("load drops closed welcome tabs", () => {
   fs.writeFileSync(
     path.join(dir, "state.json"),
     JSON.stringify({
@@ -399,10 +399,10 @@ test("load drops archived welcome tabs", () => {
   );
   const store = loaded();
   assert.deepEqual(titles(store), ["Alpha"]);
-  assert.equal(store.archiveCount(), 0);
+  assert.equal(store.closedCount(), 0);
   store.closeDb();
   const again = loaded();
-  assert.equal(again.archiveCount(), 0);
+  assert.equal(again.closedCount(), 0);
   assert.equal(again.get("welcome"), undefined);
   again.closeDb();
 });
@@ -416,7 +416,7 @@ test("export then import restores html, state, and pin without overwriting", () 
     pin: true,
     state: { items: ["a"] },
   });
-  const pack = store.exportFile(tab.id);
+  const pack = store.exportFile({ id: tab.id });
   assert.equal(pack.pages.length, 1);
   assert.deepEqual(pack.pages[0].state, { items: ["a"] });
   const copy = store.importBoard(
@@ -433,7 +433,7 @@ test("export then import restores html, state, and pin without overwriting", () 
     "meta"
   );
   assert.equal(copy.opened, 1);
-  assert.equal(copy.archived, 0);
+  assert.equal(copy.closed, 0);
   const original = store.get("todos");
   const imported = store.get(copy.tabs[0].id);
   assert.ok(original);
@@ -448,20 +448,20 @@ test("export then import restores html, state, and pin without overwriting", () 
   store.closeDb();
 });
 
-test("import destination follows archivedAt unless forced to archive", () => {
+test("import destination follows closedAt unless forced closed", () => {
   const store = loaded();
   const open = store.importBoard({ templates: [], pages: [{ title: "Open", html: "<p>o</p>" }] }, "meta");
   const fromMeta = store.importBoard(
-    { templates: [], pages: [{ title: "Was archived", html: "<p>a</p>", archivedAt: 50 }] },
+    { templates: [], pages: [{ title: "Was closed", html: "<p>a</p>", closedAt: 50 }] },
     "meta"
   );
-  const forced = store.importBoard({ templates: [], pages: [{ title: "Forced", html: "<p>f</p>" }] }, "archive");
+  const forced = store.importBoard({ templates: [], pages: [{ title: "Forced", html: "<p>f</p>" }] }, "closed");
   assert.equal(open.opened, 1);
-  assert.equal(fromMeta.archived, 1);
+  assert.equal(fromMeta.closed, 1);
   assert.equal(fromMeta.opened, 0);
-  assert.equal(forced.archived, 1);
-  assert.equal(store.get(fromMeta.tabs[0].id)?.archivedAt, 50);
-  assert.ok(store.get(forced.tabs[0].id)?.archivedAt);
+  assert.equal(forced.closed, 1);
+  assert.equal(store.get(fromMeta.tabs[0].id)?.closedAt, 50);
+  assert.ok(store.get(forced.tabs[0].id)?.closedAt);
   assert.equal(store.list().some((tab) => tab.title === "Forced"), false);
   store.closeDb();
 });
@@ -586,7 +586,7 @@ test("deleting a template unlinks pages and they stay editable", () => {
   const leftover = store.get(tab.id);
   assert.ok(leftover);
   assert.equal(leftover.templateId, undefined);
-  const updated = store.update(tab.id, { html: "<p>free</p>", activate: false });
+  const { tab: updated } = store.update(tab.id, { html: "<p>free</p>", activate: false });
   assert.match(updated.html, /<p>free<\/p>/);
   store.closeDb();
 });
@@ -638,7 +638,7 @@ test("exporting a templated page includes its template and binding", () => {
   const template = todoTemplate(store);
   store.upsertTemplate({ key: "unused", title: "Unused", html: "<p>u</p>" });
   const { tab } = store.openFromTemplate("todo", { title: "Shop", columns: 4 });
-  const single = store.exportFile(tab.id);
+  const single = store.exportFile({ id: tab.id });
   assert.deepEqual(single.templates.map((item) => item.id), [template.id]);
   assert.deepEqual(single.pages[0].template, {
     templateId: template.id,
@@ -654,7 +654,7 @@ test("importing a templated page on another board recreates the template and bin
   const source = loaded();
   const template = todoTemplate(source);
   const { tab } = source.openFromTemplate("todo", { title: "Shop", columns: 4 });
-  const parsed = roundTrip(source.exportFile(tab.id));
+  const parsed = roundTrip(source.exportFile({ id: tab.id }));
   source.closeDb();
 
   const target = otherBoard();
@@ -677,7 +677,7 @@ test("importing a template the board already has reuses it, even repeatedly", ()
   const store = loaded();
   const template = todoTemplate(store);
   const { tab } = store.openFromTemplate("todo", { title: "Shop" });
-  const parsed = roundTrip(store.exportFile(tab.id));
+  const parsed = roundTrip(store.exportFile({ id: tab.id }));
   const first = store.importBoard(parsed, "meta");
   const second = store.importBoard(parsed, "meta");
   assert.equal(first.templatesCreated + second.templatesCreated, 0);
@@ -692,7 +692,7 @@ test("a same-id template with different content is imported as a separate templa
   const store = loaded();
   const template = todoTemplate(store);
   const { tab } = store.openFromTemplate("todo", { title: "Shop" });
-  const parsed = roundTrip(store.exportFile(tab.id));
+  const parsed = roundTrip(store.exportFile({ id: tab.id }));
   todoTemplate(store, "<h1>{{title}}</h1><p>local edit</p>");
 
   const first = store.importBoard(parsed, "meta");
@@ -715,7 +715,7 @@ test("import keeps a page's incompatible flag and state version", () => {
   todoTemplate(store);
   const { tab } = store.openFromTemplate("todo", { title: "Shop" });
   todoTemplate(store, "<h1>{{title}}</h1>", 2);
-  const parsed = roundTrip(store.exportFile(tab.id));
+  const parsed = roundTrip(store.exportFile({ id: tab.id }));
   const result = store.importBoard(parsed, "meta");
   const imported = store.get(result.tabs[0].id)!;
   assert.equal(imported.templateCompatible, false);
@@ -750,21 +750,21 @@ test("tabs hidden from the agent vanish from every agent listing", () => {
   store.upsert({ key: "open", title: "Open secret", html: "<p>alpha</p>" });
   store.upsert({ key: "shown", title: "Shown", html: "<p>alpha</p>" });
   store.upsert({ key: "old", title: "Old secret", html: "<p>alpha</p>" });
-  store.archiveTab("old");
+  store.closeTab("old");
   store.focus("open");
   store.setAgentHidden("open", true);
   store.setAgentHidden("old", true);
 
   assert.deepEqual(store.list("agent").map((tab) => tab.key), ["shown"]);
   assert.equal(store.list("user").length, 2);
-  assert.equal(store.archiveCount("agent"), 0);
-  assert.equal(store.archiveCount("user"), 1);
+  assert.equal(store.closedCount("agent"), 0);
+  assert.equal(store.closedCount("user"), 1);
   assert.equal(store.getActiveId("agent"), null);
   assert.equal(store.getActiveId("user"), store.get("open")?.id);
   assert.equal(store.get("open", "agent"), undefined);
   assert.equal(store.get("old", "agent"), undefined);
   assert.deepEqual(store.searchOpen("alpha", "agent").hits.map((hit) => hit.tab.key), ["shown"]);
-  assert.equal(store.searchArchive("alpha", 0, 20, "agent").matchCount, 0);
+  assert.deepEqual(store.searchLibrary("alpha", { viewer: "agent" }).hits.map((hit) => hit.tab.key), ["shown"]);
   assert.deepEqual(store.searchPages("alpha", undefined, "agent").hits.map((hit) => hit.tab.key), ["shown"]);
   store.closeDb();
 });
@@ -785,7 +785,7 @@ test("agent bulk close skips hidden tabs", () => {
   store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
   store.upsert({ key: "b", title: "B", html: "<p>b</p>" });
   store.setAgentHidden("a", true);
-  store.archiveMany("all", "agent");
+  store.closeMany("all", "agent");
   assert.deepEqual(titles(store), ["A"]);
   store.closeDb();
 });
@@ -798,7 +798,7 @@ test("hide-from-agent persists and survives export and import", () => {
 
   const again = loaded();
   assert.equal(again.get("page")?.agentHidden, true);
-  const parsed = parseImport(serializeExport(again.exportFile("page")));
+  const parsed = parseImport(serializeExport(again.exportFile({ id: "page" })));
   const copy = again.importBoard(parsed, "meta");
   assert.equal(copy.tabs[0].agentHidden, true);
   again.setAgentHidden("page", false);
@@ -806,19 +806,192 @@ test("hide-from-agent persists and survives export and import", () => {
   again.closeDb();
 });
 
-test("opening a board without tabs.agent_hidden adds the column", () => {
-  const store = loaded();
-  store.upsert({ key: "page", title: "Page", html: "<p>p</p>" });
-  store.closeDb();
+const V1_SCHEMA = `
+CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE tabs (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  html TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT '{}',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK (status IN ('open','archived','deleted')),
+  strip_seq INTEGER NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  archived_at INTEGER,
+  deleted_at INTEGER,
+  revision INTEGER NOT NULL,
+  state_revision INTEGER NOT NULL,
+  state_updated_at INTEGER NOT NULL DEFAULT 0,
+  signal_revision INTEGER NOT NULL DEFAULT 0,
+  signal TEXT,
+  assets TEXT NOT NULL DEFAULT '[]'
+);
+INSERT INTO meta (k, v) VALUES ('schema', '1');
+`;
+
+function insertV1Tab(db: DatabaseSync, id: string, status: string, seq: number, pinned = 0, archivedAt: number | null = null) {
+  db.prepare(
+    `INSERT INTO tabs (id, key, title, html, pinned, status, strip_seq, created_at, updated_at, archived_at, revision, state_revision)
+     VALUES (?, ?, ?, '<p>x</p>', ?, ?, ?, 1, 1, ?, 1, 0)`
+  ).run(id, id, id.toUpperCase(), pinned, status, seq, archivedAt);
+}
+
+test("a schema v1 board migrates archived tabs into the Library", () => {
   const db = new DatabaseSync(path.join(dir, "board.sqlite"));
-  db.exec("ALTER TABLE tabs DROP COLUMN agent_hidden");
+  db.exec(V1_SCHEMA);
+  insertV1Tab(db, "open_b", "open", 2);
+  insertV1Tab(db, "open_a", "open", 3, 1);
+  insertV1Tab(db, "old", "archived", 1, 0, 10);
+  insertV1Tab(db, "newer", "archived", 4, 0, 20);
   db.close();
 
+  const store = loaded();
+  assert.deepEqual(titles(store), ["OPEN_A", "OPEN_B"]);
+  assert.equal(store.closedCount(), 2);
+  assert.equal(store.get("old")?.closedAt, 10);
+  assert.equal(store.get("open_a")?.agentHidden, undefined);
+  const order = store.searchLibrary("", {}).hits.map((hit) => hit.tab.key);
+  assert.deepEqual(order, ["open_a", "open_b", "newer", "old"]);
+  store.setAgentHidden("old", true);
+  store.closeDb();
+
+  const check = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const schema = check.prepare("SELECT v FROM meta WHERE k = 'schema'").get() as { v: string };
+  check.close();
+  assert.equal(schema.v, "2");
   const again = loaded();
-  assert.equal(again.get("page")?.agentHidden, undefined);
-  again.setAgentHidden("page", true);
+  assert.equal(again.get("old")?.agentHidden, true);
   again.closeDb();
-  const third = loaded();
-  assert.equal(third.get("page")?.agentHidden, true);
-  third.closeDb();
+});
+
+test("closing a tab keeps the page in the Library at its position", () => {
+  const store = loaded();
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>" });
+  const before = store.searchLibrary("", {}).hits.map((hit) => hit.tab.key);
+  assert.deepEqual(before, ["b", "a"]);
+  store.closeTab("a");
+  assert.deepEqual(store.searchLibrary("", {}).hits.map((hit) => hit.tab.key), before);
+  assert.equal(store.isClosed("a"), true);
+  store.openPage("a", { activate: false });
+  assert.equal(store.isOpen("a"), true);
+  assert.deepEqual(store.searchLibrary("", {}).hits.map((hit) => hit.tab.key), before);
+  store.closeDb();
+});
+
+test("folders nest, hold pages, and persist", () => {
+  const store = loaded();
+  const work = store.createFolder({ name: "Work" });
+  const sub = store.createFolder({ name: "Releases", parentId: work.id });
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>", folder: "Work/Releases" });
+  store.movePage("a", work.id, 0);
+  assert.equal(store.get("b")?.folderId, sub.id);
+  assert.equal(store.folderPath(store.get("a")?.folderId), "Work");
+  assert.equal(store.findFolderPath("work/releases"), sub.id);
+  assert.throws(() => store.moveFolder(work.id, sub.id, 0), /into itself/);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.listFolders().length, 2);
+  assert.equal(again.folderPath(again.get("b")?.folderId), "Work/Releases");
+  again.closeDb();
+});
+
+test("folder param only applies when a page is created", () => {
+  const store = loaded();
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
+  store.upsert({ key: "a", title: "A", html: "<p>a2</p>", folder: "Elsewhere" });
+  assert.equal(store.get("a")?.folderId, undefined);
+  assert.equal(store.listFolders().length, 0);
+  store.closeDb();
+});
+
+test("moving a strip tab into the Library with close closes it", () => {
+  const store = loaded();
+  const folder = store.createFolder({ name: "F" });
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
+  store.movePage("a", folder.id, 0, { close: true });
+  assert.equal(store.isClosed("a"), true);
+  assert.equal(store.get("a")?.folderId, folder.id);
+  store.closeDb();
+});
+
+test("deleting a folder with its pages is one undo step", () => {
+  const store = loaded();
+  const folder = store.createFolder({ name: "F" });
+  const inner = store.createFolder({ name: "Inner", parentId: folder.id });
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>", folder: "F" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>", folder: "F/Inner" });
+  store.closeTab("b");
+  const { deleted } = store.deleteFolder(folder.id, "delete");
+  assert.equal(deleted.length, 2);
+  assert.equal(store.get("a"), undefined);
+  assert.equal(store.listFolders().length, 0);
+  store.restoreLast();
+  assert.equal(store.isOpen("a"), true);
+  assert.equal(store.isClosed("b"), true);
+  assert.equal(store.get("b")?.folderId, inner.id);
+  assert.equal(store.listFolders().length, 2);
+  store.closeDb();
+});
+
+test("lifting a folder moves its contents up a level", () => {
+  const store = loaded();
+  const folder = store.createFolder({ name: "F" });
+  store.createFolder({ name: "Inner", parentId: folder.id });
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>", folder: "F" });
+  store.deleteFolder(folder.id, "lift");
+  assert.equal(store.get("a")?.folderId, undefined);
+  assert.deepEqual(store.listFolders().map((item) => [item.name, item.parentId]), [["Inner", null]]);
+  store.closeDb();
+});
+
+test("a bulk delete counts as a single bin entry and the bin keeps 10", () => {
+  const store = loaded();
+  for (let i = 0; i < 12; i += 1) {
+    store.upsert({ key: `p${i}`, title: `P${i}`, html: "<p>x</p>" });
+  }
+  store.deleteMany(["p0", "p1", "p2"]);
+  for (let i = 3; i < 12; i += 1) {
+    store.deletePermanent(`p${i}`);
+  }
+  for (let i = 11; i >= 3; i -= 1) {
+    store.restoreLast();
+  }
+  store.restoreLast();
+  assert.equal(store.list().length, 12);
+  store.closeDb();
+});
+
+test("a user rename holds the title against agent writes and bumps the revision", () => {
+  const store = loaded();
+  const firstRevision = store.upsert({ key: "page", title: "Agent title", html: "<p>a</p>", viewer: "agent" }).tab.revision;
+  const renamed = store.renamePage("page", "My title");
+  assert.equal(renamed.revision, firstRevision + 1);
+  const shown = store.upsert({ key: "page", title: "Agent again", html: "<p>b</p>", viewer: "agent" });
+  assert.equal(shown.tab.title, "My title");
+  assert.ok(shown.titleKept);
+  assert.throws(
+    () => store.patchHtml("page", { title: "X", edits: [{ oldString: "b", newString: "c" }], expectedRevision: firstRevision, viewer: "agent" }),
+    (err: unknown) => err instanceof RevisionConflictError
+  );
+  store.update("page", { title: "User can", viewer: "user" });
+  assert.equal(store.get("page")?.title, "User can");
+  store.closeDb();
+});
+
+test("updatedAt only moves when content changes", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  const at = tab.updatedAt;
+  store.update("page", { pin: true, activate: false });
+  store.signal("page", { name: "go" });
+  store.setState("page", { state: { n: 1 } });
+  store.closeTab("page");
+  store.openPage("page", { activate: false });
+  assert.equal(store.get("page")?.updatedAt, at);
+  store.closeDb();
 });
