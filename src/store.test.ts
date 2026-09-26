@@ -900,6 +900,30 @@ test("folders nest, hold pages, and persist", () => {
   again.closeDb();
 });
 
+test("folderTree lists paths depth-first with direct page counts", () => {
+  const store = loaded();
+  const work = store.createFolder({ name: "Work" });
+  store.createFolder({ name: "Releases", parentId: work.id });
+  store.createFolder({ name: "Notes" });
+  store.upsert({ key: "a", title: "A", html: "<p>a</p>", folder: "Work" });
+  store.upsert({ key: "b", title: "B", html: "<p>b</p>", folder: "Work/Releases" });
+  store.upsert({ key: "c", title: "C", html: "<p>c</p>", folder: "Work/Releases" });
+  store.upsert({ key: "loose", title: "Loose", html: "<p>l</p>" });
+  const tree = store.folderTree().map(({ path, pages }) => ({ path, pages }));
+  const paths = tree.map((row) => row.path);
+  assert.deepEqual(new Set(paths), new Set(["Work", "Work/Releases", "Notes"]));
+  assert.ok(paths.indexOf("Work/Releases") === paths.indexOf("Work") + 1);
+  assert.deepEqual(
+    tree.find((row) => row.path === "Work"),
+    { path: "Work", pages: 1 }
+  );
+  assert.deepEqual(
+    tree.find((row) => row.path === "Work/Releases"),
+    { path: "Work/Releases", pages: 2 }
+  );
+  store.closeDb();
+});
+
 test("folder param only applies when a page is created", () => {
   const store = loaded();
   store.upsert({ key: "a", title: "A", html: "<p>a</p>" });

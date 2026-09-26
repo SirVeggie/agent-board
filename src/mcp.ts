@@ -75,7 +75,7 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Omit unless the user asked for a folder."
+          "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Pass an existing path from board_folders when the new page clearly belongs there, or a new path only when the user asked for that folder. Otherwise omit (the page lands in the Library root)."
         ),
       state: z
         .record(z.unknown())
@@ -358,6 +358,23 @@ export async function startMcp(): Promise<void> {
           payload.matchCount === payload.total
             ? `Returned ${payload.returned} of ${payload.total} pages; ${payload.remaining} after this page.`
             : `Returned ${payload.returned} of ${payload.matchCount} matches (${payload.total} pages); ${payload.remaining} matches after this page.`,
+      });
+    }
+  );
+
+  server.tool(
+    "board_folders",
+    "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with the number of pages directly inside it. Use before board_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for board_library. Never create a new folder unless the user asked for one.",
+    {},
+    async () => {
+      const { status, data } = await api("GET", "/api/folders/tree");
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      const folders = (data as { folders: Array<{ path: string; pages: number }> }).folders ?? [];
+      return jsonResult({
+        folders: folders.map(({ path, pages }) => ({ path, pages })),
+        note: folders.length ? `${folders.length} folders.` : "The Library has no folders; new pages go to the root.",
       });
     }
   );

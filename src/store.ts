@@ -221,6 +221,21 @@ export class BoardStore extends EventEmitter {
     return parentId;
   }
 
+  /** Every folder as a path, depth-first in Library order, with its own page count (not subfolders'). */
+  folderTree(viewer: Viewer = "user"): Array<{ id: string; path: string; pages: number }> {
+    const out: Array<{ id: string; path: string; pages: number }> = [];
+    const walk = (parentId: string | null, prefix: string) => {
+      for (const folder of this.foldersIn(parentId)) {
+        const path = prefix ? `${prefix}/${folder.name}` : folder.name;
+        const pages = this.pagesIn(folder.id).filter((tab) => visibleTo(tab, viewer)).length;
+        out.push({ id: folder.id, path, pages });
+        walk(folder.id, path);
+      }
+    };
+    walk(null, "");
+    return out;
+  }
+
   searchOpen(query: string, viewer: Viewer = "user"): LibrarySearchResult {
     const tabs = this.listOpenTabs(viewer);
     return rankLibrary(tabs, query, 0, Math.max(tabs.length, 1));

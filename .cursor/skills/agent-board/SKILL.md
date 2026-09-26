@@ -1,6 +1,6 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_patch, board_screenshot, board_list, board_library, board_open, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_patch, board_screenshot, board_list, board_library, board_folders, board_open, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
 ---
 
 # Agent Board
@@ -58,7 +58,7 @@ Before writing HTML or calling `board_show` / `board_patch`, mention in a new li
 - `assets`: omit unless the page needs images
 - `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or during a **project design** screenshot loop they should not see yet.
 - `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
-- `folder`: omit unless the user asked for the page to go in a folder (`"CLIMS/Releases"`, created if missing). New pages land at the top of the Library root. It only applies when the page is created; re-showing never moves a page.
+- `folder`: for a **new** page, call `board_folders` first and pass an existing path when the page clearly belongs there (e.g. a CLIMS release analysis → `"CLIMS/Releases"`). Pass a path that does not exist yet only when the user asked for that folder (it is created). Otherwise omit: new pages land at the top of the Library root. It only applies when the page is created; re-showing never moves a page.
 
 If the result has `titleKept: true`, the user renamed that page in the last 24 hours and your `title` was ignored. Keep using their title; do not fight it.
 

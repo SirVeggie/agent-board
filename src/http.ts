@@ -438,6 +438,10 @@ export async function startHttp(): Promise<http.Server> {
     res.json({ folders: store.listFolders() });
   });
 
+  app.get("/api/folders/tree", (req, res) => {
+    res.json({ folders: store.folderTree(viewerOf(req)) });
+  });
+
   app.post("/api/folders", (req, res) => {
     try {
       const folder = store.createFolder({
