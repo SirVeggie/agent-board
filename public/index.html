@@ -8,16 +8,19 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=37">
+  <link rel="stylesheet" href="/app.css?v=45">
   <script>
     (() => {
       const theme = localStorage.getItem("agent-board.theme");
-      if (theme === "neutral" || theme === "ember" || theme === "spectrum") {
+      if (["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(theme)) {
         document.documentElement.dataset.theme = theme;
       }
       const icons = {
         ember: "/favicon-ember.svg?v=4",
         spectrum: "/favicon-spectrum.svg?v=4",
+        garnet: "/favicon-garnet.svg?v=5",
+        dusk: "/favicon-dusk.svg?v=5",
+        cream: "/favicon-cream.svg?v=5",
       };
       const href = icons[theme] || "/favicon.svg?v=4";
       const link = document.querySelector('link[rel="icon"]');
@@ -223,6 +226,6 @@
   <script src="/hovercard.js?v=1"></script>
   <script src="/library.js?v=3"></script>
   <script src="/trash.js?v=1"></script>
-  <script src="/app.js?v=43"></script>
+  <script src="/app.js?v=47"></script>
 </body>
 </html>

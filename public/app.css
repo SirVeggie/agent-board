@@ -21,6 +21,7 @@ html[data-theme="neutral"] {
   --logo: #333338;
   --danger: #ff8a8a;
   --pin-rgb: 226, 190, 140;
+  --lift-rgb: 255, 255, 255;
   --control-height: 28px;
   --shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -63,6 +64,142 @@ html[data-theme="spectrum"] {
   --file-icon: #9db8a4;
   --file-glow: drop-shadow(0 0 5px rgba(157, 184, 164, 0.6));
   --logo: linear-gradient(135deg, #5b6a7a, #7d9a86);
+}
+
+html[data-theme="garnet"] {
+  --bg: #0e0b0b;
+  --bg-image: radial-gradient(1000px 520px at 0% -15%, rgba(190, 80, 80, 0.05), transparent 60%);
+  --chrome: rgba(19, 15, 15, 0.92);
+  --chrome-solid: #130f0f;
+  --panel: #151111;
+  --side-bg: #181313;
+  --border: rgba(255, 225, 222, 0.09);
+  --text: #efe8e7;
+  --heading: #fff;
+  --muted: #a3928f;
+  --accent: #d56f6c;
+  --accent-rgb: 213, 111, 108;
+  --accent-glow: 0 0 8px rgba(213, 111, 108, 0.45);
+  --accent-soft: rgba(213, 111, 108, 0.14);
+  --accent-ring: rgba(213, 111, 108, 0.5);
+  --file-icon: #ad8986;
+  --file-glow: drop-shadow(0 0 4px rgba(213, 111, 108, 0.25));
+  --logo: linear-gradient(135deg, #8c3434, #4a1d22);
+  --pin-rgb: 232, 190, 140;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+html[data-theme="dusk"] {
+  --bg: #0e0c12;
+  --bg-image: radial-gradient(1200px 560px at 90% -15%, rgba(190, 130, 180, 0.045), transparent 60%);
+  --chrome: rgba(18, 16, 23, 0.92);
+  --chrome-solid: #121017;
+  --panel: #15121a;
+  --side-bg: #18151e;
+  --border: rgba(235, 225, 255, 0.09);
+  --text: #eeebf3;
+  --heading: #fff;
+  --muted: #a19bac;
+  --accent: #b7a2dc;
+  --accent-rgb: 183, 162, 220;
+  --accent-glow: 0 0 8px rgba(183, 162, 220, 0.45);
+  --accent-soft: rgba(183, 162, 220, 0.14);
+  --accent-ring: rgba(183, 162, 220, 0.5);
+  --file-icon: #a399b5;
+  --file-glow: drop-shadow(0 0 4px rgba(183, 162, 220, 0.25));
+  --logo: linear-gradient(135deg, #5e4690, #97587d);
+  --pin-rgb: 236, 190, 165;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+html[data-theme="cream"] {
+  color-scheme: light;
+  --bg: #f1eadc;
+  --bg-image: none;
+  --chrome: rgba(232, 223, 205, 0.95);
+  --chrome-solid: #e8dfcd;
+  --panel: #fbf8f1;
+  --side-bg: #ece4d4;
+  --border: rgba(70, 48, 22, 0.2);
+  --text: #231d17;
+  --heading: #120e0a;
+  --muted: #62564a;
+  --accent: #a3461f;
+  --accent-rgb: 163, 70, 31;
+  --accent-glow: none;
+  --accent-soft: rgba(163, 70, 31, 0.14);
+  --accent-ring: rgba(163, 70, 31, 0.55);
+  --file-icon: #6f5e4c;
+  --file-glow: none;
+  --logo: linear-gradient(135deg, #bf6438, #87401f);
+  --danger: #a82a22;
+  --pin-rgb: 150, 100, 15;
+  --lift-rgb: 80, 52, 20;
+  --shadow: 0 1px 3px rgba(70, 48, 22, 0.14), 0 2px 10px rgba(70, 48, 22, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 0 0 1px rgba(70, 48, 22, 0.14), 0 1px 2px rgba(70, 48, 22, 0.14);
+}
+
+/* Cream is the only light theme: a few surfaces assume a dark backdrop and need lighter fills. */
+html[data-theme="cream"] .chrome {
+  box-shadow: 0 1px 0 rgba(90, 60, 25, 0.08), 0 2px 10px rgba(90, 60, 25, 0.06);
+}
+
+html[data-theme="cream"] .persist-banner {
+  background: #f6ddd4;
+}
+
+html[data-theme="cream"] .sidebar-tab,
+html[data-theme="cream"] .button-track {
+  background: rgba(90, 60, 25, 0.07);
+  box-shadow: inset 0 1px 0 rgba(90, 60, 25, 0.08);
+}
+
+html[data-theme="cream"] .side-pane input[type="search"],
+html[data-theme="cream"] .lib-rename,
+html[data-theme="cream"] .template-field select,
+html[data-theme="cream"] .lib-picker input[type="search"] {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+html[data-theme="cream"] .tab.active,
+html[data-theme="cream"] .icon-btn[aria-expanded="true"],
+html[data-theme="cream"] .sidebar-tab[aria-selected="true"],
+html[data-theme="cream"] .theme-option[aria-selected="true"],
+html[data-theme="cream"] .button-track button[aria-pressed="true"] {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 2px rgba(90, 60, 25, 0.12);
+}
+
+html[data-theme="cream"] .settings-backdrop {
+  background: rgba(60, 40, 20, 0.22);
+}
+
+html[data-theme="cream"] .settings-panel {
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 20px 50px rgba(90, 60, 25, 0.18);
+}
+
+html[data-theme="cream"] button.pill-toggle::after {
+  background: #fffdf8;
+}
+
+/* Opacity dimming tuned for dark themes washes out on cream; keep secondary details legible. */
+html[data-theme="cream"] .lib-path,
+html[data-theme="cream"] .hover-card-id {
+  opacity: 1;
+}
+
+html[data-theme="cream"] .lib-page .fileicon,
+html[data-theme="cream"] .lib-pin,
+html[data-theme="cream"] .button-track button {
+  opacity: 0.85;
+}
+
+html[data-theme="cream"] .palette-chip.location-key {
+  color: #a4502a;
+}
+
+html[data-theme="cream"] .palette-chip.location-content {
+  color: #5a4f44;
 }
 
 * { box-sizing: border-box; }
@@ -282,7 +419,7 @@ body {
 
 .tab:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--lift-rgb), 0.05);
 }
 
 .tab.active {
@@ -671,7 +808,7 @@ body.resizing-side .side-pane {
 }
 
 .side-row:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--lift-rgb), 0.05);
 }
 
 .fileicon {
@@ -696,7 +833,7 @@ body.resizing-side .side-pane {
 
 .side-head .side-head-icon:hover {
   color: var(--heading);
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(var(--lift-rgb), 0.07);
 }
 
 .lib-list {
@@ -1025,14 +1162,14 @@ button {
   border-radius: 7px;
   cursor: pointer;
   border: 0;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--lift-rgb), 0.05);
   color: var(--text);
   font: inherit;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+  box-shadow: var(--button-shadow, inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, 0.35));
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -1042,7 +1179,7 @@ button[hidden],
 }
 
 button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--lift-rgb), 0.1);
 }
 
 button:disabled {
@@ -1143,7 +1280,7 @@ kbd {
   border: 1px solid var(--border);
   border-bottom-width: 2px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--lift-rgb), 0.04);
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 12px;
 }
@@ -1387,7 +1524,7 @@ kbd {
 }
 
 .theme-option:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--lift-rgb), 0.05);
   color: var(--text);
   box-shadow: none;
 }
@@ -1519,7 +1656,7 @@ kbd {
 .builtin-rule {
   height: 1px;
   margin: 0 8px 4px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--lift-rgb), 0.06);
 }
 
 .builtin-head {
@@ -1541,7 +1678,7 @@ kbd {
 }
 
 .builtin-head:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--lift-rgb), 0.04);
   color: var(--text);
 }
 
@@ -1574,7 +1711,7 @@ kbd {
 }
 
 .side-row.menu-on {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--lift-rgb), 0.08);
 }
 
 .side-row.fresh {
@@ -1727,7 +1864,7 @@ kbd {
 }
 
 .tab-menu button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--lift-rgb), 0.08);
 }
 
 .tab-menu button.danger {
@@ -1781,7 +1918,7 @@ kbd {
 }
 
 .tab-menu .lib-picker-row.active {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--lift-rgb), 0.08);
 }
 
 .tab-menu .lib-picker-row .tab-title {
@@ -1945,12 +2082,12 @@ button.pill-toggle {
   height: 20px;
   padding: 0;
   border-radius: 99px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(var(--lift-rgb), 0.12);
   box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.28);
 }
 
 button.pill-toggle:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(var(--lift-rgb), 0.18);
 }
 
 button.pill-toggle::after {
