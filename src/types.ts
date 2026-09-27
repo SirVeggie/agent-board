@@ -38,6 +38,8 @@ export type TemplateField = {
   options?: TemplateFieldOption[];
   min?: number;
   max?: number;
+  /** Character limit for text and textarea values; defaults to 500 and 4000. */
+  maxLength?: number;
 };
 
 export type TemplateValues = Record<string, string | number | boolean>;

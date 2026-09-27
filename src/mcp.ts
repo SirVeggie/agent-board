@@ -758,6 +758,11 @@ export async function startMcp(): Promise<void> {
               .describe("Required for select. Strings are used as both value and label."),
             min: z.number().optional(),
             max: z.number().optional(),
+            maxLength: z
+              .number()
+              .int()
+              .optional()
+              .describe("Character limit for text/textarea values (default 500 / 4000, up to 65536)."),
           })
         )
         .optional()

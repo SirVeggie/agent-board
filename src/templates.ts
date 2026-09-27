@@ -7,6 +7,8 @@ const PLACEHOLDER = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 const MAX_FIELDS = 32;
 const MAX_TEXT = 500;
 const MAX_TEXTAREA = 4000;
+/** Ceiling for a field's own maxLength, so one field can't hold megabytes. */
+const MAX_LENGTH_LIMIT = 65_536;
 
 export type TemplateUpsertInput = {
   id?: string;
@@ -178,6 +180,15 @@ function parseField(raw: unknown, index: number, seen: Set<string>): TemplateFie
   if (typeof raw.max === "number" && Number.isFinite(raw.max)) {
     field.max = raw.max;
   }
+  if (raw.maxLength !== undefined) {
+    if (type !== "text" && type !== "textarea") {
+      throw new Error(`fields[${index}].maxLength only applies to text and textarea`);
+    }
+    if (!Number.isInteger(raw.maxLength) || (raw.maxLength as number) < 1 || (raw.maxLength as number) > MAX_LENGTH_LIMIT) {
+      throw new Error(`fields[${index}].maxLength must be an integer from 1 to ${MAX_LENGTH_LIMIT}`);
+    }
+    field.maxLength = raw.maxLength as number;
+  }
   if (type === "select") {
     field.options = parseOptions(raw.options, index);
   }
@@ -228,7 +239,7 @@ function coerceFieldValue(field: TemplateField, raw: unknown): string | number |
     case "text":
     case "textarea": {
       const text = raw == null ? "" : String(raw);
-      const max = field.type === "textarea" ? MAX_TEXTAREA : MAX_TEXT;
+      const max = field.maxLength ?? (field.type === "textarea" ? MAX_TEXTAREA : MAX_TEXT);
       if (text.length > max) {
         throw new Error(`${field.label} is too long (max ${max})`);
       }

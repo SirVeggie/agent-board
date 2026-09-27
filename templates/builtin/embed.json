@@ -8,8 +8,8 @@
       "label": "URL",
       "type": "text",
       "required": true,
-      "placeholder": "http://127.0.0.1:8188 or https://example.com",
-      "help": "Sites that send X-Frame-Options DENY/SAMEORIGIN or a strict frame-ancestors policy will show a blank or refused frame. Board shortcuts don't work while focus is inside the site."
+      "maxLength": 8192,
+      "placeholder": "http://127.0.0.1:8188 or https://example.com"
     },
     {
       "key": "title",

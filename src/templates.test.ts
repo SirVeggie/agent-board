@@ -44,6 +44,16 @@ test("required and range checks", () => {
   assert.throws(() => parseTemplateValues(fields, { title: "A", columns: 9 }), /at most 6/);
 });
 
+test("maxLength overrides the default text limit", () => {
+  const long = "x".repeat(600);
+  assert.throws(() => parseTemplateValues(fields, { title: long }), /too long \(max 500\)/);
+  const [url] = parseTemplateFields([{ key: "url", label: "URL", type: "text", maxLength: 8192 }]);
+  assert.equal(parseTemplateValues([url], { url: long }).url, long);
+  assert.throws(() => parseTemplateValues([url], { url: "x".repeat(8193) }), /too long \(max 8192\)/);
+  assert.throws(() => parseTemplateFields([{ key: "n", label: "N", type: "number", maxLength: 5 }]), /only applies/);
+  assert.throws(() => parseTemplateFields([{ key: "t", label: "T", type: "text", maxLength: 0 }]), /integer from 1/);
+});
+
 test("normalizeTemplateInput rejects unknown placeholders", () => {
   assert.throws(
     () =>
