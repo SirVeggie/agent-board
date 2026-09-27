@@ -11,6 +11,9 @@
   <link rel="stylesheet" href="/app.css?v=45">
   <script>
     (() => {
+      if (localStorage.getItem("agent-board.tightSmall") !== "0") {
+        document.documentElement.classList.add("tight-small");
+      }
       const theme = localStorage.getItem("agent-board.theme");
       if (["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(theme)) {
         document.documentElement.dataset.theme = theme;
@@ -158,6 +161,13 @@
         <div class="setting-row">
           <span id="copy-id-prefix-label">Copy ID includes "Agent Board tab" prefix</span>
           <button type="button" class="pill-toggle" id="copy-id-prefix" role="switch" aria-checked="true" aria-labelledby="copy-id-prefix-label"></button>
+        </div>
+      </section>
+      <section class="settings-section">
+        <h3>Layout</h3>
+        <div class="setting-row">
+          <span id="tight-small-label">No spacing around panels in small windows</span>
+          <button type="button" class="pill-toggle" id="tight-small" role="switch" aria-checked="true" aria-labelledby="tight-small-label"></button>
         </div>
       </section>
       <section class="settings-section">

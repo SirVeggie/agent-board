@@ -1457,6 +1457,12 @@ kbd {
   display: none;
 }
 
+@media (max-width: 560px), (max-height: 560px) {
+  .settings {
+    padding: 12px;
+  }
+}
+
 .settings-backdrop {
   position: absolute;
   inset: 0;
@@ -1467,6 +1473,9 @@ kbd {
   position: relative;
   z-index: 1;
   width: min(520px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 28px 28px 24px;
   background: color-mix(in srgb, var(--panel) 55%, transparent);
   backdrop-filter: blur(32px) saturate(1.5);
@@ -2126,5 +2135,46 @@ button.pill-toggle[aria-checked="true"]::after {
 
   .tab-menu {
     animation: none;
+  }
+}
+
+/* Small windows: the sidebar takes the whole workspace instead of squeezing the page into a strip. */
+@media (max-width: 760px) {
+  .side-pane:not(.closed) {
+    flex: 1 1 auto;
+    width: auto;
+    margin-left: 0;
+  }
+
+  .side-pane:not(.closed) .side-inner {
+    width: 100%;
+    max-width: none;
+  }
+
+  .side-pane:not(.closed) .side-resizer {
+    display: none;
+  }
+
+  .workspace:has(.side-pane:not(.closed)) main {
+    flex: 0 0 0;
+    visibility: hidden;
+  }
+}
+
+/* Settings → Layout: drop the spacing around panels in small windows. */
+@media (max-width: 760px), (max-height: 480px) {
+  html.tight-small .workspace {
+    padding: 0;
+  }
+
+  html.tight-small .workspace main,
+  html.tight-small .side-pane {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  html.tight-small .side-pane:not(.closed) {
+    margin-left: 0;
+    border-left: 1px solid var(--border);
   }
 }

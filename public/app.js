@@ -53,6 +53,7 @@
   const themeList = document.getElementById("theme-list");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
   const copyIdPrefixToggle = document.getElementById("copy-id-prefix");
+  const tightSmallToggle = document.getElementById("tight-small");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
   const exportAllBtn = document.getElementById("export-all");
@@ -80,6 +81,8 @@
   const THEME_KEY = "agent-board.theme";
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
   const COPY_ID_PREFIX_KEY = "agent-board.copyIdPrefix";
+  /** Also read by the inline script in index.html so the first paint already has the right spacing. */
+  const TIGHT_SMALL_KEY = "agent-board.tightSmall";
   const DEFAULT_THEME = "neutral";
   const THEMES = [
     { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "/favicon.svg?v=4" },
@@ -218,6 +221,8 @@
   applyTheme(loadTheme());
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
   applyFlag(copyIdPrefixToggle, COPY_ID_PREFIX_KEY, true);
+  applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
+  document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   renderThemeList();
 
   function connect() {
@@ -609,6 +614,9 @@
     localStorage.setItem(key, on ? "1" : "0");
     if (el === smoothScrollToggle && !on) {
       stopTabScroll();
+    }
+    if (el === tightSmallToggle) {
+      document.documentElement.classList.toggle("tight-small", on);
     }
   }
 
@@ -2686,6 +2694,7 @@
   });
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   copyIdPrefixToggle.addEventListener("click", () => toggleFlag(copyIdPrefixToggle, COPY_ID_PREFIX_KEY));
+  tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
