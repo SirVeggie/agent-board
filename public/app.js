@@ -52,6 +52,7 @@
   const settingsToggle = document.getElementById("settings-toggle");
   const themeList = document.getElementById("theme-list");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
+  const copyIdPrefixToggle = document.getElementById("copy-id-prefix");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
   const exportAllBtn = document.getElementById("export-all");
@@ -78,6 +79,7 @@
   const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "agent-board.theme";
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
+  const COPY_ID_PREFIX_KEY = "agent-board.copyIdPrefix";
   const DEFAULT_THEME = "neutral";
   const THEMES = [
     { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "/favicon.svg?v=4" },
@@ -212,6 +214,7 @@
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
+  applyFlag(copyIdPrefixToggle, COPY_ID_PREFIX_KEY, true);
   renderThemeList();
 
   function connect() {
@@ -1603,7 +1606,7 @@
 
   async function copyTemplateId(id) {
     try {
-      await navigator.clipboard.writeText(`Agent Board template ${id}`);
+      await navigator.clipboard.writeText(flagOn(copyIdPrefixToggle) ? `Agent Board template ${id}` : id);
       showNotice(`Copied ${id}`);
     } catch {
       showNotice("Could not copy to clipboard");
@@ -2091,7 +2094,7 @@
 
   async function copyTabId(id) {
     try {
-      await navigator.clipboard.writeText(`Agent Board tab ${id}`);
+      await navigator.clipboard.writeText(flagOn(copyIdPrefixToggle) ? `Agent Board tab ${id}` : id);
       showNotice(`Copied ${id}`);
     } catch {
       showNotice("Could not copy to clipboard");
@@ -2679,6 +2682,7 @@
     }
   });
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
+  copyIdPrefixToggle.addEventListener("click", () => toggleFlag(copyIdPrefixToggle, COPY_ID_PREFIX_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
