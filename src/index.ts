@@ -1,6 +1,6 @@
 import { startHttp } from "./http.js";
 import { startMcp } from "./mcp.js";
-import { api, health } from "./daemon.js";
+import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 
 const args = new Set(process.argv.slice(2));
@@ -19,6 +19,12 @@ async function main(): Promise<void> {
 
   if (args.has("--daemon")) {
     await startHttp();
+    return;
+  }
+
+  // The desktop app starts (or replaces) the daemon this way before loading the board.
+  if (args.has("--ensure")) {
+    await ensureDaemon();
     return;
   }
 

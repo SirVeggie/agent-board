@@ -43,6 +43,18 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 `npm start` runs the daemon in the foreground. Cursor does not need this: the MCP server starts the daemon on first use. `npm stop` stops a running daemon.
 
+## Desktop app
+
+`desktop/` is an optional Tauri window over the same daemon and UI, so the browser keeps working as before. It needs a Rust toolchain to build and Node at runtime (it runs this clone's `dist/index.js` to start the daemon; set `AGENT_BOARD_DIR` to point elsewhere).
+
+- `npm run desktop` builds and runs a debug copy. `npm run desktop:build` builds `desktop\target\release\agent-board-desktop.exe` and an installer under `desktop\target\release\bundle\nsis`.
+- The tab strip is the title bar: drag empty space (or the spacing around panels) to move the window, double-click to maximize.
+- Settings → Desktop shows or hides each title bar button (compact, minimize, maximize, close). Right-click any button still shown for the hidden ones; with all four hidden, a ⋯ menu holds them.
+- Board shortcuts (Ctrl+D, Ctrl+S, Ctrl+H) are caught natively, so they also work while an embedded site has focus. Ctrl+Z stays with the page.
+- Ctrl+Shift+M, or the button beside the window controls, switches between the normal window and a compact one. Each remembers its own size and place; the compact one stays on top unless turned off in Settings.
+- Links that open a new window go to the default browser.
+- On launch the app writes `desktop.json` to the data folder. While Settings → Desktop → "Agents open the board in this app" is on, agents open the app instead of a browser tab when no board window is open.
+
 ## Agent tools
 
 | Tool | Purpose |

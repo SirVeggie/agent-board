@@ -34,7 +34,7 @@ export async function ensureDaemon(): Promise<string> {
     await stopDaemon();
   }
   log("Starting agent-board daemon");
-  const args = process.argv.slice(1).filter((arg) => arg !== "--daemon" && arg !== "--stop");
+  const args = process.argv.slice(1).filter((arg) => arg !== "--daemon" && arg !== "--stop" && arg !== "--ensure");
   args.push("--daemon");
   const child = spawn(process.execPath, args, {
     detached: true,

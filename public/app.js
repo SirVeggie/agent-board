@@ -2341,6 +2341,20 @@
     return false;
   }
 
+  /** Shortcuts the desktop app catches natively, so they also work while an embedded site has focus. */
+  function runShortcut(action) {
+    if (confirmDlg.open || choiceDlg.open) {
+      return;
+    }
+    if (action === "palette") {
+      togglePalette();
+    } else if (action === "download") {
+      downloadActive();
+    } else if (action === "help") {
+      openWelcome();
+    }
+  }
+
   function onBoardShortcut(event) {
     if (confirmDlg.open || choiceDlg.open) {
       return;
@@ -2641,6 +2655,7 @@
   );
 
   window.addEventListener("keydown", onBoardShortcut, true);
+  window.agentBoardShortcut = runShortcut;
   window.addEventListener("message", (event) => {
     if (event.origin !== contentOrigin() || !frameByWindow(event.source)) {
       return;

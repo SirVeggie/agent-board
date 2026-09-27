@@ -9,7 +9,7 @@ import { safeStem } from "./boardExport.js";
 import { VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
-import { openBrowser } from "./openBrowser.js";
+import { openBoard } from "./openBoard.js";
 import { clampWaitMs, parseSignalNames } from "./signal.js";
 import { clampLibraryPage } from "./librarySearch.js";
 import { withAgentDates } from "./dates.js";
@@ -116,7 +116,7 @@ export async function startMcp(): Promise<void> {
       if (activate) {
         const info = await health();
         if (!info || info.viewers === 0) {
-          openBrowser(boardUrl(tab.id));
+          openBoard(boardUrl(tab.id));
         }
       }
       return jsonResult({
@@ -223,7 +223,7 @@ export async function startMcp(): Promise<void> {
       if (activate) {
         const info = await health();
         if (!info || info.viewers === 0) {
-          openBrowser(boardUrl(payload.tab.id));
+          openBoard(boardUrl(payload.tab.id));
         }
       }
       return jsonResult({
@@ -877,7 +877,7 @@ export async function startMcp(): Promise<void> {
       };
       const info = await health();
       if (!info || info.viewers === 0) {
-        openBrowser(boardUrl(tab.id));
+        openBoard(boardUrl(tab.id));
       }
       return jsonResult({
         id: tab.id,
