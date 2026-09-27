@@ -799,6 +799,7 @@ window.createLibrary = function createLibrary(host) {
     }
     menu.hidden = true;
     menu.replaceChildren();
+    delete menu.dataset.owner;
     return true;
   }
 
@@ -874,6 +875,10 @@ window.createLibrary = function createLibrary(host) {
   function libraryMenu(event) {
     event.preventDefault();
     event.stopPropagation();
+    if (menu.dataset.owner === "library") {
+      closeMenu();
+      return;
+    }
     const box = moreBtn.getBoundingClientRect();
     openMenu({ x: box.left, y: box.bottom + 4 }, [
       { label: "New folder", action: () => createFolder(null) },
@@ -885,6 +890,7 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export all", action: () => host.downloadAll() },
     ]);
+    menu.dataset.owner = "library";
   }
 
   function setAllCollapsed(value) {
@@ -1631,7 +1637,9 @@ window.createLibrary = function createLibrary(host) {
   moreBtn.addEventListener("click", libraryMenu);
   menu.addEventListener("contextmenu", (event) => event.preventDefault());
   document.addEventListener("pointerdown", (event) => {
-    if (!menu.hidden && !menu.contains(event.target)) {
+    // The "…" button toggles its own menu on click, so leave that to it.
+    const toggling = menu.dataset.owner === "library" && moreBtn.contains(event.target);
+    if (!menu.hidden && !menu.contains(event.target) && !toggling) {
       closeMenu();
     }
   });
