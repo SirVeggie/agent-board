@@ -67,6 +67,44 @@ html[data-theme="spectrum"] {
 
 * { box-sizing: border-box; }
 
+/*
+ * Thin scrollbars without arrow buttons. Chromium ignores ::-webkit-scrollbar (and draws arrows)
+ * on any element with scrollbar-width or scrollbar-color, so those are for other engines only.
+ */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(127, 127, 127, 0.45) transparent;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Literal colors: custom properties do not resolve inside Chromium's scrollbar pseudo-elements. */
+::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.45);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(127, 127, 127, 0.65);
+}
+
 html, body {
   margin: 0;
   height: 100%;
@@ -1164,8 +1202,6 @@ kbd {
 .palette-list {
   max-height: min(46vh, 420px);
   overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--accent-rgb), 0.35) transparent;
 }
 
 .palette-row {

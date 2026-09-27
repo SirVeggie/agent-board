@@ -1,7 +1,13 @@
+/**
+ * Chromium drops the ::-webkit-scrollbar rules (and draws arrow buttons) on any element with
+ * scrollbar-width or scrollbar-color, so the standard properties are for other engines only.
+ */
 export const BOARD_SCROLLBAR_CSS = `
-html { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.45) transparent; }
-* { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.45) transparent; }
+@supports not selector(::-webkit-scrollbar) {
+  html, * { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.45) transparent; }
+}
 ::-webkit-scrollbar { width: 5px; height: 5px; background: transparent; }
+::-webkit-scrollbar-button { display: none; }
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(127, 127, 127, 0.45); border-radius: 99px; }
