@@ -54,11 +54,28 @@ export type Template = {
   stateVersion: number;
   createdAt: number;
   updatedAt: number;
+  /** Set on a local copy of a built-in template. */
+  source?: TemplateSource;
 };
 
-export type TemplateMeta = Omit<Template, "html" | "initialState"> & {
+/** Which built-in a local template was copied from, and that built-in's fingerprint at copy time. */
+export type TemplateSource = {
+  builtin: string;
+  fingerprint: string;
+};
+
+export type TemplateMeta = Omit<Template, "html" | "initialState" | "source"> & {
   htmlBytes: number;
   instanceCount: number;
+  /** Key of the built-in this template was copied from. */
+  builtinSource?: string;
+};
+
+/** A read-only template shipped with the app. Opening one opens its local copy, creating it first if needed. */
+export type BuiltinTemplateMeta = Omit<TemplateMeta, "instanceCount" | "builtinSource"> & {
+  builtIn: true;
+  /** Id of the local copy, when there is one. */
+  localId?: string;
 };
 
 export type TemplateBinding = {
@@ -185,6 +202,7 @@ export type BoardEvent =
       folders: Folder[];
       activeId: string | null;
       templates: TemplateMeta[];
+      builtinTemplates: BuiltinTemplateMeta[];
       persistError: string | null;
     }
   | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean }
@@ -197,6 +215,7 @@ export type BoardEvent =
   | { type: "trash" }
   | { type: "template_upserted"; template: TemplateMeta }
   | { type: "template_deleted"; id: string }
+  | { type: "builtin_templates"; templates: BuiltinTemplateMeta[] }
   | { type: "persist_error"; error: string }
   | { type: "persist_ok" };
 
@@ -285,6 +304,7 @@ export function toTemplateMeta(template: Template, instanceCount = 0): TemplateM
     updatedAt: template.updatedAt,
     htmlBytes: Buffer.byteLength(template.html, "utf8"),
     instanceCount,
+    ...(template.source ? { builtinSource: template.source.builtin } : {}),
   };
 }
 

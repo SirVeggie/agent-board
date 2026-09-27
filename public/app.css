@@ -1482,6 +1482,86 @@ kbd {
   color: var(--danger);
 }
 
+.template-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sits under the user's templates and sinks to the bottom of the panel when that list is short. */
+.builtin-group {
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.builtin-group[hidden] {
+  display: none;
+}
+
+.builtin-rule {
+  height: 1px;
+  margin: 0 8px 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.builtin-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.builtin-head:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.builtin-group.open .lib-chevron {
+  transform: rotate(90deg);
+}
+
+.builtin-count {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.builtin-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s var(--ease);
+}
+
+.builtin-group.open .builtin-body {
+  grid-template-rows: 1fr;
+}
+
+.builtin-body > div {
+  overflow: hidden;
+}
+
+.side-row.builtin .fileicon {
+  opacity: 0.8;
+}
+
+.side-row.menu-on {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.side-row.fresh {
+  animation: lib-flash 1.6s var(--ease);
+}
+
 .side-row .template-desc {
   display: block;
   color: var(--muted);

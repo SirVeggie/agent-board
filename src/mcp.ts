@@ -732,7 +732,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_template_upsert",
-    "Create or update a reusable Agent Board template. Only use when the user explicitly asked to create or edit a board template. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
+    "Create or update a reusable Agent Board template. Only use when the user explicitly asked to create or edit a board template. Built-in templates are read-only: to change one, use a new key (board_template_get the built-in for its HTML), or update its local copy (localId from board_template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
     {
       key: z.string().optional().describe("Stable template identity. Reusing the same key updates that template."),
       title: z.string().describe("Name shown in the Templates sidebar."),
@@ -795,7 +795,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_template_list",
-    "List saved Agent Board templates (no HTML). Only use when the user asked to work with board templates.",
+    "List Agent Board templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). Only use when the user asked to work with board templates.",
     {},
     async () => {
       const { status, data } = await api("GET", "/api/templates");
@@ -808,9 +808,9 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_template_get",
-    "Read a template's HTML, fields, and metadata. Only use when the user asked to work with board templates.",
+    "Read a template's HTML, fields, and metadata, including a built-in's. Only use when the user asked to work with board templates.",
     {
-      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
+      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
     },
     async ({ id, key }) => {
@@ -848,9 +848,9 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_template_open",
-    "Create a pinned page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance.",
+    "Create a pinned page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance. Opening a built-in opens its local copy, creating that copy first if needed.",
     {
-      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
+      id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
       values: z.record(z.unknown()).optional().describe("Form values matching the template fields."),
     },
@@ -865,7 +865,11 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const tab = (data as { tab: { id: string; key: string; title: string } }).tab;
+      const { tab, template, copiedBuiltin } = data as {
+        tab: { id: string; key: string; title: string };
+        template: { id: string; key: string };
+        copiedBuiltin: boolean;
+      };
       const info = await health();
       if (!info || info.viewers === 0) {
         openBrowser(boardUrl(tab.id));
@@ -875,7 +879,10 @@ export async function startMcp(): Promise<void> {
         key: tab.key,
         title: tab.title,
         url: boardUrl(tab.id),
-        note: "Opened a pinned page from the template.",
+        templateId: template.id,
+        note: copiedBuiltin
+          ? `Copied the built-in to the user's templates as ${template.key} and opened a pinned page from that copy.`
+          : "Opened a pinned page from the template.",
       });
     }
   );

@@ -8,6 +8,16 @@
 - **How to verify:** Create a template, open a page from it, restart the daemon, confirm the template list and the page link survive. Existing tabs without a binding still load.
 - **When to remove:** Keep. This is the current schema, not a one-shot rewrite.
 
+## `templates.builtin_key` / `builtin_fingerprint` columns (additive, schema still 2)
+
+- **What changed:** Built-in templates ship in `templates/builtin` and are never stored. Opening one creates a local copy in `templates`, and the copy records which built-in it came from (`builtin_key`) and that built-in's content fingerprint at copy time (`builtin_fingerprint`). Both are nullable `TEXT`; null means an ordinary user template.
+- **Why migration was needed:** Existing `templates` tables lack the columns and the template upsert writes them. SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureTemplateBuiltinColumns` checks `PRAGMA table_info(templates)` first. `SCHEMA_VERSION` stays `2`.
+- **On load:** a user template with no source whose content is identical to a built-in is linked to it, so opening that built-in reuses it instead of making a second copy.
+- **Export format:** templates may carry an optional `source: { builtin, fingerprint }`. Import keeps it only when the target board has no copy of that built-in yet. Older exports have no `source`. `EXPORT_VERSION` stays `1`.
+- **Where:** `src/dbMigrate.ts` (`ensureTemplateBuiltinColumns`, run by `ensureTemplateSchema`). New databases get the columns from `CREATE_SQL` / `TEMPLATE_TABLES_SQL`.
+- **How to verify:** `template tables without the built-in columns are migrated` in `src/store.test.ts` drops the columns from a board, reopens it, and checks a copy's link survives a reload.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.agent_hidden` column (additive, schema still 1)
 
 - **What changed:** Tabs can be hidden from the agent, from the board UI only. The flag is stored in a new `tabs.agent_hidden INTEGER NOT NULL DEFAULT 0` column. Export files carry it as an optional `agentHidden: true` on each page.

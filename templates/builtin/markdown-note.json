@@ -1,0 +1,19 @@
+{
+  "key": "markdown-note",
+  "title": "Markdown note",
+  "description": "A titled page with one markdown block. Click to edit raw text, click away to render.",
+  "fields": [
+    {
+      "key": "title",
+      "label": "Title",
+      "type": "text",
+      "required": true,
+      "default": "Notes"
+    }
+  ],
+  "titleTemplate": "{{title}}",
+  "initialState": {
+    "text": ""
+  },
+  "stateVersion": 1
+}

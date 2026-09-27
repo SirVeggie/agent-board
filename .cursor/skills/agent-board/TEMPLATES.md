@@ -16,6 +16,14 @@ A template is reusable page HTML plus a form. The user opens instances from the 
 
 Reuse the same `key` when updating that template.
 
+## Built-in templates
+
+Some templates ship with the app (Embed, Markdown note, Todo list). `board_template_list` returns them under `builtins` with ids like `builtin:todo-list`. They are read-only: `board_template_upsert` and `board_template_delete` refuse them.
+
+Opening a built-in (from the sidebar or `board_template_open`) copies it into the user's templates first, once, and the page binds to that copy. App updates never touch the copy, so they can't break the user's pages. `localId` on a built-in is the id of its copy, and the copy's `builtinSource` names the built-in.
+
+If the user wants a changed version of a built-in, `board_template_get` it and upsert under a new key, or update their copy by `localId` if they want that copy changed.
+
 ## Authoring
 
 1. Decide the form with the user, or pick a small set: e.g. Title, item name singular/plural, column count.

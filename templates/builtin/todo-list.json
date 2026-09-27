@@ -1,0 +1,55 @@
+{
+  "key": "todo-list",
+  "title": "Todo list",
+  "description": "Todo board with editable column headers, drag between columns, notes and images per item.",
+  "fields": [
+    {
+      "key": "title",
+      "label": "Title",
+      "type": "text",
+      "required": true,
+      "default": "Todos"
+    },
+    {
+      "key": "item",
+      "label": "One item",
+      "type": "text",
+      "required": true,
+      "placeholder": "an item",
+      "help": "Singular with its article, e.g. \"an item\".",
+      "default": "a task"
+    },
+    {
+      "key": "items",
+      "label": "Several items",
+      "type": "text",
+      "required": true,
+      "placeholder": "items",
+      "help": "Plural, e.g. \"items\".",
+      "default": "tasks"
+    },
+    {
+      "key": "checkboxes",
+      "label": "Show checkboxes",
+      "type": "checkbox",
+      "default": true
+    },
+    {
+      "key": "columns",
+      "label": "Columns",
+      "type": "number",
+      "help": "Items in removed columns come back when you add the columns again.",
+      "min": 1,
+      "max": 6,
+      "default": 1
+    }
+  ],
+  "titleTemplate": "{{title}}",
+  "initialState": {
+    "todos": [],
+    "columnTitles": [],
+    "draft": "",
+    "openId": ""
+  },
+  "stateVersion": 1
+}

@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS templates (
   initial_state TEXT NOT NULL DEFAULT '{}',
   state_version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  builtin_key TEXT,
+  builtin_fingerprint TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -30,6 +32,21 @@ CREATE TABLE IF NOT EXISTS template_bindings (
 
 export function ensureTemplateSchema(db: DatabaseSync): void {
   db.exec(TEMPLATE_TABLES_SQL);
+  ensureTemplateBuiltinColumns(db);
+}
+
+/**
+ * Template tables created before built-in templates have no builtin_key / builtin_fingerprint.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+function ensureTemplateBuiltinColumns(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(templates)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "builtin_key")) {
+    db.exec("ALTER TABLE templates ADD COLUMN builtin_key TEXT");
+  }
+  if (!columns.some((column) => column.name === "builtin_fingerprint")) {
+    db.exec("ALTER TABLE templates ADD COLUMN builtin_fingerprint TEXT");
+  }
 }
 
 /**

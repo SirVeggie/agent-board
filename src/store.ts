@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
 import { buildExport, type BoardExportFile, type ImportPageInput } from "./boardExport.js";
+import { BUILTIN_ID_PREFIX, isBuiltinId, loadBuiltinTemplates } from "./builtinTemplates.js";
 import { searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
 import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
 import { MAX_HTML_BYTES, MAX_STATE_BYTES, dbPath, statePath } from "./config.js";
@@ -29,6 +30,7 @@ import {
   type Tab,
   type TabAsset,
   type TabMeta,
+  type BuiltinTemplateMeta,
   type Template,
   type TemplateBinding,
   type TemplateMeta,
@@ -73,6 +75,7 @@ export class BoardStore extends EventEmitter {
   private removed = new Set<string>();
   private foldersDirty = false;
   private templates = new Map<string, Template>();
+  private builtins: Template[] = [];
   private removedTemplates = new Set<string>();
   private templatesDirty = false;
 
@@ -87,6 +90,8 @@ export class BoardStore extends EventEmitter {
     for (const template of snapshot.templates) {
       this.templates.set(template.id, template);
     }
+    this.builtins = loadBuiltinTemplates();
+    this.adoptBuiltinCopies();
     const bindings = new Map(snapshot.bindings.map((binding) => [binding.tabId, binding]));
     const batches = new Map<string, DeletedBatch>();
     const batchOf = (id: string, at: number): DeletedBatch => {
@@ -144,7 +149,7 @@ export class BoardStore extends EventEmitter {
     } catch (err) {
       log("Failed to clean orphan assets", String(err));
     }
-    if (this.removed.size || this.foldersDirty || this.dirty.size) {
+    if (this.removed.size || this.foldersDirty || this.dirty.size || this.templatesDirty) {
       this.persistSoon();
     }
   }
@@ -155,6 +160,7 @@ export class BoardStore extends EventEmitter {
     folders: Folder[];
     activeId: string | null;
     templates: TemplateMeta[];
+    builtinTemplates: BuiltinTemplateMeta[];
     persistError: string | null;
   } {
     return {
@@ -163,6 +169,7 @@ export class BoardStore extends EventEmitter {
       folders: this.listFolders(),
       activeId: this.activeId,
       templates: this.listTemplates(),
+      builtinTemplates: this.listBuiltinTemplates(),
       persistError: this.persistError,
     };
   }
@@ -283,11 +290,64 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
+  listBuiltinTemplates(): BuiltinTemplateMeta[] {
+    return this.builtins.map((builtin) => {
+      const { instanceCount: _count, builtinSource: _source, ...meta } = toTemplateMeta(builtin);
+      const local = this.localCopyOf(builtin.key);
+      return { ...meta, builtIn: true, ...(local ? { localId: local.id } : {}) };
+    });
+  }
+
+  /** The user's own templates only. findTemplate also looks at built-ins. */
   getTemplate(idOrKey: string): Template | undefined {
     return this.locateTemplate(idOrKey);
   }
 
+  /** A local template first, then a built-in by id or key. */
+  findTemplate(idOrKey: string): { template: Template; builtIn: boolean } | undefined {
+    const local = isBuiltinId(idOrKey) ? undefined : this.locateTemplate(idOrKey);
+    if (local) {
+      return { template: local, builtIn: false };
+    }
+    const builtin = this.locateBuiltin(idOrKey);
+    return builtin ? { template: builtin, builtIn: true } : undefined;
+  }
+
+  /**
+   * The local copy of a built-in, created on first use so a later app update never changes
+   * the user's pages. The copy is found again by its source, even after it has been edited.
+   */
+  copyBuiltinTemplate(idOrKey: string): { template: Template; created: boolean } {
+    const builtin = this.locateBuiltin(idOrKey);
+    if (!builtin) {
+      throw new Error(`template not found: ${idOrKey}`);
+    }
+    const existing = this.localCopyOf(builtin.key);
+    if (existing) {
+      return { template: existing, created: false };
+    }
+    const id = newTemplateId();
+    const now = Date.now();
+    const template: Template = {
+      ...structuredClone(builtin),
+      id,
+      key: uniqueTemplateKey(this, builtin.key, builtin.title, id),
+      createdAt: now,
+      updatedAt: now,
+      source: { builtin: builtin.key, fingerprint: templateFingerprint(builtin) },
+    };
+    this.templates.set(id, template);
+    this.markTemplateDirty(id);
+    this.persistSoon();
+    this.emit("template_upserted", toTemplateMeta(template, 0));
+    this.emit("builtin_templates", this.listBuiltinTemplates());
+    return { template, created: true };
+  }
+
   upsertTemplate(input: TemplateUpsertInput): { template: Template; created: boolean } {
+    if (input.id && isBuiltinId(input.id)) {
+      throw new Error("built-in templates are read-only. Open it once to get a local copy, then update that copy by its key.");
+    }
     const parsed = normalizeTemplateInput(input);
     const existing = input.id
       ? this.locateTemplate(input.id)
@@ -335,8 +395,11 @@ export class BoardStore extends EventEmitter {
   }
 
   deleteTemplate(idOrKey: string): Template {
-    const template = this.locateTemplate(idOrKey);
+    const template = isBuiltinId(idOrKey) ? undefined : this.locateTemplate(idOrKey);
     if (!template) {
+      if (this.locateBuiltin(idOrKey)) {
+        throw new Error("built-in templates cannot be deleted");
+      }
       throw new Error(`template not found: ${idOrKey}`);
     }
     for (const tab of this.allTabs()) {
@@ -349,6 +412,9 @@ export class BoardStore extends EventEmitter {
     this.templatesDirty = true;
     this.persistSoon();
     this.emit("template_deleted", template.id);
+    if (template.source) {
+      this.emit("builtin_templates", this.listBuiltinTemplates());
+    }
     return template;
   }
 
@@ -356,8 +422,15 @@ export class BoardStore extends EventEmitter {
     idOrKey: string,
     values: unknown,
     opts?: { activate?: boolean; agentHidden?: boolean }
-  ): { tab: Tab; created: boolean } {
-    const template = this.requireTemplate(idOrKey);
+  ): { tab: Tab; created: boolean; template: Template; copiedBuiltin: boolean } {
+    const found = this.findTemplate(idOrKey);
+    if (!found) {
+      throw new Error(`template not found: ${idOrKey}`);
+    }
+    // Validate against the built-in first so a bad form doesn't leave a stray copy behind.
+    parseTemplateValues(found.template.fields, values);
+    const copy = found.builtIn ? this.copyBuiltinTemplate(found.template.id) : undefined;
+    const template = copy ? copy.template : found.template;
     const parsed = parseTemplateValues(template.fields, values);
     const title = renderTemplateTitle(template, parsed);
     const html = this.renderBoundHtml(template, title, parsed);
@@ -379,7 +452,7 @@ export class BoardStore extends EventEmitter {
       activate: opts?.activate !== false,
       structural: true,
     });
-    return { tab, created: true };
+    return { tab, created: true, template, copiedBuiltin: Boolean(copy?.created) };
   }
 
   setTemplateValues(idOrKey: string, values: unknown): Tab {
@@ -526,6 +599,9 @@ export class BoardStore extends EventEmitter {
     }
     if (focused) {
       this.emit("tab_focused", focused.id);
+    }
+    if (plan.created.some((template) => template.source)) {
+      this.emit("builtin_templates", this.listBuiltinTemplates());
     }
     for (const template of new Set(plan.byFileId.values())) {
       this.emit("template_upserted", toTemplateMeta(template, this.instanceCount(template.id)));
@@ -1508,6 +1584,11 @@ export class BoardStore extends EventEmitter {
       const key = uniqueTemplateKey(this, template.key || undefined, template.title, id, reservedKeys);
       reservedKeys.add(key);
       const fresh: Template = { ...template, id, key };
+      // One local copy per built-in: an imported copy only keeps its link when this board has none yet.
+      const builtinKey = fresh.source?.builtin;
+      if (builtinKey && (this.localCopyOf(builtinKey) || created.some((item) => item.source?.builtin === builtinKey))) {
+        delete fresh.source;
+      }
       created.push(fresh);
       byFingerprint.set(fingerprint, fresh);
       byFileId.set(template.id, fresh);
@@ -1998,6 +2079,37 @@ export class BoardStore extends EventEmitter {
       }
     }
     return undefined;
+  }
+
+  private locateBuiltin(idOrKey: string): Template | undefined {
+    const key = isBuiltinId(idOrKey) ? idOrKey.slice(BUILTIN_ID_PREFIX.length) : normalizeKey(idOrKey);
+    return this.builtins.find((builtin) => builtin.key === key);
+  }
+
+  private localCopyOf(builtinKey: string): Template | undefined {
+    for (const template of this.templates.values()) {
+      if (template.source?.builtin === builtinKey) {
+        return template;
+      }
+    }
+    return undefined;
+  }
+
+  /** Link a local template identical to a built-in (e.g. the one it was made from), so opening the built-in reuses it. */
+  private adoptBuiltinCopies(): void {
+    for (const builtin of this.builtins) {
+      if (this.localCopyOf(builtin.key)) {
+        continue;
+      }
+      const fingerprint = templateFingerprint(builtin);
+      const twin = [...this.templates.values()].find(
+        (template) => !template.source && templateFingerprint(template) === fingerprint
+      );
+      if (twin) {
+        twin.source = { builtin: builtin.key, fingerprint };
+        this.markTemplateDirty(twin.id);
+      }
+    }
   }
 
   private requireTemplate(idOrKey: string): Template {

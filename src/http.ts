@@ -12,7 +12,7 @@ import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type FolderDeleteMode } from "./store.js";
-import { isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
@@ -554,22 +554,35 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.get("/api/templates", (req, res) => {
-    res.json({ templates: store.listTemplates(viewerOf(req)) });
+    res.json({ templates: store.listTemplates(viewerOf(req)), builtins: store.listBuiltinTemplates() });
   });
 
   app.get("/api/templates/:id", (req, res) => {
-    const template = store.getTemplate(req.params.id);
-    if (!template) {
+    const found = store.findTemplate(req.params.id);
+    if (!found) {
       res.status(404).json({ error: `template not found: ${req.params.id}` });
       return;
     }
+    const { template, builtIn } = found;
+    const meta = builtIn
+      ? store.listBuiltinTemplates().find((item) => item.id === template.id)
+      : toTemplateMeta(template, instanceCount(template, viewerOf(req)));
     res.json({
       template: {
-        ...toTemplateMeta(template, instanceCount(template, viewerOf(req))),
+        ...meta,
         html: template.html,
         ...(template.initialState ? { initialState: template.initialState } : {}),
       },
     });
+  });
+
+  app.post("/api/templates/:id/copy", (req, res) => {
+    try {
+      const { template, created } = store.copyBuiltinTemplate(req.params.id);
+      res.status(created ? 201 : 200).json({ created, template: toTemplateMeta(template, instanceCount(template, viewerOf(req))) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
   });
 
   app.post("/api/templates", (req, res) => {
@@ -603,17 +616,18 @@ export async function startHttp(): Promise<http.Server> {
       const template = store.deleteTemplate(req.params.id);
       res.json({ deleted: template.id, key: template.key });
     } catch (err) {
-      res.status(404).json({ error: (err as Error).message });
+      const message = (err as Error).message;
+      res.status(message.startsWith("template not found") ? 404 : 400).json({ error: message });
     }
   });
 
   app.post("/api/templates/:id/open", (req, res) => {
     try {
-      const { tab } = store.openFromTemplate(req.params.id, req.body?.values ?? {}, {
+      const { tab, template, copiedBuiltin } = store.openFromTemplate(req.params.id, req.body?.values ?? {}, {
         activate: req.body?.activate !== false,
         agentHidden: viewerOf(req) === "user" && req.body?.agentHidden === true,
       });
-      res.status(201).json({ tab: toMeta(tab) });
+      res.status(201).json({ tab: toMeta(tab), template: { id: template.id, key: template.key }, copiedBuiltin });
     } catch (err) {
       const message = (err as Error).message;
       const missing = message.startsWith("template not found");
@@ -800,6 +814,7 @@ export async function startHttp(): Promise<http.Server> {
   });
   store.on("template_upserted", (template: TemplateMeta) => broadcast({ type: "template_upserted", template }));
   store.on("template_deleted", (id: string) => broadcast({ type: "template_deleted", id }));
+  store.on("builtin_templates", (templates: BuiltinTemplateMeta[]) => broadcast({ type: "builtin_templates", templates }));
   store.on("persist_error", (error: string) => broadcast({ type: "persist_error", error }));
   store.on("persist_ok", () => broadcast({ type: "persist_ok" }));
 

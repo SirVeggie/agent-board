@@ -1,0 +1,23 @@
+{
+  "key": "embed",
+  "title": "Embed",
+  "description": "Show a local dev server or web page in a tab. The site must allow being framed.",
+  "fields": [
+    {
+      "key": "url",
+      "label": "URL",
+      "type": "text",
+      "required": true,
+      "placeholder": "http://127.0.0.1:8188 or https://example.com",
+      "help": "Sites that send X-Frame-Options DENY/SAMEORIGIN or a strict frame-ancestors policy will show a blank or refused frame. Board shortcuts don't work while focus is inside the site."
+    },
+    {
+      "key": "title",
+      "label": "Tab title",
+      "type": "text",
+      "placeholder": "Embed"
+    }
+  ],
+  "titleTemplate": "{{title}}",
+  "stateVersion": 1
+}

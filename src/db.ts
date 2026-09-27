@@ -54,6 +54,8 @@ type TemplateRow = {
   state_version: number;
   created_at: number;
   updated_at: number;
+  builtin_key: string | null;
+  builtin_fingerprint: string | null;
 };
 
 type BindingRow = {
@@ -118,7 +120,9 @@ CREATE TABLE IF NOT EXISTS templates (
   initial_state TEXT NOT NULL DEFAULT '{}',
   state_version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  builtin_key TEXT,
+  builtin_fingerprint TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -175,8 +179,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 const UPSERT_TEMPLATE_SQL = `
 INSERT INTO templates (
   id, key, title, description, html, fields, title_template, initial_state,
-  state_version, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  state_version, created_at, updated_at, builtin_key, builtin_fingerprint
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
   title = excluded.title,
@@ -187,7 +191,9 @@ ON CONFLICT(id) DO UPDATE SET
   initial_state = excluded.initial_state,
   state_version = excluded.state_version,
   created_at = excluded.created_at,
-  updated_at = excluded.updated_at
+  updated_at = excluded.updated_at,
+  builtin_key = excluded.builtin_key,
+  builtin_fingerprint = excluded.builtin_fingerprint
 `;
 
 const UPSERT_BINDING_SQL = `
@@ -638,6 +644,8 @@ function templateToParams(template: Template): SQLInputValue[] {
     template.stateVersion,
     template.createdAt,
     template.updatedAt,
+    template.source?.builtin ?? null,
+    template.source?.fingerprint ?? null,
   ];
 }
 
@@ -683,6 +691,7 @@ function rowToTemplate(row: TemplateRow): Template {
     stateVersion: row.state_version || 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.builtin_key ? { source: { builtin: row.builtin_key, fingerprint: row.builtin_fingerprint ?? "" } } : {}),
   };
 }
 

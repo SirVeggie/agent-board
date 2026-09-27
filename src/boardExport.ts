@@ -226,6 +226,9 @@ function templateFromExport(raw: unknown, index: number): Template {
     throw new Error(`templates[${index}]: ${(err as Error).message}`);
   }
   const now = Date.now();
+  const source = isPlainObject(raw.source) && typeof raw.source.builtin === "string" && raw.source.builtin
+    ? { builtin: raw.source.builtin, fingerprint: typeof raw.source.fingerprint === "string" ? raw.source.fingerprint : "" }
+    : undefined;
   return {
     id,
     key: typeof raw.key === "string" ? raw.key : "",
@@ -238,6 +241,7 @@ function templateFromExport(raw: unknown, index: number): Template {
     stateVersion: normalized.stateVersion ?? 1,
     createdAt: finiteNumber(raw.createdAt) ?? now,
     updatedAt: finiteNumber(raw.updatedAt) ?? now,
+    ...(source ? { source } : {}),
   };
 }
 

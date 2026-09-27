@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --line: #2a3140;
+    --text: #e8edf5;
+    --muted: #8b95a8;
+    --accent: #6ea8ff;
+    --shadow: 0 10px 40px rgba(0,0,0,.35);
+    --radius: 14px;
+    --edge-hi: inset 0 1px 0 rgba(255, 255, 255, .14);
+    --edge-lo: 0 1px 0 rgba(0, 0, 0, .42);
+    --depth: var(--edge-hi), var(--edge-lo);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: radial-gradient(1200px 600px at 10% -10%, #1a2740 0%, var(--bg) 55%);
+    color: var(--text);
+    font: 15px/1.45 ui-sans-serif, system-ui, Segoe UI, sans-serif;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 36px 20px 64px;
+  }
+  header { margin-bottom: 22px; }
+  h1.page-title {
+    margin: 0;
+    font-size: 28px;
+    letter-spacing: -0.03em;
+  }
+  .hidden { display: none !important; }
+  .md-preview, .md-editor {
+    min-height: 240px;
+    padding: 16px 18px;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+  }
+  .md-preview {
+    background: var(--panel);
+    cursor: text;
+    box-shadow: var(--depth), var(--shadow);
+    word-break: break-word;
+  }
+  .md-preview:hover {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 1px 0 rgba(0, 0, 0, .5), var(--shadow);
+  }
+  .md-preview.placeholder { color: var(--muted); }
+  .md-preview h1, .md-preview h2, .md-preview h3, .md-preview h4, .md-preview h5, .md-preview h6 {
+    margin: 0.8em 0 0.35em;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+  .md-preview > :first-child { margin-top: 0; }
+  .md-preview > :last-child { margin-bottom: 0; }
+  .md-preview p { margin: 0.55em 0; }
+  .md-preview ul, .md-preview ol { margin: 0.45em 0; padding-left: 1.4em; }
+  .md-preview blockquote {
+    margin: 0.6em 0;
+    padding: 0.2em 0 0.2em 12px;
+    border-left: 3px solid var(--accent);
+    color: var(--muted);
+  }
+  .md-preview hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 14px 0;
+  }
+  .md-preview a { color: var(--accent); }
+  .md-preview code {
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0f1115;
+    padding: 0.12em 0.38em;
+    border-radius: 5px;
+    box-shadow: var(--depth);
+  }
+  .md-preview pre {
+    background: #0f1115;
+    padding: 12px;
+    border-radius: 8px;
+    overflow: auto;
+    margin: 0.6em 0;
+    box-shadow: var(--depth);
+  }
+  .md-preview pre code { padding: 0; background: transparent; box-shadow: none; }
+  .md-preview img {
+    max-width: 100%;
+    border-radius: 8px;
+    display: block;
+    margin: 8px 0;
+  }
+  .md-editor {
+    display: block;
+    width: 100%;
+    min-height: 360px;
+    background: rgba(8, 12, 20, .32);
+    color: var(--text);
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    resize: vertical;
+    outline: none;
+    box-shadow: var(--depth), 0 0 0 1px var(--accent);
+  }
+  .need-reload {
+    padding: 20px;
+    background: var(--panel);
+    box-shadow: var(--depth);
+    border-radius: var(--radius);
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 class="page-title">{{title}}</h1>
+    </header>
+    <div class="md-preview placeholder" id="preview">Click to write. Markdown is supported.</div>
+    <textarea class="md-editor hidden" id="editor" placeholder="Write markdown…" spellcheck="false"></textarea>
+  </div>
+<script>
+(function () {
+  var preview = document.getElementById("preview");
+  var editor = document.getElementById("editor");
+
+  if (!window.board) {
+    preview.className = "need-reload";
+    preview.textContent = "Reload the Agent Board tab so this page can use shared state.";
+    return;
+  }
+
+  var editing = false;
+
+  board.bind(editor, "draftText");
+
+  function text() {
+    return typeof board.state.text === "string" ? board.state.text : "";
+  }
+
+  function showPreview() {
+    var src = text();
+    if (!src.trim()) {
+      preview.className = "md-preview placeholder";
+      preview.textContent = "Click to write. Markdown is supported.";
+      return;
+    }
+    preview.className = "md-preview";
+    preview.innerHTML = renderMarkdown(src);
+  }
+
+  function startEdit() {
+    if (editing) return;
+    editing = true;
+    var src = text();
+    board.set({ draftText: src });
+    editor.value = src;
+    preview.classList.add("hidden");
+    editor.classList.remove("hidden");
+    editor.style.height = Math.max(360, preview.offsetHeight || 0) + "px";
+    editor.focus();
+  }
+
+  function stopEdit() {
+    if (!editing) return;
+    editing = false;
+    var src = String(board.state.draftText != null ? board.state.draftText : editor.value);
+    board.set({ text: src });
+    editor.classList.add("hidden");
+    preview.classList.remove("hidden");
+    showPreview();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function safeUrl(url, forImage) {
+    url = String(url || "").trim();
+    if (/^https?:\/\//i.test(url)) return url;
+    if (forImage && /^data:image\/(png|jpeg|jpg|gif|webp);/i.test(url)) return url;
+    return "";
+  }
+
+  function mdInline(raw) {
+    var held = [];
+    function hold(html) {
+      held.push(html);
+      return "\u0000" + (held.length - 1) + "\u0000";
+    }
+    var str = String(raw || "");
+    str = str.replace(/`([^`]+)`/g, function (_, c) {
+      return hold("<code>" + escapeHtml(c) + "</code>");
+    });
+    str = str.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
+      var src = safeUrl(url, true);
+      if (!src) return _;
+      return hold('<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '">');
+    });
+    str = str.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, t, url) {
+      var href = safeUrl(url, false);
+      if (!href) return _;
+      return hold('<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener">' + escapeHtml(t) + "</a>");
+    });
+    str = escapeHtml(str);
+    str = str.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    str = str.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    str = str.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    str = str.replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1<em>$2</em>");
+    str = str.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    str = str.replace(/\u0000(\d+)\u0000/g, function (_, i) { return held[+i]; });
+    return str;
+  }
+
+  function renderMarkdown(src) {
+    var lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
+    var html = [];
+    var i = 0;
+    function isFence(line) { return /^```/.test(line); }
+    function isHeading(line) { return /^#{1,6} /.test(line); }
+    function isQuote(line) { return /^>\s?/.test(line); }
+    function isUl(line) { return /^\s*[-*+] /.test(line); }
+    function isOl(line) { return /^\s*\d+\. /.test(line); }
+    function isHr(line) { return /^(---+|\*\*\*+|___+)\s*$/.test(line); }
+    function isBlock(line) {
+      return isFence(line) || isHeading(line) || isQuote(line) || isUl(line) || isOl(line) || isHr(line);
+    }
+    while (i < lines.length) {
+      var line = lines[i];
+      if (isFence(line)) {
+        var code = [];
+        i++;
+        while (i < lines.length && !isFence(lines[i])) code.push(lines[i++]);
+        if (i < lines.length) i++;
+        html.push("<pre><code>" + escapeHtml(code.join("\n")) + "</code></pre>");
+        continue;
+      }
+      if (isHeading(line)) {
+        var n = line.match(/^#+/)[0].length;
+        html.push("<h" + n + ">" + mdInline(line.replace(/^#+\s+/, "")) + "</h" + n + ">");
+        i++;
+        continue;
+      }
+      if (isQuote(line)) {
+        var q = [];
+        while (i < lines.length && isQuote(lines[i])) q.push(lines[i++].replace(/^>\s?/, ""));
+        html.push("<blockquote>" + q.map(mdInline).join("<br>") + "</blockquote>");
+        continue;
+      }
+      if (isHr(line)) {
+        html.push("<hr>");
+        i++;
+        continue;
+      }
+      if (isUl(line) || isOl(line)) {
+        var ordered = isOl(line);
+        var test = ordered ? isOl : isUl;
+        html.push(ordered ? "<ol>" : "<ul>");
+        while (i < lines.length && test(lines[i])) {
+          html.push("<li>" + mdInline(lines[i].replace(ordered ? /^\s*\d+\.\s+/ : /^\s*[-*+]\s+/, "")) + "</li>");
+          i++;
+        }
+        html.push(ordered ? "</ol>" : "</ul>");
+        continue;
+      }
+      if (!line.trim()) {
+        i++;
+        continue;
+      }
+      var p = [];
+      while (i < lines.length && lines[i].trim() && !isBlock(lines[i])) p.push(lines[i++]);
+      html.push("<p>" + p.map(mdInline).join("<br>") + "</p>");
+    }
+    return html.join("");
+  }
+
+  preview.onclick = function (event) {
+    if (event.target.closest && event.target.closest("a")) return;
+    startEdit();
+  };
+  editor.onblur = stopEdit;
+  editor.onkeydown = function (event) {
+    if (event.key === "Escape" || ((event.ctrlKey || event.metaKey) && event.key === "Enter")) {
+      event.preventDefault();
+      editor.blur();
+    }
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+      var s = editor.selectionStart, e = editor.selectionEnd;
+      editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(e);
+      editor.selectionStart = editor.selectionEnd = s + 2;
+      board.set({ draftText: editor.value });
+    }
+  };
+
+  board.onChange(function () {
+    if (!editing) showPreview();
+  });
+  showPreview();
+})();
+</script>
+</body>
+</html>

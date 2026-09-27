@@ -122,8 +122,18 @@
           <div class="side-head">
             <h2>Templates <span id="template-count">0</span></h2>
           </div>
-          <div id="template-list" class="side-list"></div>
-          <div id="template-none" class="side-none">No templates yet. Ask the agent to create one.</div>
+          <div class="side-list template-scroll">
+            <div id="template-list"></div>
+            <div id="template-none" class="side-none">No templates yet. Ask the agent to create one, or open a built-in.</div>
+            <div id="builtin-group" class="builtin-group" hidden>
+              <div class="builtin-rule"></div>
+              <button type="button" id="builtin-head" class="builtin-head" aria-expanded="true" aria-controls="builtin-body">
+                <span class="lib-chevron"><svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M5.5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                Built-in <span id="builtin-count" class="builtin-count">0</span>
+              </button>
+              <div id="builtin-body" class="builtin-body"><div id="builtin-list"></div></div>
+            </div>
+          </div>
         </div>
       </div>
     </aside>

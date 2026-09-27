@@ -1081,3 +1081,108 @@ test("updatedAt only moves when content changes", () => {
   assert.equal(store.get("page")?.updatedAt, at);
   store.closeDb();
 });
+
+test("built-in templates are listed apart from the user's own", () => {
+  const store = loaded();
+  const builtins = store.listBuiltinTemplates();
+  assert.ok(builtins.some((item) => item.id === "builtin:todo-list" && item.builtIn));
+  assert.ok(builtins.every((item) => !item.localId));
+  assert.equal(store.listTemplates().length, 0);
+  assert.equal(store.findTemplate("todo-list")?.builtIn, true);
+  store.closeDb();
+});
+
+test("opening a built-in opens a local copy, created once", () => {
+  const store = loaded();
+  const first = store.openFromTemplate("builtin:todo-list", { title: "Chores" });
+  assert.equal(first.copiedBuiltin, true);
+  const copy = store.getTemplate(first.tab.templateId!)!;
+  assert.equal(copy.key, "todo-list");
+  assert.equal(copy.source?.builtin, "todo-list");
+  const second = store.openFromTemplate("builtin:todo-list", { title: "Errands" });
+  assert.equal(second.copiedBuiltin, false);
+  assert.equal(second.tab.templateId, copy.id);
+  assert.equal(store.listTemplates().length, 1);
+  assert.equal(store.listTemplates()[0].builtinSource, "todo-list");
+  assert.equal(store.listBuiltinTemplates().find((item) => item.key === "todo-list")?.localId, copy.id);
+  // The key now finds the user's copy, not the built-in.
+  assert.equal(store.findTemplate("todo-list")?.template.id, copy.id);
+  store.closeDb();
+});
+
+test("a built-in's local copy keeps its link after edits and a reload", () => {
+  const store = loaded();
+  const { template } = store.copyBuiltinTemplate("markdown-note");
+  store.upsertTemplate({ id: template.id, title: "My notes", html: "<p>mine</p>" });
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.copyBuiltinTemplate("markdown-note").created, false);
+  assert.equal(again.getTemplate(template.id)?.source?.builtin, "markdown-note");
+  assert.equal(again.listTemplates().length, 1);
+  again.closeDb();
+});
+
+test("built-ins cannot be updated or deleted", () => {
+  const store = loaded();
+  assert.throws(() => store.upsertTemplate({ id: "builtin:embed", title: "X", html: "<p>x</p>" }), /read-only/);
+  assert.throws(() => store.deleteTemplate("builtin:embed"), /cannot be deleted/);
+  assert.throws(() => store.deleteTemplate("embed"), /cannot be deleted/);
+  store.closeDb();
+});
+
+test("opening a built-in with bad values leaves no copy behind", () => {
+  const store = loaded();
+  assert.throws(() => store.openFromTemplate("builtin:embed", {}), /required/);
+  assert.equal(store.listTemplates().length, 0);
+  store.closeDb();
+});
+
+test("a local template identical to a built-in is adopted as its copy", () => {
+  const store = loaded();
+  const builtin = store.findTemplate("builtin:embed")!.template;
+  const { template } = store.upsertTemplate({
+    key: "my-embed",
+    title: builtin.title,
+    description: builtin.description,
+    html: builtin.html,
+    fields: builtin.fields,
+    titleTemplate: builtin.titleTemplate,
+    stateVersion: builtin.stateVersion,
+  });
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.getTemplate(template.id)?.source?.builtin, "embed");
+  assert.equal(again.openFromTemplate("builtin:embed", { url: "https://example.com" }).tab.templateId, template.id);
+  again.closeDb();
+});
+
+test("template tables without the built-in columns are migrated", () => {
+  const store = loaded();
+  store.persist();
+  store.closeDb();
+  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  db.exec("ALTER TABLE templates DROP COLUMN builtin_key; ALTER TABLE templates DROP COLUMN builtin_fingerprint;");
+  db.close();
+  const again = loaded();
+  const { template } = again.copyBuiltinTemplate("embed");
+  again.persist();
+  again.closeDb();
+  const third = loaded();
+  assert.equal(third.getTemplate(template.id)?.source?.builtin, "embed");
+  third.closeDb();
+});
+
+test("an exported built-in copy stays linked on import", () => {
+  const source = loaded();
+  const { tab } = source.openFromTemplate("builtin:embed", { url: "https://example.com" });
+  const parsed = roundTrip(source.exportFile({ id: tab.id }));
+  source.closeDb();
+  const target = otherBoard();
+  target.importBoard(parsed, "meta");
+  const imported = target.listTemplates();
+  assert.equal(imported.length, 1);
+  assert.equal(imported[0].builtinSource, "embed");
+  target.closeDb();
+});

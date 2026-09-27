@@ -20,6 +20,10 @@
   const templateCountEl = document.getElementById("template-count");
   const templateList = document.getElementById("template-list");
   const templateNone = document.getElementById("template-none");
+  const builtinGroup = document.getElementById("builtin-group");
+  const builtinHead = document.getElementById("builtin-head");
+  const builtinCountEl = document.getElementById("builtin-count");
+  const builtinList = document.getElementById("builtin-list");
   const templateEditBtn = document.getElementById("template-edit");
   const templateBlock = document.getElementById("template-block");
   const templateBlockReason = document.getElementById("template-block-reason");
@@ -67,7 +71,8 @@
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "2.1.0";
+  const BOARD_VERSION = "2.2.0";
+  const BUILTIN_OPEN_KEY = "agent-board.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
   const TOGGLE_HOVER_OPEN_MS = 500;
@@ -83,6 +88,8 @@
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.6 1.4l5 5-1.4 1.4-.9-.2-2.3 2.3.2 2.5-1.5 1.5-2.4-2.4-3.1 3.1-.8-.8 3.1-3.1-2.4-2.4 1.5-1.5 2.5.2 2.3-2.3-.2-.9z" fill="currentColor"/></svg>';
   const FILE_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="currentColor"/></svg>';
+  const BUILTIN_SVG =
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill-rule="evenodd" d="M2.5 2h7.5l3.5 3.5V14h-11zM8 7.2l.9 1.8 2 .3-1.45 1.4.35 2L8 11.75l-1.8.95.35-2L5.1 9.3l2-.3z" fill="currentColor"/></svg>';
   const AGENT_HIDDEN_SVG =
     '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/><path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   const AGENT_HIDDEN_TITLE = "Hidden from the agent";
@@ -93,6 +100,9 @@
     closed: [],
     folders: [],
     templates: [],
+    /** Read-only templates shipped with the app. Opening one opens its local copy. */
+    builtinTemplates: [],
+    builtinOpen: localStorage.getItem(BUILTIN_OPEN_KEY) !== "0",
     activeId: null,
     connected: false,
     sideOpen: localStorage.getItem(SIDE_OPEN_KEY) === "1",
@@ -259,6 +269,7 @@
       state.closed = Array.isArray(msg.closed) ? msg.closed : [];
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       state.templates = Array.isArray(msg.templates) ? msg.templates : [];
+      state.builtinTemplates = Array.isArray(msg.builtinTemplates) ? msg.builtinTemplates : [];
       const hash = location.hash.replace(/^#/, "");
       const fromOpen = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
       const fromClosed = state.closed.find((tab) => tab.id === hash || tab.key === hash);
@@ -434,6 +445,11 @@
         closeTemplateModal();
       }
       renderChrome();
+      renderTemplates();
+      return;
+    }
+    if (msg.type === "builtin_templates") {
+      state.builtinTemplates = Array.isArray(msg.templates) ? msg.templates : [];
       renderTemplates();
     }
   }
@@ -1461,42 +1477,56 @@
   function renderTemplates() {
     const rows = state.templates;
     templateCountEl.textContent = String(rows.length);
-    templateList.replaceChildren();
+    templateList.replaceChildren(...rows.map((template) => templateRow(template, false)));
     templateNone.hidden = rows.length > 0;
-    for (const template of rows) {
-      const el = document.createElement("div");
-      el.className = "side-row";
-      el.role = "button";
-      el.tabIndex = 0;
-      el.dataset.id = template.id;
-      el.dataset.kind = "template";
-      el.ariaLabel = template.title;
-      el.addEventListener("click", () => openTemplateModal(template, "create"));
-      el.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openTemplateModal(template, "create");
-        }
-      });
+    if (freshTemplateId) {
+      flashTemplateRow(freshTemplateId);
+    }
+    const builtins = state.builtinTemplates;
+    builtinGroup.hidden = builtins.length === 0;
+    builtinGroup.classList.toggle("open", state.builtinOpen);
+    builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
+    builtinCountEl.textContent = String(builtins.length);
+    builtinList.replaceChildren(...builtins.map((template) => templateRow(template, true)));
+  }
 
-      const icon = document.createElement("span");
-      icon.className = "fileicon";
-      icon.innerHTML = FILE_SVG;
-      el.appendChild(icon);
-
-      const text = document.createElement("span");
-      text.className = "tab-title";
-      const name = document.createElement("span");
-      name.textContent = template.title;
-      text.appendChild(name);
-      if (template.description) {
-        const desc = document.createElement("span");
-        desc.className = "template-desc";
-        desc.textContent = template.description;
-        text.appendChild(desc);
+  function templateRow(template, builtin) {
+    const el = document.createElement("div");
+    el.className = builtin ? "side-row builtin" : "side-row";
+    el.role = "button";
+    el.tabIndex = builtin && !state.builtinOpen ? -1 : 0;
+    el.dataset.id = template.id;
+    el.dataset.kind = "template";
+    el.ariaLabel = template.title;
+    el.addEventListener("click", () => openTemplateModal(template, "create"));
+    el.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openTemplateModal(template, "create");
       }
-      el.appendChild(text);
+    });
 
+    const icon = document.createElement("span");
+    icon.className = "fileicon";
+    icon.innerHTML = builtin ? BUILTIN_SVG : FILE_SVG;
+    el.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.className = "tab-title";
+    const name = document.createElement("span");
+    name.textContent = template.title;
+    text.appendChild(name);
+    if (template.description) {
+      const desc = document.createElement("span");
+      desc.className = "template-desc";
+      desc.textContent = template.description;
+      text.appendChild(desc);
+    }
+    el.appendChild(text);
+
+    if (builtin) {
+      el.addEventListener("contextmenu", (event) => builtinMenu(event, template, el));
+    } else {
       const close = document.createElement("button");
       close.className = "tab-close";
       close.type = "button";
@@ -1507,9 +1537,81 @@
         deleteTemplate(template);
       });
       el.appendChild(close);
-      hoverCard.bind(el, TEMPLATE_CARD_DELAY);
-      templateList.appendChild(el);
     }
+    hoverCard.bind(el, TEMPLATE_CARD_DELAY);
+    return el;
+  }
+
+  function builtinMenu(event, template, el) {
+    event.preventDefault();
+    event.stopPropagation();
+    el.classList.add("menu-on");
+    library.openMenu({ x: event.clientX, y: event.clientY }, [
+      { label: "Open…", action: () => openTemplateModal(template, "create") },
+      template.localId
+        ? { label: "Show my copy", action: () => flashTemplateRow(template.localId, true) }
+        : { label: "Add to my templates", action: () => copyBuiltinTemplate(template) },
+      "sep",
+      { label: "Copy template ID", action: () => copyTemplateId(template.id) },
+    ]);
+    // The shared menu has no close hook; drop the highlight on the next interaction.
+    const clear = () => el.classList.remove("menu-on");
+    setTimeout(() => {
+      document.addEventListener("pointerdown", clear, { once: true, capture: true });
+      document.addEventListener("keydown", clear, { once: true, capture: true });
+    });
+  }
+
+  function toggleBuiltinGroup() {
+    state.builtinOpen = !state.builtinOpen;
+    try {
+      localStorage.setItem(BUILTIN_OPEN_KEY, state.builtinOpen ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+    renderTemplates();
+  }
+
+  /** A template row that should flash once it exists (the upsert event and the fetch response race). */
+  let freshTemplateId = null;
+
+  function flashTemplateRow(id, scroll = false) {
+    const row = templateList.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!row) {
+      freshTemplateId = id;
+      return;
+    }
+    freshTemplateId = null;
+    row.classList.remove("fresh");
+    void row.offsetWidth;
+    row.classList.add("fresh");
+    if (scroll) {
+      row.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  async function copyBuiltinTemplate(template) {
+    const res = await fetch(`/api/templates/${encodeURIComponent(template.id)}/copy`, { method: "POST" }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
+    if (!res?.ok || !data.template) {
+      showNotice(data.error || "Could not copy the template");
+      return;
+    }
+    flashTemplateRow(data.template.id, true);
+    showNotice(`Added “${data.template.title}” to your templates`);
+  }
+
+  async function copyTemplateId(id) {
+    try {
+      await navigator.clipboard.writeText(`Agent Board template ${id}`);
+      showNotice(`Copied ${id}`);
+    } catch {
+      showNotice("Could not copy to clipboard");
+    }
+  }
+
+  function findTemplateMeta(id) {
+    return state.templates.find((item) => item.id === id) || state.builtinTemplates.find((item) => item.id === id) || null;
   }
 
   function isTemplateModalOpen() {
@@ -1639,7 +1741,7 @@
     event.preventDefault();
     const id = templateModal.dataset.templateId;
     const mode = templateModal.dataset.mode;
-    const template = state.templates.find((item) => item.id === id);
+    const template = findTemplateMeta(id);
     if (!template) {
       return;
     }
@@ -1670,6 +1772,9 @@
       }
       if (mode !== "edit" && data.tab?.id) {
         pendingFocus = { id: data.tab.id, key: data.tab.key };
+      }
+      if (data.copiedBuiltin) {
+        showNotice(`Added “${template.title}” to your templates`);
       }
       closeTemplateModal();
     } catch {
@@ -1914,7 +2019,7 @@
 
   function describeForCard(el) {
     if (el.dataset.kind === "template") {
-      const template = state.templates.find((item) => item.id === el.dataset.id);
+      const template = findTemplateMeta(el.dataset.id);
       return template
         ? {
             title: template.title,
@@ -2580,6 +2685,7 @@
   libraryToggle.addEventListener("click", () => setSideOpen(!state.sideOpen));
   sidebarTabLibrary.addEventListener("click", () => setSidebarTab("library"));
   sidebarTabTemplates.addEventListener("click", () => setSidebarTab("templates"));
+  builtinHead.addEventListener("click", toggleBuiltinGroup);
   trashBack.addEventListener("click", () => {
     closeTrash();
     document.getElementById("library-more")?.focus({ preventScroll: true });
