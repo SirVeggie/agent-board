@@ -18,20 +18,33 @@ enum Shortcut {
     Compact,
     /// Board actions the page runs through `window.agentBoardShortcut`. Ctrl+Z stays with the
     /// page: an embed's text field needs its own undo, and board frames already forward it.
+    /// Ctrl+Shift+T reopens without that caveat.
     Board(&'static str),
 }
+
+const VK_TAB: u32 = 0x09;
 
 fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
     if !ctrl || alt {
         return None;
     }
-    match (key as u8, shift) {
+    if key == VK_TAB {
+        return Some(Shortcut::Board(if shift { "prev-tab" } else { "next-tab" }));
+    }
+    match (u8::try_from(key).ok()?, shift) {
         (b'M', true) => Some(Shortcut::Compact),
+        (b'T', true) => Some(Shortcut::Board("reopen")),
         (b'D', false) => Some(Shortcut::Board("palette")),
         (b'S', false) => Some(Shortcut::Board("download")),
         (b'H', false) => Some(Shortcut::Board("help")),
+        (b'W', false) => Some(Shortcut::Board("close-tab")),
         _ => None,
     }
+}
+
+/// Holding Ctrl+Tab keeps cycling, like a browser. Everything else fires once per press.
+fn repeats(shortcut: &Shortcut) -> bool {
+    matches!(shortcut, Shortcut::Board("next-tab" | "prev-tab"))
 }
 
 fn pressed(key: u16) -> bool {
@@ -57,7 +70,7 @@ pub fn install(window: &WebviewWindow) {
             args.SetHandled(true)?;
             let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
             args.PhysicalKeyStatus(&mut status)?;
-            if status.WasKeyDown.as_bool() {
+            if status.WasKeyDown.as_bool() && !repeats(&shortcut) {
                 return Ok(());
             }
             let window = target.clone();

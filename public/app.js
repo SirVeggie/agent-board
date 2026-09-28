@@ -2364,7 +2364,26 @@
       downloadActive();
     } else if (action === "help") {
       openWelcome();
+    } else if (action === "next-tab" || action === "prev-tab") {
+      cycleTab(action === "next-tab" ? 1 : -1);
+    } else if (action === "close-tab") {
+      const tab = activeTab();
+      if (tab) {
+        closeTab(tab.id);
+      }
+    } else if (action === "reopen") {
+      undoClose();
     }
+  }
+
+  function cycleTab(step) {
+    const count = state.tabs.length;
+    if (count === 0) {
+      return;
+    }
+    const at = state.tabs.findIndex((tab) => tab.id === state.activeId);
+    const next = at < 0 ? state.tabs[step > 0 ? 0 : count - 1] : state.tabs[(at + step + count) % count];
+    selectTab(next.id, { fromUser: true });
   }
 
   function onBoardShortcut(event) {
