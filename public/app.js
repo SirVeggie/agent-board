@@ -1666,7 +1666,7 @@
     }
     templateModalAgentHidden.checked = mode === "edit" && Boolean(activeTab()?.agentHidden);
     templateModal.hidden = false;
-    const first = templateModalFields.querySelector("input, textarea, select");
+    const first = templateModalFields.querySelector("input, textarea, .select-button");
     first?.focus();
   }
 
@@ -1733,7 +1733,7 @@
       if (fallback != null && field.type !== "checkbox") {
         input.value = String(fallback);
       }
-      wrap.appendChild(input);
+      wrap.appendChild(field.type === "select" ? window.createSelect(input) : input);
     }
     if (field.help) {
       const help = document.createElement("p");
