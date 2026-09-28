@@ -96,6 +96,20 @@ test("Ctrl+Z keeps strip_seq so the tab returns to its hole", () => {
   store.closeDb();
 });
 
+test("closing the active tab focuses its left neighbor, or the right one when leftmost", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.focus("b");
+  const activeTitle = () => store.snapshot().tabs.find((tab) => tab.id === store.snapshot().activeId)?.title;
+  store.closeTab("b");
+  assert.equal(activeTitle(), "A");
+  store.closeTab("a");
+  assert.equal(activeTitle(), "C");
+  store.closeDb();
+});
+
 test("opening a closed page assigns a new seq and appends", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });

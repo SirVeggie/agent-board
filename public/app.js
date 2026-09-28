@@ -382,13 +382,14 @@
       if (drag && drag.id === msg.id) {
         abortDrag(false);
       }
+      const neighbor = neighborTabId(msg.id);
       state.tabs = state.tabs.filter((tab) => tab.id !== msg.id);
       state.closed = state.closed.filter((tab) => tab.id !== msg.id);
       unread.delete(msg.id);
       unreadLibrary.delete(msg.id);
       discardFrame(msg.id);
       if (state.activeId === msg.id) {
-        state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
+        state.activeId = neighbor;
         if (state.activeId) {
           unread.delete(state.activeId);
         }
@@ -465,8 +466,18 @@
     }
   }
 
+  /** The tab to focus when `id` leaves the strip: its left neighbor, or its right one when it is leftmost. */
+  function neighborTabId(id) {
+    const idx = state.tabs.findIndex((tab) => tab.id === id);
+    if (idx === -1) {
+      return state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
+    }
+    return (state.tabs[idx - 1] ?? state.tabs[idx + 1])?.id ?? null;
+  }
+
   /** A page whose tab is closed. Blips the Library only when its content or state changed, not on moves or pins. */
   function upsertClosed(tab, structural) {
+    const neighbor = neighborTabId(tab.id);
     state.tabs = state.tabs.filter((item) => item.id !== tab.id);
     unread.delete(tab.id);
     discardFrame(tab.id);
@@ -481,7 +492,7 @@
       state.closed[idx] = tab;
     }
     if (state.activeId === tab.id) {
-      state.activeId = state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
+      state.activeId = neighbor;
       if (state.activeId) {
         unread.delete(state.activeId);
       }

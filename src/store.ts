@@ -1137,12 +1137,13 @@ export class BoardStore extends EventEmitter {
       return located.tab;
     }
     const tab = located.tab;
+    const prevOrder = this.order;
     this.tabs.delete(tab.id);
     this.rebuildOrder();
     tab.closedAt = this.stamp();
     this.closed.set(tab.id, tab);
     if (this.activeId === tab.id) {
-      this.activeId = this.order[this.order.length - 1] ?? null;
+      this.activeId = this.neighborOf(prevOrder, tab.id);
     }
     this.markDirty(tab.id);
     this.persistSoon();
@@ -1170,6 +1171,7 @@ export class BoardStore extends EventEmitter {
   deleteMany(idsOrKeys: string[]): Tab[] {
     const batch: DeletedBatch = { id: newBatchId(), deletedAt: this.stamp(), tabs: [], folders: [] };
     const wasActive = this.activeId;
+    const prevOrder = this.order;
     for (const idOrKey of idsOrKeys) {
       const located = this.locate(idOrKey);
       if (!located) {
@@ -1188,7 +1190,7 @@ export class BoardStore extends EventEmitter {
     this.pushDeleted(batch);
     this.rebuildOrder();
     if (this.activeId && !this.tabs.has(this.activeId)) {
-      this.activeId = this.order[this.order.length - 1] ?? null;
+      this.activeId = this.neighborOf(prevOrder, this.activeId);
     }
     this.persistSoon();
     for (const tab of batch.tabs) {
@@ -1810,12 +1812,13 @@ export class BoardStore extends EventEmitter {
   private discardAppTab(tab: Tab): Tab {
     const wasActive = this.activeId === tab.id;
     const wasOpen = this.tabs.has(tab.id);
+    const prevOrder = this.order;
     this.tabs.delete(tab.id);
     this.closed.delete(tab.id);
     this.rebuildOrder();
     delete tab.closedAt;
     if (wasActive) {
-      this.activeId = this.order[this.order.length - 1] ?? null;
+      this.activeId = this.neighborOf(prevOrder, tab.id);
     }
     this.removed.add(tab.id);
     this.dirty.delete(tab.id);
@@ -2004,6 +2007,25 @@ export class BoardStore extends EventEmitter {
 
   private emitFolders(): void {
     this.emit("folders", this.listFolders());
+  }
+
+  /** The nearest still-open tab left of `id` in `prevOrder`, else the nearest to its right. */
+  private neighborOf(prevOrder: string[], id: string): string | null {
+    const idx = prevOrder.indexOf(id);
+    if (idx === -1) {
+      return this.order[this.order.length - 1] ?? null;
+    }
+    for (let i = idx - 1; i >= 0; i--) {
+      if (this.tabs.has(prevOrder[i])) {
+        return prevOrder[i];
+      }
+    }
+    for (let i = idx + 1; i < prevOrder.length; i++) {
+      if (this.tabs.has(prevOrder[i])) {
+        return prevOrder[i];
+      }
+    }
+    return null;
   }
 
   private rebuildOrder(): void {
