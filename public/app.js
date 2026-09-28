@@ -42,6 +42,7 @@
   const choiceDlg = document.getElementById("choice");
   const choiceMessage = document.getElementById("choice-message");
   const choiceActions = document.getElementById("choice-actions");
+  const cleanupDlg = document.getElementById("cleanup");
   const paletteEl = document.getElementById("palette");
   const paletteBackdrop = document.getElementById("palette-backdrop");
   const paletteInput = document.getElementById("palette-input");
@@ -2354,7 +2355,7 @@
 
   /** Shortcuts the desktop app catches natively, so they also work while an embedded site has focus. */
   function runShortcut(action) {
-    if (confirmDlg.open || choiceDlg.open) {
+    if (confirmDlg.open || choiceDlg.open || cleanupDlg.open) {
       return;
     }
     if (action === "palette") {
@@ -2367,7 +2368,7 @@
   }
 
   function onBoardShortcut(event) {
-    if (confirmDlg.open || choiceDlg.open) {
+    if (confirmDlg.open || choiceDlg.open || cleanupDlg.open) {
       return;
     }
     if (event.key === "Escape") {

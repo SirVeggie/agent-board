@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=46">
+  <link rel="stylesheet" href="/app.css?v=47">
   <script>
     (() => {
       if (localStorage.getItem("agent-board.tightSmall") !== "0") {
@@ -228,6 +228,49 @@
       </div>
     </form>
   </dialog>
+  <dialog id="cleanup" class="confirm cleanup" aria-labelledby="cleanup-title">
+    <form method="dialog">
+      <h2 id="cleanup-title">Clean up tabs</h2>
+      <div class="cleanup-fields">
+        <div class="template-field">
+          <label for="cleanup-age">Older than</label>
+          <div class="cleanup-age">
+            <input type="number" id="cleanup-age" min="1" max="9999" step="1" value="30" inputmode="numeric">
+            <select id="cleanup-unit" aria-label="Unit">
+              <option value="1" selected>days</option>
+              <option value="7">weeks</option>
+              <option value="30">months</option>
+              <option value="365">years</option>
+            </select>
+          </div>
+        </div>
+        <div class="template-field">
+          <label for="cleanup-basis">Based on</label>
+          <select id="cleanup-basis">
+            <option value="activity" selected>Last activity</option>
+            <option value="edited">Last edited</option>
+            <option value="created">Created</option>
+            <option value="closed">Closed</option>
+          </select>
+          <p class="help" id="cleanup-basis-help"></p>
+        </div>
+        <div class="setting-row">
+          <span id="cleanup-open-label">Include open tabs</span>
+          <button type="button" class="pill-toggle" id="cleanup-open" role="switch" aria-checked="false" aria-labelledby="cleanup-open-label"></button>
+        </div>
+        <div class="setting-row">
+          <span id="cleanup-pinned-label">Include pinned tabs</span>
+          <button type="button" class="pill-toggle" id="cleanup-pinned" role="switch" aria-checked="false" aria-labelledby="cleanup-pinned-label"></button>
+        </div>
+      </div>
+      <p class="cleanup-summary" id="cleanup-summary" role="status" aria-live="polite"></p>
+      <ul class="cleanup-list" id="cleanup-list" hidden></ul>
+      <div class="confirm-actions">
+        <button type="submit" value="cancel">Cancel</button>
+        <button type="submit" value="ok" class="danger" id="cleanup-submit" disabled>Delete</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="choice" class="confirm">
     <form method="dialog">
       <p id="choice-message"></p>
@@ -236,9 +279,9 @@
   </dialog>
   <script src="/hovercard.js?v=1"></script>
   <script src="/select.js?v=1"></script>
-  <script src="/library.js?v=3"></script>
+  <script src="/library.js?v=5"></script>
   <script src="/trash.js?v=1"></script>
-  <script src="/app.js?v=48"></script>
+  <script src="/app.js?v=49"></script>
   <script src="/desktop.js?v=4"></script>
 </body>
 </html>

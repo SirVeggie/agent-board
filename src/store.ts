@@ -55,6 +55,17 @@ type Located = { tab: Tab; where: "open" | "closed" };
 
 export type FolderDeleteMode = "lift" | "delete";
 
+/** Which date the Library clean-up compares: latest activity (edit, data, or close), last edit, creation, or close. */
+export type CleanupBasis = "activity" | "edited" | "created" | "closed";
+export const CLEANUP_BASES: CleanupBasis[] = ["activity", "edited", "created", "closed"];
+
+export type CleanupOptions = {
+  days: number;
+  basis?: CleanupBasis;
+  includeOpen?: boolean;
+  includePinned?: boolean;
+};
+
 const FOLDER_NAME_MAX = 120;
 
 export class BoardStore extends EventEmitter {
@@ -1214,16 +1225,29 @@ export class BoardStore extends EventEmitter {
     return located.tab;
   }
 
-  /** Closed pages whose content and close time are both older than `days`, as one batch. */
-  deleteStale(days: number): Tab[] {
+  /** Pages whose `basis` date is older than `days`. Closed pages only unless `includeOpen`; pinned ones only with `includePinned`. */
+  cleanupCandidates(opts: CleanupOptions): Tab[] {
+    const { days, basis = "activity", includeOpen = false, includePinned = false } = opts;
     if (!Number.isFinite(days) || days <= 0) {
       throw new Error("days must be a positive number");
     }
+    if (!CLEANUP_BASES.includes(basis)) {
+      throw new Error(`basis must be one of: ${CLEANUP_BASES.join(", ")}`);
+    }
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-    const stale = [...this.closed.values()].filter(
-      (tab) => Math.max(tab.updatedAt, tab.stateUpdatedAt, tab.closedAt ?? 0) < cutoff
-    );
-    return this.deleteMany(stale.map((tab) => tab.id));
+    const pool = includeOpen ? [...this.tabs.values(), ...this.closed.values()] : [...this.closed.values()];
+    return pool.filter((tab) => {
+      if (isAppTab(tab) || (tab.pinned && !includePinned)) {
+        return false;
+      }
+      const at = cleanupDate(tab, basis);
+      return at !== undefined && at < cutoff;
+    });
+  }
+
+  /** Deletes the cleanup candidates as one batch (undoable from the Trash). */
+  cleanup(opts: CleanupOptions): Tab[] {
+    return this.deleteMany(this.cleanupCandidates(opts).map((tab) => tab.id));
   }
 
   restore(idOrKey: string, opts?: { placement?: RestorePlacement; activate?: boolean }): Tab {
@@ -2592,6 +2616,20 @@ function shouldClose(destination: ImportDestination, closedAt?: number): boolean
       const _never: never = destination;
       return _never;
     }
+  }
+}
+
+/** The date a page is judged by; undefined when it has none (an open page has no close date). */
+function cleanupDate(tab: Tab, basis: CleanupBasis): number | undefined {
+  switch (basis) {
+    case "edited":
+      return Math.max(tab.updatedAt, tab.stateUpdatedAt);
+    case "created":
+      return tab.createdAt;
+    case "closed":
+      return tab.closedAt;
+    default:
+      return Math.max(tab.updatedAt, tab.stateUpdatedAt, tab.closedAt ?? 0);
   }
 }
 

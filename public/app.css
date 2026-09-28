@@ -158,6 +158,8 @@ html[data-theme="cream"] .side-pane input[type="search"],
 html[data-theme="cream"] .lib-rename,
 html[data-theme="cream"] .template-field select,
 html[data-theme="cream"] .select-button,
+html[data-theme="cream"] .cleanup-age input,
+html[data-theme="cream"] .cleanup-list,
 html[data-theme="cream"] .lib-picker input[type="search"] {
   background-color: rgba(255, 255, 255, 0.7);
 }
@@ -1160,6 +1162,100 @@ body.dragging-lib iframe {
   background: rgba(255, 123, 138, 0.28);
 }
 
+.cleanup {
+  width: min(380px, calc(100vw - 32px));
+}
+
+.cleanup h2 {
+  margin: 0;
+  padding: 18px 18px 12px;
+  font-size: 15px;
+  color: var(--heading);
+}
+
+.cleanup-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 18px;
+}
+
+.cleanup-age {
+  display: flex;
+  gap: 8px;
+}
+
+.cleanup-age input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cleanup-age .select-wrap {
+  flex: 0 0 110px;
+}
+
+.cleanup p.help {
+  padding: 0;
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cleanup .setting-row {
+  min-height: 28px;
+  padding: 0;
+}
+
+.cleanup p.cleanup-summary {
+  padding: 14px 18px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cleanup-summary strong {
+  color: var(--heading);
+}
+
+.cleanup-list {
+  list-style: none;
+  margin: 8px 18px 0;
+  padding: 4px 0;
+  max-height: 140px;
+  overflow-y: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+}
+
+.cleanup-list[hidden] {
+  display: none;
+}
+
+.cleanup-list li {
+  display: flex;
+  gap: 8px;
+  padding: 3px 10px;
+}
+
+.cleanup-list .title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cleanup-list .tag {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.confirm button.danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: rgba(255, 123, 138, 0.16);
+}
+
 button {
   appearance: none;
   -webkit-appearance: none;
@@ -1676,6 +1772,16 @@ kbd {
 .select-menu button[aria-selected="true"] {
   color: var(--heading);
   font-weight: 600;
+}
+
+.template-field input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.template-field input[type="number"]::-webkit-inner-spin-button,
+.template-field input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .template-field textarea {

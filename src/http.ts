@@ -11,7 +11,7 @@ import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
-import { store, type FolderDeleteMode } from "./store.js";
+import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
 import { isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
@@ -527,10 +527,21 @@ export async function startHttp(): Promise<http.Server> {
     res.json({ purged: store.emptyTrash() });
   });
 
-  app.post("/api/library/delete-stale", (req, res) => {
+  /** Library "Clean up tabs": `dryRun` lists what would go; otherwise deletes it as one undoable batch. */
+  app.post("/api/library/cleanup", (req, res) => {
     try {
-      const days = optionalNumber(req.body?.days) ?? 30;
-      res.json({ deleted: store.deleteStale(days).map((tab) => tab.id) });
+      const opts: CleanupOptions = {
+        days: optionalNumber(req.body?.days) ?? 30,
+        basis: (optionalString(req.body?.basis) as CleanupBasis | undefined) ?? "activity",
+        includeOpen: req.body?.includeOpen === true,
+        includePinned: req.body?.includePinned === true,
+      };
+      if (req.body?.dryRun === true) {
+        const pages = store.cleanupCandidates(opts);
+        res.json({ pages: pages.map((tab) => ({ id: tab.id, title: tab.title, pinned: tab.pinned, open: tab.closedAt === undefined })) });
+        return;
+      }
+      res.json({ deleted: store.cleanup(opts).map((tab) => tab.id) });
     } catch (err) {
       sendStoreError(res, err);
     }

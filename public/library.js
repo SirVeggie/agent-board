@@ -9,6 +9,16 @@ window.createLibrary = function createLibrary(host) {
   const countEl = document.getElementById("library-count");
   const newFolderBtn = document.getElementById("library-new-folder");
   const moreBtn = document.getElementById("library-more");
+  const cleanupDlg = document.getElementById("cleanup");
+  const cleanupAge = document.getElementById("cleanup-age");
+  const cleanupUnit = document.getElementById("cleanup-unit");
+  const cleanupBasis = document.getElementById("cleanup-basis");
+  const cleanupBasisHelp = document.getElementById("cleanup-basis-help");
+  const cleanupOpen = document.getElementById("cleanup-open");
+  const cleanupPinned = document.getElementById("cleanup-pinned");
+  const cleanupSummary = document.getElementById("cleanup-summary");
+  const cleanupList = document.getElementById("cleanup-list");
+  const cleanupSubmit = document.getElementById("cleanup-submit");
 
   const COLLAPSED_KEY = "agent-board.libraryCollapsed";
   const ROW_CARD_DELAY = 700;
@@ -18,7 +28,13 @@ window.createLibrary = function createLibrary(host) {
   const SCROLL_EDGE = 40;
   const INDENT = 14;
   const ROW_PAD = 8;
-  const STALE_DAYS = 30;
+  const CLEANUP_KEY = "agent-board.cleanup";
+  const CLEANUP_BASIS_HELP = {
+    activity: "The latest of an edit, a data change, or closing the tab.",
+    edited: "The last change to the page's content or data.",
+    created: "When the page was first shown.",
+    closed: "When the tab was closed. Open tabs have no close date, so they never match.",
+  };
   const ROOT = "\u0000root";
 
   const FOLDER_SVG =
@@ -45,6 +61,8 @@ window.createLibrary = function createLibrary(host) {
   /** @type {any} */
   let drag = null;
   let suppressClick = false;
+  let cleanupReq = 0;
+  let cleanupTimer = 0;
 
   const lineEl = document.createElement("div");
   lineEl.className = "lib-drop-line";
@@ -584,27 +602,154 @@ window.createLibrary = function createLibrary(host) {
     return parts.join(" and ");
   }
 
-  async function deleteStale() {
-    const cutoff = Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000;
-    const stale = model.pages.filter(
-      (page) =>
-        !host.isOpen(page.id) && Math.max(page.updatedAt || 0, page.stateUpdatedAt || 0, page.closedAt || 0) < cutoff
-    );
-    if (!stale.length) {
-      host.showNotice(`No closed pages older than ${STALE_DAYS} days`);
+  /* ---------- clean up ---------- */
+
+  function plural(n, word) {
+    return `${n} ${word}${n === 1 ? "" : "s"}`;
+  }
+
+  function loadCleanupPrefs() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CLEANUP_KEY) || "{}");
+      if (Number.isInteger(saved.age) && saved.age > 0) {
+        cleanupAge.value = String(saved.age);
+      }
+      if ([...cleanupUnit.options].some((opt) => opt.value === String(saved.unit))) {
+        cleanupUnit.value = String(saved.unit);
+      }
+      if (saved.basis in CLEANUP_BASIS_HELP) {
+        cleanupBasis.value = saved.basis;
+      }
+    } catch {
+      // Defaults from the markup stand.
+    }
+    for (const wrap of cleanupSelects) {
+      wrap.syncSelect();
+    }
+  }
+
+  function saveCleanupPrefs() {
+    try {
+      localStorage.setItem(
+        CLEANUP_KEY,
+        JSON.stringify({ age: Number(cleanupAge.value), unit: Number(cleanupUnit.value), basis: cleanupBasis.value })
+      );
+    } catch {
+      // Only a convenience.
+    }
+  }
+
+  /** Current dialog choices, or null while the age is not a whole number of at least 1. */
+  function cleanupOptions() {
+    const age = Number(cleanupAge.value);
+    if (!Number.isInteger(age) || age < 1) {
+      return null;
+    }
+    return {
+      days: age * Number(cleanupUnit.value),
+      basis: cleanupBasis.value,
+      includeOpen: cleanupOpen.getAttribute("aria-checked") === "true",
+      includePinned: cleanupPinned.getAttribute("aria-checked") === "true",
+    };
+  }
+
+  function showCleanupPreview(pages) {
+    cleanupList.replaceChildren();
+    if (!pages) {
+      cleanupSummary.textContent = "Enter an age of at least 1.";
+      cleanupList.hidden = true;
+      cleanupSubmit.disabled = true;
+      cleanupSubmit.textContent = "Delete";
       return;
     }
-    const n = stale.length;
-    const ok = await host.confirm(
-      `Delete ${n} closed page${n === 1 ? "" : "s"} untouched for ${STALE_DAYS} days? They stay in the Trash for 7 days.`
-    );
-    if (!ok) {
+    const n = pages.length;
+    cleanupSubmit.disabled = n === 0;
+    cleanupSubmit.textContent = n ? `Delete ${plural(n, "tab")}` : "Delete";
+    cleanupList.hidden = n === 0;
+    if (!n) {
+      cleanupSummary.textContent = "No tabs match.";
       return;
     }
-    const res = await send("POST", "/api/library/delete-stale", { days: STALE_DAYS });
-    if (res.ok) {
-      host.showNotice(`Deleted ${n} old page${n === 1 ? "" : "s"}`, { undo: true });
+    const count = document.createElement("strong");
+    count.textContent = plural(n, "tab");
+    cleanupSummary.replaceChildren(count, " will be deleted. They stay in the Trash for 7 days.");
+    for (const page of pages) {
+      const li = document.createElement("li");
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = page.title;
+      li.appendChild(title);
+      const tags = [page.open && "open", page.pinned && "pinned"].filter(Boolean);
+      if (tags.length) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = tags.join(", ");
+        li.appendChild(tag);
+      }
+      cleanupList.appendChild(li);
     }
+  }
+
+  async function previewCleanup() {
+    clearTimeout(cleanupTimer);
+    cleanupBasisHelp.textContent = CLEANUP_BASIS_HELP[cleanupBasis.value] || "";
+    const opts = cleanupOptions();
+    const req = ++cleanupReq;
+    if (!opts) {
+      showCleanupPreview(null);
+      return;
+    }
+    const res = await send("POST", "/api/library/cleanup", { ...opts, dryRun: true });
+    if (req !== cleanupReq || !cleanupDlg.open) {
+      return;
+    }
+    if (!res.ok) {
+      cleanupSummary.textContent = "Could not check which tabs match.";
+      cleanupList.hidden = true;
+      cleanupSubmit.disabled = true;
+      return;
+    }
+    const data = await res.json();
+    if (req === cleanupReq) {
+      showCleanupPreview(data.pages || []);
+    }
+  }
+
+  function schedulePreview() {
+    clearTimeout(cleanupTimer);
+    cleanupTimer = window.setTimeout(previewCleanup, 150);
+  }
+
+  function openCleanup() {
+    loadCleanupPrefs();
+    cleanupOpen.setAttribute("aria-checked", "false");
+    cleanupPinned.setAttribute("aria-checked", "false");
+    cleanupSummary.textContent = "";
+    cleanupList.hidden = true;
+    cleanupSubmit.disabled = true;
+    cleanupSubmit.textContent = "Delete";
+    cleanupDlg.returnValue = "cancel";
+    cleanupDlg.showModal();
+    cleanupAge.focus();
+    cleanupAge.select();
+    previewCleanup();
+  }
+
+  async function runCleanup() {
+    const opts = cleanupOptions();
+    if (!opts) {
+      return;
+    }
+    saveCleanupPrefs();
+    const res = await send("POST", "/api/library/cleanup", opts);
+    if (!res.ok) {
+      host.showNotice("Could not clean up tabs");
+      return;
+    }
+    const { deleted = [] } = await res.json();
+    host.showNotice(deleted.length ? `Deleted ${plural(deleted.length, "tab")}` : "No tabs matched", {
+      undo: deleted.length > 0,
+    });
   }
 
   /** Local position for an insert at `index`, mirroring the server so the optimistic order is right. */
@@ -885,7 +1030,7 @@ window.createLibrary = function createLibrary(host) {
       { label: "Expand all", disabled: model.folders.length === 0, action: () => setAllCollapsed(false) },
       { label: "Collapse all", disabled: model.folders.length === 0, action: () => setAllCollapsed(true) },
       "sep",
-      { label: `Delete pages untouched for ${STALE_DAYS} days…`, action: () => deleteStale() },
+      { label: "Clean up tabs…", action: () => openCleanup() },
       { label: "Trash", action: () => host.openTrash() },
       "sep",
       { label: "Export all", action: () => host.downloadAll() },
@@ -1634,6 +1779,40 @@ window.createLibrary = function createLibrary(host) {
     scheduleSearch();
   });
   newFolderBtn.addEventListener("click", () => createFolder(null));
+  cleanupAge.addEventListener("input", schedulePreview);
+  cleanupAge.addEventListener("keydown", (event) => {
+    // The form's first submit button is Cancel, so Enter would otherwise dismiss the dialog.
+    if (event.key === "Enter") {
+      event.preventDefault();
+    }
+  });
+  const cleanupSelects = [window.createSelect(cleanupUnit), window.createSelect(cleanupBasis)];
+  cleanupUnit.addEventListener("change", previewCleanup);
+  cleanupBasis.addEventListener("change", previewCleanup);
+  for (const toggle of [cleanupOpen, cleanupPinned]) {
+    toggle.addEventListener("click", () => {
+      toggle.setAttribute("aria-checked", toggle.getAttribute("aria-checked") === "true" ? "false" : "true");
+      previewCleanup();
+    });
+  }
+  // A click on the backdrop lands on the dialog itself (the form fills everything inside it).
+  let cleanupPressedOutside = false;
+  cleanupDlg.addEventListener("pointerdown", (event) => {
+    cleanupPressedOutside = event.target === cleanupDlg;
+  });
+  cleanupDlg.addEventListener("click", (event) => {
+    if (cleanupPressedOutside && event.target === cleanupDlg) {
+      cleanupDlg.close("cancel");
+    }
+    cleanupPressedOutside = false;
+  });
+  cleanupDlg.addEventListener("close", () => {
+    clearTimeout(cleanupTimer);
+    cleanupReq++;
+    if (cleanupDlg.returnValue === "ok") {
+      runCleanup();
+    }
+  });
   moreBtn.addEventListener("click", libraryMenu);
   menu.addEventListener("contextmenu", (event) => event.preventDefault());
   document.addEventListener("pointerdown", (event) => {

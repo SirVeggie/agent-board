@@ -1029,6 +1029,45 @@ test("the Trash drops deletes older than 7 days on load", () => {
   assert.deepEqual(rows.map((row) => row.key), ["new"]);
 });
 
+test("cleanup picks closed, unpinned pages older than the cutoff by default", () => {
+  const store = loaded();
+  const day = 24 * 60 * 60 * 1000;
+  const age = (key: string, fields: { updatedAt?: number; stateUpdatedAt?: number; closedAt?: number; createdAt?: number }) =>
+    Object.assign(store.get(key)!, fields);
+  for (const key of ["old", "fresh", "pinned", "open", "reclosed"]) {
+    store.upsert({ key, title: key, html: `<p>${key}</p>` });
+  }
+  store.update("pinned", { pin: true, activate: false });
+  for (const key of ["old", "fresh", "pinned", "reclosed"]) {
+    store.closeTab(key);
+  }
+  const long = Date.now() - 40 * day;
+  age("old", { createdAt: long, updatedAt: long, stateUpdatedAt: long, closedAt: long });
+  age("pinned", { createdAt: long, updatedAt: long, stateUpdatedAt: long, closedAt: long });
+  age("open", { createdAt: long, updatedAt: long, stateUpdatedAt: long });
+  age("reclosed", { createdAt: long, updatedAt: long, stateUpdatedAt: long });
+  const keys = (opts: Parameters<BoardStore["cleanupCandidates"]>[0]) =>
+    store.cleanupCandidates(opts).map((tab) => tab.key).sort();
+
+  assert.deepEqual(keys({ days: 30 }), ["old"]);
+  assert.deepEqual(keys({ days: 30, includePinned: true }), ["old", "pinned"]);
+  assert.deepEqual(keys({ days: 30, includeOpen: true }), ["old", "open"]);
+  assert.deepEqual(keys({ days: 30, basis: "edited" }), ["old", "reclosed"]);
+  assert.deepEqual(keys({ days: 30, basis: "created", includeOpen: true, includePinned: true }), [
+    "old",
+    "open",
+    "pinned",
+    "reclosed",
+  ]);
+  assert.deepEqual(keys({ days: 30, basis: "closed", includeOpen: true }), ["old"]);
+  assert.throws(() => store.cleanupCandidates({ days: 0 }));
+  assert.throws(() => store.cleanupCandidates({ days: 30, basis: "nope" as never }));
+
+  assert.deepEqual(store.cleanup({ days: 30, includePinned: true }).map((tab) => tab.key).sort(), ["old", "pinned"]);
+  assert.equal(store.listTrash().length, 1);
+  store.closeDb();
+});
+
 test("restoring one page from a Trash batch puts it back closed and leaves the rest", () => {
   const store = loaded();
   store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
