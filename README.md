@@ -47,7 +47,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 `desktop/` is an optional Tauri window over the same daemon and UI, so the browser keeps working as before. It needs a Rust toolchain to build and Node at runtime (it runs this clone's `dist/index.js` to start the daemon; set `AGENT_BOARD_DIR` to point elsewhere).
 
-- `npm run desktop` builds and runs a debug copy. `npm run desktop:build` builds `desktop\target\release\agent-board-desktop.exe` and an installer under `desktop\target\release\bundle\nsis`.
+- `npm run desktop` builds and runs a debug copy. `npm run desktop:build` builds `desktop\target\release\agent-board-desktop.exe` and an installer under `desktop\target\release\bundle\nsis`. `npm run desktop:install -- <folder>` closes a running app, builds the release exe, copies it into `<folder>`, and restarts it from there if it was open. The exe runs on its own, so that copy is all you need.
 - The tab strip is the title bar: drag empty space (or the spacing around panels) to move the window, double-click to maximize.
 - Settings → Desktop shows or hides each title bar button (compact, minimize, maximize, close). Right-click any button still shown for the hidden ones; with all four hidden, a ⋯ menu holds them.
 - Board shortcuts (Ctrl+D, Ctrl+S, Ctrl+H) are caught natively, so they also work while an embedded site has focus. Ctrl+Z stays with the page; Ctrl+Shift+T does the same and is caught natively.
