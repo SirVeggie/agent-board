@@ -4,6 +4,12 @@ version = "1.0.0"
 description = "Desktop window for Agent Board"
 edition = "2021"
 rust-version = "1.90"
+default-run = "board"
+autobins = false
+
+[[bin]]
+name = "board"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
