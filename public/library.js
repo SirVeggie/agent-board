@@ -1509,23 +1509,30 @@ window.createLibrary = function createLibrary(host) {
     return done;
   }
 
+  /**
+   * The folder whose chain stays open after a drop. A drop onto a folder row leaves
+   * that folder as it was before the drag, so only its ancestors are kept.
+   */
+  function keptFolder(target) {
+    if (target.into && target.into !== ROOT) {
+      return model.folderById.get(target.into)?.parentId ?? null;
+    }
+    return target.folderId;
+  }
+
   function dropDrag() {
     const target = drag?.target;
     if (!target || target.noop) {
       cancelDrag();
       return;
     }
-    const done = endDrag(target.where === "lib" ? (target.into && target.into !== ROOT ? target.into : target.folderId) : undefined);
+    const done = endDrag(target.where === "lib" ? keptFolder(target) : undefined);
     if (target.where === "strip") {
       host.clearStripSlot();
       fadeGhost(done.ghost);
       host.openPage(done.id, { activate: true, before: target.before });
       render();
       return;
-    }
-    if (target.into && target.into !== ROOT) {
-      collapsed.delete(target.into);
-      saveCollapsed();
     }
     if (done.kind === "page") {
       movePage(done.id, target.folderId, target.index);
@@ -1602,11 +1609,7 @@ window.createLibrary = function createLibrary(host) {
       stripDragCancel();
       return false;
     }
-    endDrag(target.into && target.into !== ROOT ? target.into : target.folderId);
-    if (target.into && target.into !== ROOT) {
-      collapsed.delete(target.into);
-      saveCollapsed();
-    }
+    endDrag(keptFolder(target));
     movePage(tab.id, target.folderId, target.index, { close: true });
     return true;
   }
