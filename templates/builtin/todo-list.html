@@ -917,8 +917,9 @@
     var rect = el.getBoundingClientRect();
     drag.moved = true;
     didDrag = true;
-    drag.offsetX = event.clientX - rect.left;
-    drag.offsetY = event.clientY - rect.top;
+    // From where the press started, so the item doesn't trail the pointer by the drag threshold.
+    drag.offsetX = drag.startX - rect.left;
+    drag.offsetY = drag.startY - rect.top;
     var placeholder = document.createElement("li");
     placeholder.className = "item-drop-slot";
     placeholder.style.height = rect.height + "px";
@@ -1017,21 +1018,45 @@
     }
   }
 
+  function layoutTop(el) {
+    return layoutMid(el) - el.offsetHeight / 2;
+  }
+
+  /**
+   * Like the tab strip: within a column the slot passes a neighbour once the lifted item's
+   * center crosses the midpoint between the slot and that neighbour, so there's no overshoot.
+   * Entering another column places the slot by the item's center.
+   */
   function moveDropSlot() {
     if (!drag || !drag.placeholder || !drag.el) return;
     var ghost = drag.el.getBoundingClientRect();
     var col = columnAt(ghost.left + ghost.width / 2);
     var list = listEls[col];
-    var others = othersIn(list);
-    var target = slotIndex(others, ghost.top + ghost.height / 2);
+    var mid = ghost.top + ghost.height / 2;
     var placeholder = drag.placeholder;
-    if (placeholder.parentNode === list && others.indexOf(placeholder.nextElementSibling) === target) return;
-    if (placeholder.parentNode === list && !placeholder.nextElementSibling && target === others.length) return;
-    flipLists(function () {
-      if (others[target]) list.insertBefore(placeholder, others[target]);
-      else list.appendChild(placeholder);
-      drag.col = col;
-    });
+    if (placeholder.parentNode !== list) {
+      var others = othersIn(list);
+      var target = slotIndex(others, mid);
+      flipLists(function () {
+        if (others[target]) list.insertBefore(placeholder, others[target]);
+        else list.appendChild(placeholder);
+        drag.col = col;
+      });
+      return;
+    }
+    for (var guard = 0; guard < 60; guard++) {
+      var top = layoutTop(placeholder);
+      var bottom = top + placeholder.offsetHeight;
+      var next = placeholder.nextElementSibling;
+      var prev = placeholder.previousElementSibling;
+      if (next && mid > (top + layoutTop(next) + next.offsetHeight) / 2) {
+        flipLists(function () { list.insertBefore(placeholder, next.nextElementSibling); });
+      } else if (prev && mid < (layoutTop(prev) + bottom) / 2) {
+        flipLists(function () { list.insertBefore(placeholder, prev); });
+      } else {
+        break;
+      }
+    }
   }
 
   function updateDragScroll(clientX, clientY) {
