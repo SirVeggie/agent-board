@@ -59,6 +59,8 @@ export type Template = {
   updatedAt: number;
   /** Set on a local copy of a built-in template. */
   source?: TemplateSource;
+  /** Markdown for agents working with pages made from this template: state shape, signals, conventions. */
+  guide?: string;
 };
 
 /** Which built-in a local template was copied from, and that built-in's fingerprint at copy time. */
@@ -67,8 +69,10 @@ export type TemplateSource = {
   fingerprint: string;
 };
 
-export type TemplateMeta = Omit<Template, "html" | "initialState" | "source"> & {
+export type TemplateMeta = Omit<Template, "html" | "initialState" | "source" | "guide"> & {
   htmlBytes: number;
+  /** The template carries an agent guide (tool results deliver it). */
+  hasGuide?: boolean;
   instanceCount: number;
   /** Key of the built-in this template was copied from. */
   builtinSource?: string;
@@ -311,6 +315,7 @@ export function toTemplateMeta(template: Template, instanceCount = 0): TemplateM
     htmlBytes: Buffer.byteLength(template.html, "utf8"),
     instanceCount,
     ...(template.source ? { builtinSource: template.source.builtin } : {}),
+    ...(template.guide ? { hasGuide: true } : {}),
   };
 }
 

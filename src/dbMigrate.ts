@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   builtin_key TEXT,
-  builtin_fingerprint TEXT
+  builtin_fingerprint TEXT,
+  guide TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -51,6 +52,9 @@ function ensureTemplateBuiltinColumns(db: DatabaseSync): void {
   }
   if (!columns.some((column) => column.name === "builtin_fingerprint")) {
     db.exec("ALTER TABLE templates ADD COLUMN builtin_fingerprint TEXT");
+  }
+  if (!columns.some((column) => column.name === "guide")) {
+    db.exec("ALTER TABLE templates ADD COLUMN guide TEXT");
   }
 }
 

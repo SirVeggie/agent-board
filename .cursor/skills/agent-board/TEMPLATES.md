@@ -8,7 +8,7 @@ A template is reusable page HTML plus a form. The user opens instances from the 
 
 | Tool | Purpose |
 | --- | --- |
-| `board_template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`) |
+| `board_template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`) |
 | `board_template_list` | Names and field schemas (no HTML) |
 | `board_template_get` | Full HTML and fields |
 | `board_template_delete` | Remove the template. Existing pages stay, keep last HTML, and become ordinary pages |
@@ -18,7 +18,7 @@ Reuse the same `key` when updating that template.
 
 ## Built-in templates
 
-Some templates ship with the app (Embed, Markdown note, Todo list). `board_template_list` returns them under `builtins` with ids like `builtin:todo-list`. They are read-only: `board_template_upsert` and `board_template_delete` refuse them.
+Some templates ship with the app (Embed, Kanban board, Markdown note, Todo list). `board_template_list` returns them under `builtins` with ids like `builtin:todo-list`. They are read-only: `board_template_upsert` and `board_template_delete` refuse them.
 
 Opening a built-in (from the sidebar or `board_template_open`) copies it into the user's templates first, once, and the page binds to that copy. App updates never touch the copy, so they can't break the user's pages. `localId` on a built-in is the id of its copy, and the copy's `builtinSource` names the built-in.
 
@@ -31,6 +31,7 @@ If the user wants a changed version of a built-in, `board_template_get` it and u
 3. Use `board.state` for live data (todos, notes). Put starting data in `initialState`.
 4. Set `titleTemplate` if the tab title should include a field, e.g. `{{title}}`.
 5. Field `type`: `text`, `textarea`, `number`, `select`, `checkbox`. Select needs `options`. Keys must be JS identifiers.
+6. If an agent will read or change the page's state, write a `guide`: markdown with the state shape, the signals the page fires and when, and the rules for editing (which keys to leave alone, how to add an item). Tool results hand it to any agent the first time it touches a page from the template, so nothing about the template needs to go in this skill. Keep it under a page; `templates/builtin/kanban.guide.md` is a good model. Upserting without `guide` keeps the current one.
 
 Do not pin the template itself. The user opens pages from the sidebar.
 

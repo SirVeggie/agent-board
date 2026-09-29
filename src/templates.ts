@@ -20,7 +20,12 @@ export type TemplateUpsertInput = {
   titleTemplate?: string;
   initialState?: BoardState;
   stateVersion?: number;
+  /** Omit to keep an existing template's guide; an empty string removes it. */
+  guide?: string;
 };
+
+/** A guide is read by agents, so keep it to a page or two. */
+export const MAX_GUIDE_CHARS = 16_000;
 
 export function parseTemplateFields(raw: unknown): TemplateField[] {
   if (raw === undefined || raw === null) {
@@ -88,6 +93,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
   titleTemplate?: string;
   initialState?: BoardState;
   stateVersion?: number;
+  guide?: string;
 } {
   const title = input.title.trim();
   if (!title) {
@@ -110,6 +116,16 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
     }
     initialState = { ...input.initialState };
   }
+  let guide: string | undefined;
+  if (input.guide !== undefined) {
+    if (typeof input.guide !== "string") {
+      throw new Error("guide must be a string");
+    }
+    guide = input.guide.trim();
+    if (guide.length > MAX_GUIDE_CHARS) {
+      throw new Error(`guide is too long (${guide.length} characters, max ${MAX_GUIDE_CHARS})`);
+    }
+  }
   let stateVersion: number | undefined;
   if (input.stateVersion !== undefined) {
     if (!Number.isInteger(input.stateVersion) || input.stateVersion < 1) {
@@ -125,6 +141,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
     ...(titleTemplate ? { titleTemplate } : {}),
     ...(initialState ? { initialState } : {}),
     ...(stateVersion !== undefined ? { stateVersion } : {}),
+    ...(guide !== undefined ? { guide } : {}),
   };
 }
 

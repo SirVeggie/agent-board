@@ -57,6 +57,7 @@ type TemplateRow = {
   updated_at: number;
   builtin_key: string | null;
   builtin_fingerprint: string | null;
+  guide: string | null;
 };
 
 type PageAssetRow = {
@@ -135,7 +136,8 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   builtin_key TEXT,
-  builtin_fingerprint TEXT
+  builtin_fingerprint TEXT,
+  guide TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -192,8 +194,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 const UPSERT_TEMPLATE_SQL = `
 INSERT INTO templates (
   id, key, title, description, html, fields, title_template, initial_state,
-  state_version, created_at, updated_at, builtin_key, builtin_fingerprint
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
   title = excluded.title,
@@ -206,7 +208,8 @@ ON CONFLICT(id) DO UPDATE SET
   created_at = excluded.created_at,
   updated_at = excluded.updated_at,
   builtin_key = excluded.builtin_key,
-  builtin_fingerprint = excluded.builtin_fingerprint
+  builtin_fingerprint = excluded.builtin_fingerprint,
+  guide = excluded.guide
 `;
 
 const UPSERT_BINDING_SQL = `
@@ -785,6 +788,7 @@ function templateToParams(template: Template): SQLInputValue[] {
     template.updatedAt,
     template.source?.builtin ?? null,
     template.source?.fingerprint ?? null,
+    template.guide ?? null,
   ];
 }
 
@@ -831,6 +835,7 @@ function rowToTemplate(row: TemplateRow): Template {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.builtin_key ? { source: { builtin: row.builtin_key, fingerprint: row.builtin_fingerprint ?? "" } } : {}),
+    ...(row.guide ? { guide: row.guide } : {}),
   };
 }
 

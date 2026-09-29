@@ -1,0 +1,42 @@
+{
+  "key": "kanban",
+  "title": "Kanban board",
+  "description": "Work board with columns you manage on the page, labels, priorities, due dates, checklists, images, comments, and an agent hand-off flow.",
+  "fields": [
+    {
+      "key": "title",
+      "label": "Title",
+      "type": "text",
+      "required": true,
+      "default": "Board"
+    },
+    {
+      "key": "preset",
+      "label": "Starting columns",
+      "type": "select",
+      "help": "Only used to create the first columns. Afterwards you add, rename and reorder columns on the page.",
+      "default": "dev",
+      "options": [
+        { "value": "simple", "label": "Simple: To do, Doing, Done" },
+        { "value": "dev", "label": "Development: Backlog, Ready, In progress, Review, Done" },
+        { "value": "agent", "label": "Agent: Inbox, Ready for agent, Agent working, Needs review, Done" }
+      ]
+    },
+    {
+      "key": "agentMode",
+      "label": "Agent hand-off",
+      "type": "checkbox",
+      "help": "Agent inbox and review columns, agent status on cards, and signals an agent can wait on.",
+      "default": true
+    }
+  ],
+  "titleTemplate": "{{title}}",
+  "initialState": {
+    "columns": [],
+    "labels": [],
+    "cards": [],
+    "nextNum": 1,
+    "view": {}
+  },
+  "stateVersion": 1
+}

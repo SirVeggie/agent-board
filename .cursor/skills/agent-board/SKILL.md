@@ -409,3 +409,5 @@ If the page asks the user to do something you must continue from — submit, cho
 Do **not** create, edit, or delete board templates unless the user explicitly asked. Everyday pages still use `board_show` / `board_patch`.
 
 When they do ask, read `TEMPLATES.md` in this skill folder before using `board_template_*`. A page bound to a template cannot have its HTML changed — update the template instead. You may still change that page's state, title, and pin.
+
+Pages made from a template (a Kanban board, a Todo list) can come with an **agent guide**: the state shape, the signals the page fires, and how to change it. The first `board_get_state`, `board_read`, `board_wait`, or `board_template_open` on such a page in a session appends the guide to the result. Read it before writing that page's state, and follow it over general advice here. Later results only point back to it; `board_get_state` with `guide: true` shows it again.

@@ -1216,7 +1216,7 @@ test("template tables without the built-in columns are migrated", () => {
   store.persist();
   store.closeDb();
   const db = new DatabaseSync(path.join(dir, "board.sqlite"));
-  db.exec("ALTER TABLE templates DROP COLUMN builtin_key; ALTER TABLE templates DROP COLUMN builtin_fingerprint;");
+  db.exec("ALTER TABLE templates DROP COLUMN builtin_key; ALTER TABLE templates DROP COLUMN builtin_fingerprint; ALTER TABLE templates DROP COLUMN guide;");
   db.close();
   const again = loaded();
   const { template } = again.copyBuiltinTemplate("embed");
@@ -1398,6 +1398,28 @@ test("setState stores local files as page assets and swaps asset:<name> for thei
   );
   assert.equal(pageAssetRows().length, 1);
   store.closeDb();
+});
+
+test("a page from a built-in copy gets the built-in's guide; a user template keeps its own", () => {
+  const store = loaded();
+  const { template: copy } = store.copyBuiltinTemplate("kanban");
+  const guide = store.templateGuide(copy.id);
+  assert.equal(guide?.id, "builtin:kanban");
+  assert.match(guide?.text ?? "", /Column roles/);
+  assert.equal(store.templateGuide("embed"), undefined);
+
+  const { template } = store.upsertTemplate({ key: "log", title: "Log", html: "<p>log</p>", guide: "  Append to entries.  " });
+  assert.equal(store.templateGuide("log")?.text, "Append to entries.");
+  store.upsertTemplate({ key: "log", title: "Log", html: "<p>log v2</p>" });
+  assert.equal(store.templateGuide("log")?.text, "Append to entries.", "an update without guide keeps it");
+  store.persist();
+  store.closeDb();
+
+  const again = loaded();
+  assert.equal(again.templateGuide(template.id)?.text, "Append to entries.");
+  again.upsertTemplate({ key: "log", title: "Log", html: "<p>log</p>", guide: "" });
+  assert.equal(again.templateGuide("log"), undefined);
+  again.closeDb();
 });
 
 test("a new page can take the key of a page in the Trash, and both save", () => {

@@ -31,6 +31,42 @@ type ScreenshotPayload = {
   bytes: number;
 };
 
+type TemplateGuide = { id: string; title: string; text: string };
+type ToolResult = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; isError?: boolean };
+
+/**
+ * Template guides already handed to this agent. One MCP process serves one agent session, so
+ * a guide goes out in full the first time the agent touches a page from that template and as a
+ * one-line pointer after that, instead of every template's guide living in the skill.
+ */
+const deliveredGuides = new Map<string, string>();
+
+async function withGuide(result: ToolResult, which: string, force = false): Promise<ToolResult> {
+  let guide: TemplateGuide | null = null;
+  try {
+    const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}/guide`);
+    guide = status < 400 ? ((data as { guide?: TemplateGuide | null }).guide ?? null) : null;
+  } catch {
+    return result;
+  }
+  if (!guide) {
+    return result;
+  }
+  if (!force && deliveredGuides.get(guide.id) === guide.text) {
+    result.content.push({
+      type: "text",
+      text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; board_get_state with guide: true shows it again.`,
+    });
+    return result;
+  }
+  deliveredGuides.set(guide.id, guide.text);
+  result.content.push({
+    type: "text",
+    text: `Agent guide for "${guide.title}" pages. Follow it when reading or changing this page.\n\n${guide.text}`,
+  });
+  return result;
+}
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({
@@ -469,12 +505,13 @@ export async function startMcp(): Promise<void> {
           note: `Checked out. Edit the file, then board_patch({ key: "${tab.key}", htmlPath, expectedRevision: ${tab.revision} }).`,
         });
       }
-      return {
+      const result: ToolResult = {
         content: [
           { type: "text" as const, text: JSON.stringify(meta, null, 2) },
           { type: "text" as const, text: tab.html },
         ],
       };
+      return tab.templateId ? withGuide(result, tab.id) : result;
     }
   );
 
@@ -555,8 +592,12 @@ export async function startMcp(): Promise<void> {
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
+      guide: z
+        .boolean()
+        .optional()
+        .describe("Include the page's template guide even if it was already sent in this session."),
     },
-    async ({ id, key }) => {
+    async ({ id, key, guide }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -565,7 +606,8 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      return jsonResult(data);
+      const result = jsonResult(data);
+      return (data as { templateId?: string }).templateId ? withGuide(result, which, guide === true) : result;
     }
   );
 
@@ -617,7 +659,7 @@ export async function startMcp(): Promise<void> {
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }
-        return jsonResult(data);
+        return withGuide(jsonResult(data), which);
       } catch (err) {
         return errorResult((err as Error).message || "board_wait failed");
       }
@@ -802,8 +844,14 @@ export async function startMcp(): Promise<void> {
         .number()
         .optional()
         .describe("Integer >= 1. Bump when existing page data will not work with the new HTML."),
+      guide: z
+        .string()
+        .optional()
+        .describe(
+          "Markdown for agents that later work with pages from this template: the state shape, signals the page fires, and conventions (how to add an item, which keys to leave alone). Tool results hand it to an agent the first time it touches such a page. Omit to keep the current guide; an empty string removes it."
+        ),
     },
-    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion }) => {
+    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide }) => {
       const { status, data } = await api("POST", "/api/templates", {
         key,
         title,
@@ -813,6 +861,7 @@ export async function startMcp(): Promise<void> {
         titleTemplate,
         initialState,
         stateVersion,
+        guide,
       });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
@@ -902,16 +951,19 @@ export async function startMcp(): Promise<void> {
       if (!info || info.viewers === 0) {
         openBoard(boardUrl(tab.id));
       }
-      return jsonResult({
-        id: tab.id,
-        key: tab.key,
-        title: tab.title,
-        url: boardUrl(tab.id),
-        templateId: template.id,
-        note: copiedBuiltin
-          ? `Copied the built-in to the user's templates as ${template.key} and opened a pinned page from that copy.`
-          : "Opened a pinned page from the template.",
-      });
+      return withGuide(
+        jsonResult({
+          id: tab.id,
+          key: tab.key,
+          title: tab.title,
+          url: boardUrl(tab.id),
+          templateId: template.id,
+          note: copiedBuiltin
+            ? `Copied the built-in to the user's templates as ${template.key} and opened a pinned page from that copy.`
+            : "Opened a pinned page from the template.",
+        }),
+        tab.id
+      );
     }
   );
 

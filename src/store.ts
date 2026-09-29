@@ -339,6 +339,23 @@ export class BoardStore extends EventEmitter {
     });
   }
 
+  /**
+   * The agent guide for a template: its own, or for a local copy of a built-in, the built-in's.
+   * `id` names the guide across copies, so an agent is not sent the same text twice.
+   */
+  templateGuide(idOrKey: string): { id: string; title: string; text: string } | undefined {
+    const found = this.findTemplate(idOrKey);
+    if (!found) {
+      return undefined;
+    }
+    const { template } = found;
+    if (template.guide) {
+      return { id: template.id, title: template.title, text: template.guide };
+    }
+    const builtin = template.source ? this.locateBuiltin(template.source.builtin) : undefined;
+    return builtin?.guide ? { id: builtin.id, title: builtin.title, text: builtin.guide } : undefined;
+  }
+
   /** The user's own templates only. findTemplate also looks at built-ins. */
   getTemplate(idOrKey: string): Template | undefined {
     return this.locateTemplate(idOrKey);
@@ -369,8 +386,10 @@ export class BoardStore extends EventEmitter {
     }
     const id = newTemplateId();
     const now = Date.now();
+    // The guide stays with the built-in, so an app update reaches copies made before it.
+    const { guide: _guide, ...content } = structuredClone(builtin);
     const template: Template = {
-      ...structuredClone(builtin),
+      ...content,
       id,
       key: uniqueTemplateKey(this, builtin.key, builtin.title, id),
       createdAt: now,
@@ -404,6 +423,13 @@ export class BoardStore extends EventEmitter {
       existing.fields = parsed.fields;
       existing.titleTemplate = parsed.titleTemplate;
       existing.initialState = parsed.initialState;
+      if (parsed.guide !== undefined) {
+        if (parsed.guide) {
+          existing.guide = parsed.guide;
+        } else {
+          delete existing.guide;
+        }
+      }
       if (parsed.stateVersion !== undefined) {
         existing.stateVersion = parsed.stateVersion;
       }
@@ -425,6 +451,7 @@ export class BoardStore extends EventEmitter {
       ...(parsed.titleTemplate ? { titleTemplate: parsed.titleTemplate } : {}),
       ...(parsed.initialState ? { initialState: parsed.initialState } : {}),
       stateVersion: parsed.stateVersion ?? 1,
+      ...(parsed.guide ? { guide: parsed.guide } : {}),
       createdAt: now,
       updatedAt: now,
     };

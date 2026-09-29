@@ -252,6 +252,7 @@ function templateFromExport(raw: unknown, index: number): Template {
       titleTemplate: typeof raw.titleTemplate === "string" ? raw.titleTemplate : undefined,
       initialState: raw.initialState === undefined || raw.initialState === null ? undefined : (raw.initialState as BoardState),
       stateVersion: raw.stateVersion === undefined ? undefined : (raw.stateVersion as number),
+      guide: typeof raw.guide === "string" ? raw.guide : undefined,
     });
   } catch (err) {
     throw new Error(`templates[${index}]: ${(err as Error).message}`);
@@ -270,6 +271,7 @@ function templateFromExport(raw: unknown, index: number): Template {
     ...(normalized.titleTemplate ? { titleTemplate: normalized.titleTemplate } : {}),
     ...(normalized.initialState ? { initialState: normalized.initialState } : {}),
     stateVersion: normalized.stateVersion ?? 1,
+    ...(normalized.guide ? { guide: normalized.guide } : {}),
     createdAt: finiteNumber(raw.createdAt) ?? now,
     updatedAt: finiteNumber(raw.updatedAt) ?? now,
     ...(source ? { source } : {}),

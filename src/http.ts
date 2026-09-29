@@ -245,6 +245,16 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  /** The agent guide of the template a page was made from; the MCP hands it to the agent once per session. */
+  app.get("/api/tabs/:id/guide", (req, res) => {
+    const tab = store.get(req.params.id, viewerOf(req));
+    if (!tab) {
+      res.status(404).json({ error: `tab not found: ${req.params.id}` });
+      return;
+    }
+    res.json({ guide: (tab.templateId && store.templateGuide(tab.templateId)) || null });
+  });
+
   app.get("/api/tabs/:id/state", (req, res) => {
     const tab = store.get(req.params.id);
     if (!tab) {
@@ -642,11 +652,13 @@ export async function startHttp(): Promise<http.Server> {
     const meta = builtIn
       ? store.listBuiltinTemplates().find((item) => item.id === template.id)
       : toTemplateMeta(template, instanceCount(template, viewerOf(req)));
+    const guide = store.templateGuide(template.id);
     res.json({
       template: {
         ...meta,
         html: template.html,
         ...(template.initialState ? { initialState: template.initialState } : {}),
+        ...(guide ? { guide: guide.text } : {}),
       },
     });
   });
@@ -672,6 +684,7 @@ export async function startHttp(): Promise<http.Server> {
         titleTemplate: optionalString(req.body?.titleTemplate),
         initialState: isPlainObject(req.body?.initialState) ? req.body.initialState : undefined,
         stateVersion: typeof req.body?.stateVersion === "number" ? req.body.stateVersion : undefined,
+        guide: typeof req.body?.guide === "string" ? req.body.guide : undefined,
       });
       res.status(created ? 201 : 200).json({
         created,

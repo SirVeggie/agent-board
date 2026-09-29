@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { normalizeTemplateInput } from "./templates.js";
 import type { Template } from "./types.js";
 
-/** Built-ins ship as <key>.json (metadata and fields) plus <key>.html in templates/builtin. */
+/** Built-ins ship as <key>.json (metadata and fields), <key>.html, and optionally <key>.guide.md in templates/builtin. */
 const builtinDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "templates", "builtin");
 
 export const BUILTIN_ID_PREFIX = "builtin:";
@@ -33,6 +33,8 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
         initialState: meta.initialState as Template["initialState"],
         stateVersion: typeof meta.stateVersion === "number" ? meta.stateVersion : undefined,
       });
+      const guidePath = path.join(dir, `${key}.guide.md`);
+      const guide = fs.existsSync(guidePath) ? fs.readFileSync(guidePath, "utf8").trim() : "";
       const mtime = Math.floor(fs.statSync(htmlPath).mtimeMs);
       templates.push({
         id: BUILTIN_ID_PREFIX + key,
@@ -44,6 +46,7 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
         ...(parsed.titleTemplate ? { titleTemplate: parsed.titleTemplate } : {}),
         ...(parsed.initialState ? { initialState: parsed.initialState } : {}),
         stateVersion: parsed.stateVersion ?? 1,
+        ...(guide ? { guide } : {}),
         createdAt: mtime,
         updatedAt: mtime,
       });

@@ -12,6 +12,7 @@
 
 - **What changed:** Built-in templates ship in `templates/builtin` and are never stored. Opening one creates a local copy in `templates`, and the copy records which built-in it came from (`builtin_key`) and that built-in's content fingerprint at copy time (`builtin_fingerprint`). Both are nullable `TEXT`; null means an ordinary user template.
 - **Why migration was needed:** Existing `templates` tables lack the columns and the template upsert writes them. SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureTemplateBuiltinColumns` checks `PRAGMA table_info(templates)` first. `SCHEMA_VERSION` stays `2`.
+- **Later addition:** `templates.guide` (nullable `TEXT`, the template's agent guide) is added by the same function in the same way.
 - **On load:** a user template with no source whose content is identical to a built-in is linked to it, so opening that built-in reuses it instead of making a second copy.
 - **Export format:** templates may carry an optional `source: { builtin, fingerprint }`. Import keeps it only when the target board has no copy of that built-in yet. Older exports have no `source`. `EXPORT_VERSION` stays `1`.
 - **Where:** `src/dbMigrate.ts` (`ensureTemplateBuiltinColumns`, run by `ensureTemplateSchema`). New databases get the columns from `CREATE_SQL` / `TEMPLATE_TABLES_SQL`.

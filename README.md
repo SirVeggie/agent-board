@@ -73,7 +73,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. Optional `assets` (local files) are stored as page assets; each state value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Close one tab, all unpinned tabs, or everything; the pages stay in the Library. Pass `permanent: true` to delete instead |
-| `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar) |
+| `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar). A template can carry an agent `guide` (built-ins: `templates/builtin/<key>.guide.md`), which the MCP appends to the first tool result that touches one of its pages in a session. |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `board_patch` with exact `oldString`/`newString` edits instead of sending the whole document again. For a large page, `board_read` with `toFile: true`, edit the file, then `board_patch` with `htmlPath` and `expectedRevision`.
 
