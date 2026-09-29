@@ -1,7 +1,9 @@
 /**
  * A themed dropdown over a native <select>: the select stays the source of truth (value, name,
  * change events, form reads) and is hidden; a button and a .tab-menu list stand in for it.
- * The list lives next to the button so it also works inside a modal <dialog>'s top layer.
+ * Inside a modal <dialog> the open list stays next to the button, in the dialog's top layer.
+ * Anywhere else it moves to <body> while open: a scrolling or backdrop-filtered panel would
+ * otherwise clip it and become its containing block.
  */
 (function () {
   /** @type {null | { close: (focus?: boolean) => void }} */
@@ -20,7 +22,7 @@
     true
   );
   document.addEventListener("pointerdown", (event) => {
-    if (openOne && !event.target.closest?.(".select-wrap.open")) {
+    if (openOne && !event.target.closest?.(".select-wrap.open, .select-menu")) {
       openOne.close();
     }
   });
@@ -91,9 +93,18 @@
       }
     }
 
+    /** Scrolls only the list: scrollIntoView would also scroll ancestors, and a scroll outside the list closes it. */
     function highlight() {
       [...menu.children].forEach((child, index) => child.classList.toggle("active", index === active));
-      menu.children[active]?.scrollIntoView({ block: "nearest" });
+      const item = menu.children[active];
+      if (!item) {
+        return;
+      }
+      if (item.offsetTop < menu.scrollTop) {
+        menu.scrollTop = item.offsetTop;
+      } else if (item.offsetTop + item.offsetHeight > menu.scrollTop + menu.clientHeight) {
+        menu.scrollTop = item.offsetTop + item.offsetHeight - menu.clientHeight;
+      }
     }
 
     function place() {
@@ -132,6 +143,9 @@
         menu.appendChild(item);
       });
       active = Math.max(0, select.selectedIndex);
+      if (!wrap.closest("dialog")) {
+        document.body.appendChild(menu);
+      }
       menu.hidden = false;
       wrap.classList.add("open");
       button.setAttribute("aria-expanded", "true");
@@ -145,6 +159,9 @@
         return;
       }
       menu.hidden = true;
+      if (menu.parentNode !== wrap) {
+        wrap.appendChild(menu);
+      }
       wrap.classList.remove("open");
       button.setAttribute("aria-expanded", "false");
       if (openOne === api) {

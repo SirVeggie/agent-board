@@ -1738,7 +1738,12 @@
       if (fallback != null && field.type !== "checkbox") {
         input.value = String(fallback);
       }
-      wrap.appendChild(field.type === "select" ? window.createSelect(input) : input);
+      if (field.type === "select") {
+        wrap.appendChild(window.createSelect(input));
+        label.htmlFor = `${id}-button`;
+      } else {
+        wrap.appendChild(input);
+      }
     }
     if (field.help) {
       const help = document.createElement("p");
