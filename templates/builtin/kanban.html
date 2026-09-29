@@ -2926,9 +2926,53 @@
     if (list && list.scrollHeight > list.clientHeight + 1) return;
     if (e.target.closest && e.target.closest("textarea")) return;
     var unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? boardEl.clientWidth : 1;
-    boardEl.scrollLeft += e.deltaY * unit;
+    smoothScrollBoard(e.deltaY * unit);
     e.preventDefault();
   }, { passive: false });
+
+  // Wheel steps move a target; the board eases toward it, so fast wheeling adds up instead
+  // of restarting. Anything else moving the board mid-glide (scrollbar, drag) wins.
+  var REDUCED_MOTION = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var glide = null;
+  function smoothScrollBoard(dx) {
+    var max = boardEl.scrollWidth - boardEl.clientWidth;
+    if (REDUCED_MOTION) {
+      boardEl.scrollLeft = clamp(boardEl.scrollLeft + dx, 0, max);
+      return;
+    }
+    if (!glide) {
+      glide = { pos: boardEl.scrollLeft, target: boardEl.scrollLeft, last: performance.now() };
+      requestAnimationFrame(stepGlide);
+    }
+    glide.target = clamp(glide.target + dx, 0, max);
+  }
+  function stepGlide(now) {
+    if (!glide) return;
+    if (Math.abs(boardEl.scrollLeft - glide.pos) > 2) {
+      glide = null;
+      return;
+    }
+    var diff = glide.target - glide.pos;
+    if (Math.abs(diff) < 1) {
+      boardEl.scrollLeft = glide.target;
+      glide = null;
+      return;
+    }
+    // A frame's timestamp can precede the wheel event that started the glide.
+    var dt = Math.min(64, now - glide.last);
+    if (dt <= 0) {
+      requestAnimationFrame(stepGlide);
+      return;
+    }
+    glide.last = now;
+    var step = diff * (1 - Math.exp(-dt / 65));
+    if (Math.abs(step) < 0.5) step = Math.sign(diff) * Math.min(Math.abs(diff), 0.5);
+    glide.pos += step;
+    boardEl.scrollLeft = glide.pos;
+    // scrollLeft snaps to device pixels; follow where it actually landed.
+    glide.pos = Math.abs(boardEl.scrollLeft - glide.pos) <= 1 ? glide.pos : boardEl.scrollLeft;
+    requestAnimationFrame(stepGlide);
+  }
   document.addEventListener("keydown", function (e) {
     var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
     if (e.key === "Escape") {
