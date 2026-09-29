@@ -1969,6 +1969,22 @@ export class BoardStore extends EventEmitter {
     return focus;
   }
 
+  /**
+   * A page in the Trash gives up its key when a new page wants it: the key names the page an
+   * agent or the user is working with now. Restoring the trashed page later gives it a free key
+   * (claimKey). Without this the key stays taken in the database and every save fails.
+   */
+  releaseTrashedKey(key: string): void {
+    for (const batch of this.deleted) {
+      for (const tab of batch.tabs) {
+        if (tab.key === key) {
+          tab.key = `${key}-${tab.id.slice(2)}`;
+          this.markDirty(tab.id);
+        }
+      }
+    }
+  }
+
   private claimKey(tab: Tab): void {
     const keyOwner = this.locate(tab.key);
     if (keyOwner && keyOwner.tab.id !== tab.id) {
@@ -2900,20 +2916,24 @@ function uniqueKey(
   reserved: Set<string> = new Set()
 ): string {
   const taken = (key: string) => Boolean(store.get(key)) || reserved.has(key);
+  const claim = (key: string) => {
+    store.releaseTrashedKey(key);
+    return key;
+  };
   if (requested) {
     const key = normalizeKey(requested);
     if (key && !taken(key)) {
-      return key;
+      return claim(key);
     }
     if (key) {
-      return `${key}-${id.slice(2)}`;
+      return claim(`${key}-${id.slice(2)}`);
     }
   }
   const base = normalizeKey(title) || "page";
   if (!taken(base)) {
-    return base;
+    return claim(base);
   }
-  return `${base}-${id.slice(2)}`;
+  return claim(`${base}-${id.slice(2)}`);
 }
 
 function shouldClose(destination: ImportDestination, closedAt?: number): boolean {

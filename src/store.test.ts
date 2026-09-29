@@ -1399,3 +1399,39 @@ test("setState stores local files as page assets and swaps asset:<name> for thei
   assert.equal(pageAssetRows().length, 1);
   store.closeDb();
 });
+
+test("a new page can take the key of a page in the Trash, and both save", () => {
+  const store = loaded();
+  const { tab: old } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>old</p>" });
+  store.persist();
+  store.deleteMany([old.id]);
+  store.persist();
+  const { tab: fresh } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>new</p>" });
+  store.persist();
+  assert.equal(store.snapshot().persistError, null);
+  assert.equal(fresh.key, "kanban");
+  assert.notEqual(old.key, "kanban");
+
+  store.restoreFromTrash(old.id);
+  store.persist();
+  assert.equal(store.snapshot().persistError, null);
+  assert.equal(store.get("kanban")?.id, fresh.id);
+  store.closeDb();
+
+  const again = loaded();
+  assert.equal(again.get("kanban")?.id, fresh.id);
+  assert.ok(again.get(old.id));
+  again.closeDb();
+});
+
+test("pages opened from a template with a trashed page's title get the plain key", () => {
+  const store = loaded();
+  const first = store.upsert({ title: "Agent Board work", html: "<p>a</p>" }).tab;
+  store.persist();
+  store.deleteMany([first.id]);
+  const second = store.upsert({ title: "Agent Board work", html: "<p>b</p>" }).tab;
+  store.persist();
+  assert.equal(store.snapshot().persistError, null);
+  assert.equal(second.key, "agent-board-work");
+  store.closeDb();
+});

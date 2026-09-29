@@ -236,7 +236,8 @@ export class BoardDb {
 
   constructor(private readonly db: DatabaseSync) {
     this.upsertStmt = db.prepare(UPSERT_SQL);
-    this.parkStripStmt = db.prepare("UPDATE tabs SET strip_seq = ? WHERE id = ?");
+    // Parks the key too: ids are unique and can't start with a NUL, so the parked key is free.
+    this.parkStripStmt = db.prepare("UPDATE tabs SET strip_seq = ?, key = char(0) || id WHERE id = ?");
     this.deleteStmt = db.prepare("DELETE FROM tabs WHERE id = ?");
     this.metaStmt = db.prepare(
       "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v"
@@ -323,9 +324,9 @@ export class BoardDb {
         this.deleteStmt.run(id);
         this.deleteBindingStmt.run(id);
       }
-      // UNIQUE(strip_seq) is checked per statement, so swapping two existing
-      // seqs would fail if we wrote the final values directly. Park dirty rows
-      // on unused negative seqs first, then apply the real ones.
+      // UNIQUE(strip_seq) and UNIQUE(key) are checked per statement, so handing a
+      // seq or key from one row to another would fail if we wrote the final values
+      // directly. Park dirty rows on unused values first, then apply the real ones.
       this.parkDirtyStripSeqs(input.upserts);
       for (const row of input.upserts) {
         this.upsertStmt.run(...storedToParams(row));
