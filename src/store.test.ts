@@ -1239,3 +1239,163 @@ test("an exported built-in copy stays linked on import", () => {
   assert.equal(imported[0].builtinSource, "embed");
   target.closeDb();
 });
+
+function pageAssetRows(): Array<{ id: string; tab_id: string; orphaned_at: number | null }> {
+  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  try {
+    return db.prepare("SELECT id, tab_id, orphaned_at FROM page_assets ORDER BY created_at, id").all() as Array<{
+      id: string;
+      tab_id: string;
+      orphaned_at: number | null;
+    }>;
+  } finally {
+    db.close();
+  }
+}
+
+/** Pretend every orphaned asset lost its references long ago, so the next check deletes it. */
+function ageOrphans(): void {
+  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  try {
+    db.prepare("UPDATE page_assets SET orphaned_at = 1 WHERE orphaned_at IS NOT NULL").run();
+  } finally {
+    db.close();
+  }
+}
+
+test("a page asset saved right after creating its page is stored and served", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
+  const { asset, usage } = store.savePageAsset("kanban", {
+    name: "card.png",
+    mimeType: "image/png; charset=binary",
+    data: Buffer.from("png-bytes"),
+  });
+  assert.match(asset.id, /^pa_[0-9a-f]{24}$/);
+  assert.equal(asset.mimeType, "image/png");
+  assert.equal(usage.count, 1);
+  assert.equal(usage.bytes, 9);
+  assert.equal(usage.warning, undefined);
+  assert.equal(store.readPageAsset(asset.id)?.data.toString(), "png-bytes");
+  assert.deepEqual(
+    store.listPageAssets(tab.id).assets.map((item) => item.id),
+    [asset.id]
+  );
+  store.closeDb();
+});
+
+test("page assets stay while referenced and go once unreferenced past the grace period", () => {
+  const store = loaded();
+  store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
+  const kept = store.savePageAsset("kanban", { data: Buffer.from("a") }).asset;
+  const dropped = store.savePageAsset("kanban", { data: Buffer.from("b") }).asset;
+  const neverUsed = store.savePageAsset("kanban", { data: Buffer.from("c") }).asset;
+  store.setState("kanban", { state: { cards: [{ image: kept.id }, { image: `/blob/${dropped.id}` }] } });
+  store.persist();
+  assert.deepEqual(Object.fromEntries(pageAssetRows().map((row) => [row.id, row.orphaned_at === null])), {
+    [kept.id]: true,
+    [dropped.id]: true,
+    [neverUsed.id]: false,
+  });
+
+  store.setState("kanban", { state: { cards: [{ image: kept.id }] } });
+  store.persist();
+  // Within the grace period nothing is deleted, so an undo can bring the card back.
+  assert.equal(pageAssetRows().length, 3);
+
+  ageOrphans();
+  store.sweepAssets();
+  assert.deepEqual(pageAssetRows().map((row) => row.id), [kept.id]);
+  assert.equal(store.pageAssetUsageOf(store.get("kanban")!.id).count, 1);
+  store.closeDb();
+});
+
+test("a reference restored within the grace period keeps the asset", () => {
+  const store = loaded();
+  store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
+  const asset = store.savePageAsset("kanban", { data: Buffer.from("a") }).asset;
+  store.setState("kanban", { state: { image: asset.id } });
+  store.persist();
+  store.setState("kanban", { state: { image: null } });
+  store.persist();
+  store.setState("kanban", { state: { image: asset.id } });
+  store.persist();
+  ageOrphans();
+  store.sweepAssets();
+  assert.equal(pageAssetRows().length, 1);
+  store.closeDb();
+});
+
+test("page assets survive the Trash and go with the page when it is purged", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
+  const asset = store.savePageAsset("kanban", { data: Buffer.from("a") }).asset;
+  store.setState("kanban", { state: { image: asset.id } });
+  store.deleteMany([tab.id]);
+  store.persist();
+  assert.equal(pageAssetRows().length, 1);
+  store.purgeFromTrash(tab.id);
+  store.persist();
+  assert.equal(pageAssetRows().length, 0);
+  assert.equal(store.pageAssetUsageOf(tab.id).count, 0);
+  store.closeDb();
+});
+
+test("the startup sweep removes page assets whose page row is gone", () => {
+  const store = loaded();
+  store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
+  store.closeDb();
+  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.prepare(
+    "INSERT INTO page_assets (id, tab_id, name, mime_type, bytes, data, created_at, orphaned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(`pa_${"0".repeat(24)}`, "t_gone", "x", "image/png", 1, Buffer.from("x"), 1, null);
+  db.close();
+  const reopened = loaded();
+  assert.equal(pageAssetRows().length, 0);
+  reopened.closeDb();
+});
+
+test("export and import carry page assets and re-id them when the ids are taken", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
+  const asset = store.savePageAsset("kanban", { name: "card.png", mimeType: "image/png", data: Buffer.from("img") }).asset;
+  store.setState("kanban", { state: { cards: [{ image: `/blob/${asset.id}` }] } });
+  const file = parseImport(Buffer.from(serializeExport(store.exportFile({ id: tab.id }))), "kanban.json");
+  assert.equal(file.pages[0].pageAssets?.length, 1);
+
+  const result = store.importBoard(file, "meta");
+  const imported = store.get(result.tabs[0].id)!;
+  const cards = imported.state.cards as Array<{ image: string }>;
+  const newId = cards[0].image.replace("/blob/", "");
+  assert.notEqual(newId, asset.id);
+  assert.equal(store.readPageAsset(newId)?.data.toString(), "img");
+  assert.equal(store.readPageAsset(newId)?.meta.tabId, imported.id);
+  assert.equal(pageAssetRows().filter((row) => row.orphaned_at === null).length, 2);
+  store.closeDb();
+});
+
+test("setState stores local files as page assets and swaps asset:<name> for their URLs", () => {
+  const store = loaded();
+  store.upsert({ key: "todos", title: "Todos", html: "<p>list</p>", state: { todos: [] } });
+  const file = path.join(dir, "photo.png");
+  fs.writeFileSync(file, "png");
+  const result = store.setState("todos", {
+    state: { todos: [{ id: "t1", text: "Buy", images: [{ id: "i1", name: "photo.png", data: "asset:Photo.png" }] }] },
+    assets: [{ path: file }],
+  });
+  assert.ok(result.ok);
+  assert.equal(result.assets?.length, 1);
+  const url = (result.tab.state.todos as Array<{ images: Array<{ data: string }> }>)[0].images[0].data;
+  assert.equal(url, `/blob/${result.assets![0].id}`);
+  assert.equal(result.assets![0].mimeType, "image/png");
+  store.persist();
+  assert.equal(pageAssetRows()[0].orphaned_at, null);
+
+  assert.throws(
+    () => store.setState("todos", { state: { note: "asset:missing.png" }, assets: [{ path: file }] }),
+    /asset:missing.png but no such file was passed.*no state value is exactly asset:<name> for photo.png/
+  );
+  assert.equal(pageAssetRows().length, 1);
+  store.closeDb();
+});

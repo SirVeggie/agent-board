@@ -74,7 +74,7 @@
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "2.2.0";
+  const BOARD_VERSION = "2.3.0";
   const BUILTIN_OPEN_KEY = "agent-board.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -313,6 +313,10 @@
     }
     if (msg.type === "persist_ok") {
       showPersistError(null);
+      return;
+    }
+    if (msg.type === "page_asset_warning") {
+      warnPageAssets(msg);
       return;
     }
     if (msg.type === "tab_upserted") {
@@ -2202,6 +2206,17 @@
       },
       undo ? 7000 : 4000
     );
+  }
+
+  /** A page nearing its asset storage limit. Once per page per 10 minutes; the page sees it on every save. */
+  const assetWarnedAt = new Map();
+  function warnPageAssets(msg) {
+    const now = Date.now();
+    if (!msg.usage || now - (assetWarnedAt.get(msg.id) || 0) < 10 * 60 * 1000) {
+      return;
+    }
+    assetWarnedAt.set(msg.id, now);
+    showNotice(`“${msg.title || "Page"}” is nearly out of asset storage: ${msg.usage.warning}.`);
   }
 
   function showVersionMismatch(version) {

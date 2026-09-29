@@ -40,3 +40,22 @@ CREATE TABLE IF NOT EXISTS folders (
   deleted_batch TEXT
 );
 `;
+
+/**
+ * Blobs saved by page code. Rows go with their page through the foreign key, so a
+ * permanent delete of a `tabs` row removes them in the same statement. The tabs upsert
+ * must stay `ON CONFLICT DO UPDATE` (never `REPLACE`), which would cascade on every save.
+ */
+export const PAGE_ASSETS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS page_assets (
+  id TEXT PRIMARY KEY,
+  tab_id TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  orphaned_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_page_assets_tab ON page_assets(tab_id);
+`;

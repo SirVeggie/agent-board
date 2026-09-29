@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
-import { ensureTemplateSchema, migrateV1ToLibrarySchema } from "./dbMigrate.js";
+import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
+import { ensurePageAssetSchema, ensureTemplateSchema, migrateV1ToLibrarySchema } from "./dbMigrate.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
   isPlainObject,
@@ -57,6 +58,18 @@ type TemplateRow = {
   builtin_key: string | null;
   builtin_fingerprint: string | null;
 };
+
+type PageAssetRow = {
+  id: string;
+  tab_id: string;
+  name: string;
+  mime_type: string;
+  bytes: number;
+  created_at: number;
+  orphaned_at: number | null;
+};
+
+const PAGE_ASSET_COLUMNS = "id, tab_id, name, mime_type, bytes, created_at, orphaned_at";
 
 type BindingRow = {
   tab_id: string;
@@ -249,6 +262,7 @@ export class BoardDb {
       configure(db);
       db.exec(CREATE_SQL);
       ensureTemplateSchema(db);
+      ensurePageAssetSchema(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -350,6 +364,129 @@ export class BoardDb {
     this.db.close();
   }
 
+  /** New assets start orphaned at their creation time, so an upload the page never references is swept too. */
+  insertPageAssets(tabId: string, assets: PageAssetDraft[]): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO page_assets (${PAGE_ASSET_COLUMNS}, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.transaction(() => {
+      for (const asset of assets) {
+        stmt.run(asset.id, tabId, asset.name, asset.mimeType, asset.data.length, asset.createdAt, asset.createdAt, asset.data);
+      }
+    });
+  }
+
+  readPageAsset(id: string): { meta: PageAssetMeta; data: Buffer } | undefined {
+    const row = this.db.prepare(`SELECT ${PAGE_ASSET_COLUMNS}, data FROM page_assets WHERE id = ?`).get(id) as
+      | (PageAssetRow & { data: Uint8Array })
+      | undefined;
+    return row ? { meta: rowToPageAsset(row), data: toBuffer(row.data) } : undefined;
+  }
+
+  listPageAssets(tabId: string): PageAssetMeta[] {
+    const rows = this.db
+      .prepare(`SELECT ${PAGE_ASSET_COLUMNS} FROM page_assets WHERE tab_id = ? ORDER BY created_at, id`)
+      .all(tabId) as PageAssetRow[];
+    return rows.map(rowToPageAsset);
+  }
+
+  readPageAssetDrafts(tabId: string): PageAssetDraft[] {
+    const rows = this.db
+      .prepare(`SELECT id, name, mime_type, created_at, data FROM page_assets WHERE tab_id = ? ORDER BY created_at, id`)
+      .all(tabId) as Array<{ id: string; name: string; mime_type: string; created_at: number; data: Uint8Array }>;
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      mimeType: row.mime_type,
+      createdAt: row.created_at,
+      data: toBuffer(row.data),
+    }));
+  }
+
+  pageAssetExists(id: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 AS x FROM page_assets WHERE id = ?").get(id));
+  }
+
+  deletePageAsset(tabId: string, id: string): boolean {
+    const result = this.db.prepare("DELETE FROM page_assets WHERE tab_id = ? AND id = ?").run(tabId, id);
+    return Number(result.changes) > 0;
+  }
+
+  /** Count and bytes per page that has any assets. */
+  pageAssetTotals(): Map<string, { count: number; bytes: number }> {
+    const rows = this.db
+      .prepare("SELECT tab_id, COUNT(*) AS count, SUM(bytes) AS bytes FROM page_assets GROUP BY tab_id")
+      .all() as Array<{ tab_id: string; count: number; bytes: number }>;
+    return new Map(rows.map((row) => [row.tab_id, { count: Number(row.count), bytes: Number(row.bytes) || 0 }]));
+  }
+
+  pageAssetTotal(tabId: string): { count: number; bytes: number } {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS count, SUM(bytes) AS bytes FROM page_assets WHERE tab_id = ?")
+      .get(tabId) as { count: number; bytes: number | null };
+    return { count: Number(row.count), bytes: Number(row.bytes) || 0 };
+  }
+
+  /**
+   * Marks a page's assets referenced or orphaned and deletes those orphaned for longer than
+   * `graceMs`. `nextExpiry` is when the next remaining orphan runs out of grace.
+   */
+  reconcilePageAssets(
+    tabId: string,
+    refs: Set<string>,
+    now: number,
+    graceMs: number
+  ): { deleted: number; nextExpiry: number | null } {
+    const rows = this.db
+      .prepare("SELECT id, orphaned_at FROM page_assets WHERE tab_id = ?")
+      .all(tabId) as Array<{ id: string; orphaned_at: number | null }>;
+    let deleted = 0;
+    let nextExpiry: number | null = null;
+    const mark = this.db.prepare("UPDATE page_assets SET orphaned_at = ? WHERE id = ?");
+    const drop = this.db.prepare("DELETE FROM page_assets WHERE id = ?");
+    this.transaction(() => {
+      for (const row of rows) {
+        if (refs.has(row.id)) {
+          if (row.orphaned_at !== null) {
+            mark.run(null, row.id);
+          }
+          continue;
+        }
+        if (row.orphaned_at === null) {
+          mark.run(now, row.id);
+          nextExpiry = Math.min(nextExpiry ?? Infinity, now + graceMs);
+        } else if (row.orphaned_at + graceMs <= now) {
+          drop.run(row.id);
+          deleted += 1;
+        } else {
+          nextExpiry = Math.min(nextExpiry ?? Infinity, row.orphaned_at + graceMs);
+        }
+      }
+    });
+    return { deleted, nextExpiry };
+  }
+
+  /** Assets whose page row is gone. The foreign key should make this impossible; this is the safety net. */
+  deleteDanglingPageAssets(): number {
+    const result = this.db.prepare("DELETE FROM page_assets WHERE tab_id NOT IN (SELECT id FROM tabs)").run();
+    return Number(result.changes);
+  }
+
+  private transaction(fn: () => void): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      fn();
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
+  }
+
   private parkDirtyStripSeqs(upserts: StoredTab[]): void {
     if (!upserts.length) {
       return;
@@ -395,6 +532,7 @@ export class BoardDb {
         throw new Error(`board.sqlite schema ${version} cannot be opened by this daemon`);
       }
       ensureTemplateSchema(db);
+      ensurePageAssetSchema(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -713,6 +851,22 @@ function rowToBinding(row: BindingRow): TemplateBinding {
     compatible: row.compatible !== 0,
     ...(row.reason ? { reason: row.reason } : {}),
   };
+}
+
+function rowToPageAsset(row: PageAssetRow): PageAssetMeta {
+  return {
+    id: row.id,
+    tabId: row.tab_id,
+    name: row.name,
+    mimeType: row.mime_type,
+    bytes: Number(row.bytes),
+    createdAt: row.created_at,
+    ...(row.orphaned_at !== null ? { orphanedAt: row.orphaned_at } : {}),
+  };
+}
+
+function toBuffer(data: Uint8Array): Buffer {
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
 }
 
 function removeSqlite(sqlitePath: string): void {

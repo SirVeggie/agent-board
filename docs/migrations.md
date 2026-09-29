@@ -18,6 +18,17 @@
 - **How to verify:** `template tables without the built-in columns are migrated` in `src/store.test.ts` drops the columns from a board, reopens it, and checks a copy's link survives a reload.
 - **When to remove:** Keep. This is the current schema.
 
+## `page_assets` table (additive, schema still 2)
+
+- **What changed:** Blobs saved by page code (`board.saveAsset`) are stored in a new `page_assets` table: `id`, `tab_id REFERENCES tabs(id) ON DELETE CASCADE`, `name`, `mime_type`, `bytes`, `data BLOB`, `created_at`, `orphaned_at` (set while nothing in the page's state or HTML mentions the id).
+- **Why no version bump:** Nothing existing changes. `ensurePageAssetSchema` runs `CREATE TABLE IF NOT EXISTS` on every open. `SCHEMA_VERSION` stays `2`.
+- **Hazard for future migrations:** the cascade fires on any `DELETE` of a `tabs` row, and `foreign_keys` is on. A migration that rebuilds `tabs` (rename, create, copy, drop, like `migrateV1ToLibrarySchema`) would delete every page asset when it drops the old table, because `ALTER TABLE RENAME` repoints the foreign key at the renamed table. Turn `foreign_keys` off for such a rebuild (it cannot be changed inside a transaction), and keep the tabs upsert as `ON CONFLICT DO UPDATE`, never `INSERT OR REPLACE`.
+- **Export format:** pages may carry an optional `pageAssets: [{ id, name, mimeType, createdAt, data }]` (base64). Older exports have none. Importing reuses the ids unless they already exist on the board; taken ids get new ones and the page's state and HTML are rewritten to match. `EXPORT_VERSION` stays `1`. `MAX_IMPORT_BYTES` rose from 128 MB to 400 MB.
+- **Protocol:** `VERSION` 2.2.0 → 2.3.0 for the new `page_asset_warning` event.
+- **Where:** `src/schema.ts` (`PAGE_ASSETS_TABLE_SQL`), `src/dbMigrate.ts` (`ensurePageAssetSchema`), `src/pageAssets.ts`.
+- **How to verify:** the page asset tests in `src/store.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.agent_hidden` column (additive, schema still 1)
 
 - **What changed:** Tabs can be hidden from the agent, from the board UI only. The flag is stored in a new `tabs.agent_hidden INTEGER NOT NULL DEFAULT 0` column. Export files carry it as an optional `agentHidden: true` on each page.

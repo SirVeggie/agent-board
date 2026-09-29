@@ -1,7 +1,8 @@
 /**
  * Injected into every tab page. Gives the page `window.board` over the tab's
  * server-owned state: `board.state`, `board.set`, `board.onChange`, `board.bind`,
- * `board.signal`.
+ * `board.signal`, and page-saved blobs: `board.saveAsset`, `board.assetUrl`,
+ * `board.deleteAsset`, `board.listAssets`.
  *
  * Boot state is inlined ahead of this script so `board.state` is readable
  * synchronously by page scripts.
@@ -390,9 +391,82 @@ export const BOARD_BRIDGE_JS = `
     });
   }
 
+  function assetsPath(suffix) {
+    return "/api/tabs/" + encodeURIComponent(tabId) + "/assets" + (suffix || "");
+  }
+
+  function readJson(res) {
+    return res.json().catch(function () {
+      return {};
+    }).then(function (data) {
+      if (!res.ok) {
+        throw new Error((data && data.error) || "request failed (" + res.status + ")");
+      }
+      return data;
+    });
+  }
+
+  function warnUsage(usage) {
+    if (usage && usage.warning) {
+      console.warn("[board] " + usage.warning);
+    }
+  }
+
+  /**
+   * Store a Blob, File, ArrayBuffer, or typed array for this page. Keep the returned id (or
+   * url) in board state: an asset nothing in the state or HTML mentions is deleted after a
+   * grace period.
+   */
+  function saveAsset(data, options) {
+    var opts = options || {};
+    if (!tabId) {
+      return Promise.reject(new Error("no tab id"));
+    }
+    var blob = data instanceof Blob ? data : new Blob([data]);
+    var name = opts.name || (data && typeof data.name === "string" ? data.name : "") || "asset";
+    var type = opts.type || blob.type || "application/octet-stream";
+    return fetch(assetsPath(""), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Asset-Name": encodeURIComponent(name),
+        "X-Asset-Type": type
+      },
+      body: blob
+    })
+      .then(readJson)
+      .then(function (result) {
+        warnUsage(result.usage);
+        var asset = result.asset;
+        asset.usage = result.usage;
+        return asset;
+      });
+  }
+
+  function deleteAsset(id) {
+    return fetch(assetsPath("/" + encodeURIComponent(String(id))), { method: "DELETE" })
+      .then(readJson)
+      .then(function (result) {
+        return result.usage;
+      });
+  }
+
+  function listAssets() {
+    return fetch(assetsPath("")).then(readJson);
+  }
+
+  function assetUrl(idOrUrl) {
+    var value = String(idOrUrl || "");
+    return value.indexOf("/blob/") === 0 ? value : "/blob/" + value;
+  }
+
   window.board = {
     id: tabId,
     template: template,
+    saveAsset: saveAsset,
+    deleteAsset: deleteAsset,
+    listAssets: listAssets,
+    assetUrl: assetUrl,
     get state() {
       return current;
     },

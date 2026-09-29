@@ -13,6 +13,7 @@ import { openBoard } from "./openBoard.js";
 import { clampWaitMs, parseSignalNames } from "./signal.js";
 import { clampLibraryPage } from "./librarySearch.js";
 import { withAgentDates } from "./dates.js";
+import type { PageAssetUsage } from "./pageAssets.js";
 import type { Tab, TabAsset, TabMeta } from "./types.js";
 
 type ApiError = { error?: string };
@@ -426,7 +427,7 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const tab = data as Tab & { folder: string | null };
+      const tab = data as Tab & { folder: string | null; pageAssets?: PageAssetUsage };
       const dates = withAgentDates(tab);
       const meta = {
         id: tab.id,
@@ -442,6 +443,7 @@ export async function startMcp(): Promise<void> {
         ...(dates.closedAt ? { closedAt: dates.closedAt } : {}),
         viewUrl: viewUrl(tab.id),
         assets: tab.assets ?? [],
+        ...(tab.pageAssets ? { pageAssets: tab.pageAssets } : {}),
         ...(tab.templateId
           ? {
               templateId: tab.templateId,
@@ -624,7 +626,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_set_state",
-    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Keys merge into the existing state, so send only what you are changing. Pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft).",
+    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Keys merge into the existing state, so send only what you are changing. Pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft). To put a local image or file into the page's data (an image on a todo item, a card, a gallery), pass it in assets and reference it as \"asset:<name>\" in state.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -647,11 +649,31 @@ export async function startMcp(): Promise<void> {
         .describe(
           "If true, clear the template incompatibility overlay on this page after you have fixed its state. Only for pages bound to a template."
         ),
+      assets: z
+        .array(
+          z.union([
+            z.string().describe("Absolute or workspace-relative path to a local file."),
+            z.object({
+              path: z.string().describe("Absolute or workspace-relative path to a local file."),
+              name: z.string().optional().describe("Name to use in asset:name. Defaults to the file's basename."),
+            }),
+          ])
+        )
+        .optional()
+        .describe(
+          "Local files (images or any other file, 32 MB each) to store as page assets. Put the whole string \"asset:<name>\" as a value in state wherever the file's URL belongs, e.g. { todos: [..., { images: [{ id: \"i1\", name: \"photo.png\", data: \"asset:photo.png\" }] }] }; it is replaced with a /blob/<id> URL the page can use as an img src. Every file must be referenced and every asset:<name> must have a file."
+        ),
     },
-    async ({ id, key, state, expectedRevision, replace, force, resolveIncompatibility }) => {
+    async ({ id, key, state, expectedRevision, replace, force, resolveIncompatibility, assets }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
+      }
+      let resolvedAssets: { path: string; name?: string }[] = [];
+      try {
+        resolvedAssets = resolveAssetPaths(assets);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
       const guardRevision = force ? undefined : (expectedRevision ?? 0);
       const { status, data } = await api("PUT", `/api/tabs/${encodeURIComponent(which)}/state`, {
@@ -659,6 +681,7 @@ export async function startMcp(): Promise<void> {
         replace,
         expectedRevision: guardRevision,
         resolveIncompatibility,
+        ...(resolvedAssets.length ? { assets: resolvedAssets } : {}),
       });
       if (status === 409) {
         const conflict = data as { state: unknown; stateRevision: number };

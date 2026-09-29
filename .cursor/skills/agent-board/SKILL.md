@@ -220,6 +220,7 @@ board.signal("submitted")       // wake board_wait; flushes pending board.set fi
 board.onChange(render)          // a remote change arrived; not fired for your own board.set
 board.bind(el, "notes")         // two-way bind an input, textarea, or checkbox
 board.revision                  // current stateRevision
+board.saveAsset(file)           // store an image/file for this page; see Page assets
 ```
 
 Declarative wake-ups (do **not** also call `board.signal` in the same click):
@@ -236,7 +237,37 @@ Rules that keep pages well behaved:
 - Bind every text field with `board.bind` rather than wiring inputs by hand. It protects in-flight typing: a remote change to a field the user is inside does not touch their caret.
 - In `onChange`, re-render only the parts that changed. Do not rebuild a container that holds a bound field.
 - Keep in-progress form input under a `draft` key and never write that key from the agent.
-- State is JSON only, 256 KB per tab.
+- State is JSON only, 256 KB per tab. Images, files, and other binary data go in page assets (below), never base64 in state.
+
+### Page assets (images and files saved by the page)
+
+When the user adds an image or file on the page itself (a kanban card's picture, a pasted screenshot, a dropped PDF), save it with `board.saveAsset` and keep its id in state:
+
+```js
+const asset = await board.saveAsset(file);          // Blob, File, ArrayBuffer, or typed array
+// asset: { id, url, name, mimeType, bytes, usage }
+board.set({ cards: [...cards, { title, image: asset.id }] });
+img.src = board.assetUrl(card.image);               // "/blob/<id>"; works for an id or a stored url
+await board.deleteAsset(id);                        // optional; unreferenced ones are cleaned up anyway
+const { assets, usage } = await board.listAssets();
+```
+
+- An asset stays as long as its id (or url) appears anywhere in the page's state or HTML. Once nothing mentions it for 10 minutes it is deleted, so an undo right after removing a card still works. Save the id to state right after the upload.
+- Deleting the page permanently deletes its assets with it. Export and import carry them.
+- Limits: 32 MB per asset, 2000 assets and 256 MB per page. `usage.warning` is set (and the board shows a notice) once a page is 80% full; `saveAsset` rejects past the limit, so handle the error.
+- To show a local image in the page's markup, use `assets` on `board_show` (see Images). To put a local file into the page's *data* (an image on a todo item, a card, a gallery entry), use `assets` on `board_set_state` and write the whole string `"asset:<name>"` where its URL belongs. It is stored as a page asset and replaced with `/blob/<id>`:
+
+```
+board_set_state({
+  key: "groceries",
+  expectedRevision: 4,
+  assets: ["C:/Users/me/Pictures/apples.jpg"],
+  state: { todos: [...current, { id: "t9", text: "Apples", done: false, description: "", col: 0,
+    images: [{ id: "i1", name: "apples.jpg", data: "asset:apples.jpg" }] }] }
+})
+```
+
+Every file must be referenced and every `asset:<name>` needs a file; otherwise the write is refused. The built-in Todo list keeps images per item as `images: [{ id, name, data }]` and shows one inline in the description with `![alt](#img-<image id>)`.
 
 The shape to follow — bind the fields once, render the rest from state, and call `render()` yourself after your own writes:
 

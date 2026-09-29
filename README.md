@@ -70,7 +70,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_read` | Read a page's HTML so it can be revised (open or closed). `toFile: true` checks it out to a temp file for editing with file tools instead |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
 | `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
-| `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. |
+| `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. Optional `assets` (local files) are stored as page assets; each state value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Close one tab, all unpinned tabs, or everything; the pages stay in the Library. Pass `permanent: true` to delete instead |
 | `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar) |
@@ -106,6 +106,18 @@ board.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
 A submit button can declare the same handshake without extra script: `data-board-signal="submitted"`. The agent then calls `board_wait` with that signal name. `board_show` clears the last signal on the tab so a new wait does not instantly see the previous submit.
 
 Interactive pages should use this instead of `localStorage` — all tab pages share one origin, so their `localStorage` collides, and the agent cannot see it.
+
+### Page assets
+
+A page can store images and other files from its own code, for example a picture pasted onto a kanban card:
+
+```js
+const asset = await board.saveAsset(file, { name: "card.png" }); // Blob, File, ArrayBuffer, or typed array
+board.set({ cards: [...cards, { image: asset.id }] });
+img.src = board.assetUrl(card.image);                            // "/blob/<id>"
+```
+
+They are stored in `board.sqlite`, tied to the page by a foreign key, so permanently deleting the page (emptying it from the Trash, or its 7 days running out) deletes them in the same statement. An asset is kept as long as its id appears anywhere in the page's state or HTML. When nothing mentions it any more it is deleted 10 minutes later (so an undo in the page still finds it); the check runs after each save, and an hourly sweep plus one at startup catch anything the per-save check missed. Limits are 32 MB per asset and 2000 assets / 256 MB per page. From 80% of either limit, `saveAsset` results carry `usage.warning` and the board shows a notice. Page assets travel with exports and imports.
 
 `board.bind` is what makes text fields safe. It saves as you type (250 ms idle, 1 s ceiling), and when a remote change arrives for a field you are currently in, it leaves your caret and half-typed text alone, marks the field `board-stale`, and reconciles once you move on.
 

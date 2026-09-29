@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
+import { FOLDERS_TABLE_SQL, PAGE_ASSETS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 
 /**
  * Additive template tables; CREATE IF NOT EXISTS only. See docs/migrations.md.
@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS template_bindings (
 export function ensureTemplateSchema(db: DatabaseSync): void {
   db.exec(TEMPLATE_TABLES_SQL);
   ensureTemplateBuiltinColumns(db);
+}
+
+/** Additive page asset table; CREATE IF NOT EXISTS only. See docs/migrations.md. */
+export function ensurePageAssetSchema(db: DatabaseSync): void {
+  db.exec(PAGE_ASSETS_TABLE_SQL);
 }
 
 /**

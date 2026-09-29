@@ -1,6 +1,14 @@
 import path from "node:path";
 import { prepareAssetFromBuffer } from "./assets.js";
 import { MAX_ASSETS_PER_TAB, MAX_ASSETS_TOTAL_BYTES } from "./config.js";
+import {
+  assertPageAssetRoom,
+  assertPageAssetSize,
+  cleanPageAssetName,
+  isPageAssetId,
+  normalizePageAssetMime,
+  type PageAssetDraft,
+} from "./pageAssets.js";
 import { normalizeTemplateInput } from "./templates.js";
 import {
   isPlainObject,
@@ -21,6 +29,15 @@ export type BoardExportAsset = {
   data: string;
 };
 
+/** A blob the page saved from its own code; `id` is what the page's state refers to. */
+export type BoardExportPageAsset = {
+  id: string;
+  name: string;
+  mimeType: string;
+  createdAt: number;
+  data: string;
+};
+
 /** templateId refers to an entry in the same file's templates list. */
 export type PageTemplateBinding = Omit<TemplateBinding, "tabId">;
 
@@ -37,6 +54,8 @@ export type BoardExportPage = {
   libPos?: number;
   state: BoardState;
   assets: BoardExportAsset[];
+  /** Omitted when the page has none. */
+  pageAssets?: BoardExportPageAsset[];
   template?: PageTemplateBinding;
   agentHidden?: boolean;
 };
@@ -61,6 +80,7 @@ export type ImportPageInput = {
   libPos?: number;
   state?: BoardState;
   assets?: PreparedAsset[];
+  pageAssets?: PageAssetDraft[];
   template?: PageTemplateBinding;
   agentHidden?: boolean;
 };
@@ -72,7 +92,7 @@ export type ParsedImport = {
 };
 
 export function buildExport(
-  entries: Array<{ tab: Tab; assets: PreparedAsset[]; folderPath?: string | null }>,
+  entries: Array<{ tab: Tab; assets: PreparedAsset[]; pageAssets?: PageAssetDraft[]; folderPath?: string | null }>,
   templates: Template[] = []
 ): BoardExportFile {
   const included = new Set(templates.map((template) => template.id));
@@ -81,7 +101,7 @@ export function buildExport(
     version: EXPORT_VERSION,
     exportedAt: Date.now(),
     templates,
-    pages: entries.map(({ tab, assets, folderPath }) => ({
+    pages: entries.map(({ tab, assets, pageAssets, folderPath }) => ({
       key: tab.key,
       title: tab.title,
       html: tab.html,
@@ -97,6 +117,17 @@ export function buildExport(
         mimeType: asset.mimeType,
         data: asset.buffer.toString("base64"),
       })),
+      ...(pageAssets?.length
+        ? {
+            pageAssets: pageAssets.map((asset) => ({
+              id: asset.id,
+              name: asset.name,
+              mimeType: asset.mimeType,
+              createdAt: asset.createdAt,
+              data: asset.data.toString("base64"),
+            })),
+          }
+        : {}),
       ...(tab.agentHidden ? { agentHidden: true } : {}),
       ...(tab.templateId && included.has(tab.templateId)
         ? {
@@ -291,6 +322,7 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
     libPos: finiteNumber(page.libPos),
     state: isPlainObject(page.state) ? page.state : {},
     assets: assetsFromExport(page.assets, index),
+    pageAssets: pageAssetsFromExport(page.pageAssets, index),
     template: bindingFromExport(page.template, index, templateIds),
     ...(page.agentHidden === true ? { agentHidden: true } : {}),
   };
@@ -331,6 +363,41 @@ function assetsFromExport(raw: unknown, pageIndex: number): PreparedAsset[] {
     }
     out.push(asset);
   }
+  return out;
+}
+
+function pageAssetsFromExport(raw: unknown, pageIndex: number): PageAssetDraft[] {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error(`pages[${pageIndex}].pageAssets must be an array`);
+  }
+  const seen = new Set<string>();
+  const out: PageAssetDraft[] = [];
+  let bytes = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    const label = `pages[${pageIndex}].pageAssets[${i}]`;
+    if (!isPlainObject(item) || typeof item.id !== "string" || typeof item.data !== "string") {
+      throw new Error(`${label} must include id and data`);
+    }
+    if (!isPageAssetId(item.id) || seen.has(item.id)) {
+      throw new Error(`${label} has an invalid or repeated id`);
+    }
+    seen.add(item.id);
+    const data = Buffer.from(item.data, "base64");
+    assertPageAssetSize(data.length, label);
+    bytes += data.length;
+    out.push({
+      id: item.id,
+      name: cleanPageAssetName(item.name),
+      mimeType: normalizePageAssetMime(item.mimeType),
+      createdAt: finiteNumber(item.createdAt) ?? Date.now(),
+      data,
+    });
+  }
+  assertPageAssetRoom({ count: 0, bytes: 0 }, out.length, bytes);
   return out;
 }
 

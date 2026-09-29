@@ -5,9 +5,35 @@ import { buildExport, type BoardExportFile, type ImportPageInput } from "./board
 import { BUILTIN_ID_PREFIX, isBuiltinId, loadBuiltinTemplates } from "./builtinTemplates.js";
 import { searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
 import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
-import { MAX_HTML_BYTES, MAX_STATE_BYTES, dbPath, statePath } from "./config.js";
+import {
+  ASSET_SWEEP_INTERVAL_MS,
+  MAX_HTML_BYTES,
+  MAX_STATE_BYTES,
+  PAGE_ASSET_ORPHAN_GRACE_MS,
+  dbPath,
+  statePath,
+} from "./config.js";
 import { BoardDb, type StoredFolder, type StoredTab } from "./db.js";
 import { log } from "./log.js";
+import {
+  assertPageAssetRoom,
+  assertPageAssetSize,
+  cleanPageAssetName,
+  collectPageAssetRefs,
+  isPageAssetId,
+  newPageAssetId,
+  normalizePageAssetMime,
+  pageAssetUrl,
+  pageAssetUsage,
+  readPageAssetFile,
+  remapPageAssetRefs,
+  substituteStateAssets,
+  type PageAssetFile,
+  type PageAssetDraft,
+  type PageAssetInput,
+  type PageAssetMeta,
+  type PageAssetUsage,
+} from "./pageAssets.js";
 import { normalizeSignalName } from "./signal.js";
 import {
   TRASH_TTL_MS,
@@ -78,6 +104,11 @@ export class BoardStore extends EventEmitter {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private trashTimer: ReturnType<typeof setInterval> | null = null;
+  private assetSweepTimer: ReturnType<typeof setInterval> | null = null;
+  private assetExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private assetExpiryAt = 0;
+  /** Count and bytes of page assets, for pages that have any. Mirrors the page_assets table. */
+  private pageAssetTotals = new Map<string, { count: number; bytes: number }>();
   private persistError: string | null = null;
   private lastStamp = 0;
   private lastSeq = 0;
@@ -155,11 +186,10 @@ export class BoardStore extends EventEmitter {
     );
     this.activeId =
       snapshot.activeId && this.tabs.has(snapshot.activeId) ? snapshot.activeId : (this.order[0] ?? null);
-    try {
-      cleanupOrphanAssets(this.knownAssetTabIds());
-    } catch (err) {
-      log("Failed to clean orphan assets", String(err));
-    }
+    this.pageAssetTotals = this.db.pageAssetTotals();
+    this.sweepAssets();
+    this.assetSweepTimer = setInterval(() => this.sweepAssets(), ASSET_SWEEP_INTERVAL_MS);
+    this.assetSweepTimer.unref?.();
     if (this.removed.size || this.foldersDirty || this.dirty.size || this.templatesDirty) {
       this.persistSoon();
     }
@@ -529,6 +559,7 @@ export class BoardStore extends EventEmitter {
       tabs.map((tab) => ({
         tab,
         assets: readPreparedAssets(tab.id, tab.assets ?? []),
+        pageAssets: this.pageAssetTotals.has(tab.id) ? this.requireDb().readPageAssetDrafts(tab.id) : [],
         folderPath: this.folderPath(tab.folderId),
       })),
       templates
@@ -554,9 +585,10 @@ export class BoardStore extends EventEmitter {
     const plan = this.planTemplateImport(input.templates);
     const drafts: Tab[] = [];
     const reserved = new Set<string>();
+    const pendingAssets = new Map<string, PageAssetDraft[]>();
     try {
       for (const page of pages) {
-        const tab = this.buildImportedDraft(page, reserved, plan.byFileId);
+        const tab = this.buildImportedDraft(page, reserved, plan.byFileId, pendingAssets);
         reserved.add(tab.key);
         drafts.push(tab);
       }
@@ -593,7 +625,11 @@ export class BoardStore extends EventEmitter {
     if (focused) {
       this.activeId = focused.id;
     }
-    this.persistSoon();
+    if (pendingAssets.size) {
+      this.insertImportedPageAssets(pendingAssets);
+    } else {
+      this.persistSoon();
+    }
     if (this.folders.size !== foldersBefore) {
       this.emitFolders();
     }
@@ -1059,7 +1095,11 @@ export class BoardStore extends EventEmitter {
     if (input.expectedRevision !== undefined && input.expectedRevision !== tab.stateRevision) {
       return { ok: false, state: tab.state, stateRevision: tab.stateRevision };
     }
-    const next = input.replace ? { ...input.state } : { ...tab.state, ...input.state };
+    let next: BoardState = input.replace ? { ...input.state } : { ...tab.state, ...input.state };
+    const attached = input.assets?.length ? this.prepareStateAssets(tab, next, input.assets) : undefined;
+    if (attached) {
+      next = attached.state;
+    }
     const resolved = this.applyResolveIncompatibility(tab, input.resolveIncompatibility);
     const serialized = JSON.stringify(next);
     const stateChanged = serialized !== JSON.stringify(tab.state);
@@ -1071,9 +1111,17 @@ export class BoardStore extends EventEmitter {
       if (bytes > MAX_STATE_BYTES) {
         throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
       }
+      const assets = attached ? this.insertPageAssetDrafts(tab, attached.drafts) : undefined;
       tab.state = next;
       tab.stateRevision += 1;
       tab.stateUpdatedAt = Date.now();
+      this.markDirty(tab.id);
+      this.persistSoon();
+      this.emit("tab_state", tab, input.client);
+      if (located.where === "closed" || resolved) {
+        this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+      }
+      return { ok: true, tab, ...(assets ? { assets } : {}) };
     }
     this.markDirty(tab.id);
     this.persistSoon();
@@ -1464,6 +1512,76 @@ export class BoardStore extends EventEmitter {
       .map((tab) => this.closeTab(tab.id));
   }
 
+  /**
+   * Store a blob for a page. The page keeps the returned id (or URL) in its state; once no
+   * state or HTML of the page mentions it for PAGE_ASSET_ORPHAN_GRACE_MS, it is deleted.
+   */
+  savePageAsset(idOrKey: string, input: PageAssetInput): { asset: PageAssetMeta; usage: PageAssetUsage } {
+    const tab = this.requireAny(idOrKey);
+    assertPageAssetSize(input.data.length);
+    const [asset] = this.insertPageAssetDrafts(tab, [
+      {
+        id: newPageAssetId(),
+        name: cleanPageAssetName(input.name),
+        mimeType: normalizePageAssetMime(input.mimeType),
+        createdAt: Date.now(),
+        data: input.data,
+      },
+    ]);
+    return { asset, usage: this.pageAssetUsageOf(tab.id) };
+  }
+
+  deletePageAsset(idOrKey: string, assetId: string): PageAssetUsage {
+    const tab = this.requireAny(idOrKey);
+    if (!isPageAssetId(assetId) || !this.requireDb().deletePageAsset(tab.id, assetId)) {
+      throw new Error(`asset not found: ${assetId}`);
+    }
+    this.refreshPageAssetTotal(tab.id);
+    return this.pageAssetUsageOf(tab.id);
+  }
+
+  listPageAssets(idOrKey: string): { assets: PageAssetMeta[]; usage: PageAssetUsage } {
+    const tab = this.requireAny(idOrKey);
+    const assets = this.pageAssetTotals.has(tab.id) ? this.requireDb().listPageAssets(tab.id) : [];
+    return { assets, usage: this.pageAssetUsageOf(tab.id) };
+  }
+
+  /** By asset id alone: page asset URLs do not name their page, so they survive export and import. */
+  readPageAsset(assetId: string): { meta: PageAssetMeta; data: Buffer } | undefined {
+    if (!this.db || !isPageAssetId(assetId)) {
+      return undefined;
+    }
+    return this.db.readPageAsset(assetId);
+  }
+
+  pageAssetUsageOf(tabId: string): PageAssetUsage {
+    return pageAssetUsage(this.pageAssetTotals.get(tabId));
+  }
+
+  /**
+   * Safety net behind the per-save checks: drop asset rows whose page row is gone, re-check
+   * every page that has assets, and clear agent-attached asset folders of unknown pages.
+   */
+  sweepAssets(): void {
+    if (this.db) {
+      try {
+        const dangling = this.db.deleteDanglingPageAssets();
+        if (dangling) {
+          log(`Removed ${dangling} page assets whose page no longer exists`);
+          this.pageAssetTotals = this.db.pageAssetTotals();
+        }
+        this.reconcilePageAssets([...this.pageAssetTotals.keys()]);
+      } catch (err) {
+        log("Failed to sweep page assets", String(err));
+      }
+    }
+    try {
+      cleanupOrphanAssets(this.knownAssetTabIds());
+    } catch (err) {
+      log("Failed to clean orphan assets", String(err));
+    }
+  }
+
   persist(): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -1484,11 +1602,12 @@ export class BoardStore extends EventEmitter {
         upserts.push(stored);
       }
     }
+    const removedIds = [...this.removed];
     try {
       this.db.save({
         activeId: this.activeId,
         upserts,
-        removedIds: [...this.removed],
+        removedIds,
         ...(this.foldersDirty ? { folders: this.collectFolders() } : {}),
         templates: [...this.templates.values()],
         removedTemplateIds: [...this.removedTemplates],
@@ -1500,6 +1619,11 @@ export class BoardStore extends EventEmitter {
       this.removedTemplates.clear();
       this.templatesDirty = false;
       this.foldersDirty = false;
+      // Removed rows took their page assets with them (ON DELETE CASCADE).
+      for (const id of removedIds) {
+        this.pageAssetTotals.delete(id);
+      }
+      this.reconcilePageAssets(upserts.map((row) => row.tab.id));
       if (this.persistError) {
         this.persistError = null;
         this.emit("persist_ok");
@@ -1517,6 +1641,14 @@ export class BoardStore extends EventEmitter {
     if (this.trashTimer) {
       clearInterval(this.trashTimer);
       this.trashTimer = null;
+    }
+    if (this.assetSweepTimer) {
+      clearInterval(this.assetSweepTimer);
+      this.assetSweepTimer = null;
+    }
+    if (this.assetExpiryTimer) {
+      clearTimeout(this.assetExpiryTimer);
+      this.assetExpiryTimer = null;
     }
     this.persist();
     if (this.persistRetryTimer) {
@@ -1622,7 +1754,12 @@ export class BoardStore extends EventEmitter {
     return { byFileId, created, reused: reused.size };
   }
 
-  private buildImportedDraft(page: ImportPageInput, reserved: Set<string>, templates: Map<string, Template>): Tab {
+  private buildImportedDraft(
+    page: ImportPageInput,
+    reserved: Set<string>,
+    templates: Map<string, Template>,
+    pendingAssets: Map<string, PageAssetDraft[]>
+  ): Tab {
     const title = page.title.trim();
     if (!title) {
       throw new Error("title is required");
@@ -1635,13 +1772,29 @@ export class BoardStore extends EventEmitter {
       throw new Error(`template not found: ${page.template.templateId}`);
     }
     const templateValues = template ? parseTemplateValues(template.fields, page.template?.values) : undefined;
-    const html = wrapHtml(title, page.html);
+    // Importing the same file twice would reuse asset ids, so taken ones get fresh ids and the
+    // page's text is rewritten to match.
+    const remap = new Map<string, string>();
+    const pendingIds = new Set([...pendingAssets.values()].flat().map((asset) => asset.id));
+    const pageAssets = (page.pageAssets ?? []).map((asset) => {
+      if (!pendingIds.has(asset.id) && !this.db?.pageAssetExists(asset.id)) {
+        return asset;
+      }
+      const id = newPageAssetId();
+      remap.set(asset.id, id);
+      return { ...asset, id };
+    });
+    const pageHtml = remapPageAssetRefs(page.html, remap);
+    const pageState = page.state && remap.size
+      ? (JSON.parse(remapPageAssetRefs(JSON.stringify(page.state), remap)) as BoardState)
+      : page.state;
+    const html = wrapHtml(title, pageHtml);
     const bytes = Buffer.byteLength(html, "utf8");
     if (bytes > MAX_HTML_BYTES) {
       throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
     }
-    if (page.state) {
-      const stateBytes = Buffer.byteLength(JSON.stringify(page.state), "utf8");
+    if (pageState) {
+      const stateBytes = Buffer.byteLength(JSON.stringify(pageState), "utf8");
       if (stateBytes > MAX_STATE_BYTES) {
         throw new Error(`state is too large (${stateBytes} bytes, max ${MAX_STATE_BYTES})`);
       }
@@ -1675,7 +1828,10 @@ export class BoardStore extends EventEmitter {
       assets,
       ...(page.agentHidden ? { agentHidden: true } : {}),
     };
-    seedState(tab, page.state);
+    seedState(tab, pageState);
+    if (pageAssets.length) {
+      pendingAssets.set(id, pageAssets);
+    }
     if (template && page.template && templateValues) {
       applyBinding(tab, { ...page.template, tabId: id, templateId: template.id, values: templateValues });
     }
@@ -2405,6 +2561,160 @@ export class BoardStore extends EventEmitter {
     const next = Math.max(now, this.lastStamp + 1);
     this.lastStamp = next;
     return next;
+  }
+
+  private requireDb(): BoardDb {
+    if (!this.db) {
+      throw new Error("board database is not open");
+    }
+    return this.db;
+  }
+
+  /** Checks room, writes the page row first if it is new (asset rows point at it), then the assets. */
+  private insertPageAssetDrafts(tab: Tab, drafts: PageAssetDraft[]): PageAssetMeta[] {
+    const db = this.requireDb();
+    const current = this.pageAssetTotals.get(tab.id) ?? { count: 0, bytes: 0 };
+    const adding = drafts.reduce((sum, draft) => sum + draft.data.length, 0);
+    assertPageAssetRoom(current, drafts.length, adding);
+    if (this.dirty.has(tab.id)) {
+      this.persist();
+      if (this.dirty.has(tab.id)) {
+        throw new Error(`could not save the page before its assets: ${this.persistError ?? "unknown error"}`);
+      }
+    }
+    db.insertPageAssets(tab.id, drafts);
+    const next = { count: current.count + drafts.length, bytes: current.bytes + adding };
+    this.pageAssetTotals.set(tab.id, next);
+    this.scheduleAssetExpiry(Math.min(...drafts.map((draft) => draft.createdAt)) + PAGE_ASSET_ORPHAN_GRACE_MS);
+    const usage = pageAssetUsage(next);
+    if (usage.warning) {
+      this.emit("page_asset_warning", tab, usage);
+    }
+    return drafts.map((draft) => ({
+      id: draft.id,
+      tabId: tab.id,
+      name: draft.name,
+      mimeType: draft.mimeType,
+      bytes: draft.data.length,
+      createdAt: draft.createdAt,
+      orphanedAt: draft.createdAt,
+    }));
+  }
+
+  /**
+   * Read the agent's files and swap each `asset:<name>` string in the state for the URL its
+   * asset will have. Nothing is stored yet, so a state that turns out too large leaves nothing behind.
+   */
+  private prepareStateAssets(
+    tab: Tab,
+    state: BoardState,
+    files: PageAssetFile[]
+  ): { state: BoardState; drafts: PageAssetDraft[] } {
+    const now = Date.now();
+    const urls = new Map<string, string>();
+    const drafts: PageAssetDraft[] = [];
+    for (const file of files) {
+      const read = readPageAssetFile(file);
+      const key = read.name.toLowerCase();
+      if (urls.has(key)) {
+        throw new Error(`duplicate asset name: ${read.name}`);
+      }
+      const draft: PageAssetDraft = { id: newPageAssetId(), createdAt: now, ...read };
+      urls.set(key, pageAssetUrl(draft.id));
+      drafts.push(draft);
+    }
+    assertPageAssetRoom(
+      this.pageAssetTotals.get(tab.id) ?? { count: 0, bytes: 0 },
+      drafts.length,
+      drafts.reduce((sum, draft) => sum + draft.data.length, 0)
+    );
+    const used = new Set<string>();
+    const missing = new Set<string>();
+    const next = substituteStateAssets(state, urls, used, missing) as BoardState;
+    const unused = drafts.filter((draft) => !used.has(draft.name.toLowerCase())).map((draft) => draft.name);
+    if (missing.size || unused.length) {
+      const parts = [
+        ...(missing.size ? [`state refers to ${[...missing].map((name) => `asset:${name}`).join(", ")} but no such file was passed`] : []),
+        ...(unused.length ? [`no state value is exactly asset:<name> for ${unused.join(", ")}`] : []),
+      ];
+      throw new Error(`${parts.join("; ")}. Put "asset:<name>" as a whole string value where each file's URL should go.`);
+    }
+    return { state: next, drafts };
+  }
+
+  /** Asset rows point at page rows, so imported pages are written before their assets. */
+  private insertImportedPageAssets(pending: Map<string, PageAssetDraft[]>): void {
+    this.persist();
+    const db = this.requireDb();
+    for (const [tabId, assets] of pending) {
+      try {
+        db.insertPageAssets(tabId, assets);
+        this.refreshPageAssetTotal(tabId);
+      } catch (err) {
+        log(`Failed to import page assets for ${tabId}`, String(err));
+      }
+    }
+    // Imported assets start orphaned; check them against their pages right away.
+    this.reconcilePageAssets(pending.keys());
+  }
+
+  /** Pages whose rows were deleted are skipped; the cascade already took their assets. */
+  private reconcilePageAssets(ids: Iterable<string>): void {
+    if (!this.db) {
+      return;
+    }
+    const now = Date.now();
+    let next: number | null = null;
+    try {
+      for (const id of ids) {
+        if (!this.pageAssetTotals.has(id)) {
+          continue;
+        }
+        const tab = this.storedOf(id)?.tab;
+        if (!tab) {
+          continue;
+        }
+        const refs = collectPageAssetRefs(tab.html, JSON.stringify(tab.state));
+        const result = this.db.reconcilePageAssets(id, refs, now, PAGE_ASSET_ORPHAN_GRACE_MS);
+        if (result.deleted) {
+          this.refreshPageAssetTotal(id);
+        }
+        if (result.nextExpiry !== null) {
+          next = Math.min(next ?? Infinity, result.nextExpiry);
+        }
+      }
+    } catch (err) {
+      log("Failed to check page assets", String(err));
+    }
+    if (next !== null) {
+      this.scheduleAssetExpiry(next);
+    }
+  }
+
+  /** One timer for the earliest orphan to run out of grace; firing re-checks every page with assets. */
+  private scheduleAssetExpiry(at: number): void {
+    if (this.assetExpiryTimer && this.assetExpiryAt <= at) {
+      return;
+    }
+    if (this.assetExpiryTimer) {
+      clearTimeout(this.assetExpiryTimer);
+    }
+    this.assetExpiryAt = at;
+    this.assetExpiryTimer = setTimeout(() => {
+      this.assetExpiryTimer = null;
+      this.assetExpiryAt = 0;
+      this.reconcilePageAssets([...this.pageAssetTotals.keys()]);
+    }, Math.max(0, at - Date.now()) + 1000);
+    this.assetExpiryTimer.unref?.();
+  }
+
+  private refreshPageAssetTotal(tabId: string): void {
+    const total = this.db?.pageAssetTotal(tabId);
+    if (total && total.count) {
+      this.pageAssetTotals.set(tabId, total);
+    } else {
+      this.pageAssetTotals.delete(tabId);
+    }
   }
 
   private knownAssetTabIds(): string[] {

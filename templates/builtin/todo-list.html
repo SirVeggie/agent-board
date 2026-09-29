@@ -1331,44 +1331,55 @@
   }
 
   function addImageFile(file, intoMarkdown) {
-    if (!file || !current()) return;
+    var target = current();
+    if (!file || !target) return;
     if (!/^image\/(png|jpe?g|gif|webp)$/i.test(file.type)) {
       setHint("Use png, jpeg, gif, or webp.", true);
       return;
     }
-    compressImage(file, function (err, data, name) {
-      if (err || !data) {
+    setHint("Adding image…");
+    shrinkImage(file, function (err, blob) {
+      if (err || !blob) {
         setHint("Could not read that image.", true);
         return;
       }
-      var item = current();
-      if (!item) return;
-      var img = { id: newId("i"), name: name, data: data };
-      var next = items().map(function (t) {
-        if (t.id !== item.id) return t;
-        return Object.assign({}, t, { images: t.images.concat([img]) });
+      board.saveAsset(blob, { name: file.name || "image" }).then(function (asset) {
+        placeImage(target.id, asset.url, asset.name, intoMarkdown);
+        if (asset.usage && asset.usage.warning) {
+          setHint("Image added. Storage is filling up: " + asset.usage.warning + ".", true);
+        }
+      }, function (saveErr) {
+        setHint("Could not save that image: " + saveErr.message, true);
       });
-      if (!stateFits(next)) {
-        setHint("Not enough room for that image. Try a smaller one.", true);
-        return;
-      }
-      if (intoMarkdown && editingDesc) {
-        insertAtCursor(mdEditor, "![" + (name || "image") + "](#img-" + img.id + ")\n");
-        next = items().map(function (t) {
-          if (t.id !== item.id) return t;
-          return Object.assign({}, t, {
-            images: t.images.concat([img]),
-            description: mdEditor.value
-          });
-        });
-        board.set({ todos: next, draftDesc: mdEditor.value });
-        renderGallery(current());
-        renderLists();
-        return;
-      }
-      setTodos(next);
-      setHint("Image added.");
     });
+  }
+
+  /** Images live in page assets; an item keeps { id, name, data: "/blob/<id>" }. Older items may hold data: URLs. */
+  function placeImage(itemId, data, name, intoMarkdown) {
+    if (!items().some(function (t) { return t.id === itemId; })) return;
+    var img = { id: newId("i"), name: name, data: data };
+    var next = items().map(function (t) {
+      if (t.id !== itemId) return t;
+      return Object.assign({}, t, { images: t.images.concat([img]) });
+    });
+    if (!stateFits(next)) {
+      setHint("This list is too large to add more.", true);
+      return;
+    }
+    var open = current();
+    if (intoMarkdown && editingDesc && open && open.id === itemId) {
+      insertAtCursor(mdEditor, "![" + (name || "image") + "](#img-" + img.id + ")\n");
+      next = next.map(function (t) {
+        return t.id === itemId ? Object.assign({}, t, { description: mdEditor.value }) : t;
+      });
+      board.set({ todos: next, draftDesc: mdEditor.value });
+      renderGallery(current());
+      renderLists();
+      setHint("Image added.");
+      return;
+    }
+    setTodos(next);
+    setHint("Image added.");
   }
 
   function insertAtCursor(textarea, text) {
@@ -1380,42 +1391,36 @@
     board.set({ draftDesc: textarea.value });
   }
 
-  function compressImage(file, cb) {
-    var reader = new FileReader();
-    reader.onerror = function () { cb(new Error("read")); };
-    reader.onload = function () {
-      var img = new Image();
-      img.onload = function () {
-        var max = 720;
-        var w = img.naturalWidth || img.width;
-        var h = img.naturalHeight || img.height;
-        var scale = Math.min(1, max / Math.max(w, h, 1));
-        w = Math.max(1, Math.round(w * scale));
-        h = Math.max(1, Math.round(h * scale));
-        var canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        var ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#1a1d24";
-        ctx.fillRect(0, 0, w, h);
-        ctx.drawImage(img, 0, 0, w, h);
-        var data = canvas.toDataURL("image/jpeg", 0.62);
-        if (data.length > 90000) {
-          var s2 = Math.min(1, 480 / Math.max(w, h, 1));
-          canvas.width = Math.max(1, Math.round(w * s2));
-          canvas.height = Math.max(1, Math.round(h * s2));
-          ctx = canvas.getContext("2d");
-          ctx.fillStyle = "#1a1d24";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          data = canvas.toDataURL("image/jpeg", 0.5);
-        }
-        cb(null, data, file.name || "image");
-      };
-      img.onerror = function () { cb(new Error("decode")); };
-      img.src = reader.result;
+  /** Small files are kept as they are (animated gifs stay animated); large ones are scaled down to a JPEG. */
+  function shrinkImage(file, cb) {
+    if (file.size <= 1536 * 1024) {
+      cb(null, file);
+      return;
+    }
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () {
+      URL.revokeObjectURL(url);
+      var max = 1920;
+      var w = img.naturalWidth || img.width;
+      var h = img.naturalHeight || img.height;
+      var scale = Math.min(1, max / Math.max(w, h, 1));
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(w * scale));
+      canvas.height = Math.max(1, Math.round(h * scale));
+      var ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#1a1d24";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(function (blob) {
+        cb(blob ? null : new Error("encode"), blob);
+      }, "image/jpeg", 0.85);
     };
-    reader.readAsDataURL(file);
+    img.onerror = function () {
+      URL.revokeObjectURL(url);
+      cb(new Error("decode"));
+    };
+    img.src = url;
   }
 
   function escapeHtml(s) {
@@ -1435,6 +1440,7 @@
     }
     if (/^https?:\/\//i.test(url)) return url;
     if (/^data:image\/(png|jpeg|jpg|gif|webp);/i.test(url)) return url;
+    if (/^\/blob\/pa_[0-9a-f]{24}$/.test(url)) return url;
     return "";
   }
 

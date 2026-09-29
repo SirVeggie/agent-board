@@ -5,7 +5,8 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
-import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
@@ -145,7 +146,8 @@ export async function startHttp(): Promise<http.Server> {
       res.status(404).json({ error: `tab not found: ${req.params.id}` });
       return;
     }
-    res.json({ ...tab, folder: store.folderPath(tab.folderId) });
+    const usage = store.pageAssetUsageOf(tab.id);
+    res.json({ ...tab, folder: store.folderPath(tab.folderId), ...(usage.count ? { pageAssets: usage } : {}) });
   });
 
   app.post("/api/tabs", (req, res) => {
@@ -304,9 +306,16 @@ export async function startHttp(): Promise<http.Server> {
 
   app.put("/api/tabs/:id/state", (req, res) => {
     try {
+      const assetFiles = parseAssetInputs(req.body?.assets);
+      // Reading local files is for the agent; a page must not be able to pull files off the disk.
+      if (assetFiles.length && isContentHost(req)) {
+        res.status(403).json({ error: "pages save assets with board.saveAsset, not file paths" });
+        return;
+      }
       const result = store.setState(req.params.id, {
         state: req.body?.state,
         replace: req.body?.replace === true,
+        ...(assetFiles.length ? { assets: assetFiles } : {}),
         expectedRevision:
           typeof req.body?.expectedRevision === "number" ? req.body.expectedRevision : undefined,
         client: optionalString(req.body?.client),
@@ -321,11 +330,66 @@ export async function startHttp(): Promise<http.Server> {
         });
         return;
       }
-      res.json({ state: result.tab.state, stateRevision: result.tab.stateRevision });
+      res.json({
+        state: result.tab.state,
+        stateRevision: result.tab.stateRevision,
+        ...(result.assets ? { assets: result.assets.map(assetView), usage: store.pageAssetUsageOf(result.tab.id) } : {}),
+      });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
     }
+  });
+
+  /** Page code saves blobs here (board.saveAsset). The body is the raw bytes; the type rides in a header. */
+  app.post("/api/tabs/:id/assets", readAssetBody, (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body)) {
+        res.status(400).json({ error: "expected the asset bytes as an application/octet-stream body" });
+        return;
+      }
+      const result = store.savePageAsset(req.params.id, {
+        name: decodeHeader(req.get("x-asset-name")),
+        mimeType: req.get("x-asset-type"),
+        data: req.body,
+      });
+      res.status(201).json({ asset: assetView(result.asset), usage: result.usage });
+    } catch (err) {
+      sendAssetError(res, err);
+    }
+  });
+
+  app.get("/api/tabs/:id/assets", (req, res) => {
+    try {
+      const result = store.listPageAssets(req.params.id);
+      res.json({ assets: result.assets.map(assetView), usage: result.usage });
+    } catch (err) {
+      sendAssetError(res, err);
+    }
+  });
+
+  app.delete("/api/tabs/:id/assets/:assetId", (req, res) => {
+    try {
+      res.json({ usage: store.deletePageAsset(req.params.id, req.params.assetId) });
+    } catch (err) {
+      sendAssetError(res, err);
+    }
+  });
+
+  /** Ids are random and never reused, so the bytes behind one never change. */
+  app.get("/blob/:assetId", (req, res) => {
+    const found = store.readPageAsset(req.params.assetId);
+    if (!found) {
+      res.status(404).type("text").send("asset not found");
+      return;
+    }
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (found.meta.mimeType !== "application/pdf") {
+      // Stored bytes are arbitrary; opened directly they must not run script on the content origin.
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox");
+    }
+    res.type(found.meta.mimeType).send(found.data);
   });
 
   app.post("/api/tabs/:id/focus", (req, res) => {
@@ -826,6 +890,9 @@ export async function startHttp(): Promise<http.Server> {
   store.on("template_upserted", (template: TemplateMeta) => broadcast({ type: "template_upserted", template }));
   store.on("template_deleted", (id: string) => broadcast({ type: "template_deleted", id }));
   store.on("builtin_templates", (templates: BuiltinTemplateMeta[]) => broadcast({ type: "builtin_templates", templates }));
+  store.on("page_asset_warning", (tab: Tab, usage: PageAssetUsage) =>
+    broadcast({ type: "page_asset_warning", id: tab.id, title: tab.title, usage })
+  );
   store.on("persist_error", (error: string) => broadcast({ type: "persist_error", error }));
   store.on("persist_ok", () => broadcast({ type: "persist_ok" }));
 
@@ -856,6 +923,44 @@ function parseFolderRef(value: unknown): string | null {
     throw new Error("folderId must be a folder id or null");
   }
   return value;
+}
+
+const rawAssetBody = express.raw({ type: "application/octet-stream", limit: MAX_PAGE_ASSET_BYTES });
+
+/** express.raw, but a body over the limit answers in JSON like the rest of the API. */
+function readAssetBody(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  rawAssetBody(req, res, (err?: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const tooLarge = (err as { type?: string }).type === "entity.too.large";
+    res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge ? `asset is too large (max ${MAX_PAGE_ASSET_BYTES} bytes)` : (err as Error).message,
+    });
+  });
+}
+
+function assetView(asset: PageAssetMeta): PageAssetMeta & { url: string } {
+  return { ...asset, url: pageAssetUrl(asset.id) };
+}
+
+function sendAssetError(res: express.Response, err: unknown): void {
+  const message = (err as Error).message;
+  const missing = message.startsWith("tab not found") || message.startsWith("asset not found");
+  const full = message.startsWith("page asset");
+  res.status(missing ? 404 : full ? 413 : 400).json({ error: message });
+}
+
+function decodeHeader(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function sendStoreError(res: express.Response, err: unknown): void {
@@ -938,6 +1043,9 @@ function isContentHost(req: express.Request): boolean {
 const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
 const SIGNAL_PATH = /^\/api\/tabs\/[^/]+\/signal$/;
 const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/;
+const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
+const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
+const BLOB_PATH = /^\/blob\/[^/]+$/;
 
 function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (isContentHost(req)) {
@@ -961,6 +1069,18 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
       next();
       return;
     }
+    if ((req.method === "GET" || req.method === "POST") && ASSETS_PATH.test(req.path)) {
+      next();
+      return;
+    }
+    if (req.method === "DELETE" && ASSET_PATH.test(req.path)) {
+      next();
+      return;
+    }
+    if (req.method === "GET" && BLOB_PATH.test(req.path)) {
+      next();
+      return;
+    }
     if (req.method === "GET" && (req.path === "/" || req.path === "/index.html")) {
       res.redirect(302, `${baseUrl()}/`);
       return;
@@ -968,7 +1088,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
     res.status(403).json({ error: "This origin only serves tab pages" });
     return;
   }
-  if (req.path === "/view" || req.path.startsWith("/view/")) {
+  if (req.path === "/view" || req.path.startsWith("/view/") || req.path.startsWith("/blob/")) {
     res.status(404).type("text").send("Tab pages are served from the content origin.");
     return;
   }

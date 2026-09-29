@@ -1,4 +1,5 @@
 import { embedUrlFromHtml } from "./embed.js";
+import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
 
 export type BoardState = Record<string, unknown>;
 
@@ -218,6 +219,7 @@ export type BoardEvent =
   | { type: "template_upserted"; template: TemplateMeta }
   | { type: "template_deleted"; id: string }
   | { type: "builtin_templates"; templates: BuiltinTemplateMeta[] }
+  | { type: "page_asset_warning"; id: string; title: string; usage: PageAssetUsage }
   | { type: "persist_error"; error: string }
   | { type: "persist_ok" };
 
@@ -241,6 +243,8 @@ export type SetStateInput = {
   expectedRevision?: number;
   client?: string;
   resolveIncompatibility?: boolean;
+  /** Local files to store as page assets; state strings `asset:<name>` become their URLs. */
+  assets?: PageAssetFile[];
 };
 
 export type SignalInput = {
@@ -256,7 +260,7 @@ export type ImportDestination = "meta" | "closed";
 
 /** A stale expectedRevision resolves to ok:false carrying the current state so the caller can merge and retry. */
 export type SetStateResult =
-  | { ok: true; tab: Tab }
+  | { ok: true; tab: Tab; assets?: PageAssetMeta[] }
   | { ok: false; state: BoardState; stateRevision: number };
 
 export function toMeta(tab: Tab): TabMeta {
