@@ -6,12 +6,29 @@ mod board;
 #[cfg(windows)]
 mod keys;
 mod layout;
+mod startup;
+mod tray;
 
+use std::sync::Mutex;
+
+use serde::Serialize;
 use tauri::ipc::CapabilityBuilder;
 use tauri::webview::NewWindowResponse;
-use tauri::{Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const MAIN: &str = "main";
+
+/// Why the daemon last failed to start, for the offline page.
+#[derive(Default)]
+struct DaemonError(Mutex<Option<String>>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DaemonStatus {
+    board: String,
+    running: bool,
+    error: Option<String>,
+}
 
 #[tauri::command]
 async fn desktop_state(window: WebviewWindow) -> layout::DesktopState {
@@ -34,6 +51,15 @@ async fn window_action(window: WebviewWindow, action: String) -> Result<(), Stri
             layout::toggle_compact(&window);
             Ok(())
         }
+        // The board page lost the daemon. Swap it for the offline page, which comes back when it can.
+        "daemon-offline" => {
+            if board::is_running() {
+                return Ok(());
+            }
+            let mut url = offline_url();
+            url.set_fragment(window.url().ok().as_ref().and_then(Url::fragment));
+            window.navigate(url)
+        }
         _ => return Err(format!("Unknown window action: {action}")),
     };
     result.map_err(|err| err.to_string())
@@ -48,31 +74,57 @@ async fn set_desktop_setting(
     match name.as_str() {
         "compactOnTop" => layout::set_compact_on_top(&window, value),
         "openFromAgents" => board::write_registration(value),
+        "closeToTray" => {
+            layout::set_close_to_tray(&window, value);
+            tray::set_enabled(window.app_handle(), value);
+        }
+        "launchAtStartup" => startup::set_enabled(value)?,
         _ => return Err(format!("Unknown desktop setting: {name}")),
     }
     Ok(layout::desktop_state(&window))
 }
 
+/// For the offline page: whether the daemon answers, optionally after trying to start it.
+#[tauri::command]
+async fn daemon_status(app: AppHandle, start: bool) -> DaemonStatus {
+    let last_error = app.state::<DaemonError>();
+    if start {
+        let result = tauri::async_runtime::spawn_blocking(board::ensure_daemon)
+            .await
+            .unwrap_or_else(|err| Err(err.to_string()));
+        *last_error.0.lock().unwrap() = result.err();
+    }
+    let error = last_error.0.lock().unwrap().clone();
+    DaemonStatus {
+        board: format!("{}/", board::base_url()),
+        running: board::is_running(),
+        error,
+    }
+}
+
+/// The bundled page (splash/index.html) shown while the daemon is down, where Tauri serves it.
+fn offline_url() -> Url {
+    let origin = if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" };
+    format!("{origin}/index.html").parse().expect("valid offline page URL")
+}
+
+/// Show the window, from the taskbar, the tray, or nowhere yet.
 fn focus(window: &WebviewWindow) {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+    layout::push_state(window);
 }
 
 fn select_tab(window: &WebviewWindow, tab: &str) {
     let _ = window.eval(format!("location.hash = {tab:?}"));
 }
 
-fn fail(message: &str) -> ! {
-    #[cfg(windows)]
-    unsafe {
-        use windows::core::HSTRING;
-        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-        MessageBoxW(None, &HSTRING::from(message), &HSTRING::from("Agent Board"), MB_OK | MB_ICONERROR);
+fn quit(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN) {
+        layout::remember(&window);
     }
-    #[cfg(not(windows))]
-    eprintln!("{message}");
-    std::process::exit(1);
+    app.exit(0);
 }
 
 fn main() {
@@ -87,12 +139,17 @@ fn main() {
                 }
             }
         }))
-        .invoke_handler(tauri::generate_handler![desktop_state, window_action, set_desktop_setting])
+        .invoke_handler(tauri::generate_handler![
+            desktop_state,
+            window_action,
+            set_desktop_setting,
+            daemon_status
+        ])
         .on_window_event(layout::on_window_event)
         .setup(move |app| {
-            if let Err(message) = board::ensure_daemon() {
-                fail(&message);
-            }
+            let daemon_error = board::ensure_daemon().err();
+            let daemon_up = daemon_error.is_none();
+            app.manage(DaemonError(Mutex::new(daemon_error)));
             let open_from_agents = board::read_registration().is_none_or(|registration| registration.open_from_agents);
             board::write_registration(open_from_agents);
 
@@ -106,15 +163,22 @@ fn main() {
                     .permission("core:window:allow-internal-toggle-maximize")
                     .permission("allow-desktop-state")
                     .permission("allow-window-action")
-                    .permission("allow-set-desktop-setting"),
+                    .permission("allow-set-desktop-setting")
+                    .permission("allow-daemon-status"),
             )?;
-            app.manage(layout::load(app.handle()));
+            let layout = layout::load(app.handle());
+            let close_to_tray = layout.close_to_tray();
+            app.manage(layout);
+            tray::set_enabled(app.handle(), close_to_tray);
+            startup::refresh();
 
-            let mut url: Url = format!("{base}/").parse()?;
+            let board_url: Url = format!("{base}/").parse()?;
+            let board_origin = board_url.origin();
+            let offline_origin = offline_url().origin();
+            let mut url = if daemon_up { board_url } else { offline_url() };
             if let Some(tab) = board::tab_from_args(&args) {
                 url.set_fragment(Some(&tab));
             }
-            let origin = url.origin();
             let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
                 .title("Agent Board")
                 .inner_size(1280.0, 800.0)
@@ -126,7 +190,7 @@ fn main() {
                     NewWindowResponse::Deny
                 })
                 .on_navigation(move |url| {
-                    if url.origin() == origin {
+                    if url.origin() == board_origin || url.origin() == offline_origin {
                         return true;
                     }
                     board::open_external(url.as_str());
@@ -139,7 +203,11 @@ fn main() {
             layout::apply_initial(&window);
             #[cfg(windows)]
             keys::install(&window);
-            focus(&window);
+            // Started with the OS and kept in the tray: stay there until opened.
+            let autostart = args.iter().any(|arg| arg == startup::ARG);
+            if !(autostart && close_to_tray) {
+                focus(&window);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

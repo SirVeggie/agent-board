@@ -1,7 +1,9 @@
 //! Where the board lives: the Node daemon, its data folder, and the settings the MCP reads.
 
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +18,12 @@ pub fn port() -> u16 {
 
 pub fn base_url() -> String {
     format!("http://127.0.0.1:{}", port())
+}
+
+/// Whether something answers on the board port. Quick enough to ask on the UI's behalf.
+pub fn is_running() -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], port()));
+    TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok()
 }
 
 /// The agent-board checkout whose `dist/index.js` runs the daemon. Defaults to the clone this app was built from.

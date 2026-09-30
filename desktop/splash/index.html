@@ -1,5 +1,171 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Agent Board</title></head>
-<body style="margin:0;background:#131315"></body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Board</title>
+<style>
+  /* Shown in place of the board while its daemon is down. Colors follow the board's neutral theme. */
+  :root {
+    color-scheme: dark;
+    --bg: #131315;
+    --panel: #1a1a1d;
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #e8e8ea;
+    --heading: #fff;
+    --muted: #8e8e96;
+    --danger: #ff8a8a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, "Segoe UI", sans-serif;
+    user-select: none;
+  }
+  .strip { display: flex; justify-content: flex-end; height: 36px; flex-shrink: 0; }
+  .strip button {
+    width: 46px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+  }
+  .strip button:hover { background: rgba(255, 255, 255, 0.08); color: var(--heading); }
+  .strip .close:hover { background: #c42b1c; color: #fff; }
+  main {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    padding: 16px 24px 52px;
+    overflow: auto;
+  }
+  .card { max-width: 440px; width: 100%; }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    margin-bottom: 18px;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: var(--heading); }
+  p { margin: 0 0 18px; color: var(--muted); }
+  code { font: 12px ui-monospace, Consolas, monospace; color: var(--text); }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .start {
+    height: 30px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+  }
+  .start:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.2); color: var(--heading); }
+  .start:disabled { opacity: 0.6; }
+  .status { color: var(--muted); font-size: 13px; }
+  pre {
+    margin: 18px 0 0;
+    padding: 10px 12px;
+    max-height: 40vh;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--panel);
+    color: var(--danger);
+    font: 12px/1.5 ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+  }
+  pre[hidden] { display: none; }
+</style>
+</head>
+<body>
+  <div class="strip" data-tauri-drag-region>
+    <button type="button" class="min" title="Minimize" aria-label="Minimize">
+      <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M0 5h10" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button type="button" class="close" title="Close" aria-label="Close">
+      <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+  </div>
+  <main data-tauri-drag-region>
+    <div class="card">
+      <div class="dot"></div>
+      <h1>The board daemon isn't running</h1>
+      <p>The board opens here as soon as the daemon at <code id="address">127.0.0.1</code> is up. An agent starts it with its first board call, or you can start it now.</p>
+      <div class="row">
+        <button type="button" class="start">Start daemon</button>
+        <span class="status" role="status"></span>
+      </div>
+      <pre hidden></pre>
+    </div>
+  </main>
+<script>
+  (() => {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) {
+      return;
+    }
+    const start = document.querySelector(".start");
+    const status = document.querySelector(".status");
+    const detail = document.querySelector("pre");
+    let starting = false;
+
+    document.querySelector(".min").addEventListener("click", () => invoke("window_action", { action: "minimize" }));
+    document.querySelector(".close").addEventListener("click", () => invoke("window_action", { action: "close" }));
+
+    function show(state) {
+      document.getElementById("address").textContent = new URL(state.board).host;
+      if (state.running) {
+        status.textContent = "Opening the board…";
+        location.replace(state.board + location.hash);
+        return true;
+      }
+      detail.hidden = !state.error;
+      detail.textContent = state.error || "";
+      return false;
+    }
+
+    async function check() {
+      if (!starting) {
+        try {
+          if (show(await invoke("daemon_status", { start: false }))) {
+            return;
+          }
+        } catch {
+          /* ask again on the next round */
+        }
+      }
+      setTimeout(check, 1500);
+    }
+
+    start.addEventListener("click", async () => {
+      starting = true;
+      start.disabled = true;
+      status.textContent = "Starting…";
+      let state = null;
+      try {
+        state = await invoke("daemon_status", { start: true });
+      } catch {
+        /* reported below */
+      }
+      starting = false;
+      start.disabled = false;
+      if (!state || !show(state)) {
+        status.textContent = "It did not start.";
+      }
+    });
+
+    check();
+  })();
+</script>
+</body>
 </html>

@@ -76,7 +76,7 @@
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "2.3.0";
+  const BOARD_VERSION = "2.4.0";
   const BUILTIN_OPEN_KEY = "agent-board.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -145,6 +145,7 @@
   let socket = null;
   let lastInteractedAt = 0;
   let lastEditAt = 0;
+  let viewerHidden = false;
   let paletteTimer = 0;
   let paletteReq = 0;
   /** @type {Array<any>} */
@@ -273,6 +274,7 @@
       state.connected = true;
       renderChrome();
       reportViewer();
+      dispatchEvent(new CustomEvent("agent-board:connection", { detail: { connected: true } }));
     });
     ws.addEventListener("message", (event) => {
       applyEvent(JSON.parse(event.data));
@@ -283,6 +285,7 @@
       }
       state.connected = false;
       renderChrome();
+      dispatchEvent(new CustomEvent("agent-board:connection", { detail: { connected: false } }));
       setTimeout(connect, 1000);
     });
   }
@@ -297,9 +300,16 @@
         selectedId: state.activeId,
         lastInteractedAt,
         lastEditAt,
+        hidden: viewerHidden,
       })
     );
   }
+
+  /** The desktop app reports its window hidden in the tray, so agents open it instead of assuming it is seen. */
+  window.agentBoardSetHidden = (hidden) => {
+    viewerHidden = Boolean(hidden);
+    reportViewer();
+  };
 
   function noteEdit() {
     const now = Date.now();

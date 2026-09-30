@@ -31,7 +31,15 @@
     close: '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" stroke-width="1"/></svg>',
   };
 
-  let desktop = { compact: false, maximized: false, compactOnTop: true, openFromAgents: true };
+  let desktop = {
+    compact: false,
+    maximized: false,
+    compactOnTop: true,
+    openFromAgents: true,
+    closeToTray: false,
+    launchAtStartup: false,
+    hidden: false,
+  };
 
   /** The four title bar buttons, in strip order. `label` follows the window state. */
   const BUTTONS = [
@@ -213,10 +221,17 @@
     desktop.openFromAgents,
     (on) => saveSetting("openFromAgents", on)
   );
+  const trayRow = settingRow("desktop-tray", "Closing the window keeps the app in the tray", desktop.closeToTray, (on) =>
+    saveSetting("closeToTray", on)
+  );
+  const startupRow = settingRow("desktop-startup", "Launch at startup", desktop.launchAtStartup, (on) =>
+    saveSetting("launchAtStartup", on)
+  );
   const hint = document.createElement("p");
   hint.className = "settings-hint settings-hint-after";
-  hint.innerHTML = "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
-  section.append(buttonTrack.row, onTopRow.row, openRow.row, hint);
+  hint.innerHTML =
+    "At startup the app waits in the tray while closing keeps it there.<br><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
+  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, hint);
   document.getElementById("import-page")?.closest(".settings-section")?.before(section);
 
   /** One row of connected icon toggles, one per title bar button, in strip order. */
@@ -276,7 +291,12 @@
   }
 
   async function saveSetting(name, value) {
-    setState(await invoke("set_desktop_setting", { name, value }));
+    try {
+      setState(await invoke("set_desktop_setting", { name, value }));
+    } catch (err) {
+      console.error(err);
+      setState(await invoke("desktop_state"));
+    }
   }
 
   function render() {
@@ -297,11 +317,16 @@
     controls.hidden = [minBtn, maxBtn, closeBtn].every((el) => el.hidden);
     onTopRow.toggle.setAttribute("aria-checked", String(desktop.compactOnTop));
     openRow.toggle.setAttribute("aria-checked", String(desktop.openFromAgents));
+    trayRow.toggle.setAttribute("aria-checked", String(desktop.closeToTray));
+    startupRow.toggle.setAttribute("aria-checked", String(desktop.launchAtStartup));
   }
 
   function setState(state) {
     if (!state) {
       return;
+    }
+    if (state.hidden !== desktop.hidden) {
+      window.agentBoardSetHidden?.(state.hidden);
     }
     desktop = state;
     root.classList.toggle("compact", state.compact);
@@ -309,6 +334,19 @@
   }
 
   window.agentBoardDesktop = { setState };
+
+  // Lost the daemon for more than a moment (it restarts for a new build in about that long):
+  // the app swaps in its offline page, which brings the board back once the daemon answers.
+  let offlineTimer = 0;
+  addEventListener("agent-board:connection", (event) => {
+    if (event.detail.connected) {
+      clearTimeout(offlineTimer);
+      offlineTimer = 0;
+    } else if (!offlineTimer) {
+      // Each failed reconnect reports again; time from the first.
+      offlineTimer = setTimeout(() => invoke("window_action", { action: "daemon-offline" }), 4000);
+    }
+  });
   render();
   invoke("desktop_state").then(setState);
 })();

@@ -1,4 +1,5 @@
-//! Window geometry for the normal and compact form factors, remembered separately.
+//! Window geometry for the normal and compact form factors, remembered separately, and the window
+//! settings saved beside it.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -6,7 +7,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow, Window, WindowEvent};
 
-use crate::board;
+use crate::{board, startup};
 
 const NORMAL_SIZE: (f64, f64) = (1280.0, 800.0);
 const COMPACT_SIZE: (f64, f64) = (440.0, 600.0);
@@ -30,6 +31,7 @@ struct Layout {
     compact: Option<Rect>,
     compact_mode: bool,
     compact_on_top: bool,
+    close_to_tray: bool,
 }
 
 impl Default for Layout {
@@ -40,6 +42,7 @@ impl Default for Layout {
             compact: None,
             compact_mode: false,
             compact_on_top: true,
+            close_to_tray: false,
         }
     }
 }
@@ -58,6 +61,10 @@ pub struct DesktopState {
     maximized: bool,
     compact_on_top: bool,
     open_from_agents: bool,
+    close_to_tray: bool,
+    launch_at_startup: bool,
+    /// Hidden in the tray. The page tells the daemon, so agents open the window again.
+    hidden: bool,
 }
 
 pub fn load<R: Runtime>(app: &tauri::AppHandle<R>) -> LayoutState {
@@ -74,6 +81,12 @@ pub fn load<R: Runtime>(app: &tauri::AppHandle<R>) -> LayoutState {
         layout: Mutex::new(layout),
         path,
         last_maximized: Mutex::new(false),
+    }
+}
+
+impl LayoutState {
+    pub fn close_to_tray(&self) -> bool {
+        self.layout.lock().unwrap().close_to_tray
     }
 }
 
@@ -165,6 +178,13 @@ pub fn set_compact_on_top<R: Runtime>(window: &WebviewWindow<R>, on_top: bool) {
     save(&state, &layout);
 }
 
+pub fn set_close_to_tray<R: Runtime>(window: &WebviewWindow<R>, on: bool) {
+    let state = state(window);
+    let mut layout = state.layout.lock().unwrap();
+    layout.close_to_tray = on;
+    save(&state, &layout);
+}
+
 pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
     let state = state(window);
     let layout = state.layout.lock().unwrap();
@@ -173,6 +193,9 @@ pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
         maximized: window.is_maximized().unwrap_or(false),
         compact_on_top: layout.compact_on_top,
         open_from_agents: board::read_registration().is_none_or(|registration| registration.open_from_agents),
+        close_to_tray: layout.close_to_tray,
+        launch_at_startup: startup::is_enabled(),
+        hidden: !window.is_visible().unwrap_or(true),
     }
 }
 
@@ -201,26 +224,39 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
                 push_state(&webview);
             }
         }
-        WindowEvent::CloseRequested { .. } => {
-            let state = state(&webview);
-            let mut layout = state.layout.lock().unwrap();
-            let maximized = webview.is_maximized().unwrap_or(false);
-            if !layout.compact_mode {
-                layout.normal_maximized = maximized;
+        WindowEvent::CloseRequested { api, .. } => {
+            remember(&webview);
+            if state(&webview).close_to_tray() {
+                api.prevent_close();
+                let _ = webview.hide();
+                push_state(&webview);
             }
-            if !maximized {
-                if let Some(rect) = current_rect(&webview) {
-                    if layout.compact_mode {
-                        layout.compact = Some(rect);
-                    } else {
-                        layout.normal = Some(rect);
-                    }
-                }
-            }
-            save(&state, &layout);
         }
         _ => {}
     }
+}
+
+/// Save where the window is, for the next launch. A hidden window was saved when it was hidden.
+pub fn remember<R: Runtime>(window: &WebviewWindow<R>) {
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let state = state(window);
+    let mut layout = state.layout.lock().unwrap();
+    let maximized = window.is_maximized().unwrap_or(false);
+    if !layout.compact_mode {
+        layout.normal_maximized = maximized;
+    }
+    if !maximized {
+        if let Some(rect) = current_rect(window) {
+            if layout.compact_mode {
+                layout.compact = Some(rect);
+            } else {
+                layout.normal = Some(rect);
+            }
+        }
+    }
+    save(&state, &layout);
 }
 
 fn current_rect<R: Runtime>(window: &WebviewWindow<R>) -> Option<Rect> {

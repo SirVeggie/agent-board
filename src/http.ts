@@ -866,7 +866,13 @@ export async function startHttp(): Promise<http.Server> {
     viewers.add(socket);
     send(socket, { type: "snapshot", version: VERSION, ...store.snapshot() });
     socket.on("message", (raw) => {
-      let msg: { type?: string; selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown };
+      let msg: {
+        type?: string;
+        selectedId?: string | null;
+        lastInteractedAt?: unknown;
+        lastEditAt?: unknown;
+        hidden?: unknown;
+      };
       try {
         msg = JSON.parse(String(raw)) as typeof msg;
       } catch {
@@ -879,6 +885,7 @@ export async function startHttp(): Promise<http.Server> {
         selectedId: msg.selectedId,
         lastInteractedAt: msg.lastInteractedAt,
         lastEditAt: msg.lastEditAt,
+        hidden: msg.hidden,
       });
     });
     socket.on("close", () => {

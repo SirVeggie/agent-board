@@ -8,6 +8,8 @@ export type Viewer = {
   lastInteractedAt: number;
   lastEditAt: number;
   connectedAt: number;
+  /** A desktop window hidden in the tray: connected, but nobody is looking at it. */
+  hidden: boolean;
 };
 
 export class ViewerHub {
@@ -20,6 +22,7 @@ export class ViewerHub {
       lastInteractedAt: 0,
       lastEditAt: 0,
       connectedAt: Date.now(),
+      hidden: false,
     };
     this.viewers.set(socket, viewer);
     return viewer;
@@ -31,7 +34,7 @@ export class ViewerHub {
 
   update(
     socket: WebSocket,
-    patch: { selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown }
+    patch: { selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown; hidden?: unknown }
   ): void {
     const viewer = this.viewers.get(socket);
     if (!viewer) {
@@ -46,10 +49,18 @@ export class ViewerHub {
     if (typeof patch.lastEditAt === "number" && Number.isFinite(patch.lastEditAt)) {
       viewer.lastEditAt = Math.max(viewer.lastEditAt, patch.lastEditAt);
     }
+    if (typeof patch.hidden === "boolean") {
+      viewer.hidden = patch.hidden;
+    }
   }
 
+  /** Viewers someone can see. With none, agents open the board. */
   count(): number {
-    return this.viewers.size;
+    return this.visible().length;
+  }
+
+  private visible(): Viewer[] {
+    return [...this.viewers.values()].filter((viewer) => !viewer.hidden);
   }
 
   /**
@@ -58,7 +69,7 @@ export class ViewerHub {
    * `null` = blocked (recent edit) or no viewers.
    */
   focusTarget(tabId: string): Viewer | "already-visible" | null {
-    const list = [...this.viewers.values()];
+    const list = this.visible();
     if (list.length === 0) {
       return null;
     }

@@ -54,6 +54,9 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 - Desktop-only tab keys: Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, Ctrl+W closes the current tab (it stays in the Library).
 - Ctrl+Shift+M, or the button beside the window controls, switches between the normal window and a compact one. Each remembers its own size and place; the compact one stays on top unless turned off in Settings.
 - Links that open a new window go to the default browser.
+- Settings → Desktop → "Closing the window keeps the app in the tray" hides the window on close instead of quitting. Left-click the tray icon to bring it back; right-click for Open and Quit. With the setting off there is no tray icon. While hidden, agents open the window again as if it were closed.
+- Settings → Desktop → "Launch at startup" adds a sign-in entry (`HKCU\...\Run`). At sign-in the app starts hidden in the tray when closing to the tray is on, otherwise as a normal window. Starting it yourself always shows the window, and starting it while it runs brings the running one forward.
+- If the daemon cannot be started, or stops while the app is open, the window shows a "daemon isn't running" page with a Start button and the last error. It returns to the board as soon as the daemon answers.
 - On launch the app writes `desktop.json` to the data folder. While Settings → Desktop → "Agents open the board in this app" is on, agents open the app instead of a browser tab when no board window is open.
 
 ## Agent tools
