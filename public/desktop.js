@@ -229,8 +229,7 @@
   );
   const hint = document.createElement("p");
   hint.className = "settings-hint settings-hint-after";
-  hint.innerHTML =
-    "At startup the app waits in the tray while Close to tray is on.<br><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
+  hint.innerHTML = "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
   section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, hint);
   document.getElementById("import-page")?.closest(".settings-section")?.before(section);
 
