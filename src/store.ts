@@ -442,7 +442,7 @@ export class BoardStore extends EventEmitter {
         existing.stateVersion = parsed.stateVersion;
       }
       const builtin = existing.source ? this.locateBuiltin(existing.source.builtin) : undefined;
-      if (input.syncedWithBuiltin && builtin) {
+      if (builtin && (input.syncedWithBuiltin || templateFingerprint(existing) === templateFingerprint(builtin))) {
         existing.source = { builtin: builtin.key, fingerprint: templateFingerprint(builtin) };
       }
       existing.updatedAt = now;
@@ -2364,6 +2364,12 @@ export class BoardStore extends EventEmitter {
       }
       const latest = templateFingerprint(builtin);
       if (copy.source.fingerprint === latest) {
+        continue;
+      }
+      // Already matches the built-in (e.g. the same change was made to both): just record that.
+      if (templateFingerprint(copy) === latest) {
+        copy.source = { builtin: builtin.key, fingerprint: latest };
+        this.markTemplateDirty(copy.id);
         continue;
       }
       if (templateFingerprint(copy) !== copy.source.fingerprint || copy.stateVersion !== builtin.stateVersion) {

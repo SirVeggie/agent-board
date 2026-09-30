@@ -8,7 +8,7 @@ import { parseImport, serializeExport } from "./boardExport.js";
 import { RevisionConflictError } from "./htmlEdit.js";
 import { templateFingerprint } from "./templates.js";
 import { BoardStore } from "./store.js";
-import { toMeta } from "./types.js";
+import { toMeta, type Template } from "./types.js";
 
 let dir = "";
 let prevHome: string | undefined;
@@ -1178,13 +1178,13 @@ test("a built-in's local copy keeps its link after edits and a reload", () => {
 });
 
 /** A copy of markdown-note that looks as if it was made from an older built-in, then reloaded. */
-function staleCopy(edit: (copy: ReturnType<BoardStore["copyBuiltinTemplate"]>["template"]) => void) {
+function staleCopy(edit: (copy: Template, builtin: Template) => void) {
   const store = loaded();
   const { template } = store.copyBuiltinTemplate("markdown-note");
   store.upsertTemplate({ id: template.id, title: template.title, html: "<p>old</p>", fields: template.fields });
   const copy = store.getTemplate(template.id)!;
   copy.source = { builtin: "markdown-note", fingerprint: templateFingerprint(copy) };
-  edit(copy);
+  edit(copy, store.findTemplate("builtin:markdown-note")!.template);
   const { tab } = store.openFromTemplate(template.id, {});
   store.persist();
   store.closeDb();
@@ -1224,6 +1224,28 @@ test("a built-in copy is not updated when the built-in's stateVersion changed", 
   });
   assert.equal(again.getTemplate(id)!.html, "<p>old</p>");
   assert.equal(again.listTemplates()[0].builtinUpdate, true);
+  again.closeDb();
+});
+
+test("a built-in copy that already matches its changed built-in is not flagged", () => {
+  // The same change was made to the copy before it landed in the built-in.
+  const { id, again } = staleCopy((copy, builtin) => {
+    Object.assign(copy, structuredClone({ ...builtin, id: copy.id, key: copy.key, source: copy.source }));
+  });
+  const builtin = again.findTemplate("builtin:markdown-note")!.template;
+  assert.equal(again.getTemplate(id)!.source?.fingerprint, templateFingerprint(builtin));
+  assert.equal(again.listTemplates()[0].builtinUpdate, undefined);
+  again.closeDb();
+});
+
+test("editing a built-in copy to match its built-in clears the update flag", () => {
+  const { id, again } = staleCopy((copy) => {
+    copy.html = "<p>mine</p>";
+  });
+  assert.equal(again.listTemplates()[0].builtinUpdate, true);
+  const builtin = again.findTemplate("builtin:markdown-note")!.template;
+  again.upsertTemplate({ ...builtin, id });
+  assert.equal(again.listTemplates()[0].builtinUpdate, undefined);
   again.closeDb();
 });
 
