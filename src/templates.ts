@@ -22,6 +22,8 @@ export type TemplateUpsertInput = {
   stateVersion?: number;
   /** Omit to keep an existing template's guide; an empty string removes it. */
   guide?: string;
+  /** On a built-in's local copy: the built-in's latest changes are merged, so clear builtinUpdate. */
+  syncedWithBuiltin?: boolean;
 };
 
 /** A guide is read by agents, so keep it to a page or two. */

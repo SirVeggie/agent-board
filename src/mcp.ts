@@ -850,8 +850,14 @@ export async function startMcp(): Promise<void> {
         .describe(
           "Markdown for agents that later work with pages from this template: the state shape, signals the page fires, and conventions (how to add an item, which keys to leave alone). Tool results hand it to an agent the first time it touches such a page. Omit to keep the current guide; an empty string removes it."
         ),
+      syncedWithBuiltin: z
+        .boolean()
+        .optional()
+        .describe(
+          "For a built-in's local copy with builtinUpdate: pass true once this upsert brings in the built-in's latest changes (board_template_get the built-in), to clear the flag."
+        ),
     },
-    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide }) => {
+    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, syncedWithBuiltin }) => {
       const { status, data } = await api("POST", "/api/templates", {
         key,
         title,
@@ -862,6 +868,7 @@ export async function startMcp(): Promise<void> {
         initialState,
         stateVersion,
         guide,
+        syncedWithBuiltin,
       });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);

@@ -13,7 +13,7 @@ import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
-import { isPlainObject, toMeta, toTemplateMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isPlainObject, toMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
@@ -651,7 +651,7 @@ export async function startHttp(): Promise<http.Server> {
     const { template, builtIn } = found;
     const meta = builtIn
       ? store.listBuiltinTemplates().find((item) => item.id === template.id)
-      : toTemplateMeta(template, instanceCount(template, viewerOf(req)));
+      : store.templateMeta(template, instanceCount(template, viewerOf(req)));
     const guide = store.templateGuide(template.id);
     res.json({
       template: {
@@ -666,7 +666,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/templates/:id/copy", (req, res) => {
     try {
       const { template, created } = store.copyBuiltinTemplate(req.params.id);
-      res.status(created ? 201 : 200).json({ created, template: toTemplateMeta(template, instanceCount(template, viewerOf(req))) });
+      res.status(created ? 201 : 200).json({ created, template: store.templateMeta(template, instanceCount(template, viewerOf(req))) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
@@ -685,11 +685,12 @@ export async function startHttp(): Promise<http.Server> {
         initialState: isPlainObject(req.body?.initialState) ? req.body.initialState : undefined,
         stateVersion: typeof req.body?.stateVersion === "number" ? req.body.stateVersion : undefined,
         guide: typeof req.body?.guide === "string" ? req.body.guide : undefined,
+        syncedWithBuiltin: req.body?.syncedWithBuiltin === true,
       });
       res.status(created ? 201 : 200).json({
         created,
         template: {
-          ...toTemplateMeta(template, instanceCount(template, viewerOf(req))),
+          ...store.templateMeta(template, instanceCount(template, viewerOf(req))),
           html: template.html,
           ...(template.initialState ? { initialState: template.initialState } : {}),
         },

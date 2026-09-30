@@ -76,10 +76,12 @@ export type TemplateMeta = Omit<Template, "html" | "initialState" | "source" | "
   instanceCount: number;
   /** Key of the built-in this template was copied from. */
   builtinSource?: string;
+  /** The built-in changed since this copy was made, and the copy could not be updated automatically. */
+  builtinUpdate?: boolean;
 };
 
 /** A read-only template shipped with the app. Opening one opens its local copy, creating it first if needed. */
-export type BuiltinTemplateMeta = Omit<TemplateMeta, "instanceCount" | "builtinSource"> & {
+export type BuiltinTemplateMeta = Omit<TemplateMeta, "instanceCount" | "builtinSource" | "builtinUpdate"> & {
   builtIn: true;
   /** Id of the local copy, when there is one. */
   localId?: string;
@@ -301,7 +303,7 @@ export function toMeta(tab: Tab): TabMeta {
   };
 }
 
-export function toTemplateMeta(template: Template, instanceCount = 0): TemplateMeta {
+export function toTemplateMeta(template: Template, instanceCount = 0, builtinUpdate = false): TemplateMeta {
   return {
     id: template.id,
     key: template.key,
@@ -315,6 +317,7 @@ export function toTemplateMeta(template: Template, instanceCount = 0): TemplateM
     htmlBytes: Buffer.byteLength(template.html, "utf8"),
     instanceCount,
     ...(template.source ? { builtinSource: template.source.builtin } : {}),
+    ...(builtinUpdate ? { builtinUpdate: true } : {}),
     ...(template.guide ? { hasGuide: true } : {}),
   };
 }

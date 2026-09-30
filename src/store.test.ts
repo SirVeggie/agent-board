@@ -1198,6 +1198,7 @@ test("an unedited built-in copy follows the built-in and re-renders its pages", 
   assert.equal(copy.html, builtin.html);
   assert.equal(copy.source?.fingerprint, templateFingerprint(builtin));
   assert.doesNotMatch(again.get(tabId)!.html, /<p>old<\/p>/);
+  assert.equal(again.listTemplates()[0].builtinUpdate, undefined);
   again.closeDb();
 });
 
@@ -1206,6 +1207,13 @@ test("an edited built-in copy is not updated", () => {
     copy.html = "<p>mine</p>";
   });
   assert.equal(again.getTemplate(id)!.html, "<p>mine</p>");
+  assert.equal(again.listTemplates()[0].builtinUpdate, true);
+  // An ordinary edit keeps the flag; one that says it merged the built-in clears it.
+  const copy = again.getTemplate(id)!;
+  again.upsertTemplate({ id, title: copy.title, html: "<p>mine 2</p>", fields: copy.fields });
+  assert.equal(again.listTemplates()[0].builtinUpdate, true);
+  again.upsertTemplate({ id, title: copy.title, html: "<p>merged</p>", fields: copy.fields, syncedWithBuiltin: true });
+  assert.equal(again.listTemplates()[0].builtinUpdate, undefined);
   again.closeDb();
 });
 
@@ -1215,6 +1223,7 @@ test("a built-in copy is not updated when the built-in's stateVersion changed", 
     copy.source = { builtin: "markdown-note", fingerprint: templateFingerprint(copy) };
   });
   assert.equal(again.getTemplate(id)!.html, "<p>old</p>");
+  assert.equal(again.listTemplates()[0].builtinUpdate, true);
   again.closeDb();
 });
 

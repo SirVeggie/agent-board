@@ -313,7 +313,7 @@ export class BoardStore extends EventEmitter {
   listTemplates(viewer: Viewer = "user"): TemplateMeta[] {
     return [...this.templates.values()]
       .sort((a, b) => a.title.localeCompare(b.title) || a.createdAt - b.createdAt)
-      .map((template) => toTemplateMeta(template, this.instanceCount(template.id, viewer)));
+      .map((template) => this.templateMeta(template, this.instanceCount(template.id, viewer)));
   }
 
   setAgentHidden(idOrKey: string, hidden: boolean): Tab {
@@ -330,6 +330,12 @@ export class BoardStore extends EventEmitter {
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     return tab;
+  }
+
+  /** Template metadata, flagging a built-in's copy that fell behind its built-in. */
+  templateMeta(template: Template, instanceCount = 0): TemplateMeta {
+    const builtin = template.source ? this.locateBuiltin(template.source.builtin) : undefined;
+    return toTemplateMeta(template, instanceCount, Boolean(builtin && template.source!.fingerprint !== templateFingerprint(builtin)));
   }
 
   listBuiltinTemplates(): BuiltinTemplateMeta[] {
@@ -401,7 +407,7 @@ export class BoardStore extends EventEmitter {
     this.templates.set(id, template);
     this.markTemplateDirty(id);
     this.persistSoon();
-    this.emit("template_upserted", toTemplateMeta(template, 0));
+    this.emit("template_upserted", this.templateMeta(template, 0));
     this.emit("builtin_templates", this.listBuiltinTemplates());
     return { template, created: true };
   }
@@ -435,11 +441,15 @@ export class BoardStore extends EventEmitter {
       if (parsed.stateVersion !== undefined) {
         existing.stateVersion = parsed.stateVersion;
       }
+      const builtin = existing.source ? this.locateBuiltin(existing.source.builtin) : undefined;
+      if (input.syncedWithBuiltin && builtin) {
+        existing.source = { builtin: builtin.key, fingerprint: templateFingerprint(builtin) };
+      }
       existing.updatedAt = now;
       this.markTemplateDirty(existing.id);
       this.refreshTemplateInstances(existing, parsed.stateVersion !== undefined && parsed.stateVersion !== prevVersion);
       this.persistSoon();
-      this.emit("template_upserted", toTemplateMeta(existing, this.instanceCount(existing.id)));
+      this.emit("template_upserted", this.templateMeta(existing, this.instanceCount(existing.id)));
       return { template: existing, created: false };
     }
     const id = newTemplateId();
@@ -460,7 +470,7 @@ export class BoardStore extends EventEmitter {
     this.templates.set(id, template);
     this.markTemplateDirty(id);
     this.persistSoon();
-    this.emit("template_upserted", toTemplateMeta(template, 0));
+    this.emit("template_upserted", this.templateMeta(template, 0));
     return { template, created: true };
   }
 
@@ -680,7 +690,7 @@ export class BoardStore extends EventEmitter {
       this.emit("builtin_templates", this.listBuiltinTemplates());
     }
     for (const template of new Set(plan.byFileId.values())) {
-      this.emit("template_upserted", toTemplateMeta(template, this.instanceCount(template.id)));
+      this.emit("template_upserted", this.templateMeta(template, this.instanceCount(template.id)));
     }
     return {
       tabs: drafts,
@@ -2369,6 +2379,7 @@ export class BoardStore extends EventEmitter {
       copy.updatedAt = Date.now();
       this.markTemplateDirty(copy.id);
       this.refreshTemplateInstances(copy, false);
+      this.emit("template_upserted", this.templateMeta(copy, this.instanceCount(copy.id)));
     }
   }
 
