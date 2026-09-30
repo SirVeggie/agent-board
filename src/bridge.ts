@@ -603,8 +603,10 @@ export const BOARD_BRIDGE_JS = `
         }
         var page = pages[raw];
         el.classList.toggle("board-link-missing", !page);
-        if (page && !el.textContent.trim() && !el.children.length) {
-          el.textContent = page.title;
+        // An empty link shows its page's title, kept current on each recheck; the target itself while the page is missing.
+        if (el.hasAttribute("data-board-autotitle") || (!el.textContent.trim() && !el.children.length)) {
+          el.setAttribute("data-board-autotitle", "");
+          el.textContent = page ? page.title : raw;
         }
         if (page && !el.getAttribute("title")) {
           el.setAttribute("title", page.title);

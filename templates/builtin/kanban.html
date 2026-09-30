@@ -556,6 +556,8 @@
   .md-preview ul, .md-preview ol { margin: .4em 0; padding-left: 1.3em; }
   .md-preview blockquote { margin: .5em 0; padding: .1em 0 .1em 12px; border-left: 3px solid var(--accent); color: var(--muted); }
   .md-preview a { color: var(--accent); }
+  .page-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; cursor: pointer; }
+  .page-link:hover { border-bottom-style: solid; }
   .md-preview code { font: 12.5px/1.45 ui-monospace, Consolas, monospace; background: #0f1115; padding: .1em .35em; border-radius: 5px; }
   .md-preview pre { background: #0f1115; padding: 10px 12px; border-radius: 8px; overflow: auto; }
   .md-preview pre code { padding: 0; background: none; }
@@ -1401,7 +1403,9 @@
     }
     var titleEl = el("div", "card-title");
     titleEl.appendChild(el("span", "num", "#" + c.num));
-    titleEl.appendChild(document.createTextNode(c.title));
+    var titleText = el("span", "");
+    titleText.innerHTML = linkText(c.title);
+    titleEl.appendChild(titleText);
     li.appendChild(titleEl);
 
     var badges = el("div", "badges");
@@ -1934,7 +1938,7 @@
     var col = colOf(c);
     mNum.textContent = "#" + c.num + (c.archived ? " · archived" : "") + (col ? " · in " + col.title : "");
     if (!editingTitle) {
-      mTitle.textContent = c.title;
+      mTitle.innerHTML = linkText(c.title);
       mTitle.classList.remove("hidden");
       mTitleInput.classList.add("hidden");
     }
@@ -2031,7 +2035,9 @@
     c.comments.forEach(function (cm) {
       var box = el("div", "comment" + (cm.by === "agent" ? " agent" : ""));
       box.appendChild(el("div", "who", (cm.by === "agent" ? "🤖 Agent" : "You") + " · " + ago(cm.at)));
-      box.appendChild(el("div", "body", cm.text));
+      var body = el("div", "body");
+      body.innerHTML = linkText(cm.text);
+      box.appendChild(body);
       commentsEl.appendChild(box);
     });
     if (!c.comments.length) commentsEl.appendChild(el("div", "who", "No comments yet."));
@@ -2065,7 +2071,7 @@
       mLinks.appendChild(row);
     });
     var candidates = liveCards().filter(function (x) { return x.id !== c.id && c.blockedBy.indexOf(x.id) === -1; });
-    fillSelect(mLinkAdd, [["", "+ Add a blocker…"]].concat(candidates.map(function (x) { return [x.id, "#" + x.num + " " + x.title.slice(0, 60)]; })), "");
+    fillSelect(mLinkAdd, [["", "+ Add a blocker…"]].concat(candidates.map(function (x) { return [x.id, "#" + x.num + " " + plainLinks(x.title).slice(0, 60)]; })), "");
 
     mReview.classList.toggle("hidden", !(AGENT_MODE && col && col.role === "review" && !c.archived));
     $("mArchive").textContent = c.archived ? "Restore" : "Archive";
@@ -2104,7 +2110,8 @@
     }
   }
 
-  mTitle.addEventListener("click", function () {
+  mTitle.addEventListener("click", function (e) {
+    if (e.target.closest && e.target.closest("a")) return;
     var c = card(openId);
     if (!c) return;
     editingTitle = true;
@@ -2513,7 +2520,7 @@
     var id = c.id;
     askConfirm({
       title: "Delete #" + c.num + "?",
-      text: "\u201c" + c.title + "\u201d will be gone for good, with its comments and images. Archive keeps it instead."
+      text: "\u201c" + plainLinks(c.title) + "\u201d will be gone for good, with its comments and images. Archive keeps it instead."
     }).then(function (ok) {
       if (!ok) return;
       if (openId === id) closeCard();
@@ -2694,6 +2701,49 @@
     }
   }, true);
 
+  // ---------- page links ----------
+  // [[key or id]] shows the page's title, [[target|label]] your own text, [[peek:target]] / [[split:target]] pick a
+  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A bare page id (t_1a2b3c4d), or one
+  // pasted from Copy ID ("Agent Board tab t_…"), links too. The board resolves titles and strikes out missing pages.
+  var LINK_MODES = { board: "", tab: "tab", peek: "peek", split: "split" };
+  var PAGE_LINK_RES = [
+    /\[\[\s*(?:(board|tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
+    /\[([^\]]+)\]\((board|tab|peek|split):([^)\s]+)\)/g,
+    /(^|[^\w\/#-])(?:Agent Board tab )?(t_[0-9a-f]{8})(?![\w-])/g
+  ];
+  function pageLinkHtml(target, label, mode) {
+    return '<a href="#" class="page-link" data-board-open="' + escapeHtml(target) + '"' +
+      (mode ? ' data-board-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
+  }
+  /** Replace page links in raw text with held anchors; `hold` returns a placeholder the caller swaps back. */
+  function holdPageLinks(s, hold) {
+    s = s.replace(PAGE_LINK_RES[0], function (_, mode, target, label) {
+      return hold(pageLinkHtml(target, String(label || "").trim(), LINK_MODES[mode || "board"]));
+    });
+    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target) {
+      return hold(pageLinkHtml(target, label, LINK_MODES[mode]));
+    });
+    return s.replace(PAGE_LINK_RES[2], function (_, pre, id) {
+      return pre + hold(pageLinkHtml(id, "", ""));
+    });
+  }
+  /** Plain text (a title, a comment) as HTML with only its page links live. */
+  function linkText(raw) {
+    var held = [];
+    var s = holdPageLinks(String(raw == null ? "" : raw), function (html) {
+      held.push(html);
+      return "\u0000" + (held.length - 1) + "\u0000";
+    });
+    return escapeHtml(s).replace(/\u0000(\d+)\u0000/g, function (_, i) { return held[Number(i)]; });
+  }
+  /** Page links reduced to their label or target, for places that only take text. */
+  function plainLinks(raw) {
+    return String(raw == null ? "" : raw)
+      .replace(PAGE_LINK_RES[0], function (_, mode, target, label) { return String(label || "").trim() || target; })
+      .replace(PAGE_LINK_RES[1], "$1")
+      .replace(PAGE_LINK_RES[2], "$1$2");
+  }
+
   // ---------- markdown ----------
   function resolveImg(url, images) {
     url = str(url).trim();
@@ -2710,6 +2760,7 @@
     var held = [];
     function hold(html) { held.push(html); return "\u0000" + (held.length - 1) + "\u0000"; }
     var s = raw.replace(/`([^`]+)`/g, function (_, code) { return hold("<code>" + escapeHtml(code) + "</code>"); });
+    s = holdPageLinks(s, hold);
     s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
       var src = resolveImg(url, images);
       return src ? hold('<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '">') : "";
@@ -2855,7 +2906,9 @@
     }
     items.forEach(function (c) {
       var row = el("div", "arch-row");
-      row.appendChild(el("div", "t", "#" + c.num + " " + c.title));
+      var archTitle = el("div", "t");
+      archTitle.innerHTML = "#" + c.num + " " + linkText(c.title);
+      row.appendChild(archTitle);
       var col = column(c.col);
       row.appendChild(el("div", "sub", (col ? col.title + " · " : "") + "archived " + ago(c.archivedAt)));
       var btns = el("div", "row");
@@ -2872,7 +2925,7 @@
       del.addEventListener("click", function () {
         askConfirm({
           title: "Delete #" + c.num + "?",
-          text: "\u201c" + c.title + "\u201d will be gone for good, with its comments and images."
+          text: "\u201c" + plainLinks(c.title) + "\u201d will be gone for good, with its comments and images."
         }).then(function (ok) {
           if (ok) deleteCard(c.id);
         });

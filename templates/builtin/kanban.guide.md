@@ -21,6 +21,7 @@ view: { q, label, priority, assignee, due } // the user's filter; leave it alone
 - `num` is the card's short number, shown as `#12`; people will refer to cards by it. For a new card use `nextNum` and increase `nextNum` by one.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
 - `description` is markdown. `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.
+- Link other board pages in a card's `title`, `description`, or comments: `[[page-key]]` or `[[t_1a2b3c4d]]` shows that page's title, `[[target|text]]` your own text, and `[[peek:target]]` / `[[split:target]]` open it as a peek or beside the board (`[text](peek:target)` works in markdown too). A bare page id links as well. Use keys or ids you created or found with `board_list` / `board_library`; a missing page shows struck through.
 - `comments[].by` is `"user"` or `"agent"`. Always add comments with `by: "agent"`.
 - `status` is yours: `{ kind: "working" | "blocked" | "info", text }`. It shows on the card; remove it when you finish.
 - Leave out fields you don't need; the page fills in ids, `num`, empty arrays and timestamps. Keep `archived` cards; they are the user's archive.

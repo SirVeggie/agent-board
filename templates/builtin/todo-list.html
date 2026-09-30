@@ -422,6 +422,8 @@
     margin: 12px 0;
   }
   .md-preview a { color: var(--accent); }
+  .page-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; cursor: pointer; }
+  .page-link:hover { border-bottom-style: solid; }
   .md-preview code {
     font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: #0f1115;
@@ -734,9 +736,24 @@
     var s = String(desc || "").replace(/\r\n/g, "\n");
     s = s.replace(/```[\s\S]*?```/g, " ");
     s = s.replace(/!\[[^\]]*\]\([^)]+\)/g, " ");
+    // Page links survive as tokens (linkText renders them); markdown characters inside them are not stripped.
+    var links = [];
+    s = holdPageLinks(s, function (html) {
+      links.push(html);
+      return "\u0001" + (links.length - 1) + "\u0001";
+    });
     s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
     s = (s.split("\n").filter(function (line) { return line.trim(); })[0] || "");
-    return s.replace(/[`*_#>~]/g, "").replace(/^\s*[-*]\s+/, "").replace(/\s+/g, " ").trim();
+    s = s.replace(/[`*_#>~]/g, "").replace(/^\s*[-*]\s+/, "").replace(/\s+/g, " ").trim();
+    return s.replace(/\u0001(\d+)\u0001/g, function (_, i) {
+      var a = document.createElement("div");
+      a.innerHTML = links[Number(i)];
+      var link = a.firstChild;
+      var target = link.getAttribute("data-board-open");
+      var mode = link.getAttribute("data-board-mode");
+      var label = link.textContent;
+      return "[[" + (mode ? mode + ":" : "") + target + (label ? "|" + label : "") + "]]";
+    });
   }
 
   function render() {
@@ -784,13 +801,13 @@
     label.className = "label";
     var title = document.createElement("div");
     title.className = "label-text";
-    title.textContent = item.text;
+    title.innerHTML = linkText(item.text);
     label.appendChild(title);
     var snip = snipText(item.description);
     if (snip) {
       var snipEl = document.createElement("div");
       snipEl.className = "snip";
-      snipEl.textContent = snip;
+      snipEl.innerHTML = linkText(snip);
       label.appendChild(snipEl);
     }
     if (item.images.length) {
@@ -818,7 +835,7 @@
     li.appendChild(actions);
     li.onclick = function (event) {
       if (didDrag) return;
-      if (event.target.closest && event.target.closest(".check, .actions, button, input")) return;
+      if (event.target.closest && event.target.closest(".check, .actions, button, input, a")) return;
       openModal(item.id);
     };
     li.addEventListener("pointerdown", function (event) {
@@ -876,7 +893,7 @@
 
   function onItemPointerDown(event, el) {
     if (event.button !== 0 || drag) return;
-    if (event.target.closest && event.target.closest(".check, .actions, button, input")) return;
+    if (event.target.closest && event.target.closest(".check, .actions, button, input, a")) return;
     drag = {
       id: el.getAttribute("data-id"),
       pointerId: event.pointerId,
@@ -1214,7 +1231,7 @@
     }
     overlay.classList.remove("hidden");
     modalDone.checked = item.done;
-    if (!editingTitle) modalTitle.textContent = item.text || "Untitled";
+    if (!editingTitle) modalTitle.innerHTML = linkText(item.text || "Untitled");
     if (!editingDesc) showPreview(item);
     renderGallery(item);
   }
@@ -1469,6 +1486,49 @@
     return "";
   }
 
+  // ---------- page links ----------
+  // [[key or id]] shows the page's title, [[target|label]] your own text, [[peek:target]] / [[split:target]] pick a
+  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A bare page id (t_1a2b3c4d), or one
+  // pasted from Copy ID ("Agent Board tab t_…"), links too. The board resolves titles and strikes out missing pages.
+  var LINK_MODES = { board: "", tab: "tab", peek: "peek", split: "split" };
+  var PAGE_LINK_RES = [
+    /\[\[\s*(?:(board|tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
+    /\[([^\]]+)\]\((board|tab|peek|split):([^)\s]+)\)/g,
+    /(^|[^\w\/#-])(?:Agent Board tab )?(t_[0-9a-f]{8})(?![\w-])/g
+  ];
+  function pageLinkHtml(target, label, mode) {
+    return '<a href="#" class="page-link" data-board-open="' + escapeHtml(target) + '"' +
+      (mode ? ' data-board-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
+  }
+  /** Replace page links in raw text with held anchors; `hold` returns a placeholder the caller swaps back. */
+  function holdPageLinks(s, hold) {
+    s = s.replace(PAGE_LINK_RES[0], function (_, mode, target, label) {
+      return hold(pageLinkHtml(target, String(label || "").trim(), LINK_MODES[mode || "board"]));
+    });
+    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target) {
+      return hold(pageLinkHtml(target, label, LINK_MODES[mode]));
+    });
+    return s.replace(PAGE_LINK_RES[2], function (_, pre, id) {
+      return pre + hold(pageLinkHtml(id, "", ""));
+    });
+  }
+  /** Plain text (a title, a comment) as HTML with only its page links live. */
+  function linkText(raw) {
+    var held = [];
+    var s = holdPageLinks(String(raw == null ? "" : raw), function (html) {
+      held.push(html);
+      return "\u0000" + (held.length - 1) + "\u0000";
+    });
+    return escapeHtml(s).replace(/\u0000(\d+)\u0000/g, function (_, i) { return held[Number(i)]; });
+  }
+  /** Page links reduced to their label or target, for places that only take text. */
+  function plainLinks(raw) {
+    return String(raw == null ? "" : raw)
+      .replace(PAGE_LINK_RES[0], function (_, mode, target, label) { return String(label || "").trim() || target; })
+      .replace(PAGE_LINK_RES[1], "$1")
+      .replace(PAGE_LINK_RES[2], "$1$2");
+  }
+
   function mdInline(raw, images) {
     var held = [];
     function hold(html) {
@@ -1479,6 +1539,7 @@
     str = str.replace(/`([^`]+)`/g, function (_, c) {
       return hold("<code>" + escapeHtml(c) + "</code>");
     });
+    str = holdPageLinks(str, hold);
     str = str.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
       var src = resolveImg(url, images);
       if (!src) return _;
@@ -1590,7 +1651,10 @@
     colInput.blur();
   };
 
-  modalTitle.onclick = startEditTitle;
+  modalTitle.onclick = function (event) {
+    if (event.target.closest && event.target.closest("a")) return;
+    startEditTitle();
+  };
   mdPreview.onclick = function (event) {
     if (event.target.closest && event.target.closest("a")) return;
     startEditDesc();

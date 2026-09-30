@@ -169,6 +169,7 @@ Rules:
 - A plain `href` to a website opens the browser. `data-board-mode="peek"` or `"split"` shows the site inside the board, but many sites refuse to be framed (GitHub, Google, most logins) and then show an Open in browser card instead. Sites the user is signed in to may appear signed out. Use peek or split for docs and references, not for apps.
 - Do not use `target="_blank"` or scripts for navigation; the link attributes cover it. `board.open(target, { mode, anchor })` is the script form for a click handler (it resolves to `{ ok, mode, id }` or `{ ok: false, error: "not_found" | "in_trash" }`). It refuses calls outside a click or key press, so a page can never switch the user's view on load.
 - `board.resolve([keys])` returns `{ key: { id, title, open } | null }`, for a page that builds its link list from state.
+- The built-in Todo list and Kanban board link pages in item titles, descriptions, and comments with `[[key]]` (shows the page's title), `[[target|text]]`, `[[peek:target]]`, or `[[split:target]]`. A bare page id (`t_1a2b3c4d`) links too. Write these in their state, not raw HTML.
 - You cannot open a peek or split yourself: `board_show` / `board_open` focus a tab. Links are for the user to follow.
 
 ## Images
