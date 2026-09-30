@@ -66,6 +66,9 @@ window.createViews = function createViews(host) {
     node.hidden = true;
     mainEl.appendChild(node);
   }
+  const flashEl = el("div", "view-flash");
+  flashEl.addEventListener("animationend", () => flashEl.classList.remove("on"));
+  mainEl.appendChild(flashEl);
 
   scrim.addEventListener("mousedown", (event) => {
     event.preventDefault();
@@ -302,15 +305,21 @@ window.createViews = function createViews(host) {
     }
   }
 
+  /** Outline a frame that is already on screen. The outline sits over the frame, which covers its own box. */
   function flash(frameId) {
     const entry = host.frame(frameId);
     if (!entry) {
       return;
     }
-    entry.el.classList.remove("view-flash");
-    void entry.el.offsetWidth;
-    entry.el.classList.add("view-flash");
-    setTimeout(() => entry.el.classList.remove("view-flash"), 700);
+    const frame = entry.el;
+    flashEl.style.left = frame.offsetLeft + "px";
+    flashEl.style.top = frame.offsetTop + "px";
+    flashEl.style.width = frame.offsetWidth + "px";
+    flashEl.style.height = frame.offsetHeight + "px";
+    flashEl.style.borderRadius = getComputedStyle(frame).borderRadius;
+    flashEl.classList.remove("on");
+    void flashEl.offsetWidth;
+    flashEl.classList.add("on");
   }
 
   function deliverAnchor() {
