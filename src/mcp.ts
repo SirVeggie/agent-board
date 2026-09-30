@@ -126,7 +126,7 @@ export async function startMcp(): Promise<void> {
           "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Pass an existing path from board_folders when the new page clearly belongs there, or a new path only when the user asked for that folder. Otherwise omit (the page lands in the Library root)."
         ),
       state: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .optional()
         .describe(
           "Initial state for an interactive page, readable in the page as board.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
@@ -690,7 +690,7 @@ export async function startMcp(): Promise<void> {
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
-      state: z.record(z.unknown()).describe("Top-level keys to write. Merges unless replace is true."),
+      state: z.record(z.string(), z.unknown()).describe("Top-level keys to write. Merges unless replace is true."),
       expectedRevision: z
         .number()
         .optional()
@@ -856,7 +856,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe('Tab title pattern, e.g. "{{title}}". Defaults to a field named title, or the template name.'),
       initialState: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .optional()
         .describe("Seeded as board.state when a new page is opened from this template."),
       stateVersion: z
@@ -958,7 +958,7 @@ export async function startMcp(): Promise<void> {
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
-      values: z.record(z.unknown()).optional().describe("Form values matching the template fields."),
+      values: z.record(z.string(), z.unknown()).optional().describe("Form values matching the template fields."),
     },
     async ({ id, key, values }) => {
       const which = id || key;

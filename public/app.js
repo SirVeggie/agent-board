@@ -76,7 +76,7 @@
   const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
   const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "2.4.0";
+  const BOARD_VERSION = "2.5.0";
   const BUILTIN_OPEN_KEY = "agent-board.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;

@@ -1,5 +1,6 @@
 import { embedUrlFromHtml } from "./embed.js";
 import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
+import type { AgentEvent } from "./agent/types.js";
 
 export type BoardState = Record<string, unknown>;
 
@@ -227,7 +228,8 @@ export type BoardEvent =
   | { type: "builtin_templates"; templates: BuiltinTemplateMeta[] }
   | { type: "page_asset_warning"; id: string; title: string; usage: PageAssetUsage }
   | { type: "persist_error"; error: string }
-  | { type: "persist_ok" };
+  | { type: "persist_ok" }
+  | AgentEvent;
 
 export type UpsertInput = {
   key?: string;

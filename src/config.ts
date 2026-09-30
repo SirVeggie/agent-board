@@ -1,7 +1,7 @@
 import path from "node:path";
 
 /** Daemon/UI protocol version. Bump with any API or event change; public/app.js BOARD_VERSION must match. */
-export const VERSION = "2.4.0";
+export const VERSION = "2.5.0";
 export const HOST = "127.0.0.1";
 /** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
 export const CONTENT_HOST = "127.0.0.2";

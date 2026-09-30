@@ -18,12 +18,15 @@ import { isPlainObject, toMeta, type BoardEvent, type BuiltinTemplateMeta, type 
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForSignal } from "./wait.js";
+import { AgentHost } from "./agent/host.js";
+import { agentRouter } from "./agent/routes.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 const startedAt = Date.now();
 const sockets = new Set<WebSocket>();
 const viewers = new ViewerHub();
+let agentHost: AgentHost | null = null;
 
 export function viewerCount(): number {
   return viewers.count();
@@ -32,6 +35,11 @@ export function viewerCount(): number {
 export async function startHttp(): Promise<http.Server> {
   store.load();
   const flush = () => {
+    try {
+      agentHost?.dispose();
+    } catch {
+      /* ignore */
+    }
     try {
       store.closeDb();
     } catch {
@@ -51,6 +59,10 @@ export async function startHttp(): Promise<http.Server> {
   app.disable("x-powered-by");
   app.use(contentOriginGate);
   app.use(noStoreShell);
+  agentHost = new AgentHost((event) => broadcast(event));
+  app.use("/api/agent", agentRouter(agentHost));
+  app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js")));
+  app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js")));
   app.use(express.json({ limit: "3mb" }));
   app.use(express.static(publicDir));
 
@@ -850,6 +862,11 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/shutdown", (_req, res) => {
     res.json({ ok: true });
     try {
+      agentHost?.dispose();
+    } catch {
+      /* ignore */
+    }
+    try {
       store.closeDb();
     } catch {
       /* already logged */
@@ -1125,7 +1142,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   next();
 }
 
-const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js"]);
+const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/agent.js", "/agent.css"]);
 
 function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (SHELL_PATHS.has(req.path)) {

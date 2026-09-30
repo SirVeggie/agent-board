@@ -1,0 +1,730 @@
+import path from "node:path";
+import { log } from "../../log.js";
+import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind } from "../types.js";
+import { isPlainRecord } from "../types.js";
+import type { AgentProvider, ProviderSession, RunSink, SessionContext, TurnInput, TurnResult } from "./provider.js";
+
+/**
+ * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
+ * so follow-up messages reuse the same Claude Code process. The SDK is loaded lazily so the
+ * daemon starts without it.
+ */
+
+type Sdk = typeof import("@anthropic-ai/claude-agent-sdk");
+type Query = import("@anthropic-ai/claude-agent-sdk").Query;
+type Options = import("@anthropic-ai/claude-agent-sdk").Options;
+type SDKMessage = import("@anthropic-ai/claude-agent-sdk").SDKMessage;
+type SDKUserMessage = import("@anthropic-ai/claude-agent-sdk").SDKUserMessage;
+type PermissionResult = import("@anthropic-ai/claude-agent-sdk").PermissionResult;
+type PermissionMode = import("@anthropic-ai/claude-agent-sdk").PermissionMode;
+type EffortLevel = import("@anthropic-ai/claude-agent-sdk").EffortLevel;
+
+let sdkPromise: Promise<Sdk> | null = null;
+function loadSdk(): Promise<Sdk> {
+  sdkPromise ??= import("@anthropic-ai/claude-agent-sdk");
+  return sdkPromise;
+}
+
+const IDLE_CLOSE_MS = 15 * 60 * 1000;
+const MODELS_TTL_MS = 6 * 60 * 60 * 1000;
+const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const BOARD_SERVER = "agent-board";
+
+const EFFORT_LABELS: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+
+/** Push-based async iterable feeding user messages into a streaming query. */
+class InputQueue implements AsyncIterable<SDKUserMessage> {
+  private items: SDKUserMessage[] = [];
+  private waiting: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
+  private closed = false;
+
+  push(item: SDKUserMessage): void {
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: item, done: false });
+    } else {
+      this.items.push(item);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: undefined as never, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => {
+        if (this.items.length) {
+          return Promise.resolve({ value: this.items.shift()!, done: false });
+        }
+        if (this.closed) {
+          return Promise.resolve({ value: undefined as never, done: true });
+        }
+        return new Promise((resolve) => {
+          this.waiting = resolve;
+        });
+      },
+    };
+  }
+}
+
+export class ClaudeProvider implements AgentProvider {
+  readonly id = "claude" as const;
+  readonly label = "Claude";
+  private modelCache: { at: number; models: ModelOption[] } | null = null;
+  private modelLoad: Promise<ModelOption[]> | null = null;
+  private sessions = new Set<ClaudeSession>();
+
+  async status(): Promise<ProviderStatus> {
+    try {
+      await loadSdk();
+      return { id: this.id, label: this.label, available: true, detail: "Claude Agent SDK" };
+    } catch (err) {
+      return { id: this.id, label: this.label, available: false, detail: `Claude Agent SDK is not installed: ${(err as Error).message}` };
+    }
+  }
+
+  models(refresh = false): Promise<ModelOption[]> {
+    if (!refresh && this.modelCache && Date.now() - this.modelCache.at < MODELS_TTL_MS) {
+      return Promise.resolve(this.modelCache.models);
+    }
+    if (this.modelLoad) {
+      return this.modelLoad;
+    }
+    this.modelLoad = this.loadModels().finally(() => {
+      this.modelLoad = null;
+    });
+    return this.modelLoad;
+  }
+
+  cachedModels(): ModelOption[] {
+    return this.modelCache?.models ?? [];
+  }
+
+  setModelCache(models: ModelOption[]): void {
+    if (models.length) this.modelCache = { at: Date.now(), models };
+  }
+
+  private async loadModels(): Promise<ModelOption[]> {
+    const sdk = await loadSdk();
+    const input = new InputQueue();
+    const abortController = new AbortController();
+    const q = sdk.query({ prompt: input, options: { settingSources: [], tools: [], persistSession: false, abortController } });
+    try {
+      const infos = await q.supportedModels();
+      const models: ModelOption[] = infos.map((info) => ({
+        id: info.value,
+        label: info.displayName || info.value,
+        provider: "claude",
+        description: info.description,
+        efforts: (info.supportedEffortLevels ?? []).map((level) => ({ id: level, label: EFFORT_LABELS[level] ?? level })),
+        defaultEffort: null,
+        params: [],
+      }));
+      this.setModelCache(models);
+      return models;
+    } catch (err) {
+      log(`Claude model list failed: ${(err as Error).message}`);
+      return this.modelCache?.models ?? [];
+    } finally {
+      input.close();
+      try {
+        q.close();
+      } catch {
+        abortController.abort();
+      }
+    }
+  }
+
+  createSession(thread: Thread, ctx: SessionContext): ProviderSession {
+    const session = new ClaudeSession(thread, ctx, () => this.sessions.delete(session));
+    this.sessions.add(session);
+    return session;
+  }
+
+  dispose(): void {
+    for (const session of this.sessions) {
+      session.dispose();
+    }
+  }
+}
+
+function permissionModeFor(thread: Thread): PermissionMode {
+  if (thread.mode === "plan") return "plan";
+  if (thread.mode === "board") return "dontAsk";
+  switch (thread.approval) {
+    case "ask":
+      return "default";
+    case "edits":
+      return "acceptEdits";
+    case "auto":
+      return "auto";
+    case "full":
+      return "bypassPermissions";
+    default:
+      return "default";
+  }
+}
+
+function toolKind(name: string): ToolKind {
+  if (name.startsWith("mcp__")) return "mcp";
+  switch (name) {
+    case "Read":
+    case "NotebookRead":
+      return "read";
+    case "Write":
+    case "Edit":
+    case "MultiEdit":
+    case "NotebookEdit":
+      return "edit";
+    case "Bash":
+    case "BashOutput":
+    case "KillShell":
+    case "KillBash":
+    case "PowerShell":
+      return "execute";
+    case "Grep":
+    case "Glob":
+    case "LS":
+    case "ToolSearch":
+      return "search";
+    case "WebSearch":
+    case "WebFetch":
+      return "fetch";
+    case "Task":
+    case "Agent":
+      return "task";
+    case "TodoWrite":
+      return "todo";
+    default:
+      return "other";
+  }
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function relPath(file: string, cwd: string | null): string {
+  if (!cwd) return file;
+  const rel = path.relative(cwd, file);
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.replaceAll("\\", "/") : file;
+}
+
+/** A short title and optional detail line for a tool call, from its input. */
+export function describeTool(name: string, input: unknown, cwd: string | null): { title: string; detail?: string; paths?: string[] } {
+  const inp = isPlainRecord(input) ? input : {};
+  const file = str(inp.file_path) ?? str(inp.notebook_path) ?? str(inp.path);
+  if (name.startsWith("mcp__")) {
+    const [, server, ...rest] = name.split("__");
+    const tool = rest.join("__");
+    const key = str(inp.key) ?? str(inp.title) ?? str(inp.query);
+    return { title: `${server === BOARD_SERVER ? "Board" : server}: ${tool}${key ? ` · ${key}` : ""}` };
+  }
+  switch (name) {
+    case "Read":
+      return { title: `Read ${file ? relPath(file, cwd) : "file"}`, paths: file ? [file] : undefined };
+    case "Write":
+      return { title: `Write ${file ? relPath(file, cwd) : "file"}`, paths: file ? [file] : undefined };
+    case "Edit":
+    case "MultiEdit":
+    case "NotebookEdit":
+      return { title: `Edit ${file ? relPath(file, cwd) : "file"}`, paths: file ? [file] : undefined };
+    case "Bash":
+    case "PowerShell":
+      return { title: str(inp.description) ?? "Run command", detail: str(inp.command) };
+    case "Grep":
+      return { title: `Search ${JSON.stringify(str(inp.pattern) ?? "")}${str(inp.path) ? ` in ${relPath(str(inp.path)!, cwd)}` : ""}` };
+    case "Glob":
+      return { title: `Find ${str(inp.pattern) ?? "files"}` };
+    case "LS":
+      return { title: `List ${file ? relPath(file, cwd) : "directory"}` };
+    case "WebSearch":
+      return { title: `Web search: ${str(inp.query) ?? ""}` };
+    case "WebFetch":
+      return { title: `Fetch ${str(inp.url) ?? ""}`, detail: str(inp.prompt) };
+    case "Task":
+    case "Agent":
+      return { title: `Subagent: ${str(inp.description) ?? str(inp.subagent_type) ?? "task"}`, detail: str(inp.prompt) };
+    case "TodoWrite":
+      return { title: "Update todos" };
+    case "Skill":
+      return { title: `Skill: ${str(inp.skill) ?? str(inp.name) ?? ""}` };
+    default:
+      return { title: name };
+  }
+}
+
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (isPlainRecord(block) && block.type === "text" && typeof block.text === "string") return block.text;
+      if (isPlainRecord(block) && block.type === "image") return "[image]";
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+class ClaudeSession implements ProviderSession {
+  private query: Query | null = null;
+  private input: InputQueue | null = null;
+  private abortController: AbortController | null = null;
+  private sink: RunSink | null = null;
+  private finish: ((result: TurnResult) => void) | null = null;
+  private cancelled = false;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private live: { model: string; effort: string | null; permission: PermissionMode; key: string } | null = null;
+  private sessionId: string | null;
+  private commandList: SlashCommand[] = [];
+  private stderrTail = "";
+  private instructions = "";
+  /** Streamed tool_use blocks by content index for the current message. */
+  private streamTools = new Map<number, string>();
+  private streamedText = false;
+
+  constructor(
+    private thread: Thread,
+    private ctx: SessionContext,
+    private onDispose: () => void
+  ) {
+    this.sessionId = thread.nativeId;
+  }
+
+  /** Options that need a new process when they change. */
+  private restartKey(thread: Thread): string {
+    return JSON.stringify([thread.mode, thread.web, thread.cwd, this.instructions]);
+  }
+
+  update(thread: Thread): void {
+    this.thread = thread;
+    const q = this.query;
+    if (!q || !this.live) return;
+    if (this.live.key !== this.restartKey(thread)) {
+      if (!this.sink) this.close();
+      return;
+    }
+    if (thread.model !== this.live.model) {
+      this.live.model = thread.model;
+      void q.setModel(thread.model === "default" ? undefined : thread.model).catch((err) => log(`Claude setModel failed: ${err}`));
+    }
+    if (thread.effort !== this.live.effort) {
+      this.live.effort = thread.effort;
+      void q.applyFlagSettings({ effortLevel: (thread.effort as EffortLevel) ?? null }).catch((err) => log(`Claude effort change failed: ${err}`));
+    }
+    const permission = permissionModeFor(thread);
+    if (permission !== this.live.permission) {
+      this.live.permission = permission;
+      void q.setPermissionMode(permission).catch((err) => log(`Claude permission mode change failed: ${err}`));
+    }
+  }
+
+  async commands(): Promise<SlashCommand[]> {
+    if (this.query && !this.commandList.length) {
+      try {
+        const list = await this.query.supportedCommands();
+        this.commandList = list.map((cmd) => ({ name: cmd.name, description: cmd.description, hint: cmd.argumentHint }));
+      } catch {
+        /* not ready */
+      }
+    }
+    return this.commandList;
+  }
+
+  private cwd(): string {
+    if (this.thread.mode === "board" || !this.thread.cwd) return this.ctx.scratchDir;
+    return this.thread.cwd;
+  }
+
+  private buildOptions(): Options {
+    const thread = this.thread;
+    const board = thread.mode === "board";
+    const webTools = thread.web ? ["WebSearch", "WebFetch"] : [];
+    const { command, args, env } = this.ctx.boardMcp;
+    const permissionMode = permissionModeFor(thread);
+    const options: Options = {
+      cwd: this.cwd(),
+      model: thread.model === "default" ? undefined : thread.model,
+      ...(thread.effort ? { effort: thread.effort as EffortLevel } : {}),
+      thinking: { type: "adaptive", display: "summarized" },
+      includePartialMessages: true,
+      mcpServers: { [BOARD_SERVER]: { type: "stdio", command, args, env } },
+      settingSources: board ? ["user"] : ["user", "project", "local"],
+      systemPrompt: { type: "preset", preset: "claude_code", append: this.instructions },
+      permissionMode,
+      ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
+      canUseTool: (name, input, opts) => this.canUseTool(name, input, opts),
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Write|Edit|MultiEdit|NotebookEdit",
+            hooks: [
+              async (hookInput) => {
+                const inp = hookInput as { tool_name?: string; tool_input?: unknown; tool_use_id?: string };
+                const file = isPlainRecord(inp.tool_input) ? str(inp.tool_input.file_path) ?? str(inp.tool_input.notebook_path) : undefined;
+                if (file && inp.tool_use_id && this.sink) {
+                  await this.sink.beforeWrite(inp.tool_use_id, file).catch(() => undefined);
+                }
+                return { continue: true };
+              },
+            ],
+          },
+        ],
+      },
+      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "agent-board/1" },
+      stderr: (data) => {
+        this.stderrTail = (this.stderrTail + data).slice(-4000);
+      },
+      ...(this.sessionId ? { resume: this.sessionId } : {}),
+    };
+    if (board) {
+      options.tools = [...webTools, "Skill", "TodoWrite"];
+      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...webTools, "Skill", "TodoWrite"];
+    } else if (thread.mode === "ask") {
+      options.tools = ["Read", "Grep", "Glob", "Skill", "TodoWrite", ...webTools];
+      options.allowedTools = ["Read", "Grep", "Glob", ...webTools, `mcp__${BOARD_SERVER}__*`];
+    } else {
+      options.tools = { type: "preset", preset: "claude_code" };
+      options.allowedTools = [`mcp__${BOARD_SERVER}__*`];
+      if (!thread.web) options.disallowedTools = ["WebSearch", "WebFetch"];
+    }
+    return options;
+  }
+
+  private async ensureQuery(): Promise<Query> {
+    if (this.query && this.live?.key === this.restartKey(this.thread)) {
+      return this.query;
+    }
+    this.close();
+    const sdk = await loadSdk();
+    this.input = new InputQueue();
+    this.abortController = new AbortController();
+    const options = { ...this.buildOptions(), abortController: this.abortController };
+    const q = sdk.query({ prompt: this.input, options });
+    this.query = q;
+    this.live = { model: this.thread.model, effort: this.thread.effort, permission: permissionModeFor(this.thread), key: this.restartKey(this.thread) };
+    void this.readLoop(q);
+    return q;
+  }
+
+  private async readLoop(q: Query): Promise<void> {
+    try {
+      for await (const msg of q) {
+        if (this.query !== q) break;
+        this.onMessage(msg);
+      }
+      if (this.query === q) {
+        this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `Claude stopped unexpectedly. ${this.stderrTail.slice(-600)}`.trim() });
+      }
+    } catch (err) {
+      if (this.query === q) {
+        const message = (err as Error).message || String(err);
+        this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `${message} ${this.stderrTail.slice(-600)}`.trim() });
+        this.query = null;
+        this.live = null;
+      }
+    }
+  }
+
+  private endTurn(result: TurnResult): void {
+    const finish = this.finish;
+    this.finish = null;
+    finish?.(result);
+  }
+
+  async run(input: TurnInput, sink: RunSink): Promise<TurnResult> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    this.instructions = input.instructions;
+    this.cancelled = false;
+    this.sink = sink;
+    try {
+      await this.ensureQuery();
+      const content: unknown[] = [{ type: "text", text: input.text }];
+      for (const image of input.images) {
+        content.push({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } });
+      }
+      const done = new Promise<TurnResult>((resolve) => {
+        this.finish = resolve;
+      });
+      this.input!.push({
+        type: "user",
+        message: { role: "user", content: content as never },
+        parent_tool_use_id: null,
+        origin: { kind: "human" },
+      } as SDKUserMessage);
+      return await done;
+    } catch (err) {
+      return { status: "error", error: (err as Error).message };
+    } finally {
+      this.sink = null;
+      this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
+    }
+  }
+
+  async cancel(): Promise<void> {
+    this.cancelled = true;
+    const q = this.query;
+    if (!q) return;
+    try {
+      await q.interrupt();
+    } catch {
+      this.close();
+      this.endTurn({ status: "cancelled" });
+    }
+  }
+
+  private close(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    const q = this.query;
+    this.query = null;
+    this.live = null;
+    this.input?.close();
+    this.input = null;
+    if (q) {
+      try {
+        q.close();
+      } catch {
+        this.abortController?.abort();
+      }
+    }
+  }
+
+  dispose(): void {
+    this.cancelled = true;
+    this.endTurn({ status: "cancelled" });
+    this.close();
+    this.onDispose();
+  }
+
+  private async canUseTool(
+    name: string,
+    input: Record<string, unknown>,
+    opts: { signal: AbortSignal; suggestions?: unknown[]; title?: string; decisionReason?: string; toolUseID?: string; blockedPath?: string }
+  ): Promise<PermissionResult> {
+    const sink = this.sink;
+    if (!sink) return { behavior: "deny", message: "No active turn." };
+    if (name === "AskUserQuestion") {
+      const raw = Array.isArray(input.questions) ? input.questions : [];
+      const questions = raw.filter(isPlainRecord).map((q, index) => ({
+        id: String(index),
+        prompt: String(q.question ?? ""),
+        header: str(q.header),
+        multi: q.multiSelect === true,
+        options: (Array.isArray(q.options) ? q.options : []).filter(isPlainRecord).map((o, i) => ({
+          id: String(i),
+          label: String(o.label ?? ""),
+          description: str(o.description),
+        })),
+      }));
+      try {
+        const answer = await sink.question({ questions }, opts.signal);
+        if ("skipped" in answer) {
+          return { behavior: "deny", message: answer.reason || "The user skipped these questions. Continue with your best judgement." };
+        }
+        const answers: Record<string, string> = {};
+        for (const q of questions) {
+          const picked = (answer.answers[q.id] ?? []).map((id) => q.options.find((o) => o.id === id)?.label ?? id);
+          const note = answer.notes?.[q.id];
+          answers[q.prompt] = [...picked, ...(note ? [note] : [])].join(", ");
+        }
+        return { behavior: "allow", updatedInput: { ...input, answers } };
+      } catch {
+        return { behavior: "deny", message: "The question was cancelled." };
+      }
+    }
+    if (name === "ExitPlanMode") {
+      try {
+        const decision = await sink.plan({ title: "Plan", text: String(input.plan ?? "") }, opts.signal);
+        if (decision.accepted) {
+          sink.modeChanged?.("code");
+          return { behavior: "allow", updatedInput: input };
+        }
+        return { behavior: "deny", message: decision.note ? `The user wants changes to the plan: ${decision.note}` : "The user did not accept the plan. Keep planning." };
+      } catch {
+        return { behavior: "deny", message: "Plan review was cancelled." };
+      }
+    }
+    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite"].includes(name)) {
+      return { behavior: "deny", message: "This thread is in Board mode: only board tools and web search are available." };
+    }
+    const described = describeTool(name, input, this.thread.cwd);
+    const options = [
+      { id: "allow", label: "Allow", kind: "allow_once" as const },
+      ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: "Always allow", kind: "allow_always" as const }] : []),
+      { id: "deny", label: "Deny", kind: "reject_once" as const },
+    ];
+    const detail = [described.detail ?? (name === "Edit" || name === "Write" ? undefined : summarizeInput(input)), opts.decisionReason, opts.blockedPath ? `Path: ${opts.blockedPath}` : undefined]
+      .filter(Boolean)
+      .join("\n");
+    try {
+      const decision = await sink.approval(
+        { toolId: opts.toolUseID, tool: toolKind(name), title: opts.title || described.title, detail: detail || undefined, options },
+        opts.signal
+      );
+      if (decision.optionId === "deny") {
+        return { behavior: "deny", message: decision.note ? `The user denied this: ${decision.note}` : "The user denied this tool call." };
+      }
+      return {
+        behavior: "allow",
+        updatedInput: input,
+        ...(decision.optionId === "always" && opts.suggestions ? { updatedPermissions: opts.suggestions as never } : {}),
+      };
+    } catch {
+      return { behavior: "deny", message: "The approval was cancelled." };
+    }
+  }
+
+  private onMessage(msg: SDKMessage): void {
+    const sink = this.sink;
+    const m = msg as Record<string, unknown> & { type: string; subtype?: string };
+    if (m.type === "system" && m.subtype === "init") {
+      if (typeof m.session_id === "string") {
+        this.sessionId = m.session_id;
+        sink?.nativeId(m.session_id);
+      }
+      if (Array.isArray(m.slash_commands) && !this.commandList.length) {
+        this.commandList = (m.slash_commands as string[]).map((name) => ({ name }));
+        void this.commands().then((list) => sink?.commands(list));
+      }
+      return;
+    }
+    if (!sink) return;
+    switch (m.type) {
+      case "stream_event":
+        this.onStream(m as never);
+        return;
+      case "assistant":
+        this.onAssistant(m as never);
+        return;
+      case "user":
+        this.onUser(m as never);
+        return;
+      case "result": {
+        const usage = isPlainRecord(m.modelUsage) ? Object.values(m.modelUsage as Record<string, Record<string, number>>) : [];
+        const total = usage.reduce(
+          (acc, u) => ({
+            inputTokens: acc.inputTokens + (u.inputTokens ?? 0),
+            outputTokens: acc.outputTokens + (u.outputTokens ?? 0),
+            cacheReadTokens: acc.cacheReadTokens + (u.cacheReadInputTokens ?? 0),
+            cacheWriteTokens: acc.cacheWriteTokens + (u.cacheCreationInputTokens ?? 0),
+            reasoningTokens: acc.reasoningTokens + (u.thinkingTokens ?? 0),
+            contextWindow: Math.max(acc.contextWindow, u.contextWindow ?? 0),
+          }),
+          { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, contextWindow: 0 }
+        );
+        sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined });
+        if (m.subtype === "success") {
+          this.endTurn({ status: this.cancelled ? "cancelled" : m.is_error ? "error" : "done", error: m.is_error ? String(m.result ?? "Claude reported an error") : undefined });
+        } else {
+          const errors = Array.isArray(m.errors) ? (m.errors as string[]).join("\n") : "";
+          this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : errors || String(m.subtype) });
+        }
+        return;
+      }
+      case "system":
+        if (m.subtype === "compact_boundary") sink.notice("info", "Context compacted");
+        else if (m.subtype === "api_retry") sink.notice("warn", `API retry${typeof m.attempt === "number" ? ` (attempt ${m.attempt})` : ""}${typeof m.error === "string" ? `: ${m.error}` : ""}`);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private onStream(msg: { event: Record<string, unknown>; parent_tool_use_id: string | null }): void {
+    const sink = this.sink!;
+    const event = msg.event;
+    const parent = msg.parent_tool_use_id ?? undefined;
+    if (event.type === "message_start") {
+      this.streamTools.clear();
+      return;
+    }
+    if (event.type === "content_block_start" && isPlainRecord(event.content_block)) {
+      const block = event.content_block;
+      if (block.type === "text" || block.type === "thinking") {
+        sink.breakBlock();
+      } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        this.streamTools.set(Number(event.index), block.id);
+        if (block.name === "AskUserQuestion" || block.name === "ExitPlanMode") return;
+        const described = describeTool(block.name, {}, this.thread.cwd);
+        sink.toolStart({ toolId: block.id, name: block.name, tool: toolKind(block.name), title: block.name.startsWith("mcp__") ? described.title : block.name, status: "pending", parentToolId: parent });
+      }
+      return;
+    }
+    if (event.type === "content_block_delta" && isPlainRecord(event.delta)) {
+      const delta = event.delta;
+      if (parent) return;
+      if (delta.type === "text_delta" && typeof delta.text === "string") {
+        this.streamedText = true;
+        sink.text(delta.text);
+      } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+        sink.reasoning(delta.thinking);
+      }
+    }
+  }
+
+  private onAssistant(msg: { message: { content?: unknown[] }; parent_tool_use_id: string | null }): void {
+    const sink = this.sink!;
+    const parent = msg.parent_tool_use_id ?? undefined;
+    for (const block of msg.message.content ?? []) {
+      if (!isPlainRecord(block)) continue;
+      if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        const name = block.name;
+        if (name === "AskUserQuestion" || name === "ExitPlanMode") continue;
+        const described = describeTool(name, block.input, this.thread.cwd);
+        sink.toolStart({ toolId: block.id, name, tool: toolKind(name), title: described.title, detail: described.detail, input: block.input, paths: described.paths, status: "running", parentToolId: parent });
+        sink.toolUpdate(block.id, { title: described.title, detail: described.detail, input: block.input, paths: described.paths, status: "running" });
+        if (name === "TodoWrite" && isPlainRecord(block.input) && Array.isArray(block.input.todos)) {
+          sink.todos(
+            block.input.todos.filter(isPlainRecord).map((todo) => ({
+              content: String(todo.content ?? ""),
+              status: todo.status === "completed" ? "completed" : todo.status === "in_progress" ? "in_progress" : "pending",
+            }))
+          );
+        }
+      } else if (parent && block.type === "text" && typeof block.text === "string") {
+        sink.text(block.text, parent);
+      }
+    }
+  }
+
+  private onUser(msg: { message: { content?: unknown }; tool_use_result?: unknown }): void {
+    const sink = this.sink!;
+    const content = msg.message.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (!isPlainRecord(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+      const structured = isPlainRecord(msg.tool_use_result) ? msg.tool_use_result : null;
+      let output = resultText(block.content);
+      let exitCode: number | undefined;
+      if (structured && (typeof structured.stdout === "string" || typeof structured.stderr === "string")) {
+        output = [str(structured.stdout), str(structured.stderr)].filter(Boolean).join("\n");
+        if (structured.interrupted === true) output += "\n[interrupted]";
+      }
+      if (block.is_error === true) exitCode = 1;
+      sink.toolUpdate(block.tool_use_id, { status: block.is_error === true ? "error" : "done", output, ...(exitCode !== undefined ? { exitCode } : {}) });
+    }
+  }
+}
+
+function summarizeInput(input: Record<string, unknown>): string {
+  try {
+    const text = JSON.stringify(input, null, 2);
+    return text.length > 1200 ? `${text.slice(0, 1200)}…` : text;
+  } catch {
+    return "";
+  }
+}
