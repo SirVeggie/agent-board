@@ -2039,6 +2039,7 @@
       this.listEl.hidden = !this.listOpen;
       this.view.scroll.hidden = this.listOpen;
       this.view.composer.hidden = this.listOpen;
+      this.view.root.classList.toggle("listing", this.listOpen);
       this.view.renderHeader();
       this.renderList();
     },

@@ -2412,3 +2412,13 @@ button.ag-page-chip.reverted {
 .ag-settings .settings-hint {
   margin-top: 10px;
 }
+
+.ag-view [hidden],
+.ag-composer[hidden],
+.ag-scroll[hidden] {
+  display: none !important;
+}
+
+.ag-view.listing {
+  flex: 0 0 auto;
+}
