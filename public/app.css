@@ -1913,6 +1913,65 @@ kbd {
   margin-top: 2px;
 }
 
+/* The delete button floats over the text; the text fades out beneath it on hover. */
+.template-row {
+  position: relative;
+}
+
+.template-row .tab-title {
+  --fade-mask: linear-gradient(90deg, #000 calc(100% - 44px), transparent calc(100% - 14px));
+}
+
+.template-row:not(.builtin):hover .tab-title,
+.template-row:not(.builtin):focus-within .tab-title {
+  -webkit-mask-image: var(--fade-mask);
+  mask-image: var(--fade-mask);
+}
+
+.template-row button.tab-close {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 28px;
+  height: 28px;
+  transform: translateY(-50%);
+  color: var(--danger);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.template-row:hover button.tab-close,
+.template-row:focus-within button.tab-close {
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.template-row button.tab-close:hover {
+  opacity: 1;
+}
+
+.side-row .template-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.side-row .template-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.side-row .template-version {
+  color: var(--muted);
+  opacity: 0.7;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .setting-row {
   display: flex;
   align-items: center;

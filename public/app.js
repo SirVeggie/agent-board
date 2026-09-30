@@ -1522,7 +1522,7 @@
 
   function templateRow(template, builtin) {
     const el = document.createElement("div");
-    el.className = builtin ? "side-row builtin" : "side-row";
+    el.className = builtin ? "side-row template-row builtin" : "side-row template-row";
     el.role = "button";
     el.tabIndex = builtin && !state.builtinOpen ? -1 : 0;
     el.dataset.id = template.id;
@@ -1544,8 +1544,19 @@
     const text = document.createElement("span");
     text.className = "tab-title";
     const name = document.createElement("span");
+    name.className = "template-name";
     name.textContent = template.title;
-    text.appendChild(name);
+    const line = document.createElement("span");
+    line.className = "template-line";
+    line.appendChild(name);
+    if (builtin || template.builtinSource) {
+      const version = document.createElement("span");
+      version.className = "template-version";
+      version.textContent = `v${template.stateVersion}`;
+      version.title = builtin ? "Built-in template version" : "Copied from a built-in template";
+      line.appendChild(version);
+    }
+    text.appendChild(line);
     if (template.description) {
       const desc = document.createElement("span");
       desc.className = "template-desc";
