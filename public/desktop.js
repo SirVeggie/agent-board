@@ -221,7 +221,7 @@
     desktop.openFromAgents,
     (on) => saveSetting("openFromAgents", on)
   );
-  const trayRow = settingRow("desktop-tray", "Closing the window keeps the app in the tray", desktop.closeToTray, (on) =>
+  const trayRow = settingRow("desktop-tray", "Close to tray", desktop.closeToTray, (on) =>
     saveSetting("closeToTray", on)
   );
   const startupRow = settingRow("desktop-startup", "Launch at startup", desktop.launchAtStartup, (on) =>
@@ -230,7 +230,7 @@
   const hint = document.createElement("p");
   hint.className = "settings-hint settings-hint-after";
   hint.innerHTML =
-    "At startup the app waits in the tray while closing keeps it there.<br><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
+    "At startup the app waits in the tray while Close to tray is on.<br><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
   section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, hint);
   document.getElementById("import-page")?.closest(".settings-section")?.before(section);
 
