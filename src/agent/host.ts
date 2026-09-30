@@ -604,20 +604,23 @@ export class AgentHost {
     }
 
     const sink = this.makeSink(threadId, run);
-    let result: { status: "done" | "error" | "cancelled"; error?: string };
-    try {
-      const session = this.session(thread);
-      session.update(thread);
-      result = await session.run(
-        {
-          text: contextBlock(msg.context) + msg.text,
-          images: msg.images,
-          instructions: threadInstructions(thread, this.scopeInfo(thread)),
-        },
-        sink
-      );
-    } catch (err) {
-      result = { status: "error", error: (err as Error).message };
+    let result: { status: "done" | "error" | "cancelled"; error?: string } = { status: "cancelled" };
+    // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
+    if (!run.cancelled) {
+      try {
+        const session = this.session(thread);
+        session.update(thread);
+        result = await session.run(
+          {
+            text: contextBlock(msg.context) + msg.text,
+            images: msg.images,
+            instructions: threadInstructions(thread, this.scopeInfo(thread)),
+          },
+          sink
+        );
+      } catch (err) {
+        result = { status: "error", error: (err as Error).message };
+      }
     }
     if (run.cancelled && result.status !== "error") result = { status: "cancelled" };
 

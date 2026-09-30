@@ -422,6 +422,9 @@ class ClaudeSession implements ProviderSession {
         this.onMessage(msg);
       }
       if (this.query === q) {
+        // The process ended; the next turn starts a new one and resumes the session.
+        this.query = null;
+        this.live = null;
         this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `Claude stopped unexpectedly. ${this.stderrTail.slice(-600)}`.trim() });
       }
     } catch (err) {
