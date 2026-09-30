@@ -50,6 +50,8 @@ export function agentRouter(host: AgentHost): express.Router {
 
   router.get("/threads", wrap(() => ({ threads: host.listThreads() })));
 
+  router.get("/commands", wrap((req) => ({ commands: host.providerCommands(parseProvider(req.query.provider)) })));
+
   router.post(
     "/threads",
     wrap((req) => {

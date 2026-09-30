@@ -327,11 +327,27 @@ export class AgentHost {
     if (session) {
       const list = await session.commands();
       if (list.length) {
-        this.commandCache.set(thread.provider, list);
+        this.rememberCommands(thread.provider, list);
         return list;
       }
     }
-    return this.commandCache.get(thread.provider) ?? [];
+    return this.providerCommands(thread.provider);
+  }
+
+  /** The last slash command list a provider reported, kept across restarts for new threads. */
+  providerCommands(provider: ProviderId): SlashCommand[] {
+    let list = this.commandCache.get(provider);
+    if (!list) {
+      list = this.db.getSetting<SlashCommand[]>(`commands.${provider}`, []);
+      this.commandCache.set(provider, list);
+    }
+    return list;
+  }
+
+  private rememberCommands(provider: ProviderId, list: SlashCommand[]): void {
+    const prev = this.commandCache.get(provider);
+    this.commandCache.set(provider, list);
+    if (JSON.stringify(prev) !== JSON.stringify(list)) this.db.setSetting(`commands.${provider}`, list);
   }
 
   private requireThread(id: string): Thread {
@@ -877,7 +893,7 @@ export class AgentHost {
       },
       commands(list) {
         const t = thread();
-        if (t && list.length) host.commandCache.set(t.provider, list);
+        if (t && list.length) host.rememberCommands(t.provider, list);
       },
       title(title) {
         const t = thread();

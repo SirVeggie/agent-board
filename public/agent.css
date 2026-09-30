@@ -2408,3 +2408,7 @@ button.ag-page-chip.reverted {
   box-shadow: 0 0 8px rgba(232, 196, 122, 0.8);
   animation: none;
 }
+
+.ag-settings .settings-hint {
+  margin-top: 10px;
+}

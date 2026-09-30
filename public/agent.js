@@ -1707,9 +1707,9 @@
       }
       const s = this.settings();
       let list = S.commands.get(s.provider);
-      if (this.threadId) {
+      if (this.threadId || !list) {
         try {
-          const data = await api("GET", `/threads/${encodeURIComponent(this.threadId)}/commands`);
+          const data = await api("GET", this.threadId ? `/threads/${encodeURIComponent(this.threadId)}/commands` : `/commands?provider=${s.provider}`);
           if (data.commands?.length) {
             list = data.commands;
             S.commands.set(s.provider, list);
