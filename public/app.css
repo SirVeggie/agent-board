@@ -2498,7 +2498,7 @@ html.compact .tab {
 
 html.compact .actions {
   gap: 6px;
-  padding: 0 2px 0 6px;
+  padding: 0 6px;
 }
 
 html.compact #clear,
