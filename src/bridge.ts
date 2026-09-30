@@ -1,8 +1,9 @@
 /**
  * Injected into every tab page. Gives the page `window.board` over the tab's
  * server-owned state: `board.state`, `board.set`, `board.onChange`, `board.bind`,
- * `board.signal`, and page-saved blobs: `board.saveAsset`, `board.assetUrl`,
- * `board.deleteAsset`, `board.listAssets`.
+ * `board.signal`, page-saved blobs: `board.saveAsset`, `board.assetUrl`,
+ * `board.deleteAsset`, `board.listAssets`, and page links: `board.open`, `board.resolve`,
+ * `data-board-open`, and external hrefs (opened in the browser, a peek, or a split).
  *
  * Boot state is inlined ahead of this script so `board.state` is readable
  * synchronously by page scripts.
@@ -375,6 +376,281 @@ export const BOARD_BRIDGE_JS = `
     signal(name);
   }, false);
 
+  /* ---------- page links: board.open, data-board-open, external hrefs ---------- */
+
+  var LINK_MODES = { tab: true, peek: true, split: true };
+  var embedded = window.parent !== window;
+  var boardOrigin = location.protocol + "//127.0.0.1" + (location.port ? ":" + location.port : "");
+  var linkRequests = {};
+  var linkSeq = 0;
+
+  /** Ctrl/Cmd navigates, Shift splits, Alt peeks. Null when no modifier picks a mode. */
+  function modeFromEvent(event) {
+    if (event.ctrlKey || event.metaKey) {
+      return "tab";
+    }
+    if (event.shiftKey) {
+      return "split";
+    }
+    if (event.altKey) {
+      return "peek";
+    }
+    return null;
+  }
+
+  function cleanMode(value) {
+    var mode = value == null ? "" : String(value).trim().toLowerCase();
+    if (mode === "navigate") {
+      mode = "tab";
+    }
+    return LINK_MODES[mode] ? mode : null;
+  }
+
+  /** An http(s) URL outside the board, or null. Everything else is a page key or id. */
+  function externalUrl(raw) {
+    var text = raw == null ? "" : String(raw).trim();
+    if (!/^https?:/i.test(text)) {
+      return null;
+    }
+    var url;
+    try {
+      url = new URL(text);
+    } catch (err) {
+      return null;
+    }
+    if (url.origin === location.origin || url.origin === boardOrigin) {
+      return null;
+    }
+    return url.href;
+  }
+
+  function hasGesture() {
+    var activation = navigator.userActivation;
+    return !activation || activation.isActive;
+  }
+
+  function openInBrowser(href) {
+    window.open(href, "_blank", "noopener,noreferrer");
+  }
+
+  function askBoard(message) {
+    return new Promise(function (resolve) {
+      if (!embedded) {
+        resolve({ ok: false, error: "no_board" });
+        return;
+      }
+      linkSeq += 1;
+      var reqId = client + ":" + linkSeq;
+      linkRequests[reqId] = resolve;
+      message.reqId = reqId;
+      message.id = tabId;
+      try {
+        parent.postMessage(message, "*");
+      } catch (err) {
+        delete linkRequests[reqId];
+        resolve({ ok: false, error: "no_board" });
+        return;
+      }
+      setTimeout(function () {
+        if (linkRequests[reqId]) {
+          delete linkRequests[reqId];
+          resolve({ ok: false, error: "timeout" });
+        }
+      }, 5000);
+    });
+  }
+
+  /**
+   * Open a board page (by key or id) or an http(s) URL as a tab, a peek, or a split.
+   * Without a mode, a page follows the board's Settings default and a URL opens in the browser.
+   */
+  function open(target, options) {
+    var opts = options || {};
+    var raw = target == null ? "" : String(target).trim();
+    if (!raw) {
+      return Promise.resolve({ ok: false, error: "not_found" });
+    }
+    if (!hasGesture()) {
+      console.warn("[board] board.open needs a click or key press; ignored " + raw);
+      return Promise.resolve({ ok: false, error: "no_gesture" });
+    }
+    var mode = cleanMode(opts.mode);
+    var anchor = opts.anchor == null ? "" : String(opts.anchor).replace(/^#/, "");
+    var hash = raw.indexOf("#");
+    var url = externalUrl(raw);
+    if (!url && hash > 0) {
+      anchor = anchor || raw.slice(hash + 1);
+      raw = raw.slice(0, hash);
+    }
+    if (url && (mode === null || mode === "tab")) {
+      openInBrowser(url);
+      return Promise.resolve({ ok: true, mode: "browser", url: url });
+    }
+    if (!embedded) {
+      if (url) {
+        openInBrowser(url);
+        return Promise.resolve({ ok: true, mode: "browser", url: url });
+      }
+      window.open(boardOrigin + "/#" + encodeURIComponent(raw), "_blank");
+      return Promise.resolve({ ok: true, mode: "tab" });
+    }
+    return askBoard({
+      type: "agent-board-open",
+      target: url || raw,
+      mode: mode,
+      anchor: anchor || null,
+      background: opts.background === true
+    });
+  }
+
+  /** Look up board pages by key or id: { [target]: { id, title, open } | null }. */
+  function resolve(targets) {
+    var list = Array.isArray(targets) ? targets : [targets];
+    var clean = [];
+    for (var i = 0; i < list.length; i += 1) {
+      var item = list[i] == null ? "" : String(list[i]).split("#")[0].trim();
+      if (item && !externalUrl(item) && clean.indexOf(item) === -1) {
+        clean.push(item);
+      }
+    }
+    if (!clean.length) {
+      return Promise.resolve({});
+    }
+    return askBoard({ type: "agent-board-resolve", targets: clean }).then(function (reply) {
+      return reply && reply.pages ? reply.pages : {};
+    });
+  }
+
+  function linkFor(target) {
+    if (!target || !target.closest) {
+      return null;
+    }
+    var el = target.closest("[data-board-open], a[href]");
+    if (!el) {
+      return null;
+    }
+    if (el.hasAttribute("data-board-open")) {
+      return { el: el, target: el.getAttribute("data-board-open") || "" };
+    }
+    if (el.hasAttribute("download")) {
+      return null;
+    }
+    var url = externalUrl(el.href);
+    return url ? { el: el, target: url } : null;
+  }
+
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) {
+      return;
+    }
+    var link = linkFor(event.target);
+    if (!link) {
+      return;
+    }
+    var url = externalUrl(link.target);
+    if (url && !embedded) {
+      return;
+    }
+    event.preventDefault();
+    var mode = modeFromEvent(event) || cleanMode(link.el.getAttribute("data-board-mode"));
+    open(link.target, { mode: mode }).then(function (result) {
+      if (result && (result.error === "not_found" || result.error === "in_trash")) {
+        link.el.classList.add("board-link-missing");
+      }
+    });
+  }, false);
+
+  /** Mark links to pages that don't exist, and fill in empty link text with the page's title. */
+  var labelQueued = false;
+  function labelLinks() {
+    labelQueued = false;
+    if (!embedded) {
+      return;
+    }
+    var els = document.querySelectorAll("[data-board-open]:not([data-board-link-checked])");
+    if (!els.length) {
+      return;
+    }
+    var targets = [];
+    for (var i = 0; i < els.length; i += 1) {
+      els[i].setAttribute("data-board-link-checked", "");
+      targets.push(els[i].getAttribute("data-board-open") || "");
+    }
+    resolve(targets).then(function (pages) {
+      for (var j = 0; j < els.length; j += 1) {
+        var el = els[j];
+        var raw = (el.getAttribute("data-board-open") || "").split("#")[0].trim();
+        if (externalUrl(raw)) {
+          continue;
+        }
+        var page = pages[raw];
+        el.classList.toggle("board-link-missing", !page);
+        if (page && !el.textContent.trim() && !el.children.length) {
+          el.textContent = page.title;
+        }
+        if (page && !el.getAttribute("title")) {
+          el.setAttribute("title", page.title);
+        }
+      }
+    });
+  }
+  function queueLabels() {
+    if (labelQueued) {
+      return;
+    }
+    labelQueued = true;
+    setTimeout(labelLinks, 50);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", queueLabels);
+  } else {
+    queueLabels();
+  }
+  if (embedded && typeof MutationObserver === "function") {
+    new MutationObserver(function (records) {
+      var changed = false;
+      for (var i = 0; i < records.length; i += 1) {
+        if (records[i].type === "attributes") {
+          records[i].target.removeAttribute("data-board-link-checked");
+          changed = true;
+        } else if (records[i].addedNodes.length) {
+          changed = true;
+        }
+      }
+      if (changed) {
+        queueLabels();
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-board-open"] });
+  }
+
+  function scrollToAnchor(anchor) {
+    var name = anchor == null ? "" : String(anchor).replace(/^#/, "");
+    if (!name) {
+      return;
+    }
+    var el = document.getElementById(name) || document.getElementsByName(name)[0];
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) {
+      return;
+    }
+    var data = event.data;
+    if (!data || data.id !== tabId) {
+      return;
+    }
+    if (data.type === "agent-board-open-result" && linkRequests[data.reqId]) {
+      var done = linkRequests[data.reqId];
+      delete linkRequests[data.reqId];
+      done(data.result || { ok: false, error: "unknown" });
+    } else if (data.type === "agent-board-scroll") {
+      scrollToAnchor(data.anchor);
+    }
+  });
+
   var template = boot.template && typeof boot.template === "object" ? boot.template : null;
 
   function reportIncompatible(reason) {
@@ -477,6 +753,8 @@ export const BOARD_BRIDGE_JS = `
     bind: bind,
     flush: flush,
     signal: signal,
+    open: open,
+    resolve: resolve,
     reportIncompatible: reportIncompatible,
     onChange: function (fn) {
       listeners.push(fn);
@@ -492,4 +770,6 @@ export const BOARD_BRIDGE_JS = `
 
 export const BOARD_STALE_CSS = `
 .board-stale { outline: 1px dashed rgba(224, 179, 74, 0.7); outline-offset: 2px; }
+[data-board-open] { cursor: pointer; }
+.board-link-missing { text-decoration: line-through !important; opacity: 0.6; cursor: not-allowed !important; }
 `.trim();

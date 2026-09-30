@@ -65,6 +65,8 @@
   const persistBanner = document.getElementById("persist-banner");
   const persistBannerDetail = document.getElementById("persist-banner-detail");
   const tabsWrap = tabsEl.parentElement;
+  const mainEl = document.querySelector("main");
+  const linkModeTrack = document.getElementById("link-mode");
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
@@ -82,6 +84,13 @@
   const THEME_KEY = "agent-board.theme";
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
   const COPY_ID_PREFIX_KEY = "agent-board.copyIdPrefix";
+  /** What a page link without a mode or modifier does: "tab", "peek", or "split". */
+  const LINK_MODE_KEY = "agent-board.linkMode";
+  const LINK_MODES = [
+    { id: "tab", name: "Navigate" },
+    { id: "peek", name: "Peek" },
+    { id: "split", name: "Split" },
+  ];
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "agent-board.tightSmall";
   const DEFAULT_THEME = "neutral";
@@ -170,6 +179,8 @@
   let dragScrollTimer = 0;
   let toggleHoverTimer = 0;
   let noticeTimer = 0;
+  /** @type {null | { label: string, run: () => void }} */
+  let noticeAction = null;
   /** @type {HTMLElement | null} */
   let stripSlotEl = null;
 
@@ -210,10 +221,32 @@
     },
     paneOpen: libraryShown,
     rerender: () => render(),
+    modeFromEvent: (event) => views.modeFromEvent(event),
+    openIn: (id, mode) => views.open(id, mode),
+    canSplit: (id) => Boolean(state.activeId) && state.activeId !== id,
     hoverCard,
     stripSlot,
     clearStripSlot,
     icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE },
+  });
+  const views = window.createViews({
+    mainEl,
+    contentOrigin,
+    tabs: () => state.tabs,
+    closed: () => state.closed,
+    findAnyTab,
+    activeId: () => state.activeId,
+    activeTab,
+    frame: (id) => frames.get(id) || null,
+    frameIds: () => [...frames.keys()],
+    ensureFrame,
+    discardFrame,
+    selectTab: (id) => selectTab(id, { fromUser: true }),
+    openPage,
+    showNotice,
+    linkMode,
+    markSeen,
+    render: () => render(),
   });
   const trash = window.createTrash({
     showNotice,
@@ -230,6 +263,7 @@
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   renderThemeList();
+  renderLinkModes();
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -287,6 +321,7 @@
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       state.templates = Array.isArray(msg.templates) ? msg.templates : [];
       state.builtinTemplates = Array.isArray(msg.builtinTemplates) ? msg.builtinTemplates : [];
+      views.prune();
       const hash = location.hash.replace(/^#/, "");
       const fromOpen = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
       const fromClosed = state.closed.find((tab) => tab.id === hash || tab.key === hash);
@@ -355,7 +390,7 @@
         lastInteractedAt = Date.now();
         syncHash();
       }
-      if (structural && state.activeId !== msg.tab.id) {
+      if (structural && !views.isShown(msg.tab.id)) {
         unread.add(msg.tab.id);
       }
       if (structural) {
@@ -393,6 +428,7 @@
         abortDrag(false);
       }
       const neighbor = neighborTabId(msg.id);
+      views.onDeleted(msg.id);
       state.tabs = state.tabs.filter((tab) => tab.id !== msg.id);
       state.closed = state.closed.filter((tab) => tab.id !== msg.id);
       unread.delete(msg.id);
@@ -425,7 +461,7 @@
           item.stateUpdatedAt = Date.now();
         }
       }
-      if (closed) {
+      if (closed && !views.isShown(msg.id)) {
         unreadLibrary.add(msg.id);
         renderChrome();
         library.render();
@@ -443,7 +479,7 @@
           "*"
         );
       }
-      if (tab && state.activeId !== msg.id) {
+      if (tab && !views.isShown(msg.id)) {
         unread.add(msg.id);
         render();
       }
@@ -478,6 +514,10 @@
 
   /** The tab to focus when `id` leaves the strip: its left neighbor, or its right one when it is leftmost. */
   function neighborTabId(id) {
+    const back = views.returnTarget(id);
+    if (back) {
+      return back;
+    }
     const idx = state.tabs.findIndex((tab) => tab.id === id);
     if (idx === -1) {
       return state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
@@ -490,13 +530,18 @@
     const neighbor = neighborTabId(tab.id);
     state.tabs = state.tabs.filter((item) => item.id !== tab.id);
     unread.delete(tab.id);
-    discardFrame(tab.id);
+    const shown = views.isShown(tab.id) && state.activeId !== tab.id;
+    if (shown) {
+      refreshFrame(tab);
+    } else {
+      discardFrame(tab.id);
+    }
     const idx = state.closed.findIndex((item) => item.id === tab.id);
     if (idx === -1) {
       state.closed.push(tab);
     } else {
       const prev = state.closed[idx];
-      if ((structural !== false && prev.revision !== tab.revision) || prev.stateRevision !== tab.stateRevision) {
+      if (!shown && ((structural !== false && prev.revision !== tab.revision) || prev.stateRevision !== tab.stateRevision)) {
         unreadLibrary.add(tab.id);
       }
       state.closed[idx] = tab;
@@ -1878,8 +1923,10 @@
   }
 
   function evictOverflow(keepId) {
+    const keep = views.shownIds();
+    keep.add(keepId);
     while (unpinnedLiveCount() > LIVE_FRAME_CAP) {
-      const victim = [...frames.keys()].find((id) => id !== keepId && !isPinned(id));
+      const victim = [...frames.keys()].find((id) => !keep.has(id) && !isPinned(id));
       if (!victim) {
         break;
       }
@@ -1893,6 +1940,9 @@
       const el = document.createElement("iframe");
       el.title = tab.title;
       el.sandbox = SANDBOX;
+      el.addEventListener("load", () => {
+        el.dataset.loaded = "1";
+      });
       framesEl.appendChild(el);
       loadFrame(el, tab);
       entry = { el, revision: tab.revision };
@@ -1940,6 +1990,7 @@
 
   /** `allow` only applies to the next navigation, so it has to be set before src. */
   function loadFrame(el, tab) {
+    delete el.dataset.loaded;
     el.allow = tab.embedUrl ? EMBED_ALLOW : "";
     el.src = viewUrl(tab);
   }
@@ -1953,28 +2004,45 @@
     frames.delete(id);
   }
 
+  /** The active tab, plus any split beside it and a peek over it; views.js decides where each frame sits. */
   function renderFrames() {
     const tab = activeTab();
-    if (!tab) {
-      emptyEl.hidden = false;
-      for (const entry of frames.values()) {
-        entry.el.classList.add("inactive");
-      }
-      document.title = "Agent Board";
-      return;
-    }
-    emptyEl.hidden = true;
-    document.title = tab.title + " · Agent Board";
-    ensureFrame(tab);
-    for (const [id, entry] of frames) {
-      entry.el.classList.toggle("inactive", id !== tab.id);
+    emptyEl.hidden = Boolean(tab);
+    document.title = tab ? tab.title + " · Agent Board" : "Agent Board";
+    views.layout();
+  }
+
+  /** Clear the unread blips of a page that is on screen in a peek or split. */
+  function markSeen(id) {
+    unread.delete(id);
+    unreadLibrary.delete(id);
+  }
+
+  function linkMode() {
+    const mode = localStorage.getItem(LINK_MODE_KEY);
+    return LINK_MODES.some((item) => item.id === mode) ? mode : "tab";
+  }
+
+  function renderLinkModes() {
+    const current = linkMode();
+    linkModeTrack.replaceChildren();
+    for (const item of LINK_MODES) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = item.name;
+      btn.setAttribute("aria-pressed", String(item.id === current));
+      btn.addEventListener("click", () => {
+        localStorage.setItem(LINK_MODE_KEY, item.id);
+        renderLinkModes();
+      });
+      linkModeTrack.appendChild(btn);
     }
   }
 
   function render() {
+    renderFrames();
     renderChrome();
     renderTabs();
-    renderFrames();
     library.render();
     renderTemplates();
   }
@@ -1997,6 +2065,9 @@
   function selectTab(id, { fromUser } = {}) {
     if (!state.tabs.some((tab) => tab.id === id)) {
       return;
+    }
+    if (fromUser) {
+      views.onSelect(id);
     }
     if (state.activeId !== id) {
       state.activeId = id;
@@ -2229,16 +2300,19 @@
     return "Imported " + (parts.length ? `${parts.join(", ")} and ${last}` : last);
   }
 
-  function showNotice(text, { undo = false } = {}) {
+  /** `action` swaps the Undo button for another one, e.g. { label: "Restore", run }. */
+  function showNotice(text, { undo = false, action = null } = {}) {
     noticeText.textContent = text;
-    noticeUndo.hidden = !undo;
+    noticeAction = action;
+    noticeUndo.textContent = action ? action.label : "Undo";
+    noticeUndo.hidden = !undo && !action;
     noticeEl.hidden = false;
     clearTimeout(noticeTimer);
     noticeTimer = window.setTimeout(
       () => {
         noticeEl.hidden = true;
       },
-      undo ? 7000 : 4000
+      undo || action ? 7000 : 4000
     );
   }
 
@@ -2416,6 +2490,9 @@
     } else if (action === "next-tab" || action === "prev-tab") {
       cycleTab(action === "next-tab" ? 1 : -1);
     } else if (action === "close-tab") {
+      if (views.closePeek()) {
+        return;
+      }
       const tab = activeTab();
       if (tab) {
         closeTab(tab.id);
@@ -2463,6 +2540,10 @@
       if (isPaletteOpen()) {
         event.preventDefault();
         closePalette();
+        return;
+      }
+      if (views.escape()) {
+        event.preventDefault();
         return;
       }
       if (state.sideOpen && state.trashOpen) {
@@ -2528,12 +2609,39 @@
   }
 
   function frameByWindow(win) {
-    for (const entry of frames.values()) {
+    const id = frameIdByWindow(win);
+    return id ? frames.get(id) : null;
+  }
+
+  function frameIdByWindow(win) {
+    for (const [id, entry] of frames) {
       if (entry.el.contentWindow === win) {
-        return entry;
+        return id;
       }
     }
     return null;
+  }
+
+  /** A link clicked inside a page: open it and tell the page how it went. */
+  function onPageLink(event) {
+    const data = event.data;
+    const frameId = frameIdByWindow(event.source);
+    const reply = (result) => {
+      event.source?.postMessage({ type: "agent-board-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    if (data.type === "agent-board-resolve") {
+      reply({ ok: true, pages: views.resolve(data.targets) });
+      return;
+    }
+    const mode = ["tab", "peek", "split"].includes(data.mode) ? data.mode : null;
+    lastInteractedAt = Date.now();
+    views
+      .open(data.target, mode, {
+        source: { role: views.roleOf(frameId), id: frameId },
+        anchor: typeof data.anchor === "string" ? data.anchor : "",
+        background: data.background === true,
+      })
+      .then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
   }
 
   function isPaletteOpen() {
@@ -2618,7 +2726,7 @@
       });
       el.addEventListener("mousedown", (event) => {
         event.preventDefault();
-        activatePaletteHit(tab);
+        activatePaletteHit(tab, views.modeFromEvent(event));
       });
 
       const main = document.createElement("div");
@@ -2691,11 +2799,16 @@
     highlightPaletteRows();
   }
 
-  function activatePaletteHit(tab) {
+  /** Enter or a click navigates; Ctrl also navigates, Shift splits, Alt peeks. */
+  function activatePaletteHit(tab, mode = null) {
     if (!tab) {
       return;
     }
     closePalette();
+    if (mode === "peek" || mode === "split") {
+      views.open(tab.id, mode);
+      return;
+    }
     if (!state.tabs.some((item) => item.id === tab.id)) {
       openPage(tab.id);
       return;
@@ -2750,6 +2863,10 @@
       togglePalette();
     } else if (event.data?.type === "agent-board-activity") {
       noteEdit();
+    } else if (event.data?.type === "agent-board-open" || event.data?.type === "agent-board-resolve") {
+      onPageLink(event);
+    } else if (event.data?.type === "agent-board-escape") {
+      views.escape();
     }
   });
 
@@ -2773,7 +2890,16 @@
     importFiles(importFileInput.files, "meta");
     importFileInput.value = "";
   });
-  noticeUndo.addEventListener("click", () => undoClose());
+  noticeUndo.addEventListener("click", () => {
+    const action = noticeAction;
+    if (action) {
+      noticeEl.hidden = true;
+      noticeAction = null;
+      action.run();
+      return;
+    }
+    undoClose();
+  });
   bindFileDrop(settingsEl, "meta");
   bindFileDrop(tabsWrap, "meta");
   bindFileDrop(sidePane, "closed");
@@ -2840,7 +2966,7 @@
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      activatePaletteHit(paletteHits[paletteIndex]);
+      activatePaletteHit(paletteHits[paletteIndex], views.modeFromEvent(event));
       return;
     }
     if (event.key === "Escape") {

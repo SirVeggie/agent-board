@@ -627,7 +627,7 @@ button.tab-close:hover {
   line-height: 1.5;
 }
 
-main.template-locked iframe {
+main.template-locked iframe[data-role="primary"] {
   pointer-events: none;
 }
 
@@ -2549,4 +2549,256 @@ html.compact button.win-btn {
     margin-left: 0;
     border-left: 1px solid var(--border);
   }
+}
+
+/* ---------- Page links: peek and split ---------- */
+
+main {
+  isolation: isolate;
+  --view-head: 36px;
+  --peek-y: 40px;
+  --peek-x: max(48px, calc((100% - 1100px) / 2));
+  --split: 0.5;
+}
+
+@media (max-width: 760px), (max-height: 480px) {
+  html.tight-small main {
+    --peek-y: 12px;
+    --peek-x: 12px;
+  }
+}
+
+/* An iframe is a replaced element: with width or height auto it falls back to 300x150 instead of filling its insets. */
+main.has-split #frames iframe[data-role="primary"] {
+  width: calc(var(--split) * 100%);
+}
+
+#frames iframe[data-role="secondary"] {
+  top: var(--view-head);
+  left: calc(var(--split) * 100%);
+  width: calc((1 - var(--split)) * 100%);
+  height: calc(100% - var(--view-head));
+  z-index: 2;
+}
+
+#frames iframe[data-role="peek"] {
+  top: calc(var(--peek-y) + var(--view-head));
+  left: var(--peek-x);
+  width: calc(100% - 2 * var(--peek-x));
+  height: calc(100% - 2 * var(--peek-y) - var(--view-head));
+  z-index: 22;
+  border-radius: 0 0 12px 12px;
+  animation: peek-in 0.16s var(--ease);
+}
+
+#frames iframe.url-loading {
+  opacity: 0;
+}
+
+#frames iframe.view-flash {
+  animation: view-flash 0.7s var(--ease);
+}
+
+@keyframes view-flash {
+  0%, 100% { box-shadow: inset 0 0 0 0 rgba(var(--accent-rgb), 0); }
+  30% { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), 0.9); }
+}
+
+@keyframes peek-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+}
+
+@keyframes scrim-in {
+  from { opacity: 0; }
+}
+
+.peek-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(10, 11, 12, 0.5);
+  backdrop-filter: blur(2px);
+  animation: scrim-in 0.16s var(--ease);
+}
+
+html[data-theme="cream"] .peek-scrim {
+  background: rgba(60, 40, 20, 0.22);
+}
+
+.peek-card {
+  position: absolute;
+  top: var(--peek-y);
+  bottom: var(--peek-y);
+  left: var(--peek-x);
+  right: var(--peek-x);
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow), 0 18px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  animation: peek-in 0.16s var(--ease);
+}
+
+html[data-theme="cream"] .peek-card {
+  box-shadow: var(--shadow), 0 18px 48px rgba(90, 60, 25, 0.2);
+}
+
+.peek-scrim[hidden],
+.peek-card[hidden],
+.split-head[hidden],
+.split-body[hidden],
+.split-divider[hidden] {
+  display: none;
+}
+
+.view-head {
+  flex: 0 0 var(--view-head);
+  height: var(--view-head);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 12px;
+  background: color-mix(in srgb, var(--panel) 90%, var(--text));
+  border-bottom: 1px solid var(--border);
+}
+
+.split-head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: calc(var(--split) * 100%);
+  z-index: 3;
+}
+
+.view-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.view-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--heading);
+}
+
+.view-title-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+button.view-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+button.view-btn:hover {
+  background: rgba(var(--lift-rgb), 0.08);
+  color: var(--heading);
+}
+
+.view-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--panel);
+}
+
+.split-body {
+  position: absolute;
+  top: var(--view-head);
+  right: 0;
+  bottom: 0;
+  left: calc(var(--split) * 100%);
+  z-index: 1;
+}
+
+.view-loading {
+  margin: 0;
+  color: var(--muted);
+}
+
+.view-blocked {
+  max-width: 360px;
+  text-align: center;
+}
+
+.view-blocked p {
+  margin: 0 0 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.view-blocked strong {
+  color: var(--heading);
+}
+
+.view-blocked button {
+  gap: 8px;
+}
+
+/* The split's border: a hairline at rest; hovering it (after a beat) or dragging it widens it in the accent. */
+.split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--split) * 100%);
+  z-index: 5;
+  width: 10px;
+  margin-left: -5px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.split-divider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border);
+  transition: width 0.15s ease, background-color 0.15s ease;
+}
+
+.split-divider.hot::before,
+.split-divider:focus-visible::before,
+body.resizing-split .split-divider::before {
+  width: 3px;
+  background: var(--accent);
+}
+
+body.resizing-split {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.resizing-split iframe {
+  pointer-events: none;
+}
+
+.button-track.text-track button {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
 }

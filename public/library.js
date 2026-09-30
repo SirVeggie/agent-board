@@ -840,6 +840,16 @@ window.createLibrary = function createLibrary(host) {
     }
   }
 
+  /** A click or Enter on a page row: Shift opens it in a split, Alt peeks, anything else navigates. */
+  function openWith(id, event) {
+    const mode = host.modeFromEvent(event);
+    if (mode === "peek" || mode === "split") {
+      host.openIn(id, mode);
+      return;
+    }
+    activatePage(id, true);
+  }
+
   function activatePage(id, activate = true) {
     if (host.isOpen(id)) {
       if (activate) {
@@ -978,6 +988,8 @@ window.createLibrary = function createLibrary(host) {
         ? { label: "Close tab", action: () => host.closeTab(id) }
         : { label: "Open", action: () => activatePage(id, true) },
       !open && { label: "Open in background", action: () => activatePage(id, false) },
+      host.activeId() !== id && { label: "Peek", action: () => host.openIn(id, "peek") },
+      host.canSplit(id) && { label: "Open in split", action: () => host.openIn(id, "split") },
       { label: tab.pinned ? "Unpin" : "Pin", action: () => host.setPinned(id, !tab.pinned) },
       "sep",
       { label: "Rename", action: () => reveal(id, { rename: true }) },
@@ -1650,7 +1662,7 @@ window.createLibrary = function createLibrary(host) {
         toggleFolder(id);
         return;
       }
-      activatePage(id, true);
+      openWith(id, event);
     },
     true
   );
@@ -1747,7 +1759,7 @@ window.createLibrary = function createLibrary(host) {
         if (kind === "folder") {
           toggleFolder(id);
         } else {
-          activatePage(id, true);
+          openWith(id, event);
         }
         return;
       }

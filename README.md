@@ -107,6 +107,28 @@ A submit button can declare the same handshake without extra script: `data-board
 
 Interactive pages should use this instead of `localStorage` — all tab pages share one origin, so their `localStorage` collides, and the agent cannot see it.
 
+### Page links
+
+Pages can open other board pages and websites as a tab, a **peek** (a fixed card over the page area), or a **split** (a second pane tied to the current tab):
+
+```html
+<a data-board-open="release-notes">Release notes</a>                      <!-- Settings default (Navigate) -->
+<a data-board-open="release-notes#risks" data-board-mode="peek">Risks</a> <!-- key#anchor scrolls the target -->
+<a href="https://docs.rs/tauri" data-board-mode="split">Tauri docs</a>    <!-- a plain href opens the browser -->
+```
+
+```js
+await board.open("release-notes", { mode: "peek" })  // "tab" | "peek" | "split"; also { anchor, background }
+// → { ok: true, mode, id } | { ok: false, error: "not_found" | "in_trash" | "no_gesture" }
+await board.resolve(["release-notes", "roadmap"])     // → { "release-notes": { id, title, open }, roadmap: null }
+```
+
+- A target is a page key or id, or an http(s) URL. Keys resolve to an open tab first, then the Library.
+- The mode comes from a held modifier (<kbd>Ctrl</kbd> navigate, <kbd>Shift</kbd> split, <kbd>Alt</kbd> peek), then `data-board-mode`, then Settings → Links for board pages. Websites default to the browser, and Ctrl+click always sends them there; they never become board tabs. The same modifiers work on Library rows and in the Ctrl+D palette.
+- `board.open` only works during a click or key press, so a page can't take over the view on load.
+- Links to missing pages get the `board-link-missing` class, and an empty `data-board-open` link shows the target's title.
+- Peeks and splits reuse the page's iframe, so switching between them and a tab never reloads the page. A website that refuses framing (checked by the daemon at `/api/frame-check`) shows an Open in browser card instead.
+
 ### Page assets
 
 A page can store images and other files from its own code, for example a picture pasted onto a kanban card:

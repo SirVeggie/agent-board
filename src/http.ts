@@ -8,6 +8,7 @@ import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js
 import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
+import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
@@ -72,6 +73,14 @@ export async function startHttp(): Promise<http.Server> {
       activeId: store.getActiveId(),
       uptimeMs: Date.now() - startedAt,
     });
+  });
+
+  /** Whether an external link can be shown in a peek or split, or needs the browser. */
+  app.get("/api/frame-check", (req, res) => {
+    const url = typeof req.query.url === "string" ? req.query.url : "";
+    checkFramable(url)
+      .then((result) => res.json(result))
+      .catch((err: Error) => res.json({ framable: null, reason: err.message }));
   });
 
   app.get("/api/tabs", (req, res) => {
@@ -1109,7 +1118,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   next();
 }
 
-const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js"]);
+const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js"]);
 
 function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (SHELL_PATHS.has(req.path)) {
@@ -1160,6 +1169,12 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
       parent.postMessage({ type: "agent-board-palette" }, "*");
     }
   }, true);
+  // Bubble phase: a page that handles Esc itself (closing its own menu) keeps it.
+  window.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && !event.defaultPrevented) {
+      parent.postMessage({ type: "agent-board-escape" }, "*");
+    }
+  });
 })();
 </script>`;
 
