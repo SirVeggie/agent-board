@@ -1976,6 +1976,23 @@
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     row.title = t.title;
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      openMenu(row, [
+        { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
+        { label: t.archived ? "Unarchive" : "Archive", run: () => api("PATCH", `/threads/${t.id}`, { archived: !t.archived }).catch((e) => notice(e.message)) },
+        ...(t.stats.files ? [{ label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) }] : []),
+        { separator: true },
+        {
+          label: "Delete thread",
+          danger: true,
+          run: async () => {
+            if (!confirm(`Delete “${t.title}”? This removes its transcript from the board.`)) return;
+            await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
+          },
+        },
+      ], { width: 220 });
+    });
     return row;
   }
 
