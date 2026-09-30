@@ -2211,6 +2211,10 @@ kbd {
   animation: hover-card-in 110ms var(--ease);
 }
 
+.hover-card.note {
+  max-width: 260px;
+}
+
 .hover-card[hidden] {
   display: none;
 }

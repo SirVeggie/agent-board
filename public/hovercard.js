@@ -1,6 +1,7 @@
 /**
  * Shared hover card for strip tabs, Library rows, and templates.
- * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder? }` or null.
+ * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder? }` or null,
+ * or `{ title, description, note: true }` for a short explanation shown under a small anchor.
  */
 window.createHoverCard = function createHoverCard({ describe }) {
   const card = document.createElement("div");
@@ -52,9 +53,10 @@ window.createHoverCard = function createHoverCard({ describe }) {
     }
     anchor = el;
     render(info);
+    card.classList.toggle("note", Boolean(info.note));
     card.hidden = false;
     el.setAttribute("aria-describedby", card.id);
-    place(el);
+    place(el, Boolean(info.note));
   }
 
   function hide() {
@@ -82,6 +84,13 @@ window.createHoverCard = function createHoverCard({ describe }) {
     const title = document.createElement("div");
     title.className = "hover-card-title";
     title.textContent = info.title;
+    if (info.note) {
+      const description = document.createElement("div");
+      description.className = "hover-card-desc";
+      description.textContent = info.description;
+      card.append(title, description);
+      return;
+    }
     const id = document.createElement("div");
     id.className = "hover-card-id";
     id.textContent = info.id;
@@ -127,12 +136,12 @@ window.createHoverCard = function createHoverCard({ describe }) {
     rows.append(dt, dd);
   }
 
-  function place(el) {
+  function place(el, below) {
     const margin = 8;
     const gap = 6;
     const box = el.getBoundingClientRect();
     const { offsetWidth: width, offsetHeight: height } = card;
-    const inLibrary = Boolean(el.closest(".side-pane"));
+    const inLibrary = !below && Boolean(el.closest(".side-pane"));
     let left;
     let top;
     if (inLibrary) {

@@ -104,8 +104,9 @@
   const AGENT_HIDDEN_TITLE = "Hidden from the agent";
   const UPDATE_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zm-.8 3.2v4.1h1.6V4.7zm0 5.3v1.6h1.6V10z" fill="currentColor" fill-rule="evenodd"/></svg>';
-  const UPDATE_TITLE =
-    "The built-in template has changed, but this copy wasn't updated because it was edited or its page data format changed. Ask an agent to update it.";
+  const UPDATE_TITLE = "Built-in template updated";
+  const UPDATE_NOTE =
+    "This copy wasn't updated automatically because it was edited or its page data format changed. Ask an agent to update it.";
 
   /** @type {{ tabs: Array<any>, closed: Array<any>, folders: Array<any>, templates: Array<any>, activeId: string | null, connected: boolean, sideOpen: boolean, sidebarTab: string, trashOpen: boolean }} */
   const state = {
@@ -1557,8 +1558,10 @@
       const update = document.createElement("span");
       update.className = "template-update";
       update.innerHTML = UPDATE_SVG;
-      update.title = UPDATE_TITLE;
-      update.ariaLabel = UPDATE_TITLE;
+      update.ariaLabel = `${UPDATE_TITLE}. ${UPDATE_NOTE}`;
+      update.dataset.kind = "template-update";
+      update.dataset.id = template.id;
+      hoverCard.bind(update, 120);
       line.appendChild(update);
     }
     if (builtin || template.builtinSource) {
@@ -2076,6 +2079,9 @@
   }
 
   function describeForCard(el) {
+    if (el.dataset.kind === "template-update") {
+      return { title: UPDATE_TITLE, description: UPDATE_NOTE, note: true };
+    }
     if (el.dataset.kind === "template") {
       const template = findTemplateMeta(el.dataset.id);
       return template
