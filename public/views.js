@@ -312,11 +312,25 @@ window.createViews = function createViews(host) {
       return;
     }
     const frame = entry.el;
-    flashEl.style.left = frame.offsetLeft + "px";
-    flashEl.style.top = frame.offsetTop + "px";
+    const left = frame.offsetLeft;
+    const top = frame.offsetTop;
+    const right = left + frame.offsetWidth;
+    const bottom = top + frame.offsetHeight;
+    flashEl.style.left = left + "px";
+    flashEl.style.top = top + "px";
     flashEl.style.width = frame.offsetWidth + "px";
     flashEl.style.height = frame.offsetHeight + "px";
-    flashEl.style.borderRadius = getComputedStyle(frame).borderRadius;
+    // A corner of the frame that sits in a corner of the page area is rounded by it, so follow that curve.
+    const own = getComputedStyle(frame);
+    const outer = getComputedStyle(mainEl);
+    const atLeft = left <= 1;
+    const atTop = top <= 1;
+    const atRight = right >= mainEl.clientWidth - 1;
+    const atBottom = bottom >= mainEl.clientHeight - 1;
+    flashEl.style.borderTopLeftRadius = atLeft && atTop ? outer.borderTopLeftRadius : own.borderTopLeftRadius;
+    flashEl.style.borderTopRightRadius = atRight && atTop ? outer.borderTopRightRadius : own.borderTopRightRadius;
+    flashEl.style.borderBottomLeftRadius = atLeft && atBottom ? outer.borderBottomLeftRadius : own.borderBottomLeftRadius;
+    flashEl.style.borderBottomRightRadius = atRight && atBottom ? outer.borderBottomRightRadius : own.borderBottomRightRadius;
     flashEl.classList.remove("on");
     void flashEl.offsetWidth;
     flashEl.classList.add("on");
