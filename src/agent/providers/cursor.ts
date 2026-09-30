@@ -681,7 +681,9 @@ class CursorSession implements ProviderSession {
       }));
       let title = typeof toolCall.title === "string" ? toolCall.title : "Tool call";
       // MCP permission titles look like "<server>-<tool>: <tool>".
-      const mcp = /^([\w.-]+?)-[\w.-]+: (.+)$/.exec(title);
+      // The server name may contain dashes, so strip the known "-<tool>" suffix instead of splitting.
+      const titleMatch = /^([\w.-]+): ([\w.-]+)$/.exec(title);
+      const mcp = titleMatch && titleMatch[1].endsWith(`-${titleMatch[2]}`) ? [title, titleMatch[1].slice(0, -titleMatch[2].length - 1), titleMatch[2]] : null;
       const isBoard = Boolean(mcp && mcp[1] === BOARD_MCP);
       if (mcp) title = isBoard ? `Board: ${mcp[2]}` : `${mcp[1]}: ${mcp[2]}`;
       const rawInput = isPlainRecord(toolCall.rawInput) ? toolCall.rawInput : null;

@@ -832,7 +832,8 @@ export class AgentHost {
         if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
           return Promise.resolve({ optionId: allow.id });
         }
-        if (req.tool === "mcp" && /^Board:|agent-board/i.test(req.title) && allow) {
+        // Only this daemon's own board server; a same-named server from the user's config may point elsewhere.
+        if (req.tool === "mcp" && /^Board:/.test(req.title) && allow) {
           return Promise.resolve({ optionId: allow.id });
         }
         const item = host.addItem(threadId, turnId, {
