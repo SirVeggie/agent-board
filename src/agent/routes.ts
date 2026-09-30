@@ -135,6 +135,7 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.post("/threads/:id/turns/:turnId/revert", wrap((req) => host.revertTurn(req.params.id, req.params.turnId)));
+  router.post("/threads/:id/turns/:turnId/revert-page", wrap((req) => host.revertPage(req.params.id, req.params.turnId)));
 
   router.post(
     "/approvals/:requestId",

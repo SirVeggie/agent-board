@@ -94,6 +94,8 @@ export type Turn = {
   usage?: Usage;
   error?: string;
   reverted?: boolean;
+  /** The board page this turn could edit, by HTML revision before and after. The old HTML is kept as a checkpoint. */
+  page?: { id: string; title: string; before: number; after?: number; reverted?: boolean };
 };
 
 export type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "fetch" | "think" | "mcp" | "task" | "todo" | "other";
@@ -131,7 +133,7 @@ type ItemBase = {
 };
 
 export type ItemBody =
-  | { kind: "user"; text: string; images?: Array<{ name: string; mimeType: string }>; context?: ContextChip[] }
+  | { kind: "user"; text: string; images?: Array<{ name: string; mimeType: string }>; context?: ContextChip[]; /** Queued, then dropped by Stop. */ dropped?: boolean }
   | { kind: "text"; text: string; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }
   | {

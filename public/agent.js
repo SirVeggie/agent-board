@@ -874,7 +874,7 @@
       const groups = [];
       const byTurn = new Map();
       for (const item of detail.items) {
-        const key = item.turnId || `pending`;
+        const key = item.turnId || (item.dropped ? `dropped:${item.id}` : "pending");
         let g = byTurn.get(key);
         if (!g) {
           g = { key, turn: item.turnId ? detail.turns.get(item.turnId) || null : null, items: [] };
@@ -945,7 +945,7 @@
       const wrap = el("div", "ag-turn");
       wrap.dataset.turn = group.key;
       const users = group.items.filter((it) => it.kind === "user");
-      for (const user of users) wrap.append(this.renderUser(user, !group.turn));
+      for (const user of users) wrap.append(this.renderUser(user, !group.turn && !user.dropped));
       const body = el("div", "ag-turn-body");
       const rest = group.items.filter((it) => it.kind !== "user");
       const byParent = new Map();
@@ -964,6 +964,8 @@
       };
       for (const it of rest) {
         if (it.parentToolId) continue;
+        // The todos card already shows todo updates.
+        if (it.kind === "tool" && it.tool === "todo") continue;
         if (it.kind === "tool" && EXPLORE.has(it.tool) && it.status !== "error") {
           explore.push(it);
           continue;
@@ -999,6 +1001,16 @@
       bubble.append(el("div", "ag-user-text", item.text));
       row.append(bubble);
       if (queued) row.append(el("div", "ag-queued", "Queued — sends when the current turn ends"));
+      if (item.dropped) {
+        row.classList.add("dropped");
+        const again = el("div", "ag-queued");
+        again.append(el("span", null, "Not sent — stopped before it ran · "), button("Send again", "ag-btn tiny", () => {
+          this.input.value = item.text;
+          this.autosize();
+          this.send();
+        }));
+        row.append(again);
+      }
       return row;
     }
 
@@ -1048,7 +1060,7 @@
       const head = button("", "ag-reason-head", () => {
         this.toggle(key, node);
       });
-      const secs = it.endedAt ? R.duration(it.endedAt - it.startedAt) : "";
+      const secs = it.endedAt && it.endedAt - it.startedAt >= 1000 ? R.duration(it.endedAt - it.startedAt) : "";
       head.append(icon("think"), el("span", "ag-reason-label", running ? "Thinking" : `Thought${secs ? ` for ${secs}` : ""}`), el("span", "ag-reason-preview", lastLine(it.text)), icon("chevron", "ag-ico ag-chev"));
       const body = el("div", "ag-reason-body");
       R.renderMarkdown(body, it.text, mdCtx);
@@ -1298,6 +1310,23 @@
       if (usage.outputTokens) parts.append(el("span", null, `${fmtTokens((usage.inputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0))} in · ${fmtTokens(usage.outputTokens)} out`));
       parts.append(el("span", "ag-muted", modelLabel(S.threads.get(turn.threadId)?.provider, turn.model)));
       foot.append(parts);
+      if (turn.page?.after) {
+        foot.append(el("span", "ag-grow"));
+        const pageBtn = button(
+          "",
+          `ag-page-chip${turn.page.reverted ? " reverted" : ""}`,
+          async () => {
+            if (turn.page.reverted) return;
+            if (!confirm(`Put “${turn.page.title}” back to how it was before this turn?`)) return;
+            const res = await api("POST", `/threads/${encodeURIComponent(turn.threadId)}/turns/${encodeURIComponent(turn.id)}/revert-page`).catch((err) => ({ ok: false, error: err.message }));
+            if (!res.ok) notice(res.error || "Could not revert the page");
+          },
+          turn.page.reverted ? "Reverted" : "Undo this turn's page edit"
+        );
+        pageBtn.append(icon("page"), el("span", null, turn.page.reverted ? "Page reverted" : "Page edited"));
+        if (!turn.page.reverted) pageBtn.append(icon("revert"));
+        foot.append(pageBtn);
+      }
       const files = turn.files || [];
       if (files.length) {
         const added = files.reduce((a, f) => a + (f.added || 0), 0);

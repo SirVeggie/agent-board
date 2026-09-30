@@ -334,7 +334,14 @@ button.ag-tip {
   border: 1px dashed var(--accent-ring);
 }
 
+.ag-user.dropped .ag-user-bubble {
+  opacity: 0.5;
+}
+
 .ag-queued {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--muted);
 }
@@ -2358,4 +2365,23 @@ button.ag-diff-more {
 .ag-settings .setting-row strong {
   color: var(--heading);
   font-weight: 600;
+}
+
+button.ag-page-chip {
+  height: 21px;
+  padding: 0 8px;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(var(--lift-rgb), 0.05);
+  box-shadow: none;
+}
+
+button.ag-page-chip:hover:not(.reverted) {
+  color: var(--text);
+}
+
+button.ag-page-chip.reverted {
+  opacity: 0.6;
+  cursor: default;
 }

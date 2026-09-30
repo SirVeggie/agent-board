@@ -601,6 +601,8 @@ class CursorSession implements ProviderSession {
   private onTool(update: Record<string, unknown>, sink: RunSink): void {
     const toolId = String(update.toolCallId ?? "");
     if (!toolId) return;
+    // The plan card shows Cursor's plan; its tool row would repeat it.
+    if (typeof update.title === "string" && update.title.startsWith("Create Plan")) return;
     const rawTitle = typeof update.title === "string" ? this.shortenPaths(update.title) : undefined;
     const title = rawTitle?.startsWith(`${BOARD_MCP}: `) ? `Board: ${rawTitle.slice(BOARD_MCP.length + 2)}` : rawTitle;
     const status = mapStatus(update.status);

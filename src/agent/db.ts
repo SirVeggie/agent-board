@@ -133,6 +133,10 @@ export class AgentDb {
     }
   }
 
+  deleteSetting(key: string): void {
+    this.db.prepare("DELETE FROM settings WHERE k = ?").run(key);
+  }
+
   setSetting(key: string, value: unknown): void {
     this.db
       .prepare("INSERT INTO settings (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v")

@@ -513,7 +513,16 @@ export class AgentHost {
 
   async cancel(threadId: string): Promise<void> {
     const run = this.runs.get(threadId);
-    this.queues.delete(threadId);
+    if (this.queues.delete(threadId)) {
+      // Stop drops queued messages; they stay in the transcript as not sent.
+      for (const item of this.loadItems(threadId)) {
+        if (item.kind === "user" && item.turnId === null && !item.dropped) {
+          item.dropped = true;
+          this.touch(item);
+        }
+      }
+      this.emitThread(threadId);
+    }
     if (!run) return;
     run.cancelled = true;
     for (const [id, pending] of this.pending) {
@@ -561,6 +570,14 @@ export class AgentHost {
     this.db.saveThread(thread);
     this.saveTurn(turn);
     this.emitThread(threadId);
+
+    // Checkpoint the page this turn is about, so an agent edit to it can be reverted.
+    const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg.context.find((c) => c.kind === "page")?.id;
+    const pageTab = pageId ? store.get(pageId, "agent") : undefined;
+    if (pageTab && !pageTab.templateId) {
+      turn.page = { id: pageTab.id, title: pageTab.title, before: pageTab.revision };
+      this.db.setSetting(`checkpoint:${turn.id}`, { html: pageTab.html, revision: pageTab.revision });
+    }
 
     if (thread.mode !== "board" && thread.cwd) {
       run.repo = await findRepo(thread.cwd);
@@ -615,6 +632,16 @@ export class AgentHost {
     } else {
       turn.files = this.toolFiles(run);
     }
+    if (turn.page) {
+      const tab = store.get(turn.page.id, "agent");
+      if (tab && tab.revision !== turn.page.before) {
+        turn.page.after = tab.revision;
+        turn.page.title = tab.title;
+      } else {
+        delete turn.page;
+        this.db.deleteSetting(`checkpoint:${turn.id}`);
+      }
+    }
     turn.status = result.status;
     turn.endedAt = Date.now();
     turn.usage = run.usage;
@@ -635,7 +662,7 @@ export class AgentHost {
     const next = queue?.shift();
     if (queue && !queue.length) this.queues.delete(threadId);
     if (next && latest) {
-      const pendingUser = this.loadItems(threadId).find((item) => item.kind === "user" && item.turnId === null);
+      const pendingUser = this.loadItems(threadId).find((item) => item.kind === "user" && item.turnId === null && !item.dropped);
       void this.runTurn(threadId, next, pendingUser ?? this.addItem(threadId, null, { kind: "user", text: next.text }));
     }
   }
@@ -961,6 +988,12 @@ export class AgentHost {
     const pending = this.pending.get(requestId);
     if (!pending || pending.kind !== "plan") throw new Error("This plan is no longer waiting.");
     this.pending.delete(requestId);
+    const planThread = this.threads.get(pending.threadId);
+    if (decision.accepted && planThread?.provider === "cursor" && planThread.mode === "plan") {
+      // Cursor ends the turn after an accepted plan; continue in Code mode with a follow-up turn.
+      this.updateThread(planThread.id, { mode: "code" });
+      this.send(planThread.id, { text: "Implement the plan." });
+    }
     const item = this.loadItems(pending.threadId).find((it) => it.id === pending.itemId);
     if (item && item.kind === "plan") {
       item.status = decision.accepted ? "accepted" : "rejected";
@@ -1005,6 +1038,24 @@ export class AgentHost {
       .filter((item) => !file || (item.kind === "tool" && item.files?.some((f) => f.path === file)))
       .map((item) => (item.kind === "tool" ? item.diff ?? "" : ""));
     return { patch: patches.join(""), truncated: false };
+  }
+
+  /** Put the turn's page back to its HTML from before the turn. */
+  revertPage(threadId: string, turnId: string): { ok: boolean; error?: string } {
+    const turn = this.loadTurns(threadId).find((t) => t.id === turnId);
+    if (!turn?.page?.after) return { ok: false, error: "This turn did not change a page." };
+    const saved = this.db.getSetting<{ html: string; revision: number } | null>(`checkpoint:${turn.id}`, null);
+    if (!saved) return { ok: false, error: "The checkpoint for this page is gone." };
+    try {
+      store.update(turn.page.id, { html: saved.html, viewer: "user" });
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    turn.page.reverted = true;
+    this.saveTurn(turn);
+    this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: `Reverted “${turn.page.title}” to how it was before turn ${turn.seq}.` });
+    this.flushNow();
+    return { ok: true };
   }
 
   async revertTurn(threadId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {
