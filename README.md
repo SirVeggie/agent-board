@@ -154,6 +154,39 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 
 `board_wait` blocks until `board.signal("name")` (or `data-board-signal="name"`) fires on that tab. It returns the signal plus the current state. Waiting for any state change would wake on every keystroke; the named signal is the handshake. After a successful wait, pass `signal.revision` as `afterSignalRevision` to wait for the next one without re-showing the page.
 
+## Agent chat
+
+The board has its own chat with coding agents, so Claude and Cursor run from one place. The daemon runs the agents; the browser only shows them.
+
+| Provider | How it runs | Login |
+| --- | --- | --- |
+| **Cursor** | The Cursor CLI's ACP server (`agent acp`), one process per active thread. ACP has approvals (`session/request_permission`) and Cursor's own question and plan requests; the Cursor SDK has neither. | `agent login` (the CLI lives in `%LOCALAPPDATA%\cursor-agent`; `CURSOR_AGENT_HOME` overrides) |
+| **Claude** | The Claude Agent SDK, one long-lived query per active thread. | Your Claude Code login (`claude` → `/login`) or `ANTHROPIC_API_KEY` |
+
+Three ways to open it:
+
+- **Sidebar** — the ✦ button or **Ctrl+L**. The ☰ button lists threads.
+- **Floating** — **Ctrl+K**. A composer over the bottom of the page for quick asks and edits. While the conversation is collapsed, progress shows as lines that fade out; the final answer stays for a while. **Ctrl+↑** or the list button shows the conversation; **Esc** hides it to a small handle. It follows the active page: its newest thread for that page, or a new one.
+- **Full window** — **Ctrl+Shift+L** or ⤢ in the sidebar. Threads on the left, the conversation in the middle.
+
+**Threads** belong to a page, a Library folder, a workspace folder, or nothing (global). The list's **Here** filter shows threads for the current page, its folders, workspaces, and global ones; **All** and **Archived** show the rest. New page and folder threads start in Board mode. A thread keeps its provider; picking a model from the other provider starts a new thread in the same place.
+
+**Modes** set what the agent may touch: **Code** (files and shell in the workspace), **Ask** (read-only), **Plan** (propose first; accepting the plan continues in Code), **Board** (board tools and web only, no files or shell). In Code mode the shield picks approvals: **Ask first**, **Auto-edit** (edits pass, commands ask), **Auto review** (Claude's classifier), **Full access**. Approval cards offer the provider's own "always allow", which it saves to its own allowlist. Board tools on this daemon's MCP server are approved automatically, like the MCP today. **Web** turns web search and fetch on or off. The model and reasoning pickers read the provider's model list: Claude effort levels, Cursor's effort, fast, and context options per model.
+
+What shows in a thread:
+
+- **Reasoning** as collapsible "Thought" rows with a one-line preview (Settings → Agent → Reasoning expands them by default).
+- **Tool rows**: reads and searches fold into "Explored N files"; edits show file names and `+added −removed`; commands show the command and exit code. Expand a row for its output or inline diff.
+- **Changes**: every turn in a git workspace snapshots the working copy before and after (a temporary index, so your index and refs are untouched and new files count). The turn ends with the files it changed and line counts; **Review** opens the diff viewer with This turn, Thread, and Git working tree tabs, and **Revert turn** undoes the turn's changes if they still apply cleanly. Without git, the per-tool diffs are used.
+- **Page edits**: a turn on a page (a page thread, or with the page attached) keeps a checkpoint of the page's HTML. The footer's **Page edited** button puts it back.
+- Approvals, questions, plans, and todo lists as cards. Page links from the agent (`[[page-key]]` or `[label](board:page-key)`) open like page links do (Ctrl navigate, Shift split, Alt peek).
+
+The composer takes pasted or dropped images, `/` opens the provider's slash commands and skills, and the page chip attaches the current page. Messages sent while a turn runs are queued; Stop drops the queue, and those messages stay marked "Not sent" with **Send again**. Esc twice in the composer stops a running turn.
+
+In Code, Ask, and Plan modes the agents load your usual setup: Claude's user and project settings, skills, MCP servers and CLAUDE.md; Cursor's own config, rules, skills and MCP servers. Board mode runs in a scratch folder under the data folder.
+
+Threads, transcripts, and page checkpoints are stored in `%LOCALAPPDATA%\agent-board\agent.sqlite`; the providers keep their own session files for resuming. HTTP routes are under `/api/agent/*` and are not reachable from tab pages.
+
 ## Data
 
 Tabs persist in `%LOCALAPPDATA%\agent-board\board.sqlite` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\agent-board\assets\<tabId>\`. Every page lives in the **Library** until you delete it; closing a tab only takes it off the strip. **Ctrl+Z** undoes whichever is newer: the most recent close (reopens the tab), or the most recent delete. A folder delete or any other bulk delete is one undo step. Deleted pages and folders sit in the **Trash** (Library ⋯ menu → Trash) for 7 days: each row has a restore button that puts it back in the Library, and its context menu can delete it for good. After 7 days they are deleted automatically. A previous `state.json` is imported once and renamed to `state.json.bak`.

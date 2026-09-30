@@ -56,3 +56,14 @@
   - Browser localStorage keys keep their old names (`agent-board.archiveOpen`, `agent-board.archiveWidth`); a stored sidebar tab of `archive` is read as `library`. No transform.
 - **How to verify:** The `a schema v1 board migrates archived tabs into the Library` test in `src/store.test.ts` builds a v1 database, opens it, and checks the migrated statuses, `closedAt`, and the initial Library order. Manually: copy an old `board.sqlite`, start the new daemon against it, and confirm open tabs and former archive rows show in the Library in that order.
 - **When to remove:** Once every board in use has been opened by a schema 2 daemon, delete `migrateV1ToLibrarySchema` and `ensureAgentHiddenColumn` and make `openExisting` reject schema 1. For a local-only tool, one release after this lands is enough.
+
+## Agent chat: `agent.sqlite` (new file, board schema unchanged)
+
+- **What changed:** The in-app agent chat stores its threads, turns, transcript items, preferences, cached model lists, and page checkpoints in a separate SQLite file, `agent.sqlite`, next to `board.sqlite`. Tables: `meta`, `threads`, `turns`, `items`, `settings`. Rows keep their payload as JSON; the columns are only what queries need (`activity_at`, `archived`, `thread_id`, `seq`). `turns` and `items` reference `threads(id) ON DELETE CASCADE`.
+- **Why a separate file:** Nothing in `board.sqlite` changes, so old boards open as before and a broken agent database can't affect pages. `SCHEMA_VERSION` stays `2`; `agent.sqlite` has its own `meta.schema` (`AGENT_SCHEMA_VERSION = 1`).
+- **Protocol:** `VERSION` 2.4.0 → 2.5.0 for the new WebSocket events (`agent_thread`, `agent_thread_deleted`, `agent_item`, `agent_delta`, `agent_turn`) and the `/api/agent/*` routes. `public/app.js` `BOARD_VERSION` matches.
+- **Dependencies:** zod 3 → 4 and `@modelcontextprotocol/sdk` 1.25 → 1.29 (peer dependencies of `@anthropic-ai/claude-agent-sdk`). The only code change was `z.record(value)` → `z.record(z.string(), value)` in `src/mcp.ts`.
+- **On startup:** turns left `running` by a daemon that stopped are marked `cancelled`.
+- **Export format:** unchanged; board exports don't include agent threads.
+- **Where:** `src/agent/db.ts`.
+- **When to remove:** Keep. This is the current schema.

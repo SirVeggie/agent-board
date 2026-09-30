@@ -860,7 +860,8 @@
       "tab" +
       (tab.id === state.activeId ? " active" : "") +
       (tab.pinned ? " pinned" : "") +
-      (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "");
+      (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "") +
+      (window.agentBoardChat?.pageStatus(tab.id) ? ` agent-${window.agentBoardChat.pageStatus(tab.id)}` : "");
     if (drag?.moved && drag.id === tab.id) {
       el.classList.add("dragging");
     }

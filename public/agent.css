@@ -10,6 +10,7 @@
   --ag-mono: "Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
   --ag-card: rgba(var(--lift-rgb), 0.035);
   --ag-card-border: rgba(var(--lift-rgb), 0.07);
+  --ag-sunken: rgba(0, 0, 0, 0.26);
 }
 
 html[data-theme="cream"] {
@@ -19,6 +20,7 @@ html[data-theme="cream"] {
   --ag-del: #c24242;
   --ag-add-bg: rgba(47, 138, 69, 0.1);
   --ag-del-bg: rgba(194, 66, 66, 0.09);
+  --ag-sunken: rgba(60, 40, 10, 0.06);
 }
 
 /* ---------- chrome toggle ---------- */
@@ -142,7 +144,7 @@ html.tight-small .agent-pane {
 .ag-rename {
   font: inherit;
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--ag-sunken);
   color: var(--heading);
   border: 1px solid var(--accent-ring);
   border-radius: 6px;
@@ -363,7 +365,7 @@ button.ag-chip {
   border-radius: 6px;
   font-size: 12px;
   color: var(--muted);
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--ag-sunken);
   box-shadow: none;
   max-width: 260px;
   white-space: nowrap;
@@ -458,14 +460,14 @@ button.ag-chip-x {
 .ag-md code {
   font-family: var(--ag-mono);
   font-size: 0.88em;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--ag-sunken);
   padding: 0.1em 0.35em;
   border-radius: 5px;
 }
 
 .ag-md pre {
   position: relative;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--ag-sunken);
   border: 1px solid var(--border);
   border-radius: 9px;
   padding: 9px 11px;
@@ -703,7 +705,7 @@ button.ag-tool-head:hover {
   gap: 5px;
   padding: 1px 6px;
   border-radius: 5px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--ag-sunken);
   font-family: var(--ag-mono);
   font-size: 11.5px;
   min-width: 0;
@@ -823,7 +825,7 @@ button.ag-tool-head:hover {
   font-family: var(--ag-mono);
   font-size: 11.5px;
   line-height: 1.45;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--ag-sunken);
   border-radius: 7px;
   padding: 7px 9px;
   max-height: 280px;
@@ -946,7 +948,7 @@ button.ag-tool-head:hover {
   font: inherit;
   font-size: 13px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--ag-sunken);
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 6px 9px;
@@ -1035,7 +1037,7 @@ button.ag-q-opt {
   justify-content: center;
   gap: 1px;
   text-align: left;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--ag-sunken);
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
@@ -1308,7 +1310,7 @@ button.ag-change-row .ag-fname {
   position: relative;
   flex-shrink: 0;
   margin: 0 10px 10px;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--ag-sunken);
   border-radius: 13px;
   box-shadow: inset 0 0 0 1px var(--border);
   padding: 7px 8px 6px;
@@ -1518,7 +1520,7 @@ button.ag-slash-item:hover {
   font: inherit;
   font-size: 12.5px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--ag-sunken);
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 5px 8px;
@@ -1635,7 +1637,7 @@ button.ag-menu-item.danger {
 .ag-seg {
   display: flex;
   gap: 3px;
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--ag-sunken);
   border-radius: 8px;
   padding: 3px;
 }
@@ -1877,7 +1879,7 @@ html.tight-small .agent-full {
 
 .dock-panel .ag-composer {
   margin: 0 8px 8px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--ag-sunken);
 }
 
 .dock-top {
@@ -2384,4 +2386,25 @@ button.ag-page-chip:hover:not(.reverted) {
 button.ag-page-chip.reverted {
   opacity: 0.6;
   cursor: default;
+}
+
+/* ---------- tab strip: page threads at work ---------- */
+
+.tab.agent-running::before,
+.tab.agent-waiting::before {
+  content: "";
+  order: -1;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.9);
+  animation: ag-pulse 1.2s infinite;
+}
+
+.tab.agent-waiting::before {
+  background: var(--ag-warn);
+  box-shadow: 0 0 8px rgba(232, 196, 122, 0.8);
+  animation: none;
 }

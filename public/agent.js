@@ -2336,6 +2336,22 @@
       badge.classList.toggle("warn", waiting);
     }
     dock.renderHandle();
+    for (const tabEl of document.querySelectorAll(".tab[data-id]")) {
+      const status = pageStatus(tabEl.dataset.id);
+      tabEl.classList.toggle("agent-running", status === "running");
+      tabEl.classList.toggle("agent-waiting", status === "waiting");
+    }
+  }
+
+  /** "waiting" or "running" when a thread for this page is at work, for the tab strip. */
+  function pageStatus(tabId) {
+    let status = null;
+    for (const t of S.threads.values()) {
+      if (t.scope.kind !== "page" || t.scope.ref !== tabId || t.status === "idle") continue;
+      if (t.status === "waiting") return "waiting";
+      status = "running";
+    }
+    return status;
   }
 
   function views() {
@@ -2456,7 +2472,7 @@
     }
   });
 
-  window.agentBoardChat = { shortcut, escape };
+  window.agentBoardChat = { shortcut, escape, pageStatus };
 
   /* ---------- boot ---------- */
 
