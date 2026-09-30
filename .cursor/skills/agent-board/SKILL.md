@@ -143,6 +143,34 @@ If the content page would change a lot, it is better to make a new page, otherwi
 - Keep pages focused. Typical size is well under 200 KB (hard limit 2 MB). Images passed via `assets` do not count toward that cap.
 - Do not rely on the parent page's styles; tab content renders in an iframe.
 
+## Linking pages
+
+Pages can link to other board pages and to websites. The user opens a link as a tab (navigate), a **peek** (a fixed card over the page, for a quick look without opening a tab), or a **split** (a pane beside the current tab). Links keep related pages connected instead of one page trying to hold everything.
+
+```html
+<a data-board-open="clims-12345-analysis">Analysis</a>                              <!-- no mode: the user's Settings (Navigate by default) -->
+<a data-board-open="clims-12345-logs" data-board-mode="peek">raw logs</a>          <!-- a quick look -->
+<a data-board-open="clims-12345-analysis#risks" data-board-mode="split">Risks</a>  <!-- beside this page, scrolled to id="risks" -->
+<a href="https://tauri.app/reference/config/">Tauri config reference</a>          <!-- a website: opens the browser -->
+<a data-board-open="clims-12345-logs"></a>                                         <!-- empty: shows the target page's title -->
+```
+
+When to link:
+
+- A summary page with the details on their own pages: link each finding to its evidence page with `peek`, so the user checks it without losing their place.
+- A page the user will read side by side with another (a spec beside its review checklist, a diff beside its notes): `split`.
+- A page the user should go and work on (their todo list, the next step's form): leave the mode off. Their Settings decide what a plain link does, and holding Ctrl, Shift, or Alt always overrides you.
+- Existing pages the user already has: find them with `board_list` / `board_library` and link by their `key`.
+
+Rules:
+
+- Link by **key**: the keys you chose in `board_show`, or ones from `board_list` / `board_library`. Never guess a key. A link to a key with no page is struck through, and fixes itself as soon as a page with that key exists, so you may show a hub page before its detail pages as long as you create them in the same turn.
+- `#anchor` scrolls the target to the element with that `id`. Give the target the id.
+- A plain `href` to a website opens the browser. `data-board-mode="peek"` or `"split"` shows the site inside the board, but many sites refuse to be framed (GitHub, Google, most logins) and then show an Open in browser card instead. Sites the user is signed in to may appear signed out. Use peek or split for docs and references, not for apps.
+- Do not use `target="_blank"` or scripts for navigation; the link attributes cover it. `board.open(target, { mode, anchor })` is the script form for a click handler (it resolves to `{ ok, mode, id }` or `{ ok: false, error: "not_found" | "in_trash" }`). It refuses calls outside a click or key press, so a page can never switch the user's view on load.
+- `board.resolve([keys])` returns `{ key: { id, title, open } | null }`, for a page that builds its link list from state.
+- You cannot open a peek or split yourself: `board_show` / `board_open` focus a tab. Links are for the user to follow.
+
 ## Images
 
 User-provided image files (chat attachments, local paths) go on a page through `assets` on `board_show`. Reference them as `asset:<name>`:
@@ -221,18 +249,8 @@ board.onChange(render)          // a remote change arrived; not fired for your o
 board.bind(el, "notes")         // two-way bind an input, textarea, or checkbox
 board.revision                  // current stateRevision
 board.saveAsset(file)           // store an image/file for this page; see Page assets
-board.open("key", { mode })     // open a page or URL as "tab", "peek", or "split" (from a click only)
+board.open("key", { mode })     // open a page or URL as "tab", "peek", or "split"; see Linking pages
 ```
-
-Link to other pages by **key** (never guess one; use keys you created or found with `board_list` / `board_library`), or to websites with a plain `href`:
-
-```html
-<a data-board-open="clims-12345-analysis">Analysis</a>                        <!-- navigates by default -->
-<a data-board-open="clims-12345-analysis#risks" data-board-mode="peek">Risks</a> <!-- quick look, key#anchor -->
-<a href="https://example.com/docs" data-board-mode="split">Docs</a>            <!-- beside the page -->
-```
-
-Use `peek` for reference lookups and `split` for side-by-side reading; leave the mode off when the user should go work on the other page (their Settings decide). A plain `href` to a website opens the browser. `board.open(target, { mode })` does the same from a click handler; it refuses calls outside a click or key press, so never open pages on load.
 
 Declarative wake-ups (do **not** also call `board.signal` in the same click):
 

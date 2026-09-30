@@ -28,7 +28,7 @@ If the user wants a changed version of a built-in, `board_template_get` it and u
 
 1. Decide the form with the user, or pick a small set: e.g. Title, item name singular/plural, column count.
 2. Write HTML as you would for `board_show`. Use `{{fieldKey}}` where the value should appear in markup (HTML-escaped). In scripts, read `board.template.values.fieldKey`.
-3. Use `board.state` for live data (todos, notes). Put starting data in `initialState`.
+3. Use `board.state` for live data (todos, notes). Put starting data in `initialState`. Items that point at other board pages can keep the page's key in state and render `<a data-board-open="key">` (see Linking pages in the skill).
 4. Set `titleTemplate` if the tab title should include a field, e.g. `{{title}}`.
 5. Field `type`: `text`, `textarea`, `number`, `select`, `checkbox`. Select needs `options`. Keys must be JS identifiers.
 6. If an agent will read or change the page's state, write a `guide`: markdown with the state shape, the signals the page fires and when, and the rules for editing (which keys to leave alone, how to add an item). Tool results hand it to any agent the first time it touches a page from the template, so nothing about the template needs to go in this skill. Keep it under a page; `templates/builtin/kanban.guide.md` is a good model. Upserting without `guide` keeps the current one.

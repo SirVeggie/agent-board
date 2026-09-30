@@ -75,6 +75,7 @@ const INSTRUCTIONS = [
   "Show a page once with board_show and a stable key; for small edits to an existing page use board_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
   "Find pages by title with board_list (open tabs), then board_library (every page). Never guess a key.",
   "Pages keep user data in board state (board.set / board.bind in the page, board_get_state / board_set_state from you, with expectedRevision). Never use localStorage in a page.",
+  "Pages can link to each other by key: <a data-board-open=\"key\" data-board-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with board_list / board_library.",
   "When the page asks the user to submit, choose, or finish something, call board_wait next with the signal name the page fires. Never poll board_get_state.",
   "Only use board_screenshot for UI designs that belong to the current project, never to polish information pages.",
   "Do not create, edit, or delete templates unless the user asked. Pages from a template come with an agent guide in tool results; follow it.",
