@@ -15,6 +15,7 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
 nextNum: number
 lastEvent: { type, cardId, at }            // written by the page just before each signal
 view: { q, label, priority, assignee, due } // the user's filter; leave it alone
+settings: { hideAddColumn?, showDoneDate? } // the user's page settings; leave them alone
 ```
 
 - `col` is a column **id**. Order inside a column is the order in `cards`.
@@ -38,7 +39,7 @@ Match columns by `role`, never by title; the user renames them.
 | `review` | Where you put finished work. The card shows Approve and Request changes. |
 | `done` | Complete. Moving a card here: set `doneAt`. |
 
-When you move a card, set `col` and `movedAt` (and `doneAt` for a done column, removing it otherwise).
+When you move a card, set `col` and `movedAt`. For a done column, keep an existing `doneAt`; if it has none, set it and put the card first among that column's cards in `cards`, so the newest done work is on top. For any other column, remove `doneAt`.
 
 ## Signals
 

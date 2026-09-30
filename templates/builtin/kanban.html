@@ -123,6 +123,8 @@
   }
   .tool:hover { color: var(--text); box-shadow: var(--depth-hover); }
   .tool.on { color: var(--text); box-shadow: var(--depth), 0 0 0 1px var(--accent); }
+  .tool.icon { display: inline-flex; align-items: center; justify-content: center; padding: 7px 9px; }
+  .tool.icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .spacer { flex: 1; }
 
   .board {
@@ -689,6 +691,40 @@
   }
   .confirm-row .danger-solid:hover { background: #ff8592; }
   .confirm-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .settings-box { width: min(440px, 100%); }
+  .setting { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; cursor: pointer; }
+  .setting + .setting { border-top: 1px solid rgba(255, 255, 255, .06); }
+  .setting .txt { flex: 1; }
+  .setting .txt b { display: block; font-weight: 600; margin-bottom: 2px; }
+  .setting .txt span { color: var(--muted); font-size: 12.5px; }
+  .switch {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 20px;
+    margin: 1px 0 0;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, .12);
+    box-shadow: var(--depth);
+    position: relative;
+    cursor: pointer;
+    transition: background 120ms var(--ease);
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--text);
+    transition: transform 120ms var(--ease);
+  }
+  .switch:checked { background: var(--accent); }
+  .switch:checked::after { transform: translateX(14px); background: #0b1220; }
+  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, .84); display: flex; align-items: center; justify-content: center; z-index: 80; padding: 24px; cursor: zoom-out; }
   .lightbox img { max-width: min(1200px, 100%); max-height: 100%; border-radius: 10px; }
   .need-reload { margin: 40px auto; max-width: 480px; color: var(--muted); text-align: center; }
@@ -715,6 +751,7 @@
       <span class="spacer"></span>
       <button class="tool" id="labelsBtn" type="button">Labels</button>
       <button class="tool" id="archiveBtn" type="button">Archive</button>
+      <button class="tool icon" id="settingsBtn" type="button" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div>
   </header>
   <main class="board" id="board"></main>
@@ -792,6 +829,22 @@
       <div class="confirm-row">
         <button class="ghost" id="confirmCancel" type="button">Cancel</button>
         <button class="danger-solid" id="confirmOk" type="button"></button>
+      </div>
+    </div>
+  </div>
+  <div class="confirm-back hidden" id="settingsBack">
+    <div class="confirm-box settings-box" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <h3 id="settingsTitle">Board settings</h3>
+      <label class="setting">
+        <span class="txt"><b>Hide "Add column"</b><span>Removes the add column button at the end of the board.</span></span>
+        <input class="switch" id="sHideAddColumn" type="checkbox">
+      </label>
+      <label class="setting">
+        <span class="txt"><b>Show done date on cards</b><span>Cards that are done show when they were completed.</span></span>
+        <input class="switch" id="sShowDoneDate" type="checkbox">
+      </label>
+      <div class="confirm-row">
+        <button class="ghost" id="settingsClose" type="button">Close</button>
       </div>
     </div>
   </div>
@@ -921,6 +974,10 @@
     var v = board.state.view;
     return v && typeof v === "object" ? v : {};
   }
+  function settings() {
+    var s = board.state.settings;
+    return s && typeof s === "object" ? s : {};
+  }
   function column(id) {
     var cols = columns();
     for (var i = 0; i < cols.length; i++) if (cols[i].id === id) return cols[i];
@@ -1040,9 +1097,31 @@
     var col = column(colId);
     c.col = colId;
     c.movedAt = now;
-    if (col && col.role === "done") c.doneAt = now;
+    if (col && col.role === "done") { if (!c.doneAt) c.doneAt = now; }
     else delete c.doneAt;
     return c;
+  }
+  /** Whether moving c into colId completes it: a done column, and no done time yet. */
+  function completes(c, colId) {
+    var col = column(colId);
+    return Boolean(col && col.role === "done" && !c.doneAt);
+  }
+  /**
+   * Inserts c into cards (which must not contain it) in column colId: at the top when top is set,
+   * else before beforeId, else after the column's last card, so the array keeps columns together.
+   */
+  function insertCard(cards, c, colId, beforeId, top) {
+    var at = -1;
+    if (top) at = cards.findIndex(function (x) { return x.col === colId; });
+    else if (beforeId) at = cards.findIndex(function (x) { return x.id === beforeId; });
+    if (at === -1) {
+      at = cards.length;
+      for (var i = cards.length - 1; i >= 0; i--) {
+        if (cards[i].col === colId) { at = i + 1; break; }
+      }
+    }
+    cards.splice(at, 0, c);
+    return cards;
   }
   function afterMove(cardId, fromCol, toCol) {
     if (!AGENT_MODE || fromCol === toCol) return;
@@ -1272,6 +1351,7 @@
     renderBoard();
     if (openId) renderModal();
     if (!archiveEl.classList.contains("hidden")) renderArchive();
+    if (!settingsBack.classList.contains("hidden")) renderSettings();
   }
 
   function renderBoard() {
@@ -1364,7 +1444,7 @@
       setColumns(columns().concat([col]));
       boardEl.scrollLeft = boardEl.scrollWidth;
     });
-    boardEl.appendChild(addCol);
+    if (!settings().hideAddColumn) boardEl.appendChild(addCol);
     boardEl.scrollLeft = scrollLeft;
     boardEl.querySelectorAll(".cards").forEach(function (list) {
       if (listScroll[list.dataset.col]) list.scrollTop = listScroll[list.dataset.col];
@@ -1416,6 +1496,11 @@
       if (!done && t < today) { due.classList.add("late"); due.title = "Overdue"; }
       else if (!done && t <= today + 2 * DAY) { due.classList.add("soon"); due.title = "Due soon"; }
       badges.appendChild(due);
+    }
+    if (c.doneAt && settings().showDoneDate) {
+      var doneBadge = el("span", "badge full", "✓ " + shortDate(c.doneAt));
+      doneBadge.title = "Done " + new Date(c.doneAt).toLocaleString();
+      badges.appendChild(doneBadge);
     }
     if (c.checklist.length) {
       var n = c.checklist.filter(function (i) { return i.done; }).length;
@@ -1829,17 +1914,9 @@
     var moving = Object.assign({}, cards[from]);
     var fromCol = moving.col;
     cards.splice(from, 1);
+    var top = completes(moving, colId);
     enterColumn(moving, colId, Date.now());
-    var at = beforeId ? cards.findIndex(function (c) { return c.id === beforeId; }) : -1;
-    if (at === -1) {
-      // After the last card of the column, so the array keeps columns together.
-      at = cards.length;
-      for (var i = cards.length - 1; i >= 0; i--) {
-        if (cards[i].col === colId) { at = i + 1; break; }
-      }
-    }
-    cards.splice(at, 0, moving);
-    setCards(cards);
+    setCards(insertCard(cards, moving, colId, beforeId, top));
     afterMove(id, fromCol, colId);
   }
 
@@ -2237,11 +2314,9 @@
     var from = c.col;
     var to = mColumn.value;
     var cards = allCards().filter(function (x) { return x.id !== c.id; });
+    var top = completes(c, to);
     var moved = enterColumn(Object.assign({}, c), to, Date.now());
-    var at = cards.length;
-    for (var i = cards.length - 1; i >= 0; i--) if (cards[i].col === to) { at = i + 1; break; }
-    cards.splice(at, 0, moved);
-    setCards(cards);
+    setCards(insertCard(cards, moved, to, null, top));
     afterMove(c.id, from, to);
   });
   mPriority.addEventListener("change", function () {
@@ -2538,13 +2613,16 @@
     var c = card(id);
     if (!c) return;
     var target = firstRole("done");
-    var cards = allCards().map(function (x) {
-      if (x.id !== id) return x;
-      var next = Object.assign({}, x);
-      delete next.status;
-      if (target) enterColumn(next, target.id, Date.now());
-      return next;
-    });
+    var next = Object.assign({}, c);
+    delete next.status;
+    var cards = allCards().filter(function (x) { return x.id !== id; });
+    if (target && next.col !== target.id) {
+      var top = completes(next, target.id);
+      enterColumn(next, target.id, Date.now());
+      insertCard(cards, next, target.id, null, top);
+    } else {
+      cards = allCards().map(function (x) { return x.id === id ? next : x; });
+    }
     board.set({ cards: cards, lastEvent: { type: "approved", cardId: id, at: Date.now() } });
     board.signal("approved");
     render();
@@ -2937,6 +3015,51 @@
       archiveBody.appendChild(row);
     });
   }
+
+  // ---------- settings ----------
+  var settingsBtn = $("settingsBtn"), settingsBack = $("settingsBack");
+  var sHideAddColumn = $("sHideAddColumn"), sShowDoneDate = $("sShowDoneDate");
+  function renderSettings() {
+    var s = settings();
+    sHideAddColumn.checked = Boolean(s.hideAddColumn);
+    sShowDoneDate.checked = Boolean(s.showDoneDate);
+  }
+  function openSettings() {
+    closeMenu();
+    renderSettings();
+    settingsBack.classList.remove("hidden");
+    settingsBtn.classList.add("on");
+    $("settingsClose").focus();
+  }
+  function closeSettings() {
+    settingsBack.classList.add("hidden");
+    settingsBtn.classList.remove("on");
+    settingsBtn.focus();
+  }
+  function saveSetting(key, on) {
+    var next = Object.assign({}, settings());
+    if (on) next[key] = true;
+    else delete next[key];
+    board.set({ settings: next });
+    render();
+  }
+  settingsBtn.addEventListener("click", function () {
+    if (settingsBack.classList.contains("hidden")) openSettings();
+    else closeSettings();
+  });
+  $("settingsClose").addEventListener("click", closeSettings);
+  settingsBack.addEventListener("pointerdown", function (e) {
+    if (e.target === settingsBack) closeSettings();
+  });
+  sHideAddColumn.addEventListener("change", function () { saveSetting("hideAddColumn", sHideAddColumn.checked); });
+  sShowDoneDate.addEventListener("change", function () { saveSetting("showDoneDate", sShowDoneDate.checked); });
+  // Capture phase, so Esc closes only the settings and not the card or archive behind them.
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || settingsBack.classList.contains("hidden") || confirmDone) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeSettings();
+  }, true);
 
   // ---------- toolbar ----------
   var searchTimer = 0;
