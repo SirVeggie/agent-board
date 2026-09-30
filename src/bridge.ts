@@ -539,16 +539,29 @@ export const BOARD_BRIDGE_JS = `
     return url ? { el: el, target: url } : null;
   }
 
+  /** The link a click would open here, or null when the browser should handle it. */
+  function handledLink(target) {
+    var link = linkFor(target);
+    if (!link || (!embedded && externalUrl(link.target))) {
+      return null;
+    }
+    return link;
+  }
+
+  // Shift+mousedown extends the text selection before the click opens the split. Cancel it on
+  // links only, so Shift+click elsewhere still selects text.
+  document.addEventListener("mousedown", function (event) {
+    if (event.button === 0 && event.shiftKey && handledLink(event.target)) {
+      event.preventDefault();
+    }
+  }, true);
+
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) {
       return;
     }
-    var link = linkFor(event.target);
+    var link = handledLink(event.target);
     if (!link) {
-      return;
-    }
-    var url = externalUrl(link.target);
-    if (url && !embedded) {
       return;
     }
     event.preventDefault();

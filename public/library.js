@@ -1687,7 +1687,9 @@ window.createLibrary = function createLibrary(host) {
     }
   });
   list.addEventListener("mousedown", (event) => {
-    if (event.button === 1 && event.target.closest(".lib-row")) {
+    const row = event.target.closest(".lib-row");
+    // Middle click would autoscroll; Shift+click (open in split) would select text.
+    if (row && (event.button === 1 || (event.button === 0 && event.shiftKey && row.dataset.kind === "page"))) {
       event.preventDefault();
     }
   });
