@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, test } from "node:test";
 import { parseImport, serializeExport } from "./boardExport.js";
 import { RevisionConflictError } from "./htmlEdit.js";
+import { templateFingerprint } from "./templates.js";
 import { BoardStore } from "./store.js";
 import { toMeta } from "./types.js";
 
@@ -1173,6 +1174,47 @@ test("a built-in's local copy keeps its link after edits and a reload", () => {
   assert.equal(again.copyBuiltinTemplate("markdown-note").created, false);
   assert.equal(again.getTemplate(template.id)?.source?.builtin, "markdown-note");
   assert.equal(again.listTemplates().length, 1);
+  again.closeDb();
+});
+
+/** A copy of markdown-note that looks as if it was made from an older built-in, then reloaded. */
+function staleCopy(edit: (copy: ReturnType<BoardStore["copyBuiltinTemplate"]>["template"]) => void) {
+  const store = loaded();
+  const { template } = store.copyBuiltinTemplate("markdown-note");
+  store.upsertTemplate({ id: template.id, title: template.title, html: "<p>old</p>", fields: template.fields });
+  const copy = store.getTemplate(template.id)!;
+  copy.source = { builtin: "markdown-note", fingerprint: templateFingerprint(copy) };
+  edit(copy);
+  const { tab } = store.openFromTemplate(template.id, {});
+  store.persist();
+  store.closeDb();
+  return { id: template.id, tabId: tab.id, again: loaded() };
+}
+
+test("an unedited built-in copy follows the built-in and re-renders its pages", () => {
+  const { id, tabId, again } = staleCopy(() => {});
+  const builtin = again.findTemplate("builtin:markdown-note")!.template;
+  const copy = again.getTemplate(id)!;
+  assert.equal(copy.html, builtin.html);
+  assert.equal(copy.source?.fingerprint, templateFingerprint(builtin));
+  assert.doesNotMatch(again.get(tabId)!.html, /<p>old<\/p>/);
+  again.closeDb();
+});
+
+test("an edited built-in copy is not updated", () => {
+  const { id, again } = staleCopy((copy) => {
+    copy.html = "<p>mine</p>";
+  });
+  assert.equal(again.getTemplate(id)!.html, "<p>mine</p>");
+  again.closeDb();
+});
+
+test("a built-in copy is not updated when the built-in's stateVersion changed", () => {
+  const { id, again } = staleCopy((copy) => {
+    copy.stateVersion = 2;
+    copy.source = { builtin: "markdown-note", fingerprint: templateFingerprint(copy) };
+  });
+  assert.equal(again.getTemplate(id)!.html, "<p>old</p>");
   again.closeDb();
 });
 

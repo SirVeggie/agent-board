@@ -190,6 +190,7 @@ export class BoardStore extends EventEmitter {
     this.sweepAssets();
     this.assetSweepTimer = setInterval(() => this.sweepAssets(), ASSET_SWEEP_INTERVAL_MS);
     this.assetSweepTimer.unref?.();
+    this.syncBuiltinCopies();
     if (this.removed.size || this.foldersDirty || this.dirty.size || this.templatesDirty) {
       this.persistSoon();
     }
@@ -372,8 +373,9 @@ export class BoardStore extends EventEmitter {
   }
 
   /**
-   * The local copy of a built-in, created on first use so a later app update never changes
-   * the user's pages. The copy is found again by its source, even after it has been edited.
+   * The local copy of a built-in, created on first use. An app update only changes it while it is
+   * unedited and the state format is unchanged (see syncBuiltinCopies). The copy is found again by
+   * its source, even after it has been edited.
    */
   copyBuiltinTemplate(idOrKey: string): { template: Template; created: boolean } {
     const builtin = this.locateBuiltin(idOrKey);
@@ -2338,6 +2340,36 @@ export class BoardStore extends EventEmitter {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Bring unedited local copies up to date with a changed built-in, and re-render their pages.
+   * A copy the user edited, or a built-in whose stateVersion changed, is left for an agent to update.
+   */
+  private syncBuiltinCopies(): void {
+    for (const builtin of this.builtins) {
+      const copy = this.localCopyOf(builtin.key);
+      if (!copy?.source) {
+        continue;
+      }
+      const latest = templateFingerprint(builtin);
+      if (copy.source.fingerprint === latest) {
+        continue;
+      }
+      if (templateFingerprint(copy) !== copy.source.fingerprint || copy.stateVersion !== builtin.stateVersion) {
+        continue;
+      }
+      copy.title = builtin.title;
+      copy.description = builtin.description;
+      copy.html = builtin.html;
+      copy.fields = structuredClone(builtin.fields);
+      copy.titleTemplate = builtin.titleTemplate;
+      copy.initialState = structuredClone(builtin.initialState);
+      copy.source = { builtin: builtin.key, fingerprint: latest };
+      copy.updatedAt = Date.now();
+      this.markTemplateDirty(copy.id);
+      this.refreshTemplateInstances(copy, false);
+    }
   }
 
   /** Link a local template identical to a built-in (e.g. the one it was made from), so opening the built-in reuses it. */

@@ -20,7 +20,7 @@ Reuse the same `key` when updating that template.
 
 Some templates ship with the app (Embed, Kanban board, Markdown note, Todo list). `board_template_list` returns them under `builtins` with ids like `builtin:todo-list`. They are read-only: `board_template_upsert` and `board_template_delete` refuse them.
 
-Opening a built-in (from the sidebar or `board_template_open`) copies it into the user's templates first, once, and the page binds to that copy. App updates never touch the copy, so they can't break the user's pages. `localId` on a built-in is the id of its copy, and the copy's `builtinSource` names the built-in.
+Opening a built-in (from the sidebar or `board_template_open`) copies it into the user's templates first, once, and the page binds to that copy. On startup, an app update refreshes the copy (and its pages) only if the copy is unedited and the built-in's `stateVersion` is unchanged. Otherwise the copy is left alone; to bring it up to date, compare it with the built-in (`board_template_get`) and upsert the copy, migrating page state if `stateVersion` changed. `localId` on a built-in is the id of its copy, and the copy's `builtinSource` names the built-in.
 
 If the user wants a changed version of a built-in, `board_template_get` it and upsert under a new key, or update their copy by `localId` if they want that copy changed.
 
