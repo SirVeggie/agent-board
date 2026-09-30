@@ -53,7 +53,7 @@
   const settingsToggle = document.getElementById("settings-toggle");
   const themeList = document.getElementById("theme-list");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
-  const copyIdPrefixToggle = document.getElementById("copy-id-prefix");
+  const copyKeyPrefixToggle = document.getElementById("copy-key-prefix");
   const tightSmallToggle = document.getElementById("tight-small");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
@@ -83,7 +83,8 @@
   const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "agent-board.theme";
   const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
-  const COPY_ID_PREFIX_KEY = "agent-board.copyIdPrefix";
+  // Named for the old Copy ID action; kept so the saved setting carries over.
+  const COPY_KEY_PREFIX_KEY = "agent-board.copyIdPrefix";
   /** What a page link without a mode or modifier does: "tab", "peek", or "split". */
   const LINK_MODE_KEY = "agent-board.linkMode";
   const LINK_MODES = [
@@ -204,7 +205,7 @@
     closeTab: (id) => closeTab(id),
     setPinned,
     setAgentHidden,
-    copyTabId,
+    copyTabKey,
     downloadExport,
     downloadFolderExport: (id) => downloadHref(`/api/export/folder/${encodeURIComponent(id)}`),
     downloadAll: () => downloadExport(),
@@ -260,7 +261,7 @@
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
-  applyFlag(copyIdPrefixToggle, COPY_ID_PREFIX_KEY, true);
+  applyFlag(copyKeyPrefixToggle, COPY_KEY_PREFIX_KEY, true);
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   renderThemeList();
@@ -931,7 +932,7 @@
         return;
       }
       if (event.detail > 1) {
-        copyTabId(current.id);
+        copyTabKey(current.id);
         return;
       }
       selectTab(current.id, { fromUser: true });
@@ -1732,7 +1733,7 @@
 
   async function copyTemplateId(id) {
     try {
-      await navigator.clipboard.writeText(flagOn(copyIdPrefixToggle) ? `Agent Board template ${id}` : id);
+      await navigator.clipboard.writeText(flagOn(copyKeyPrefixToggle) ? `Agent Board template ${id}` : id);
       showNotice(`Copied ${id}`);
     } catch {
       showNotice("Could not copy to clipboard");
@@ -2199,7 +2200,7 @@
     }
     return {
       title: tab.title,
-      id: tab.id,
+      id: tab.key,
       createdAt: tab.createdAt,
       updatedAt: Math.max(tab.updatedAt || 0, tab.stateUpdatedAt || 0),
       folder: tab.folderId ? library.pathOf(tab.folderId) : "",
@@ -2252,10 +2253,15 @@
     });
   }
 
-  async function copyTabId(id) {
+  /** Copies the key, not the id: keys survive export and import, and read as words when pasted. */
+  async function copyTabKey(id) {
+    const key = findAnyTab(id)?.key;
+    if (!key) {
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(flagOn(copyIdPrefixToggle) ? `Agent Board tab ${id}` : id);
-      showNotice(`Copied ${id}`);
+      await navigator.clipboard.writeText(flagOn(copyKeyPrefixToggle) ? `Agent Board tab ${key}` : key);
+      showNotice(`Copied ${key}`);
     } catch {
       showNotice("Could not copy to clipboard");
     }
@@ -2942,7 +2948,7 @@
     }
   });
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
-  copyIdPrefixToggle.addEventListener("click", () => toggleFlag(copyIdPrefixToggle, COPY_ID_PREFIX_KEY));
+  copyKeyPrefixToggle.addEventListener("click", () => toggleFlag(copyKeyPrefixToggle, COPY_KEY_PREFIX_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });

@@ -2703,13 +2703,13 @@
 
   // ---------- page links ----------
   // [[key or id]] shows the page's title, [[target|label]] your own text, [[peek:target]] / [[split:target]] pick a
-  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A bare page id (t_1a2b3c4d), or one
-  // pasted from Copy ID ("Agent Board tab t_…"), links too. The board resolves titles and strikes out missing pages.
+  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A reference pasted from Copy key
+  // ("Agent Board tab some-key") or a bare page id (t_1a2b3c4d) links too. The board resolves titles and strikes out missing pages.
   var LINK_MODES = { board: "", tab: "tab", peek: "peek", split: "split" };
   var PAGE_LINK_RES = [
     /\[\[\s*(?:(board|tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
     /\[([^\]]+)\]\((board|tab|peek|split):([^)\s]+)\)/g,
-    /(^|[^\w\/#-])(?:Agent Board tab )?(t_[0-9a-f]{8})(?![\w-])/g
+    /(^|[^\w\/#-])(?:Agent Board tab ([a-z0-9._:-]*[a-z0-9_-])|(t_[0-9a-f]{8}))(?![\w-])/g
   ];
   function pageLinkHtml(target, label, mode) {
     return '<a href="#" class="page-link" data-board-open="' + escapeHtml(target) + '"' +
@@ -2723,8 +2723,8 @@
     s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target) {
       return hold(pageLinkHtml(target, label, LINK_MODES[mode]));
     });
-    return s.replace(PAGE_LINK_RES[2], function (_, pre, id) {
-      return pre + hold(pageLinkHtml(id, "", ""));
+    return s.replace(PAGE_LINK_RES[2], function (_, pre, key, id) {
+      return pre + hold(pageLinkHtml(key || id, "", ""));
     });
   }
   /** Plain text (a title, a comment) as HTML with only its page links live. */
@@ -2741,7 +2741,7 @@
     return String(raw == null ? "" : raw)
       .replace(PAGE_LINK_RES[0], function (_, mode, target, label) { return String(label || "").trim() || target; })
       .replace(PAGE_LINK_RES[1], "$1")
-      .replace(PAGE_LINK_RES[2], "$1$2");
+      .replace(PAGE_LINK_RES[2], "$1$2$3");
   }
 
   // ---------- markdown ----------

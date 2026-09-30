@@ -75,6 +75,8 @@
     margin: 14px 0;
   }
   .md-preview a { color: var(--accent); }
+  .page-link { text-decoration: none; border-bottom: 1px dotted currentColor; cursor: pointer; }
+  .page-link:hover { border-bottom-style: solid; }
   .md-preview code {
     font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: #0f1115;
@@ -148,7 +150,7 @@
     var src = text();
     if (!src.trim()) {
       preview.className = "md-preview placeholder";
-      preview.textContent = "Click to write. Markdown is supported.";
+      preview.textContent = "Click to write. Markdown is supported; [[page-key]] links another board page.";
       return;
     }
     preview.className = "md-preview";
@@ -190,6 +192,33 @@
     return "";
   }
 
+  // ---------- page links ----------
+  // [[key or id]] shows the page's title, [[target|label]] your own text, [[peek:target]] / [[split:target]] pick a
+  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A reference pasted from Copy key
+  // ("Agent Board tab some-key") or a bare page id (t_1a2b3c4d) links too. The board resolves titles and strikes out missing pages.
+  var LINK_MODES = { board: "", tab: "tab", peek: "peek", split: "split" };
+  var PAGE_LINK_RES = [
+    /\[\[\s*(?:(board|tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
+    /\[([^\]]+)\]\((board|tab|peek|split):([^)\s]+)\)/g,
+    /(^|[^\w\/#-])(?:Agent Board tab ([a-z0-9._:-]*[a-z0-9_-])|(t_[0-9a-f]{8}))(?![\w-])/g
+  ];
+  function pageLinkHtml(target, label, mode) {
+    return '<a href="#" class="page-link" data-board-open="' + escapeHtml(target) + '"' +
+      (mode ? ' data-board-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
+  }
+  /** Replace page links in raw text with held anchors; `hold` returns a placeholder the caller swaps back. */
+  function holdPageLinks(s, hold) {
+    s = s.replace(PAGE_LINK_RES[0], function (_, mode, target, label) {
+      return hold(pageLinkHtml(target, String(label || "").trim(), LINK_MODES[mode || "board"]));
+    });
+    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target) {
+      return hold(pageLinkHtml(target, label, LINK_MODES[mode]));
+    });
+    return s.replace(PAGE_LINK_RES[2], function (_, pre, key, id) {
+      return pre + hold(pageLinkHtml(key || id, "", ""));
+    });
+  }
+
   function mdInline(raw) {
     var held = [];
     function hold(html) {
@@ -200,6 +229,7 @@
     str = str.replace(/`([^`]+)`/g, function (_, c) {
       return hold("<code>" + escapeHtml(c) + "</code>");
     });
+    str = holdPageLinks(str, hold);
     str = str.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
       var src = safeUrl(url, true);
       if (!src) return _;

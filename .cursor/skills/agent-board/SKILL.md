@@ -1,6 +1,6 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via the agent-board MCP (board_* tools). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms, and whenever the user refers to something already on the board, such as a page by title, a pasted "Agent Board tab t_…" id, or their todo list or kanban, to read or change it. Prefer it over workspace .html files and the host's own canvas or artifact features unless the user asked for those. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via the agent-board MCP (board_* tools). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms, and whenever the user refers to something already on the board, such as a page by title, a pasted "Agent Board tab <key>" reference, or their todo list or kanban, to read or change it. Prefer it over workspace .html files and the host's own canvas or artifact features unless the user asked for those. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
 ---
 
 # Agent Board
@@ -29,7 +29,7 @@ Prefer Agent Board over the host's own canvas or artifact features and over work
 
 ## Find a page
 
-**By pasted id**: the user can copy a tab reference from the board, which looks like `Agent Board tab t_1a2b3c4d`. Pass the `t_…` part as `id` straight to `board_read`, `board_patch`, etc. It works for open and closed pages; no search needed.
+**By pasted reference**: the user can copy a tab reference from the board, which looks like `Agent Board tab sprint-notes`. Pass the part after `tab` as `key` straight to `board_read`, `board_patch`, etc. It works for open and closed pages; no search needed. Older references carry an id instead (`Agent Board tab t_1a2b3c4d`); pass that as `id`.
 
 The user names pages by **title** (“my Jira issues page”). Keys are slugs you invented earlier. Never guess a key.
 

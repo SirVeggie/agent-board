@@ -70,7 +70,7 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
 /** Clients show these to the model on connect, even when the agent-board skill is not loaded. */
 const INSTRUCTIONS = [
   "Agent Board is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
-  "Also use it whenever the user refers to something on the board: a page title, a pasted `Agent Board tab t_…` id (pass the t_… id straight to board_read / board_patch / board_get_state), or their todo list or kanban.",
+  "Also use it whenever the user refers to something on the board: a page title, a pasted `Agent Board tab <key>` reference (pass the part after `tab` as key straight to board_read / board_patch / board_get_state; an older t_… reference is an id), or their todo list or kanban.",
   "If the agent-board skill is available, load it before building or changing pages; it has the full rules.",
   "Show a page once with board_show and a stable key; for small edits to an existing page use board_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
   "Find pages by title with board_list (open tabs), then board_library (every page). Never guess a key.",

@@ -978,7 +978,7 @@ window.createLibrary = function createLibrary(host) {
     if (tab.key === "welcome") {
       openMenu(point, [
         { label: "Close tab", action: () => host.closeTab(id) },
-        { label: "Copy ID", action: () => host.copyTabId(id) },
+        { label: "Copy key", action: () => host.copyTabKey(id) },
       ]);
       return;
     }
@@ -998,7 +998,7 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
       { label: tab.agentHidden ? "Show to agent" : "Hide from agent", action: () => host.setAgentHidden(id, !tab.agentHidden) },
-      { label: "Copy ID", action: () => host.copyTabId(id) },
+      { label: "Copy key", action: () => host.copyTabKey(id) },
       "sep",
       { label: "Delete", danger: true, action: () => deletePage(id) },
     ]);
