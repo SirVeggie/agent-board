@@ -693,6 +693,7 @@ class CursorSession implements ProviderSession {
           {
             toolId,
             tool: mcp ? "mcp" : mapToolKind(toolCall.kind, title),
+            boardTool: isBoard,
             title,
             detail: [rawInput && typeof rawInput.command === "string" ? rawInput.command : "", reason].filter(Boolean).join("\n"),
             options,

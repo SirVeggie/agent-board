@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import type { AgentHost } from "./host.js";
+import { baseUrl } from "../config.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
 import type { ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord } from "./types.js";
@@ -9,6 +10,7 @@ import { isPlainRecord } from "./types.js";
 /** /api/agent/* for the board shell. The content origin gate keeps tab pages out of these. */
 export function agentRouter(host: AgentHost): express.Router {
   const router = express.Router();
+  router.use(shellOnly);
   router.use(express.json({ limit: "40mb" }));
 
   const wrap =
@@ -81,8 +83,8 @@ export function agentRouter(host: AgentHost): express.Router {
 
   router.delete(
     "/threads/:id",
-    wrap((req) => {
-      host.deleteThread(req.params.id);
+    wrap(async (req) => {
+      await host.deleteThread(req.params.id);
       return { ok: true };
     })
   );
@@ -212,7 +214,7 @@ export function agentRouter(host: AgentHost): express.Router {
       const raw = typeof req.query.path === "string" ? req.query.path.trim() : "";
       if (!raw) {
         if (process.platform === "win32") {
-          const drives = "CDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((d) => `${d}:\\`).filter((d) => fs.existsSync(d));
+          const drives = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((d) => `${d}:\\`).filter((d) => fs.existsSync(d));
           return { path: "", parent: null, dirs: drives.map((d) => ({ name: d, path: d })), repo: null };
         }
         return listDir("/");
@@ -224,8 +226,31 @@ export function agentRouter(host: AgentHost): express.Router {
   return router;
 }
 
+/**
+ * Writes must come from the board shell: JSON (a cross-origin form cannot send it without a
+ * preflight) and, when the browser says where it came from, the shell's own origin. Tab pages
+ * live on another origin, so this also keeps a page from starting or answering agent runs.
+ */
+function shellOnly(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (req.method === "GET" || req.method === "HEAD") {
+    next();
+    return;
+  }
+  const origin = req.get("origin");
+  if (origin && origin !== baseUrl()) {
+    res.status(403).json({ error: "Agent requests must come from the board" });
+    return;
+  }
+  if (!req.is("application/json")) {
+    res.status(415).json({ error: "Agent requests must be JSON" });
+    return;
+  }
+  next();
+}
+
 async function listDir(dir: string): Promise<{ path: string; parent: string | null; dirs: Array<{ name: string; path: string }>; repo: string | null; exists: boolean }> {
-  const abs = path.resolve(dir);
+  // "C:" alone means the current directory on C:, not its root.
+  const abs = path.resolve(/^[A-Za-z]:$/.test(dir) ? `${dir}\\` : dir);
   let entries: fs.Dirent[] = [];
   let exists = true;
   try {

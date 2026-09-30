@@ -17,7 +17,7 @@
     { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
     { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits" },
     { id: "plan", label: "Plan", detail: "Investigate and propose a plan before changing anything" },
-    { id: "board", label: "Board", detail: "Board pages and web only, no files or shell" },
+    { id: "board", label: "Board", detail: "Board pages and web only, no shell (Cursor can still write files)" },
   ];
   const APPROVALS = [
     { id: "ask", label: "Ask first", detail: "Ask before edits and commands that are not allowlisted" },
@@ -50,10 +50,11 @@
   };
 
   async function api(method, path, body) {
+    const write = method !== "GET";
     const res = await fetch(`/api/agent${path}`, {
       method,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: write ? { "Content-Type": "application/json" } : {},
+      body: write ? JSON.stringify(body ?? {}) : undefined,
     });
     let data = null;
     try {

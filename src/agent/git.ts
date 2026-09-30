@@ -72,7 +72,11 @@ export async function snapshotTree(repo: string): Promise<string | null> {
   } catch {
     return null;
   } finally {
-    fs.rmSync(tmp, { force: true });
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // Windows can still hold the file for a moment; it is a small temp file.
+    }
   }
 }
 

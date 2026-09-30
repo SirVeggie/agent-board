@@ -46,6 +46,8 @@ export type ToolPatch = {
 };
 
 export type ApprovalRequest = {
+  /** A call to this daemon's own board MCP server, identified by the provider (never by display title). */
+  boardTool?: boolean;
   toolId?: string;
   tool: ToolKind;
   title: string;

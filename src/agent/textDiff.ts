@@ -3,6 +3,8 @@
 type Op = { kind: " " | "-" | "+"; line: string };
 
 const MAX_LINES = 20000;
+/** Edit distance past which the diff gives up and shows a replace-all (keeps memory small). */
+const MAX_EDITS = 2500;
 
 export type TextDiff = { patch: string; added: number; removed: number };
 
@@ -36,10 +38,12 @@ export function diffLines(a: string[], b: string[]): Op[] {
   if (midA.length + midB.length > MAX_LINES) {
     return [...head, ...midA.map((line) => ({ kind: "-" as const, line })), ...midB.map((line) => ({ kind: "+" as const, line })), ...tail];
   }
-  return [...head, ...myers(midA, midB), ...tail];
+  const middle = myers(midA, midB) ?? [...midA.map((line) => ({ kind: "-" as const, line })), ...midB.map((line) => ({ kind: "+" as const, line }))];
+  return [...head, ...middle, ...tail];
 }
 
-function myers(a: string[], b: string[]): Op[] {
+/** Myers' diff keeping only each step's band of V, so memory is O(D²) for edit distance D. Null past MAX_EDITS. */
+function myers(a: string[], b: string[]): Op[] | null {
   const n = a.length;
   const m = b.length;
   if (n === 0) {
@@ -49,11 +53,14 @@ function myers(a: string[], b: string[]): Op[] {
     return a.map((line) => ({ kind: "-", line }));
   }
   const max = n + m;
-  const offset = max;
-  const v = new Int32Array(2 * max + 2);
+  // One slot of padding each side so the band [-d-1, d+1] always fits.
+  const offset = max + 1;
+  const v = new Int32Array(2 * max + 4);
+  // trace[d] holds V[k] for k in [-d-1, d+1] as it was before step d; index k + d + 1.
   const trace: Int32Array[] = [];
   outer: for (let d = 0; d <= max; d += 1) {
-    trace.push(v.slice());
+    if (d > MAX_EDITS) return null;
+    trace.push(v.slice(offset - d - 1, offset + d + 2));
     for (let k = -d; k <= d; k += 2) {
       let x: number;
       if (k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])) {
@@ -68,7 +75,6 @@ function myers(a: string[], b: string[]): Op[] {
       }
       v[offset + k] = x;
       if (x >= n && y >= m) {
-        trace.push(v.slice());
         break outer;
       }
     }
@@ -76,16 +82,17 @@ function myers(a: string[], b: string[]): Op[] {
   const ops: Op[] = [];
   let x = n;
   let y = m;
-  for (let d = trace.length - 2; d >= 0; d -= 1) {
-    const vd = trace[d];
+  for (let d = trace.length - 1; d >= 0; d -= 1) {
+    const band = trace[d];
+    const at = (k: number) => band[k + d + 1];
     const k = x - y;
     let prevK: number;
-    if (k === -d || (k !== d && vd[offset + k - 1] < vd[offset + k + 1])) {
+    if (k === -d || (k !== d && at(k - 1) < at(k + 1))) {
       prevK = k + 1;
     } else {
       prevK = k - 1;
     }
-    const prevX = vd[offset + prevK];
+    const prevX = at(prevK);
     const prevY = prevX - prevK;
     while (x > prevX && y > prevY) {
       ops.push({ kind: " ", line: a[x - 1] });

@@ -139,7 +139,12 @@
     } catch {
       html = escapeHtml(src);
     }
-    const clean = window.DOMPurify ? window.DOMPurify.sanitize(html, { ADD_ATTR: ["target"] }) : escapeHtml(src);
+    const clean = window.DOMPurify
+      ? window.DOMPurify.sanitize(html, {
+          FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style", "iframe", "object", "embed", "dialog"],
+          FORBID_ATTR: ["style", "action", "formaction"],
+        })
+      : escapeHtml(src);
     target.innerHTML = clean;
     enhanceMarkdown(target, ctx);
   }
@@ -166,6 +171,11 @@
       } else if (/^https?:/i.test(href)) {
         a.classList.add("ag-web-link");
         a.dataset.webHref = href;
+      } else if (!href.startsWith("#") && !/^mailto:/i.test(href)) {
+        // Relative and other links would navigate the board itself.
+        a.removeAttribute("href");
+        a.classList.add("ag-dead-link");
+        a.title = href;
       }
     }
     if (autoLinks.length && ctx?.resolvePages) {

@@ -261,7 +261,11 @@ export class AgentHost {
     if (patch.mode) next.mode = patch.mode;
     if (patch.approval) next.approval = patch.approval;
     if (typeof patch.web === "boolean") next.web = patch.web;
-    if (patch.cwd !== undefined) next.cwd = patch.cwd ? path.normalize(patch.cwd) : null;
+    if (patch.cwd !== undefined) {
+      const cwd = patch.cwd ? path.normalize(patch.cwd) : null;
+      if (cwd !== thread.cwd && this.runs.has(id)) throw new Error("Stop the running turn before changing the workspace.");
+      next.cwd = cwd;
+    }
     if (patch.scope) next.scope = patch.scope;
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
     if (typeof patch.archived === "boolean") next.archived = patch.archived;
@@ -297,9 +301,9 @@ export class AgentHost {
     if (Object.keys(next).length) this.setPrefs(next);
   }
 
-  deleteThread(id: string): void {
+  async deleteThread(id: string): Promise<void> {
     this.requireThread(id);
-    void this.cancel(id);
+    await this.cancel(id);
     this.sessions.get(id)?.dispose();
     this.sessions.delete(id);
     this.threads.delete(id);
@@ -417,6 +421,10 @@ export class AgentHost {
   // ---------- items ----------
 
   private addItem(threadId: string, turnId: string | null, body: ItemBody): Item {
+    if (!this.threads.has(threadId)) {
+      // A turn still finishing after its thread was deleted: nothing to store or show.
+      return { id: "", threadId, turnId, seq: 0, createdAt: Date.now(), ...body } as Item;
+    }
     const items = this.loadItems(threadId);
     const seq = (this.seq.get(threadId) ?? 0) + 1;
     this.seq.set(threadId, seq);
@@ -431,6 +439,7 @@ export class AgentHost {
 
   /** Marks an item changed: broadcast now, save on the next flush. */
   private touch(item: Item): void {
+    if (!this.threads.has(item.threadId)) return;
     this.flushDelta(item.id);
     this.dirty.set(item.id, item);
     this.emit({ type: "agent_item", item });
@@ -842,17 +851,18 @@ export class AgentHost {
         const t = thread();
         const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
         const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
-        if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && reject) {
-          return Promise.resolve({ optionId: reject.id, note: "Board mode has no file or shell access." });
+        if (req.boardTool && allow) {
+          return Promise.resolve({ optionId: allow.id });
+        }
+        if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
+          // Board mode never runs file or shell tools, whatever the approval setting.
+          if (reject) return Promise.resolve({ optionId: reject.id, note: "Board mode has no file or shell access." });
+          return Promise.reject(new Error("Board mode has no file or shell access."));
         }
         if (t?.approval === "full" && allow) {
           return Promise.resolve({ optionId: allow.id });
         }
         if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
-          return Promise.resolve({ optionId: allow.id });
-        }
-        // Only this daemon's own board server; a same-named server from the user's config may point elsewhere.
-        if (req.tool === "mcp" && /^Board:/.test(req.title) && allow) {
           return Promise.resolve({ optionId: allow.id });
         }
         const item = host.addItem(threadId, turnId, {

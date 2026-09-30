@@ -575,7 +575,15 @@ class ClaudeSession implements ProviderSession {
       .join("\n");
     try {
       const decision = await sink.approval(
-        { toolId: opts.toolUseID, tool: toolKind(name), title: opts.title || described.title, detail: detail || undefined, options },
+        {
+          toolId: opts.toolUseID,
+          tool: toolKind(name),
+          title: opts.title || described.title,
+          detail: detail || undefined,
+          options,
+          // Only the in-process registration counts, not a same-named server from the user's config.
+          boardTool: name.startsWith(`mcp__${BOARD_SERVER}__`) && (opts as { mcpServer?: { source?: string } }).mcpServer?.source === "sdk",
+        },
         opts.signal
       );
       if (decision.optionId === "deny") {
