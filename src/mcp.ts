@@ -67,12 +67,22 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
   return result;
 }
 
+/** Clients show these to the model on connect, even when the agent-board skill is not loaded. */
+const INSTRUCTIONS = [
+  "Agent Board is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
+  "Also use it whenever the user refers to something on the board: a page title, a pasted `Agent Board tab t_…` id (pass the t_… id straight to board_read / board_patch / board_get_state), or their todo list or kanban.",
+  "If the agent-board skill is available, load it before building or changing pages; it has the full rules.",
+  "Show a page once with board_show and a stable key; for small edits to an existing page use board_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
+  "Find pages by title with board_list (open tabs), then board_library (every page). Never guess a key.",
+  "Pages keep user data in board state (board.set / board.bind in the page, board_get_state / board_set_state from you, with expectedRevision). Never use localStorage in a page.",
+  "When the page asks the user to submit, choose, or finish something, call board_wait next with the signal name the page fires. Never poll board_get_state.",
+  "Only use board_screenshot for UI designs that belong to the current project, never to polish information pages.",
+  "Do not create, edit, or delete templates unless the user asked. Pages from a template come with an agent guide in tool results; follow it.",
+].join(" ");
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
-  const server = new McpServer({
-    name: "agent-board",
-    version: VERSION,
-  });
+  const server = new McpServer({ name: "agent-board", version: VERSION }, { instructions: INSTRUCTIONS });
 
   server.tool(
     "board_show",
@@ -291,6 +301,7 @@ export async function startMcp(): Promise<void> {
           "Keywords to search open tabs. Prefer distinctive words (jira). Every remaining word must match. Searches title, key, page text, and JSON state. Omit to list every open tab."
         ),
     },
+    { readOnlyHint: true },
     async ({ query }) => {
       const params = new URLSearchParams();
       if (query?.trim()) {
@@ -359,6 +370,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Page size. Default 20, maximum 50."),
     },
+    { readOnlyHint: true },
     async ({ query, folder, offset, limit }) => {
       const page = clampLibraryPage(offset, limit);
       const params = new URLSearchParams();
@@ -403,6 +415,7 @@ export async function startMcp(): Promise<void> {
     "board_folders",
     "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with the number of pages directly inside it. Use before board_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for board_library. Never create a new folder unless the user asked for one.",
     {},
+    { readOnlyHint: true },
     async () => {
       const { status, data } = await api("GET", "/api/folders/tree");
       if (status >= 400) {
@@ -443,7 +456,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_read",
-    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your file tools (Read, Grep, StrReplace), then check it in with board_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
+    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your normal file tools, then check it in with board_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -454,6 +467,7 @@ export async function startMcp(): Promise<void> {
           "Check the page out to a temp file instead of returning the HTML. Returns path and revision for board_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
         ),
     },
+    { readOnlyHint: true },
     async ({ id, key, toFile }) => {
       const which = id || key;
       if (!which) {
@@ -538,6 +552,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Viewport height in CSS pixels. Default 800. Clamped 320–1600."),
     },
+    { readOnlyHint: true },
     async ({ id, key, selector, fullPage, width, height }) => {
       const which = id || key;
       if (!which) {
@@ -597,6 +612,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Include the page's template guide even if it was already sent in this session."),
     },
+    { readOnlyHint: true },
     async ({ id, key, guide }) => {
       const which = id || key;
       if (!which) {
@@ -633,6 +649,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("How long to wait, in milliseconds. Defaults to 600000 (10 minutes). Maximum 10 minutes."),
     },
+    { readOnlyHint: true },
     async ({ id, key, signal, afterSignalRevision, timeoutMs }) => {
       const which = id || key;
       if (!which) {
@@ -771,6 +788,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("If true, delete the page instead of just closing its tab. Default false."),
     },
+    { destructiveHint: true },
     async ({ id, key, unpinned, all, permanent }) => {
       const extra = permanent ? "permanent=true" : "";
       if (all || unpinned) {
@@ -879,8 +897,9 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_template_list",
-    "List Agent Board templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). Only use when the user asked to work with board templates.",
+    "List Agent Board templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). builtinUpdate on a copy means its built-in changed and the copy was not updated automatically; see the agent-board skill's TEMPLATES.md before updating it. Only use when the user asked to work with board templates.",
     {},
+    { readOnlyHint: true },
     async () => {
       const { status, data } = await api("GET", "/api/templates");
       if (status >= 400) {
@@ -897,6 +916,7 @@ export async function startMcp(): Promise<void> {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
     },
+    { readOnlyHint: true },
     async ({ id, key }) => {
       const which = id || key;
       if (!which) {
@@ -917,6 +937,7 @@ export async function startMcp(): Promise<void> {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
       key: z.string().optional().describe("Template key."),
     },
+    { destructiveHint: true },
     async ({ id, key }) => {
       const which = id || key;
       if (!which) {

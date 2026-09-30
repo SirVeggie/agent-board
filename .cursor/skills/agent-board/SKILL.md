@@ -1,15 +1,15 @@
 ---
 name: agent-board
-description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via MCP (board_show, board_patch, board_screenshot, board_list, board_library, board_folders, board_open, board_read, board_get_state, board_set_state, board_wait, board_pin, board_unpin, board_close). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Agent Board tab viewer via the agent-board MCP (board_* tools). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms, and whenever the user refers to something already on the board, such as a page by title, a pasted "Agent Board tab t_…" id, or their todo list or kanban, to read or change it. Prefer it over workspace .html files and the host's own canvas or artifact features unless the user asked for those. Use board_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
 ---
 
 # Agent Board
 
 A localhost tabbed HTML viewer the user keeps open. Drive it with the `agent-board` MCP. Do **not** write one-off HTML files into the workspace for presentation.
 
-If `board_show` is missing, the MCP is not connected — tell the user to reload MCP / check `~/.cursor/mcp.json`, and fall back to a concise chat summary.
+Some hosts list MCP tools as deferred: load the `board_*` tools you need with your tool search first. Only if `board_show` is truly absent, the MCP is not connected: tell the user to reload MCP servers in their client's MCP config, and fall back to a concise chat summary.
 
-If `board_list` exists but `board_library` or `board_patch` does not (or you only see `board_archive` / `board_restore`), the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the Library.
+If `board_list` exists but `board_library` or `board_patch` does not even after loading (or you only see `board_archive` / `board_restore`), the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the Library.
 
 ## Library model
 
@@ -25,7 +25,7 @@ Skip the board for code edits, short factual answers, drafts meant to be copied,
 
 After a page is up, answer small follow-up questions in chat. Do not patch or re-show the page for a clarification, a yes/no, a short extra fact, or anything that does not need to stay on the board. Update the page when the user asked to change it, or when the new material is substantial enough to belong there.
 
-Prefer Agent Board over Cursor Canvas and over workspace `.html` files.
+Prefer Agent Board over the host's own canvas or artifact features and over workspace `.html` files, unless the user asked for one of those.
 
 ## Find a page
 
@@ -113,7 +113,7 @@ When a page is large (tens of KB, like a keep-using app) or you are rewriting a 
 board_read({ key: "todo-page", toFile: true })
   → { path: "C:/Users/me/AppData/Local/Temp/agent-board/todo-page.html", revision: 23, ... }
 
-// Read / Grep / StrReplace on that path
+// edit that path with your normal file tools
 
 board_patch({ key: "todo-page", htmlPath: "<that path>", expectedRevision: 23, background: true })
 ```
@@ -221,7 +221,18 @@ board.onChange(render)          // a remote change arrived; not fired for your o
 board.bind(el, "notes")         // two-way bind an input, textarea, or checkbox
 board.revision                  // current stateRevision
 board.saveAsset(file)           // store an image/file for this page; see Page assets
+board.open("key", { mode })     // open a page or URL as "tab", "peek", or "split" (from a click only)
 ```
+
+Link to other pages by **key** (never guess one; use keys you created or found with `board_list` / `board_library`), or to websites with a plain `href`:
+
+```html
+<a data-board-open="clims-12345-analysis">Analysis</a>                        <!-- navigates by default -->
+<a data-board-open="clims-12345-analysis#risks" data-board-mode="peek">Risks</a> <!-- quick look, key#anchor -->
+<a href="https://example.com/docs" data-board-mode="split">Docs</a>            <!-- beside the page -->
+```
+
+Use `peek` for reference lookups and `split` for side-by-side reading; leave the mode off when the user should go work on the other page (their Settings decide). A plain `href` to a website opens the browser. `board.open(target, { mode })` does the same from a click handler; it refuses calls outside a click or key press, so never open pages on load.
 
 Declarative wake-ups (do **not** also call `board.signal` in the same click):
 
