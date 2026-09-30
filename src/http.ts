@@ -1142,7 +1142,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   next();
 }
 
-const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/agent.js", "/agent.css"]);
+const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/agent.js", "/agent.css", "/agent-render.js"]);
 
 function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (SHELL_PATHS.has(req.path)) {
@@ -1197,6 +1197,15 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
   window.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && !event.defaultPrevented) {
       parent.postMessage({ type: "agent-board-escape" }, "*");
+      return;
+    }
+    // Agent chat: Ctrl+K floating chat, Ctrl+L sidebar, Ctrl+Shift+L full window. Pages that use them keep them.
+    if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+    var chatKey = event.key.toLowerCase();
+    var action = chatKey === "k" && !event.shiftKey ? "dock" : chatKey === "l" ? (event.shiftKey ? "full" : "side") : "";
+    if (action) {
+      event.preventDefault();
+      parent.postMessage({ type: "agent-board-chat-key", action: action }, "*");
     }
   });
 })();

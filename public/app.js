@@ -324,6 +324,10 @@
   }
 
   function applyEvent(msg) {
+    if (typeof msg.type === "string" && msg.type.startsWith("agent_")) {
+      dispatchEvent(new CustomEvent("agent-board:agent-event", { detail: msg }));
+      return;
+    }
     if (msg.type === "snapshot") {
       showVersionMismatch(msg.version);
       abortDrag(false);
@@ -2074,6 +2078,7 @@
     renderTabs();
     library.render();
     renderTemplates();
+    dispatchEvent(new CustomEvent("agent-board:render"));
   }
 
   function matchesPendingFocus(tab) {
@@ -2551,6 +2556,11 @@
       return;
     }
     if (event.key === "Escape") {
+      if (window.agentBoardChat?.escape()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (library.onEscape()) {
         event.preventDefault();
         event.stopPropagation();
@@ -2883,6 +2893,18 @@
 
   window.addEventListener("keydown", onBoardShortcut, true);
   window.agentBoardShortcut = runShortcut;
+  /** What the agent chat (agent.js) needs from the shell. */
+  window.agentBoardApp = {
+    activeTab,
+    findAnyTab,
+    tabs: () => state.tabs,
+    closed: () => state.closed,
+    folders: () => state.folders,
+    connected: () => state.connected,
+    openLink: (target, event, { anchor = "" } = {}) => views.open(target, views.modeFromEvent(event), { anchor }),
+    resolvePages: (targets) => views.resolve(targets),
+    showNotice,
+  };
   window.addEventListener("message", (event) => {
     if (event.origin !== contentOrigin() || !frameByWindow(event.source)) {
       return;
@@ -2900,7 +2922,11 @@
     } else if (event.data?.type === "agent-board-open" || event.data?.type === "agent-board-resolve") {
       onPageLink(event);
     } else if (event.data?.type === "agent-board-escape") {
-      views.escape();
+      if (!window.agentBoardChat?.escape()) {
+        views.escape();
+      }
+    } else if (event.data?.type === "agent-board-chat-key") {
+      window.agentBoardChat?.shortcut(String(event.data.action || ""));
     }
   });
 
