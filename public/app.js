@@ -360,6 +360,9 @@
       return;
     }
     if (msg.type === "tab_upserted") {
+      if (!findAnyTab(msg.tab.id)) {
+        notePagesChanged();
+      }
       if (isClosedMeta(msg.tab)) {
         upsertClosed(msg.tab, msg.structural);
         if (drag && drag.id === msg.tab.id) {
@@ -424,6 +427,7 @@
       return;
     }
     if (msg.type === "tab_deleted") {
+      notePagesChanged();
       if (drag && drag.id === msg.id) {
         abortDrag(false);
       }
@@ -510,6 +514,20 @@
       state.builtinTemplates = Array.isArray(msg.templates) ? msg.templates : [];
       renderTemplates();
     }
+  }
+
+  /** A page was created, deleted, or restored: live pages recheck their links (struck-through when missing). */
+  let pagesChangedTimer = 0;
+  function notePagesChanged() {
+    clearTimeout(pagesChangedTimer);
+    pagesChangedTimer = setTimeout(() => {
+      for (const [id, entry] of frames) {
+        if (id.startsWith("url:") || findAnyTab(id)?.embedUrl) {
+          continue;
+        }
+        entry.el.contentWindow?.postMessage({ type: "agent-board-pages-changed", id }, "*");
+      }
+    }, 150);
   }
 
   /** The tab to focus when `id` leaves the strip: its left neighbor, or its right one when it is leftmost. */

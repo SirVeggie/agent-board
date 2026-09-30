@@ -567,8 +567,13 @@ export const BOARD_BRIDGE_JS = `
     event.preventDefault();
     var mode = modeFromEvent(event) || cleanMode(link.el.getAttribute("data-board-mode"));
     open(link.target, { mode: mode }).then(function (result) {
-      if (result && (result.error === "not_found" || result.error === "in_trash")) {
-        link.el.classList.add("board-link-missing");
+      if (!result || result.error === "no_gesture" || result.error === "timeout" || result.error === "no_board") {
+        return;
+      }
+      // The page was deleted or restored since the links were checked: recheck every link, not just this one.
+      var missing = result.error === "not_found" || result.error === "in_trash";
+      if (missing !== link.el.classList.contains("board-link-missing")) {
+        recheckLinks();
       }
     });
   }, false);
@@ -606,6 +611,14 @@ export const BOARD_BRIDGE_JS = `
         }
       }
     });
+  }
+  /** Pages were created, deleted, or restored: check every link again. */
+  function recheckLinks() {
+    var els = document.querySelectorAll("[data-board-open][data-board-link-checked]");
+    for (var i = 0; i < els.length; i += 1) {
+      els[i].removeAttribute("data-board-link-checked");
+    }
+    queueLabels();
   }
   function queueLabels() {
     if (labelQueued) {
@@ -661,6 +674,8 @@ export const BOARD_BRIDGE_JS = `
       done(data.result || { ok: false, error: "unknown" });
     } else if (data.type === "agent-board-scroll") {
       scrollToAnchor(data.anchor);
+    } else if (data.type === "agent-board-pages-changed") {
+      recheckLinks();
     }
   });
 
