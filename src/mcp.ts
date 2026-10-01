@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { safeStem } from "./boardExport.js";
-import { VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, contentBaseUrl } from "./config.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBoard } from "./openBoard.js";
@@ -651,7 +651,7 @@ export async function startMcp(): Promise<void> {
         .describe("How long to wait, in milliseconds. Defaults to 7200000 (2 hours). There is no maximum; the user can interrupt you at any time."),
     },
     { readOnlyHint: true },
-    async ({ id, key, signal, afterSignalRevision, timeoutMs }) => {
+    async ({ id, key, signal, afterSignalRevision, timeoutMs }, extra) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -663,6 +663,21 @@ export async function startMcp(): Promise<void> {
         return errorResult((err as Error).message);
       }
       const waitMs = clampWaitMs(timeoutMs);
+      // Clients abort a call that stays silent too long (Claude Code: 30 minutes for stdio), so report progress while waiting.
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({
+                  method: "notifications/progress",
+                  params: { progressToken, progress: seconds, message: `Waiting for ${names.join(" or ")} (${seconds}s)` },
+                })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
       try {
         const { status, data } = await api(
           "POST",
@@ -672,7 +687,7 @@ export async function startMcp(): Promise<void> {
             afterSignalRevision: afterSignalRevision ?? 0,
             timeoutMs: waitMs,
           },
-          { timeoutMs: waitMs + 15_000 }
+          { timeoutMs: waitMs + 15_000, signal: extra.signal }
         );
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
@@ -680,6 +695,8 @@ export async function startMcp(): Promise<void> {
         return withGuide(jsonResult(data), which);
       } catch (err) {
         return errorResult((err as Error).message || "board_wait failed");
+      } finally {
+        clearInterval(heartbeat);
       }
     }
   );

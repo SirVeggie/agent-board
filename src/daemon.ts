@@ -74,8 +74,11 @@ export async function api(
   method: string,
   pathname: string,
   body?: unknown,
-  options?: { timeoutMs?: number }
+  options?: { timeoutMs?: number; signal?: AbortSignal }
 ): Promise<{ status: number; data: unknown }> {
+  const signals = [options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined, options?.signal].filter(
+    (signal): signal is AbortSignal => signal !== undefined
+  );
   const payload = body === undefined ? undefined : JSON.stringify(body);
   const { status, text } = await new Promise<{ status: number; text: string }>((resolve, reject) => {
     const req = http.request(
@@ -88,7 +91,7 @@ export async function api(
             ? {}
             : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }),
         },
-        signal: options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+        signal: signals.length > 0 ? AbortSignal.any(signals) : undefined,
       },
       (res) => {
         const chunks: Buffer[] = [];

@@ -27,6 +27,8 @@ export const MAX_IMPORT_BYTES = 400 * 1024 * 1024;
 export const DEFAULT_WAIT_MS = 2 * 60 * 60 * 1000;
 /** Not a policy limit (the harness owns that): setTimeout's ~24.8-day ceiling, less room for the socket margins added on top. */
 export const MAX_WAIT_MS = 2 ** 31 - 1 - 60_000;
+/** How often board_wait reports progress, so the MCP client does not take the long silence for a hung server. */
+export const WAIT_HEARTBEAT_MS = 60_000;
 /** How long the server gives a client to send a whole request. */
 export const REQUEST_TIMEOUT_MS = 10 * 60 * 1000 + 30_000;
 /** The MCP marks its requests with this header so tabs hidden from the agent stay invisible to them. */
