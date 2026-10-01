@@ -1866,15 +1866,29 @@ html.tight-small .agent-full {
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(var(--lift-rgb), 0.09);
   transform: translateY(calc(100% + 40px));
   opacity: 0;
+  /* Hidden: not focusable, and its slid-out box must not scroll the page area (see main below). */
+  visibility: hidden;
   transition:
     transform 0.32s var(--ease),
-    opacity 0.25s ease;
+    opacity 0.25s ease,
+    visibility 0s linear 0.32s;
   max-height: calc(100vh - 140px);
 }
 
 .agent-dock.shown .dock-panel {
   transform: none;
   opacity: 1;
+  visibility: visible;
+  transition:
+    transform 0.32s var(--ease),
+    opacity 0.25s ease,
+    visibility 0s;
+}
+
+/* The dock slides out past the bottom of the page area. overflow: hidden would still let focus or
+   scrollIntoView scroll main, shifting every page up; clip never scrolls. */
+.workspace main {
+  overflow: clip;
 }
 
 .dock-panel .ag-composer {
