@@ -11,6 +11,10 @@
   --ag-card: rgba(var(--lift-rgb), 0.035);
   --ag-card-border: rgba(var(--lift-rgb), 0.07);
   --ag-sunken: rgba(0, 0, 0, 0.26);
+  /* Floating surfaces: drop shadow plus the board's top highlight and bottom edge, no outline. */
+  --ag-raised: 0 14px 40px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+  /* Sunken inputs: shade at the top edge, faint light at the bottom. */
+  --ag-well: inset 0 1px 3px rgba(0, 0, 0, 0.32), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
 }
 
 html[data-theme="cream"] {
@@ -21,6 +25,8 @@ html[data-theme="cream"] {
   --ag-add-bg: rgba(47, 138, 69, 0.1);
   --ag-del-bg: rgba(194, 66, 66, 0.09);
   --ag-sunken: rgba(60, 40, 10, 0.06);
+  --ag-raised: 0 12px 34px rgba(70, 50, 20, 0.22), 0 2px 8px rgba(70, 50, 20, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.7), inset 0 -1px 0 rgba(70, 50, 20, 0.12);
+  --ag-well: inset 0 1px 3px rgba(70, 50, 20, 0.14), inset 0 -1px 0 rgba(255, 255, 255, 0.6);
 }
 
 /* ---------- chrome toggle ---------- */
@@ -1312,7 +1318,7 @@ button.ag-change-row .ag-fname {
   margin: 0 10px 10px;
   background: var(--ag-sunken);
   border-radius: 13px;
-  box-shadow: inset 0 0 0 1px var(--border);
+  box-shadow: var(--ag-well);
   padding: 7px 8px 6px;
   display: flex;
   flex-direction: column;
@@ -1321,7 +1327,7 @@ button.ag-change-row .ag-fname {
 }
 
 .ag-composer:focus-within {
-  box-shadow: inset 0 0 0 1px var(--accent-ring);
+  box-shadow: var(--ag-well), 0 0 0 2px rgba(var(--accent-rgb), 0.12);
 }
 
 .ag-view-full .ag-composer {
@@ -1374,7 +1380,6 @@ button.ag-pill {
   font-size: 11.5px;
   color: var(--muted);
   background: rgba(var(--lift-rgb), 0.05);
-  box-shadow: none;
   border-radius: 6px;
   max-width: 170px;
 }
@@ -1860,10 +1865,10 @@ html.tight-small .agent-full {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
   backdrop-filter: blur(16px) saturate(1.2);
   border-radius: 16px;
-  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(var(--lift-rgb), 0.09);
+  box-shadow: var(--ag-raised);
   transform: translateY(calc(100% + 40px));
   opacity: 0;
   /* Hidden: not focusable, and its slid-out box must not scroll the page area (see main below). */
@@ -2026,10 +2031,10 @@ button.dock-handle {
   gap: 8px;
   font-size: 12px;
   color: var(--muted);
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   backdrop-filter: blur(12px);
   border-radius: 999px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(var(--lift-rgb), 0.08);
+  box-shadow: var(--ag-raised);
   opacity: 0.45;
   transition:
     opacity 0.25s ease,
@@ -2435,4 +2440,31 @@ button.ag-page-chip.reverted {
 
 .ag-view.listing {
   flex: 0 0 auto;
+}
+
+/* ---------- favourite stars in menus ---------- */
+
+.ag-star {
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: pointer;
+  border-radius: 5px;
+}
+
+button.ag-menu-item:hover .ag-star {
+  opacity: 0.85;
+}
+
+.ag-star:hover {
+  color: var(--heading);
+  background: rgba(var(--lift-rgb), 0.08);
+}
+
+.ag-star.on {
+  color: rgb(var(--pin-rgb));
+  opacity: 1;
 }

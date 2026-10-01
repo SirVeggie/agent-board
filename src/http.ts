@@ -1199,10 +1199,15 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
       parent.postMessage({ type: "agent-board-escape" }, "*");
       return;
     }
-    // Agent chat: Ctrl+K floating chat, Ctrl+L sidebar, Ctrl+Shift+L full window. Pages that use them keep them.
-    if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+    // Agent chat: Ctrl+K floating chat, Ctrl+L sidebar, Ctrl+Shift+L full window, Ctrl+' next favourite
+    // model, Ctrl+Alt+' next reasoning level. Pages that use them keep them.
+    if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) return;
     var chatKey = event.key.toLowerCase();
-    var action = chatKey === "k" && !event.shiftKey ? "dock" : chatKey === "l" ? (event.shiftKey ? "full" : "side") : "";
+    // The apostrophe key: by character, or by position on Nordic layouts (the '* key next to Enter).
+    var quote = event.key === "'" || (event.code === "Backslash" && event.key !== "\\\\" && event.key !== "|");
+    var action = quote && !event.shiftKey ? (event.altKey ? "effort" : "model")
+      : event.altKey ? ""
+      : chatKey === "k" && !event.shiftKey ? "dock" : chatKey === "l" ? (event.shiftKey ? "full" : "side") : "";
     if (action) {
       event.preventDefault();
       parent.postMessage({ type: "agent-board-chat-key", action: action }, "*");

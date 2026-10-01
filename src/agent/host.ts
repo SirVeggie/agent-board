@@ -63,6 +63,8 @@ export type Prefs = {
   recentWorkspaces: string[];
   /** Last workspace used for a scope ("page:<id>", "folder:<id>"), so new threads there start in it. */
   scopeWorkspaces: Record<string, string>;
+  /** Starred models as "provider:modelId", in the order they were starred. Ctrl+' cycles them. */
+  favoriteModels: string[];
 };
 
 const DEFAULT_PREFS: Prefs = {
@@ -75,6 +77,7 @@ const DEFAULT_PREFS: Prefs = {
   web: true,
   recentWorkspaces: [],
   scopeWorkspaces: {},
+  favoriteModels: [],
 };
 
 type Pending =

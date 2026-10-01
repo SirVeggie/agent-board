@@ -2539,6 +2539,8 @@
       }
     } else if (action === "reopen") {
       undoClose();
+    } else if (action.startsWith("agent-")) {
+      window.agentBoardChat?.shortcut(action.slice("agent-".length));
     }
   }
 

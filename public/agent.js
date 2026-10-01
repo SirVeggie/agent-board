@@ -11,6 +11,7 @@
     dock: "agent-board.agent.dockShown",
     filter: "agent-board.agent.filter",
     reasoning: "agent-board.agent.reasoningOpen",
+    button: "agent-board.agent.showButton",
   };
 
   const MODES = [
@@ -345,6 +346,20 @@
         if (item.detail) text.append(el("span", "ag-menu-detail", item.detail));
         row.append(text);
         if (item.checked) row.append(icon("check", "ag-ico ag-menu-check"));
+        if (item.star) {
+          const star = el("span", `ag-star${item.star.on ? " on" : ""}`, item.star.on ? "★" : "☆");
+          star.title = item.star.on ? "Remove from favourites" : "Add to favourites (Ctrl+' cycles them)";
+          star.addEventListener("click", (event) => {
+            // Starring keeps the menu open.
+            event.stopPropagation();
+            event.preventDefault();
+            item.star.on = !item.star.on;
+            star.classList.toggle("on", item.star.on);
+            star.textContent = item.star.on ? "★" : "☆";
+            item.star.toggle(item.star.on);
+          });
+          row.append(star);
+        }
         row.addEventListener("click", () => {
           closeMenu();
           item.run?.();
@@ -1586,13 +1601,17 @@
       this.focus();
     }
 
-    modelMenu(anchor) {
+    /** Starred models only, plus the current one; "Show all models" opens the full, searchable list. */
+    modelMenu(anchor, { all = false } = {}) {
       const s = this.settings();
+      const favs = new Set(favoriteModels());
+      const showAll = all || !favs.size;
       const items = [];
       for (const provider of ["cursor", "claude"]) {
         const status = S.config.providers.find((p) => p.id === provider);
+        const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (s.provider === provider && s.model === m.id));
+        if (!showAll && !models.length) continue;
         items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}` });
-        const models = modelsOf(provider);
         if (!models.length) {
           items.push({ label: status?.available ? "Loading models…" : status?.detail || "Not available", disabled: true });
           continue;
@@ -1604,11 +1623,15 @@
             search: `${provider} ${m.id}`,
             checked: s.provider === provider && s.model === m.id,
             disabled: !status?.available,
+            star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
             run: () => this.updateSettings(provider === s.provider ? { model: m.id } : { provider, model: m.id }),
           });
         }
       }
-      openMenu(anchor, items, { search: true, width: 300, placeholder: "Search models" });
+      if (!showAll) {
+        items.push({ separator: true }, { label: "Show all models", icon: "more", run: () => this.modelMenu(anchor, { all: true }) });
+      }
+      openMenu(anchor, items, { search: showAll, width: 300, placeholder: "Search models · ☆ to favourite" });
     }
 
     effortMenu(anchor) {
@@ -2394,6 +2417,86 @@
     renderBadge();
   }
 
+  /* ---------- favourite models and cycling ---------- */
+
+  function modelKey(provider, id) {
+    return `${provider}:${id}`;
+  }
+
+  function favoriteModels() {
+    const list = prefs().favoriteModels;
+    return Array.isArray(list) ? list : [];
+  }
+
+  async function setFavorite(provider, id, on) {
+    const key = modelKey(provider, id);
+    const list = favoriteModels().filter((k) => k !== key);
+    if (on) list.push(key);
+    S.config.prefs = { ...prefs(), favoriteModels: list };
+    try {
+      S.config.prefs = await api("PUT", "/prefs", { favoriteModels: list });
+    } catch (err) {
+      notice(err.message);
+    }
+  }
+
+  /** The chat a cycling shortcut applies to: the one in focus, else the most prominent one open. */
+  function targetView() {
+    if (S.fullOpen) return full.view;
+    const active = document.activeElement;
+    if (S.dockShown && (dock.root?.contains(active) || !S.sideOpen)) return dock.view;
+    if (S.sideOpen) return sidebar.view;
+    return dock.view;
+  }
+
+  /** Latest non-favourite model per chat, kept in that chat's cycle until another replaces it. */
+  const cycleExtras = new Map();
+
+  async function cycleModel() {
+    const view = targetView();
+    const s = view.settings();
+    const t = view.thread();
+    // A thread with messages keeps its provider, so only that provider's favourites apply.
+    const locked = Boolean(t && t.stats.turns > 0);
+    const usable = (f) => providerAvailable(f.provider) && modelInfo(f.provider, f.id) && (!locked || f.provider === s.provider);
+    const list = favoriteModels()
+      .map((key) => ({ provider: key.slice(0, key.indexOf(":")), id: key.slice(key.indexOf(":") + 1) }))
+      .filter(usable);
+    const current = modelKey(s.provider, s.model);
+    const chatKey = view.draftKey();
+    if (!list.some((f) => modelKey(f.provider, f.id) === current)) cycleExtras.set(chatKey, { provider: s.provider, id: s.model });
+    const extra = cycleExtras.get(chatKey);
+    if (extra && usable(extra) && !list.some((f) => modelKey(f.provider, f.id) === modelKey(extra.provider, extra.id))) list.unshift(extra);
+    if (list.length < 2) {
+      notice(favoriteModels().length ? "Star another model to cycle between them" : "Star models in the model picker to cycle them with Ctrl+'");
+      return;
+    }
+    const at = list.findIndex((f) => modelKey(f.provider, f.id) === current);
+    const next = list[(at + 1) % list.length];
+    await view.updateSettings(next.provider === s.provider ? { model: next.id } : { provider: next.provider, model: next.id });
+    notice(`Model: ${modelInfo(next.provider, next.id)?.label || next.id}`);
+  }
+
+  async function cycleEffort() {
+    const view = targetView();
+    const s = view.settings();
+    const info = modelInfo(s.provider, s.model);
+    if (!info?.efforts?.length) {
+      notice(`${info?.label || s.model} has no reasoning levels`);
+      return;
+    }
+    const levels = [null, ...info.efforts.map((e) => e.id)];
+    const next = levels[(levels.indexOf(s.effort ?? null) + 1) % levels.length];
+    await view.updateSettings({ effort: next });
+    const label = next ? info.efforts.find((e) => e.id === next)?.label || next : `Default${info.defaultEffort ? ` (${info.efforts.find((e) => e.id === info.defaultEffort)?.label || info.defaultEffort})` : ""}`;
+    notice(`Reasoning: ${label}`);
+  }
+
+  function applyButton() {
+    const btn = document.getElementById("agent-toggle");
+    if (btn) btn.hidden = localStorage.getItem(LS.button) === "0";
+  }
+
   /* ---------- settings section ---------- */
 
   function mountSettings() {
@@ -2430,8 +2533,27 @@
         renderAll();
       })
     );
-    const hint = el("p", "settings-hint", "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login.");
-    section.append(status, actions, hint);
+    const buttonRow = el("div", "setting-row");
+    const buttonLabel = el("span", null, "Agent button in the top bar");
+    buttonLabel.id = "ag-button-label";
+    const buttonToggle = el("button", "pill-toggle");
+    buttonToggle.type = "button";
+    buttonToggle.setAttribute("role", "switch");
+    buttonToggle.setAttribute("aria-labelledby", "ag-button-label");
+    const syncButton = () => buttonToggle.setAttribute("aria-checked", localStorage.getItem(LS.button) === "0" ? "false" : "true");
+    buttonToggle.addEventListener("click", () => {
+      localStorage.setItem(LS.button, localStorage.getItem(LS.button) === "0" ? "1" : "0");
+      syncButton();
+      applyButton();
+    });
+    syncButton();
+    buttonRow.append(buttonLabel, buttonToggle);
+    const hint = el(
+      "p",
+      "settings-hint",
+      "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window · Ctrl+' next starred model · Ctrl+Alt+' next reasoning level. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
+    );
+    section.append(status, buttonRow, actions, hint);
     panel.append(section);
     document.getElementById("settings-toggle")?.addEventListener("click", () => setTimeout(refresh, 0));
     refresh();
@@ -2452,6 +2574,10 @@
     } else if (action === "full") {
       if (S.fullOpen) full.close();
       else full.open(sidebar.view.threadId, sidebar.view.draft);
+    } else if (action === "model") {
+      void cycleModel();
+    } else if (action === "effort") {
+      void cycleEffort();
     }
   }
 
@@ -2477,7 +2603,15 @@
   }
 
   window.addEventListener("keydown", (event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    if (!(event.ctrlKey || event.metaKey)) return;
+    // The apostrophe key by character, or by position on Nordic layouts (the '* key next to Enter).
+    const quote = event.key === "'" || (event.code === "Backslash" && event.key !== "\\" && event.key !== "|");
+    if (quote && !event.shiftKey) {
+      event.preventDefault();
+      shortcut(event.altKey ? "effort" : "model");
+      return;
+    }
+    if (event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === "k" && !event.shiftKey) {
       event.preventDefault();
@@ -2500,6 +2634,7 @@
     full.mount();
     dock.mount();
     mountSettings();
+    applyButton();
     document.getElementById("agent-toggle")?.addEventListener("click", () => shortcut("side"));
     const origSetThread = sidebar.view.setThread.bind(sidebar.view);
     sidebar.view.setThread = (id) => {

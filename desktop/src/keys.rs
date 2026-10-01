@@ -15,7 +15,9 @@ use webview2_com::{
     ClearBrowsingDataCompletedHandler,
 };
 use windows::core::{w, Interface};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_F5, VK_MENU, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, MapVirtualKeyW, MAPVK_VK_TO_CHAR, VK_CONTROL, VK_F5, VK_MENU, VK_SHIFT,
+};
 
 use crate::layout;
 
@@ -32,7 +34,18 @@ enum Shortcut {
 
 const VK_TAB: u32 = 0x09;
 
+/// The key that types an apostrophe in the current layout (on Nordic layouts the '* key next to
+/// Enter), so the model shortcuts follow the label rather than a US key position.
+fn is_apostrophe(key: u32) -> bool {
+    unsafe { MapVirtualKeyW(key, MAPVK_VK_TO_CHAR) & 0x7fff_ffff == u32::from(b'\'') }
+}
+
 fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
+    // Agent chat: Ctrl+' cycles favourite models, Ctrl+Alt+' cycles reasoning. Ctrl+Alt is also
+    // AltGr on Windows, which is fine here: AltGr+' types nothing on the layouts this is for.
+    if ctrl && !shift && is_apostrophe(key) {
+        return Some(Shortcut::Board(if alt { "agent-effort" } else { "agent-model" }));
+    }
     if alt {
         return None;
     }
@@ -52,6 +65,9 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
         (b'S', false) => Some(Shortcut::Board("download")),
         (b'H', false) => Some(Shortcut::Board("help")),
         (b'W', false) => Some(Shortcut::Board("close-tab")),
+        (b'K', false) => Some(Shortcut::Board("agent-dock")),
+        (b'L', false) => Some(Shortcut::Board("agent-side")),
+        (b'L', true) => Some(Shortcut::Board("agent-full")),
         (b'R', false | true) => Some(Shortcut::Reload),
         _ => None,
     }
