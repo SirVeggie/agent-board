@@ -51,6 +51,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 - The tab strip is the title bar: drag empty space (or the spacing around panels) to move the window, double-click to maximize.
 - Settings → Desktop shows or hides each title bar button (compact, minimize, maximize, close). Right-click any button still shown for the hidden ones; with all four hidden, a ⋯ menu holds them.
 - Board shortcuts (Ctrl+D, Ctrl+S, Ctrl+H) are caught natively, so they also work while an embedded site has focus. Ctrl+Z stays with the page; Ctrl+Shift+T does the same and is caught natively.
+- Websites that refuse to be framed (`X-Frame-Options`, CSP `frame-ancestors`) load in tabs, peeks and splits anyway: the app drops those headers from embedded documents. Sites that sign in with `SameSite` cookies may still not stay logged in inside a frame.
 - Desktop-only tab keys: Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, Ctrl+W closes the current tab (it stays in the Library).
 - Ctrl+Shift+M, or the button beside the window controls, switches between the normal window and a compact one. Each remembers its own size and place; the compact one stays on top unless turned off in Settings.
 - Links that open a new window go to the default browser.
@@ -130,7 +131,7 @@ await board.resolve(["release-notes", "roadmap"])     // → { "release-notes": 
 - The mode comes from a held modifier (<kbd>Ctrl</kbd> navigate, <kbd>Shift</kbd> split, <kbd>Alt</kbd> peek), then `data-board-mode`, then Settings → Links for board pages. Websites default to the browser, and Ctrl+click always sends them there; they never become board tabs. The same modifiers work on Library rows and in the Ctrl+D palette.
 - `board.open` only works during a click or key press, so a page can't take over the view on load.
 - Links to missing pages get the `board-link-missing` class, and an empty `data-board-open` link shows the target's title.
-- Peeks and splits reuse the page's iframe, so switching between them and a tab never reloads the page. A website that refuses framing (checked by the daemon at `/api/frame-check`) shows an Open in browser card instead.
+- Peeks and splits reuse the page's iframe, so switching between them and a tab never reloads the page. A website that refuses framing (checked by the daemon at `/api/frame-check`) shows an Open in browser card instead, except in the desktop app, which frames it anyway.
 
 ### Page assets
 

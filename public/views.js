@@ -38,6 +38,8 @@ window.createViews = function createViews(host) {
   const openedFrom = new Map();
   /** href → reason, for sites that refuse to be framed. */
   const blocked = new Map();
+  /** The desktop app drops framing headers from embedded sites (desktop/src/embeds.rs), so nothing is refused there. */
+  const framingAllowed = Boolean(window.__TAURI__);
   const checking = new Set();
   /** @type {null | { frameId: string, anchor: string }} */
   let pendingAnchor = null;
@@ -283,7 +285,7 @@ window.createViews = function createViews(host) {
   }
 
   async function checkUrl(href) {
-    if (checking.has(href) || blocked.has(href)) {
+    if (framingAllowed || checking.has(href) || blocked.has(href)) {
       return;
     }
     checking.add(href);

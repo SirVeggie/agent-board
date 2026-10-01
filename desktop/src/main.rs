@@ -4,6 +4,8 @@
 
 mod board;
 #[cfg(windows)]
+mod embeds;
+#[cfg(windows)]
 mod keys;
 mod layout;
 mod startup;
@@ -202,7 +204,10 @@ fn main() {
             window.set_decorations(false)?;
             layout::apply_initial(&window);
             #[cfg(windows)]
-            keys::install(&window);
+            {
+                keys::install(&window);
+                embeds::install(&window, board::port());
+            }
             // Started with the OS and kept in the tray: stay there until opened.
             let autostart = args.iter().any(|arg| arg == startup::ARG);
             if !(autostart && close_to_tray) {
