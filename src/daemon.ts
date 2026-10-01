@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { AGENT_CLIENT, CLIENT_HEADER, VERSION, baseUrl } from "./config.js";
 import { log } from "./log.js";
 
@@ -68,29 +69,44 @@ async function stopDaemon(): Promise<void> {
   throw new Error(`Agent Board daemon at ${baseUrl()} did not stop`);
 }
 
+/** node:http rather than fetch: fetch gives up on a response after 5 minutes, which would cut board_wait short. */
 export async function api(
   method: string,
   pathname: string,
   body?: unknown,
   options?: { timeoutMs?: number }
 ): Promise<{ status: number; data: unknown }> {
-  const res = await fetch(`${baseUrl()}${pathname}`, {
-    method,
-    headers: {
-      [CLIENT_HEADER]: AGENT_CLIENT,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const { status, text } = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const req = http.request(
+      `${baseUrl()}${pathname}`,
+      {
+        method,
+        headers: {
+          [CLIENT_HEADER]: AGENT_CLIENT,
+          ...(payload === undefined
+            ? {}
+            : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }),
+        },
+        signal: options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.end(payload);
   });
-  const text = await res.text();
   let data: unknown = text;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
     data = { error: text };
   }
-  return { status: res.status, data };
+  return { status, data };
 }
 
 function sleep(ms: number): Promise<void> {

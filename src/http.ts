@@ -5,7 +5,7 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
-import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, MAX_WAIT_MS, PORT, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { checkFramable } from "./frameCheck.js";
@@ -943,8 +943,9 @@ export async function startHttp(): Promise<http.Server> {
   store.on("persist_error", (error: string) => broadcast({ type: "persist_error", error }));
   store.on("persist_ok", () => broadcast({ type: "persist_ok" }));
 
-  server.requestTimeout = MAX_WAIT_MS + 30_000;
-  contentServer.requestTimeout = MAX_WAIT_MS + 30_000;
+  // Covers receiving the request (large imports), not a slow response, so it does not bound board_wait.
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  contentServer.requestTimeout = REQUEST_TIMEOUT_MS;
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);

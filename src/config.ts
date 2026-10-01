@@ -23,8 +23,12 @@ export const PAGE_ASSET_ORPHAN_GRACE_MS = 10 * 60 * 1000;
 export const ASSET_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 /** Kept under V8's ~512 MiB string cap, since the file is parsed as one JSON string. */
 export const MAX_IMPORT_BYTES = 400 * 1024 * 1024;
-export const DEFAULT_WAIT_MS = 10 * 60 * 1000;
-export const MAX_WAIT_MS = 10 * 60 * 1000;
+/** Long on purpose: the user can interrupt the agent at any time, and a review page may take a while. */
+export const DEFAULT_WAIT_MS = 2 * 60 * 60 * 1000;
+/** Not a policy limit (the harness owns that): setTimeout's ~24.8-day ceiling, less room for the socket margins added on top. */
+export const MAX_WAIT_MS = 2 ** 31 - 1 - 60_000;
+/** How long the server gives a client to send a whole request. */
+export const REQUEST_TIMEOUT_MS = 10 * 60 * 1000 + 30_000;
 /** The MCP marks its requests with this header so tabs hidden from the agent stay invisible to them. */
 export const CLIENT_HEADER = "x-agent-board-client";
 export const AGENT_CLIENT = "agent";

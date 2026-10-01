@@ -73,7 +73,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_open` | Open a closed page on the strip |
 | `board_read` | Read a page's HTML so it can be revised (open or closed). `toFile: true` checks it out to a temp file for editing with file tools instead |
 | `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
-| `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 10 minutes. Do not poll `board_get_state`. |
+| `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 2 hours, no maximum. Do not poll `board_get_state`. |
 | `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. Optional `assets` (local files) are stored as page assets; each state value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Close one tab, all unpinned tabs, or everything; the pages stay in the Library. Pass `permanent: true` to delete instead |

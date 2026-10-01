@@ -346,7 +346,7 @@ Do **not** signal on every keystroke, bind, or `onChange`. Do **not** wait for `
 
 Waiting again on the **same** page without `board_show`: pass `afterSignalRevision` = the previous `signal.revision`, or you instantly get the old signal. After a new `board_show`, omit it.
 
-Default timeout is 10 minutes (maximum 10 minutes). Never poll `board_get_state` in a loop.
+Default timeout is 2 hours, with no maximum. Keep the default unless you have a reason to stop waiting sooner; the user can interrupt you at any time. Never poll `board_get_state` in a loop.
 
 ### Patterns
 

@@ -630,7 +630,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_wait",
-    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 10 minutes. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with board_open or stop. If deleted is true, the page was deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
+    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with board_open or stop. If deleted is true, the page was deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -648,7 +648,7 @@ export async function startMcp(): Promise<void> {
       timeoutMs: z
         .number()
         .optional()
-        .describe("How long to wait, in milliseconds. Defaults to 600000 (10 minutes). Maximum 10 minutes."),
+        .describe("How long to wait, in milliseconds. Defaults to 7200000 (2 hours). There is no maximum; the user can interrupt you at any time."),
     },
     { readOnlyHint: true },
     async ({ id, key, signal, afterSignalRevision, timeoutMs }) => {
