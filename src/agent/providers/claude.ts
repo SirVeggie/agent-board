@@ -2,7 +2,7 @@ import path from "node:path";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind } from "../types.js";
 import { isPlainRecord } from "../types.js";
-import type { AgentProvider, ProviderSession, RunSink, SessionContext, TurnInput, TurnResult } from "./provider.js";
+import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
  * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
@@ -80,6 +80,7 @@ export class ClaudeProvider implements AgentProvider {
   private modelCache: { at: number; models: ModelOption[] } | null = null;
   private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<ClaudeSession>();
+  private spares = new SparePool<ClaudeSession>();
 
   async status(): Promise<ProviderStatus> {
     try {
@@ -143,16 +144,41 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   createSession(thread: Thread, ctx: SessionContext): ProviderSession {
+    const spare = thread.nativeId ? null : this.spares.take(claudeSpareKey(thread));
+    if (spare) {
+      spare.update(thread);
+      return spare;
+    }
     const session = new ClaudeSession(thread, ctx, () => this.sessions.delete(session));
     this.sessions.add(session);
     return session;
   }
 
+  prewarm(draft: Thread, instructions: string, ctx: SessionContext): void {
+    const key = claudeSpareKey(draft);
+    let spare = this.spares.get(key);
+    if (spare) {
+      spare.update(draft);
+    } else {
+      const session = new ClaudeSession(draft, ctx, () => this.sessions.delete(session));
+      this.sessions.add(session);
+      this.spares.put(key, session);
+      spare = session;
+    }
+    void spare.warm(instructions);
+  }
+
   dispose(): void {
+    this.spares.dispose();
     for (const session of this.sessions) {
       session.dispose();
     }
   }
+}
+
+/** What a running Claude process cannot change: its tools, folder, and instructions (which follow the scope). */
+function claudeSpareKey(thread: Thread): string {
+  return JSON.stringify([thread.mode, thread.web, thread.cwd, thread.scope.kind, thread.scope.ref]);
 }
 
 function permissionModeFor(thread: Thread): PermissionMode {
@@ -443,6 +469,19 @@ class ClaudeSession implements ProviderSession {
     finish?.(result);
   }
 
+  /** Start Claude Code ahead of the first message; it waits for input without calling the API. */
+  async warm(instructions: string): Promise<void> {
+    if (this.sink) return;
+    this.instructions = instructions;
+    try {
+      await this.ensureQuery();
+    } catch (err) {
+      log(`Claude warm-up failed: ${(err as Error).message}`);
+    }
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
+  }
+
   async run(input: TurnInput, sink: RunSink): Promise<TurnResult> {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
@@ -453,6 +492,8 @@ class ClaudeSession implements ProviderSession {
     this.sink = sink;
     try {
       await this.ensureQuery();
+      // The init message may have arrived during a warm-up, before there was a sink to tell.
+      if (this.sessionId) sink.nativeId(this.sessionId);
       const content: unknown[] = [{ type: "text", text: input.text }];
       for (const image of input.images) {
         content.push({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } });

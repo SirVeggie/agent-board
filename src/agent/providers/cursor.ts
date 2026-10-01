@@ -5,7 +5,7 @@ import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ThreadMode, ToolKind, ToolStatus } from "../types.js";
 import { isPlainRecord } from "../types.js";
 import { AcpConnection, RpcError } from "./acp.js";
-import type { AgentProvider, ProviderSession, RunSink, SessionContext, TurnInput, TurnResult } from "./provider.js";
+import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
  * Cursor through its CLI's Agent Client Protocol server (`agent acp`). The SDK has no approval
@@ -125,6 +125,7 @@ export class CursorProvider implements AgentProvider {
   private modelCache: { at: number; models: ModelOption[] } | null = null;
   private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<CursorSession>();
+  private spares = new SparePool<CursorSession>();
 
   async status(): Promise<ProviderStatus> {
     const bin = locateCursorAgent();
@@ -135,7 +136,9 @@ export class CursorProvider implements AgentProvider {
   }
 
   models(refresh = false): Promise<ModelOption[]> {
-    if (!refresh && this.modelCache && Date.now() - this.modelCache.at < MODELS_TTL_MS) {
+    if (!refresh && this.modelCache) {
+      // A stale list is still right for nearly every model; refresh behind the caller.
+      if (Date.now() - this.modelCache.at >= MODELS_TTL_MS && !this.modelLoad) void this.models(true);
       return Promise.resolve(this.modelCache.models);
     }
     if (this.modelLoad) {
@@ -149,6 +152,11 @@ export class CursorProvider implements AgentProvider {
 
   cachedModels(): ModelOption[] {
     return this.modelCache?.models ?? [];
+  }
+
+  /** Seed from the saved list so the first turn after a restart does not wait for a model list. Marked stale. */
+  setModelCache(models: ModelOption[]): void {
+    if (models.length && !this.modelCache) this.modelCache = { at: 0, models };
   }
 
   private async loadModels(): Promise<ModelOption[]> {
@@ -174,16 +182,41 @@ export class CursorProvider implements AgentProvider {
   }
 
   createSession(thread: Thread, ctx: SessionContext): ProviderSession {
+    const spare = thread.nativeId ? null : this.spares.take(spareKey(thread, ctx));
+    if (spare) {
+      spare.update(thread);
+      return spare;
+    }
     const session = new CursorSession(this, thread, ctx, () => this.sessions.delete(session));
     this.sessions.add(session);
     return session;
   }
 
+  prewarm(draft: Thread, instructions: string, ctx: SessionContext): void {
+    const key = spareKey(draft, ctx);
+    let spare = this.spares.get(key);
+    if (spare) {
+      spare.update(draft);
+    } else {
+      const session = new CursorSession(this, draft, ctx, () => this.sessions.delete(session));
+      this.sessions.add(session);
+      this.spares.put(key, session);
+      spare = session;
+    }
+    void spare.warm(instructions);
+  }
+
   dispose(): void {
+    this.spares.dispose();
     for (const session of this.sessions) {
       session.dispose();
     }
   }
+}
+
+/** A Cursor session is bound to its working directory; everything else can be set on it later. */
+function spareKey(thread: Thread, ctx: SessionContext): string {
+  return thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
 }
 
 function cursorMode(mode: ThreadMode): string {
@@ -309,6 +342,7 @@ class CursorSession implements ProviderSession {
   private knownCommands: SlashCommand[] = [];
   private startedTools = new Set<string>();
   private sentInstructions = false;
+  private warming: Promise<void> | null = null;
 
   constructor(
     private provider: CursorProvider,
@@ -425,9 +459,28 @@ class CursorSession implements ProviderSession {
     }
   }
 
+  async warm(_instructions: string): Promise<void> {
+    if (this.sink) return;
+    this.warming ??= (async () => {
+      const conn = await this.ensureConnection();
+      await this.applyThread(conn);
+    })()
+      .catch((err) => log(`Cursor warm-up failed: ${(err as Error).message}`))
+      .finally(() => {
+        this.warming = null;
+      });
+    this.armIdle();
+    return this.warming;
+  }
+
+  private armIdle(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.stopProcess(), IDLE_KILL_MS);
+  }
+
   private async applyThread(conn: AcpConnection): Promise<void> {
     await this.setOption(conn, "mode", cursorMode(this.thread.mode));
-    const models = await this.provider.models();
+    const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
     const model = models.find((item) => item.id === this.thread.model);
     if (this.applied.model !== this.thread.model) {
       await this.setOption(conn, "model", this.thread.model);
@@ -456,6 +509,8 @@ class CursorSession implements ProviderSession {
     this.abort = new AbortController();
     this.startedTools.clear();
     try {
+      // A warm-up still in flight already holds the process start; join it instead of racing it.
+      if (this.warming) await this.warming;
       const conn = await this.ensureConnection();
       if (this.sessionId) sink.nativeId(this.sessionId);
       await this.applyThread(conn);
@@ -483,7 +538,7 @@ class CursorSession implements ProviderSession {
       this.abort?.abort();
       this.abort = null;
       this.sink = null;
-      this.idleTimer = setTimeout(() => this.stopProcess(), IDLE_KILL_MS);
+      this.armIdle();
     }
   }
 

@@ -1473,10 +1473,14 @@
       this.input.addEventListener("input", () => {
         this.autosize();
         this.updateSlash();
+        this.warm();
       });
       this.input.addEventListener("keydown", (event) => this.onKey(event));
       this.input.addEventListener("paste", (event) => this.onPaste(event));
-      this.input.addEventListener("focus", () => this.renderContext());
+      this.input.addEventListener("focus", () => {
+        this.renderContext();
+        this.warm();
+      });
       this.bar = el("div", "ag-bar");
       this.slash = el("div", "ag-slash");
       this.slash.hidden = true;
@@ -1492,6 +1496,27 @@
         }
       });
       return box;
+    }
+
+    /**
+     * Ask the daemon to start the provider before the message is sent: the process, the session, and
+     * the model options take seconds, which would otherwise all come after Enter. Repeats only when
+     * the settings change or a minute has passed.
+     */
+    warm() {
+      const s = this.settings();
+      const t = this.thread();
+      if (t && t.status !== "idle") return;
+      if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) return;
+      const key = JSON.stringify([this.draftKey(), s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope]);
+      const now = Date.now();
+      if (this.lastWarm && this.lastWarm.key === key && now - this.lastWarm.at < 60_000) return;
+      this.lastWarm = { key, at: now };
+      if (t) {
+        api("POST", `/threads/${encodeURIComponent(t.id)}/warm`).catch(() => undefined);
+      } else {
+        api("POST", "/warm", { provider: s.provider, model: s.model, effort: s.effort, modelParams: s.modelParams, mode: s.mode, approval: s.approval, web: s.web, cwd: s.cwd, scope: s.scope }).catch(() => undefined);
+      }
     }
 
     autosize() {

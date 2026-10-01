@@ -126,6 +126,7 @@ export class AgentHost {
     this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider() };
     const claudeModels = this.db.getSetting<ModelOption[]>("models.claude", []);
     (this.providers.claude as ClaudeProvider).setModelCache(claudeModels);
+    (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
     for (const thread of this.db.listThreads()) {
       this.threads.set(thread.id, thread);
       // A turn cannot survive a daemon restart: mark leftovers as cancelled.
@@ -196,7 +197,37 @@ export class AgentHost {
     return { thread: this.view(thread), turns: this.loadTurns(id), items: this.loadItems(id) };
   }
 
+  /** Start a thread's provider session ahead of a message. Nothing happens while it runs. */
+  async warm(id: string): Promise<void> {
+    const thread = this.requireThread(id);
+    if (this.runs.has(id) || thread.archived) return;
+    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) return;
+    const session = this.session(thread);
+    session.update(thread);
+    await session.warm(threadInstructions(thread, this.scopeInfo(thread)));
+  }
+
+  /** Warm a spare session for a thread the user is about to start with these settings. */
+  warmDraft(input: Partial<Thread> & { scope?: ThreadScope }): void {
+    const draft = this.draftThread(input);
+    if (draft.mode !== "board" && draft.mode !== "ask" && !draft.cwd) return;
+    this.providers[draft.provider].prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
+  }
+
   createThread(input: Partial<Thread> & { scope?: ThreadScope }): ThreadView {
+    const thread = this.draftThread(input);
+    this.threads.set(thread.id, thread);
+    this.items.set(thread.id, []);
+    this.turns.set(thread.id, []);
+    this.seq.set(thread.id, 0);
+    this.db.saveThread(thread);
+    const view = this.view(thread);
+    this.emit({ type: "agent_thread", thread: view });
+    return view;
+  }
+
+  /** A thread with defaults filled in, not stored. createThread and warmDraft agree on it, so a warmed spare matches. */
+  private draftThread(input: Partial<Thread> & { scope?: ThreadScope }): Thread {
     const prefs = this.prefs();
     const provider = input.provider ?? prefs.provider;
     const scope: ThreadScope = input.scope ?? { kind: "global", ref: null };
@@ -228,14 +259,7 @@ export class AgentHost {
       updatedAt: now,
       activityAt: now,
     };
-    this.threads.set(thread.id, thread);
-    this.items.set(thread.id, []);
-    this.turns.set(thread.id, []);
-    this.seq.set(thread.id, 0);
-    this.db.saveThread(thread);
-    const view = this.view(thread);
-    this.emit({ type: "agent_thread", thread: view });
-    return view;
+    return thread;
   }
 
   updateThread(id: string, patch: Partial<Thread>): ThreadView {

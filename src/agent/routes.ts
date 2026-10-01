@@ -67,6 +67,23 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  router.post(
+    "/warm",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      host.warmDraft({ ...threadPatch(body), ...(body.scope ? { scope: parseScope(body.scope) } : {}) });
+      return { ok: true };
+    })
+  );
+
+  router.post(
+    "/threads/:id/warm",
+    wrap(async (req) => {
+      await host.warm(req.params.id);
+      return { ok: true };
+    })
+  );
+
   router.get(
     "/threads/:id",
     wrap((req) => {

@@ -92,6 +92,11 @@ export type TurnResult = { status: "done" | "error" | "cancelled"; error?: strin
 
 /** One live conversation with a provider, bound to a thread. */
 export interface ProviderSession {
+  /**
+   * Start the process and session and apply the thread's settings ahead of a turn, so sending is
+   * fast. Safe to call repeatedly; errors are logged, not thrown.
+   */
+  warm(instructions: string): Promise<void>;
   run(input: TurnInput, sink: RunSink): Promise<TurnResult>;
   cancel(): Promise<void>;
   /** The thread's settings changed; apply them live or restart before the next turn. */
@@ -113,5 +118,42 @@ export interface AgentProvider {
   status(): Promise<ProviderStatus>;
   models(refresh?: boolean): Promise<ModelOption[]>;
   createSession(thread: Thread, ctx: SessionContext): ProviderSession;
+  /** Warm a spare session for a thread that does not exist yet; createSession adopts it when the settings match. */
+  prewarm(draft: Thread, instructions: string, ctx: SessionContext): void;
   dispose(): void;
+}
+
+const SPARE_TTL_MS = 10 * 60 * 1000;
+const MAX_SPARES = 3;
+
+/** Warmed sessions for threads not created yet, keyed by what a session cannot change later (cwd, mode, ...). */
+export class SparePool<S extends { dispose(): void }> {
+  private spares = new Map<string, { session: S; timer: NodeJS.Timeout }>();
+
+  get(key: string): S | null {
+    return this.spares.get(key)?.session ?? null;
+  }
+
+  take(key: string): S | null {
+    const entry = this.spares.get(key);
+    if (!entry) return null;
+    clearTimeout(entry.timer);
+    this.spares.delete(key);
+    return entry.session;
+  }
+
+  put(key: string, session: S): void {
+    this.take(key)?.dispose();
+    while (this.spares.size >= MAX_SPARES) {
+      const oldest = this.spares.keys().next().value as string;
+      this.take(oldest)?.dispose();
+    }
+    const timer = setTimeout(() => this.take(key)?.dispose(), SPARE_TTL_MS);
+    timer.unref?.();
+    this.spares.set(key, { session, timer });
+  }
+
+  dispose(): void {
+    for (const key of [...this.spares.keys()]) this.take(key)?.dispose();
+  }
 }
