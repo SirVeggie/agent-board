@@ -312,21 +312,33 @@
   /* ---------- generic popover menu ---------- */
 
   let openMenuEl = null;
+  let openMenuAnchor = null;
 
   function closeMenu() {
     if (openMenuEl) {
       openMenuEl.remove();
       openMenuEl = null;
+      openMenuAnchor = null;
       document.removeEventListener("mousedown", onMenuOutside, true);
     }
   }
 
   function onMenuOutside(event) {
-    if (openMenuEl && !openMenuEl.contains(event.target)) closeMenu();
+    if (!openMenuEl || openMenuEl.contains(event.target)) return;
+    // A left press on the menu's own button is left to its click, which toggles the menu shut.
+    if (event.button === 0 && openMenuAnchor?.contains(event.target)) return;
+    closeMenu();
   }
 
-  /** items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? } */
+  /**
+   * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
+   * Opening again from the anchor whose menu is already open closes it instead.
+   */
   function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search" } = {}) {
+    if (openMenuEl && openMenuAnchor === anchor) {
+      closeMenu();
+      return null;
+    }
     closeMenu();
     const menu = el("div", "ag-menu");
     menu.style.width = `${width}px`;
@@ -408,6 +420,7 @@
     menu.style.left = `${Math.max(8, left)}px`;
     menu.style.maxHeight = `${window.innerHeight - 24}px`;
     openMenuEl = menu;
+    openMenuAnchor = anchor;
     setTimeout(() => document.addEventListener("mousedown", onMenuOutside, true), 0);
     return menu;
   }
