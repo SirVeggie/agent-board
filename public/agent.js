@@ -2997,7 +2997,7 @@
     ["Ctrl+L", "Sidebar chat"],
     ["Ctrl+K", "Floating chat"],
     ["Ctrl+Shift+L", "Full window"],
-    ["Ctrl+↑ / Ctrl+↓", "From a chat into the full window and back; expand or collapse the floating chat"],
+    ["Ctrl+↑ / Ctrl+↓", "From a chat into the full window and back; expand, collapse, or hide the floating chat"],
     ["Ctrl+J", "Threads"],
     ["Ctrl+Shift+K", "New thread"],
     ["Ctrl+'", "Next starred model"],
@@ -3583,10 +3583,11 @@
     }
   }
 
-  /** Ctrl+Down: the full window goes back where it came from; an expanded floating chat collapses. */
+  /** Ctrl+Down: the full window goes back where it came from; an expanded floating chat collapses; a collapsed one hides. */
   function chatDown() {
     if (S.fullOpen) leaveFull();
     else if (dockFocused() && S.dockExpanded) dock.setExpanded(false);
+    else if (dockFocused()) dock.setShown(false);
   }
 
   function openThreads() {
