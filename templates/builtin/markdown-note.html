@@ -132,18 +132,18 @@
   var preview = document.getElementById("preview");
   var editor = document.getElementById("editor");
 
-  if (!window.board) {
+  if (!window.scribe) {
     preview.className = "need-reload";
-    preview.textContent = "Reload the Agent Board tab so this page can use shared state.";
+    preview.textContent = "Reload the Scribe tab so this page can use shared state.";
     return;
   }
 
   var editing = false;
 
-  board.bind(editor, "draftText");
+  scribe.bind(editor, "draftText");
 
   function text() {
-    return typeof board.state.text === "string" ? board.state.text : "";
+    return typeof scribe.state.text === "string" ? scribe.state.text : "";
   }
 
   function showPreview() {
@@ -161,7 +161,7 @@
     if (editing) return;
     editing = true;
     var src = text();
-    board.set({ draftText: src });
+    scribe.set({ draftText: src });
     editor.value = src;
     preview.classList.add("hidden");
     editor.classList.remove("hidden");
@@ -172,8 +172,8 @@
   function stopEdit() {
     if (!editing) return;
     editing = false;
-    var src = String(board.state.draftText != null ? board.state.draftText : editor.value);
-    board.set({ text: src });
+    var src = String(scribe.state.draftText != null ? scribe.state.draftText : editor.value);
+    scribe.set({ text: src });
     editor.classList.add("hidden");
     preview.classList.remove("hidden");
     showPreview();
@@ -193,29 +193,29 @@
   }
 
   // ---------- page links ----------
-  // [[key or id]] shows the page's title, [[target|label]] your own text, [[peek:target]] / [[split:target]] pick a
-  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A reference pasted from Copy key
-  // ("Agent Board tab some-key") or a bare page id (t_1a2b3c4d) links too. The board resolves titles and strikes out missing pages.
-  var LINK_MODES = { board: "", tab: "tab", peek: "peek", split: "split" };
+  // [[scribe:key]] (or a bare page id) shows the page's title, [[target|label]] your own text, [[peek:target]] /
+  // [[split:target]] pick a mode, and [label](scribe:key) / (peek:…) / (split:…) is the markdown form. A key or id
+  // written on its own (scribe:some-key, t_1a2b3c4d) links too. Scribe resolves titles and strikes out missing pages.
+  var LINK_MODES = { tab: "tab", peek: "peek", split: "split" };
   var PAGE_LINK_RES = [
-    /\[\[\s*(?:(board|tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
-    /\[([^\]]+)\]\((board|tab|peek|split):([^)\s]+)\)/g,
-    /(^|[^\w\/#-])(?:Agent Board tab ([a-z0-9._:-]*[a-z0-9_-])|(t_[0-9a-f]{8}))(?![\w-])/g
+    /\[\[\s*(?:(tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
+    /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|(scribe:[^)\s]+))\)/g,
+    /(^|[^\w\/#:-])(scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?![\w-])/g
   ];
   function pageLinkHtml(target, label, mode) {
-    return '<a href="#" class="page-link" data-board-open="' + escapeHtml(target) + '"' +
-      (mode ? ' data-board-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
+    return '<a href="#" class="page-link" data-scribe-open="' + escapeHtml(target) + '"' +
+      (mode ? ' data-scribe-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
   }
   /** Replace page links in raw text with held anchors; `hold` returns a placeholder the caller swaps back. */
   function holdPageLinks(s, hold) {
     s = s.replace(PAGE_LINK_RES[0], function (_, mode, target, label) {
-      return hold(pageLinkHtml(target, String(label || "").trim(), LINK_MODES[mode || "board"]));
+      return hold(pageLinkHtml(target, String(label || "").trim(), mode ? LINK_MODES[mode] : ""));
     });
-    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target) {
-      return hold(pageLinkHtml(target, label, LINK_MODES[mode]));
+    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target, key) {
+      return hold(pageLinkHtml(target || key, label, mode ? LINK_MODES[mode] : ""));
     });
-    return s.replace(PAGE_LINK_RES[2], function (_, pre, key, id) {
-      return pre + hold(pageLinkHtml(key || id, "", ""));
+    return s.replace(PAGE_LINK_RES[2], function (_, pre, target) {
+      return pre + hold(pageLinkHtml(target, "", ""));
     });
   }
 
@@ -327,11 +327,11 @@
       var s = editor.selectionStart, e = editor.selectionEnd;
       editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(e);
       editor.selectionStart = editor.selectionEnd = s + 2;
-      board.set({ draftText: editor.value });
+      scribe.set({ draftText: editor.value });
     }
   };
 
-  board.onChange(function () {
+  scribe.onChange(function () {
     if (!editing) showPreview();
   });
   showPreview();

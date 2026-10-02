@@ -162,8 +162,8 @@ export class AgentHost {
     const scratchDir = path.join(dataDir(), "agent", "scratch");
     fs.mkdirSync(scratchDir, { recursive: true });
     const entry = fileURLToPath(new URL("../index.js", import.meta.url));
-    const env: Record<string, string> = { AGENT_BOARD_PORT: String(PORT) };
-    if (process.env.AGENT_BOARD_HOME) env.AGENT_BOARD_HOME = process.env.AGENT_BOARD_HOME;
+    const env: Record<string, string> = { SCRIBE_PORT: String(PORT) };
+    if (process.env.SCRIBE_HOME) env.SCRIBE_HOME = process.env.SCRIBE_HOME;
     this.ctx = { boardMcp: { command: process.execPath, args: [entry], env }, scratchDir, limits: (provider, info) => this.recordLimits(provider, info) };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
   }
@@ -592,7 +592,7 @@ export class AgentHost {
     const msg: QueuedMessage = { text, images: input.images ?? [], context: input.context ?? [], ...(input.from === "page" ? { from: "page" as const } : {}) };
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
-      throw new Error("Pick a workspace folder for this thread first, or switch it to Board mode.");
+      throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
     }
     if (this.runs.has(threadId)) {
       const queue = this.queues.get(threadId) ?? [];
@@ -1048,9 +1048,9 @@ export class AgentHost {
           return Promise.resolve({ optionId: allow.id });
         }
         if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
-          // Board mode never runs file or shell tools, whatever the approval setting.
-          if (reject) return Promise.resolve({ optionId: reject.id, note: "Board mode has no file or shell access." });
-          return Promise.reject(new Error("Board mode has no file or shell access."));
+          // Pages mode never runs file or shell tools, whatever the approval setting.
+          if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
+          return Promise.reject(new Error("Pages mode has no file or shell access."));
         }
         if (t?.approval === "full" && allow) {
           return Promise.resolve({ optionId: allow.id });

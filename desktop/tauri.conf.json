@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agent Board",
-  "mainBinaryName": "board",
+  "productName": "Scribe",
+  "mainBinaryName": "scribe",
   "version": "1.0.0",
-  "identifier": "local.agent-board.desktop",
+  "identifier": "local.scribe.desktop",
   "build": {
     "frontendDist": "./splash"
   },

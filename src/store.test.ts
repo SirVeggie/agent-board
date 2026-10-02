@@ -14,16 +14,16 @@ let dir = "";
 let prevHome: string | undefined;
 
 beforeEach(() => {
-  prevHome = process.env.AGENT_BOARD_HOME;
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-board-"));
-  process.env.AGENT_BOARD_HOME = dir;
+  prevHome = process.env.SCRIBE_HOME;
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-"));
+  process.env.SCRIBE_HOME = dir;
 });
 
 afterEach(() => {
   if (prevHome === undefined) {
-    delete process.env.AGENT_BOARD_HOME;
+    delete process.env.SCRIBE_HOME;
   } else {
-    process.env.AGENT_BOARD_HOME = prevHome;
+    process.env.SCRIBE_HOME = prevHome;
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -278,7 +278,7 @@ test("pin does not steal a closed tab's strip_seq", () => {
   store.closeDb();
 });
 
-test("migrates state.json once into board.sqlite", () => {
+test("migrates state.json once into scribe.sqlite", () => {
   fs.writeFileSync(
     path.join(dir, "state.json"),
     JSON.stringify({
@@ -321,7 +321,7 @@ test("migrates state.json once into board.sqlite", () => {
   );
   const store = loaded();
   assert.deepEqual(titles(store), ["Alpha", "Beta"]);
-  assert.equal(fs.existsSync(path.join(dir, "board.sqlite")), true);
+  assert.equal(fs.existsSync(path.join(dir, "scribe.sqlite")), true);
   assert.equal(fs.existsSync(path.join(dir, "state.json.bak")), true);
   assert.equal(fs.existsSync(path.join(dir, "state.json")), false);
   store.closeDb();
@@ -640,11 +640,11 @@ function todoTemplate(store: BoardStore, html = "<h1>{{title}}</h1>", stateVersi
 }
 
 function roundTrip(pack: ReturnType<BoardStore["exportFile"]>) {
-  return parseImport(serializeExport(pack), "pack.board.json");
+  return parseImport(serializeExport(pack), "pack.scribe.json");
 }
 
 function otherBoard(): BoardStore {
-  process.env.AGENT_BOARD_HOME = fs.mkdtempSync(path.join(dir, "other-"));
+  process.env.SCRIBE_HOME = fs.mkdtempSync(path.join(dir, "other-"));
   return loaded();
 }
 
@@ -770,7 +770,7 @@ test("tabs hidden from the agent vanish from every agent listing", () => {
   store.setAgentHidden("open", true);
   store.setAgentHidden("old", true);
 
-  assert.deepEqual(store.list("agent").map((tab) => tab.key), ["shown"]);
+  assert.deepEqual(store.list("agent").map((tab) => tab.key), ["scribe:shown"]);
   assert.equal(store.list("user").length, 2);
   assert.equal(store.closedCount("agent"), 0);
   assert.equal(store.closedCount("user"), 1);
@@ -778,9 +778,9 @@ test("tabs hidden from the agent vanish from every agent listing", () => {
   assert.equal(store.getActiveId("user"), store.get("open")?.id);
   assert.equal(store.get("open", "agent"), undefined);
   assert.equal(store.get("old", "agent"), undefined);
-  assert.deepEqual(store.searchOpen("alpha", "agent").hits.map((hit) => hit.tab.key), ["shown"]);
-  assert.deepEqual(store.searchLibrary("alpha", { viewer: "agent" }).hits.map((hit) => hit.tab.key), ["shown"]);
-  assert.deepEqual(store.searchPages("alpha", undefined, "agent").hits.map((hit) => hit.tab.key), ["shown"]);
+  assert.deepEqual(store.searchOpen("alpha", "agent").hits.map((hit) => hit.tab.key), ["scribe:shown"]);
+  assert.deepEqual(store.searchLibrary("alpha", { viewer: "agent" }).hits.map((hit) => hit.tab.key), ["scribe:shown"]);
+  assert.deepEqual(store.searchPages("alpha", undefined, "agent").hits.map((hit) => hit.tab.key), ["scribe:shown"]);
   store.closeDb();
 });
 
@@ -817,7 +817,7 @@ test("hide-from-agent persists and survives export and import", () => {
   const copy = again.importBoard(parsed, "meta");
   assert.equal(copy.tabs[0].agentHidden, true);
   again.setAgentHidden("page", false);
-  assert.equal(again.get("page", "agent")?.key, "page");
+  assert.equal(again.get("scribe:page", "agent")?.key, "scribe:page");
   again.closeDb();
 });
 
@@ -854,7 +854,7 @@ function insertV1Tab(db: DatabaseSync, id: string, status: string, seq: number, 
 }
 
 test("a schema v1 board migrates archived tabs into the Library", () => {
-  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   db.exec(V1_SCHEMA);
   insertV1Tab(db, "open_b", "open", 2);
   insertV1Tab(db, "open_a", "open", 3, 1);
@@ -868,11 +868,11 @@ test("a schema v1 board migrates archived tabs into the Library", () => {
   assert.equal(store.get("old")?.closedAt, 10);
   assert.equal(store.get("open_a")?.agentHidden, undefined);
   const order = store.searchLibrary("", {}).hits.map((hit) => hit.tab.key);
-  assert.deepEqual(order, ["open_a", "open_b", "newer", "old"]);
+  assert.deepEqual(order, ["scribe:open_a", "scribe:open_b", "scribe:newer", "scribe:old"]);
   store.setAgentHidden("old", true);
   store.closeDb();
 
-  const check = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const check = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   const schema = check.prepare("SELECT v FROM meta WHERE k = 'schema'").get() as { v: string };
   check.close();
   assert.equal(schema.v, "2");
@@ -886,7 +886,7 @@ test("closing a tab keeps the page in the Library at its position", () => {
   store.upsert({ key: "a", title: "A", html: "<p>a</p>" });
   store.upsert({ key: "b", title: "B", html: "<p>b</p>" });
   const before = store.searchLibrary("", {}).hits.map((hit) => hit.tab.key);
-  assert.deepEqual(before, ["b", "a"]);
+  assert.deepEqual(before, ["scribe:b", "scribe:a"]);
   store.closeTab("a");
   assert.deepEqual(store.searchLibrary("", {}).hits.map((hit) => hit.tab.key), before);
   assert.equal(store.isClosed("a"), true);
@@ -998,7 +998,7 @@ test("a bulk delete counts as a single Trash entry and the Trash has no count ca
     store.deletePermanent(`p${i}`);
   }
   assert.equal(store.listTrash().length, 13);
-  assert.deepEqual(store.listTrash()[0].tabs.map((tab) => tab.key), ["p14"]);
+  assert.deepEqual(store.listTrash()[0].tabs.map((tab) => tab.key), ["scribe:p14"]);
   for (let i = 14; i >= 3; i -= 1) {
     store.restoreLast();
   }
@@ -1015,19 +1015,19 @@ test("the Trash drops deletes older than 7 days on load", () => {
   store.deletePermanent("old");
   store.deletePermanent("new");
   store.closeDb();
-  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
-  db.prepare("UPDATE tabs SET deleted_at = ? WHERE key = 'old'").run(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
+  db.prepare("UPDATE tabs SET deleted_at = ? WHERE key = 'scribe:old'").run(Date.now() - 8 * 24 * 60 * 60 * 1000);
   db.close();
   const again = loaded();
   assert.deepEqual(
     again.listTrash().flatMap((batch) => batch.tabs.map((tab) => tab.key)),
-    ["new"]
+    ["scribe:new"]
   );
   again.closeDb();
-  const check = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const check = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   const rows = check.prepare("SELECT key FROM tabs").all() as Array<{ key: string }>;
   check.close();
-  assert.deepEqual(rows.map((row) => row.key), ["new"]);
+  assert.deepEqual(rows.map((row) => row.key), ["scribe:new"]);
 });
 
 test("cleanup picks closed, unpinned pages older than the cutoff by default", () => {
@@ -1050,21 +1050,21 @@ test("cleanup picks closed, unpinned pages older than the cutoff by default", ()
   const keys = (opts: Parameters<BoardStore["cleanupCandidates"]>[0]) =>
     store.cleanupCandidates(opts).map((tab) => tab.key).sort();
 
-  assert.deepEqual(keys({ days: 30 }), ["old"]);
-  assert.deepEqual(keys({ days: 30, includePinned: true }), ["old", "pinned"]);
-  assert.deepEqual(keys({ days: 30, includeOpen: true }), ["old", "open"]);
-  assert.deepEqual(keys({ days: 30, basis: "edited" }), ["old", "reclosed"]);
+  assert.deepEqual(keys({ days: 30 }), ["scribe:old"]);
+  assert.deepEqual(keys({ days: 30, includePinned: true }), ["scribe:old", "scribe:pinned"]);
+  assert.deepEqual(keys({ days: 30, includeOpen: true }), ["scribe:old", "scribe:open"]);
+  assert.deepEqual(keys({ days: 30, basis: "edited" }), ["scribe:old", "scribe:reclosed"]);
   assert.deepEqual(keys({ days: 30, basis: "created", includeOpen: true, includePinned: true }), [
-    "old",
-    "open",
-    "pinned",
-    "reclosed",
+    "scribe:old",
+    "scribe:open",
+    "scribe:pinned",
+    "scribe:reclosed",
   ]);
-  assert.deepEqual(keys({ days: 30, basis: "closed", includeOpen: true }), ["old"]);
+  assert.deepEqual(keys({ days: 30, basis: "closed", includeOpen: true }), ["scribe:old"]);
   assert.throws(() => store.cleanupCandidates({ days: 0 }));
   assert.throws(() => store.cleanupCandidates({ days: 30, basis: "nope" as never }));
 
-  assert.deepEqual(store.cleanup({ days: 30, includePinned: true }).map((tab) => tab.key).sort(), ["old", "pinned"]);
+  assert.deepEqual(store.cleanup({ days: 30, includePinned: true }).map((tab) => tab.key).sort(), ["scribe:old", "scribe:pinned"]);
   assert.equal(store.listTrash().length, 1);
   store.closeDb();
 });
@@ -1077,7 +1077,7 @@ test("restoring one page from a Trash batch puts it back closed and leaves the r
   store.restoreFromTrash(a.id);
   assert.equal(store.isClosed("a"), true);
   assert.equal(store.isOpen("a"), false);
-  assert.deepEqual(store.listTrash()[0].tabs.map((tab) => tab.key), ["b"]);
+  assert.deepEqual(store.listTrash()[0].tabs.map((tab) => tab.key), ["scribe:b"]);
   store.closeDb();
 });
 
@@ -1310,7 +1310,7 @@ test("template tables without the built-in columns are migrated", () => {
   const store = loaded();
   store.persist();
   store.closeDb();
-  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   db.exec("ALTER TABLE templates DROP COLUMN builtin_key; ALTER TABLE templates DROP COLUMN builtin_fingerprint; ALTER TABLE templates DROP COLUMN guide;");
   db.close();
   const again = loaded();
@@ -1336,7 +1336,7 @@ test("an exported built-in copy stays linked on import", () => {
 });
 
 function pageAssetRows(): Array<{ id: string; tab_id: string; orphaned_at: number | null }> {
-  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   try {
     return db.prepare("SELECT id, tab_id, orphaned_at FROM page_assets ORDER BY created_at, id").all() as Array<{
       id: string;
@@ -1350,7 +1350,7 @@ function pageAssetRows(): Array<{ id: string; tab_id: string; orphaned_at: numbe
 
 /** Pretend every orphaned asset lost its references long ago, so the next check deletes it. */
 function ageOrphans(): void {
-  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   try {
     db.prepare("UPDATE page_assets SET orphaned_at = 1 WHERE orphaned_at IS NOT NULL").run();
   } finally {
@@ -1440,7 +1440,7 @@ test("the startup sweep removes page assets whose page row is gone", () => {
   const store = loaded();
   store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
   store.closeDb();
-  const db = new DatabaseSync(path.join(dir, "board.sqlite"));
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   db.exec("PRAGMA foreign_keys = OFF");
   db.prepare(
     "INSERT INTO page_assets (id, tab_id, name, mime_type, bytes, data, created_at, orphaned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
@@ -1526,7 +1526,7 @@ test("a new page can take the key of a page in the Trash, and both save", () => 
   const { tab: fresh } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>new</p>" });
   store.persist();
   assert.equal(store.snapshot().persistError, null);
-  assert.equal(fresh.key, "kanban");
+  assert.equal(fresh.key, "scribe:kanban");
   assert.notEqual(old.key, "kanban");
 
   store.restoreFromTrash(old.id);
@@ -1543,12 +1543,12 @@ test("a new page can take the key of a page in the Trash, and both save", () => 
 
 test("pages opened from a template with a trashed page's title get the plain key", () => {
   const store = loaded();
-  const first = store.upsert({ title: "Agent Board work", html: "<p>a</p>" }).tab;
+  const first = store.upsert({ title: "Scribe work", html: "<p>a</p>" }).tab;
   store.persist();
   store.deleteMany([first.id]);
-  const second = store.upsert({ title: "Agent Board work", html: "<p>b</p>" }).tab;
+  const second = store.upsert({ title: "Scribe work", html: "<p>b</p>" }).tab;
   store.persist();
   assert.equal(store.snapshot().persistError, null);
-  assert.equal(second.key, "agent-board-work");
+  assert.equal(second.key, "scribe:scribe-work");
   store.closeDb();
 });

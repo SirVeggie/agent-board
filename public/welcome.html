@@ -51,7 +51,7 @@
 </head>
 <body>
   <h1>Welcome</h1>
-  <p>Agent Board is a local tabbed viewer for pages the Cursor agent presents. Keep this window open. New pages show up as tabs.</p>
+  <p>Scribe is a local tabbed viewer for pages the Cursor agent presents. Keep this window open. New pages show up as tabs.</p>
 
   <h2>Shortcuts</h2>
   <table>
@@ -68,14 +68,14 @@
       <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Desktop app only: switch between the normal and compact window</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Desktop app only: next / previous tab</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>W</kbd></td><td>Desktop app only: close a peek, or else the current tab (it stays in the Library)</td></tr>
-      <tr><td><kbd>F5</kbd> or <kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Desktop app only: reload the board and drop cached pages of embedded sites</td></tr>
+      <tr><td><kbd>F5</kbd> or <kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Desktop app only: reload Scribe and drop cached pages of embedded sites</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>Desktop app only: same as <kbd>Ctrl</kbd>+<kbd>Z</kbd>, and works while an embedded site has focus</td></tr>
     </tbody>
   </table>
 
   <h2>Search</h2>
   <ul>
-    <li><kbd>Ctrl</kbd>+<kbd>D</kbd> opens a palette over the board. Type to search titles, page content, and saved form data across every page in the Library.</li>
+    <li><kbd>Ctrl</kbd>+<kbd>D</kbd> opens a palette over Scribe. Type to search titles, page content, and saved form data across every page in the Library.</li>
     <li>With an empty query it lists open tabs, then recently closed pages. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens the page (as a tab if it was closed), <kbd>Esc</kbd> closes.</li>
   </ul>
 
@@ -85,7 +85,7 @@
     <li>This Welcome page is part of the app. Closing it dismisses it; <kbd>Ctrl</kbd>+<kbd>H</kbd> opens it again.</li>
     <li>Right-click a tab to pin or unpin it. Pinned tabs stay on the left. Clear closes unpinned tabs and leaves pinned tabs alone.</li>
     <li>Hover a tab for its full title, key, created and updated times, and Library folder.</li>
-    <li>Double-click a tab (or right-click → Copy key) to copy a reference like <code>Agent Board tab sprint-notes</code>. Paste it into a chat so the agent knows exactly which page you mean, or into a Todo or Kanban card to link the page.</li>
+    <li>Double-click a tab (or right-click → Copy key) to copy a reference like <code>Scribe tab sprint-notes</code>. Paste it into a chat so the agent knows exactly which page you mean, or into a Todo or Kanban card to link the page.</li>
     <li>Drag a tab to move it inside the pinned or unpinned group. Drop does not switch the page. Escape cancels.</li>
     <li>Right-click a tab or a Library row to export that page with its data and images.</li>
     <li>A dot on a tab means it was updated while you were looking at another tab.</li>
@@ -96,11 +96,11 @@
   <ul>
     <li>Pages can link to other pages and to websites. A link opens its target as a tab, as a <b>peek</b> (a card over the page area, for a quick look without opening a tab), or in a <b>split</b> beside the current tab.</li>
     <li>Hold <kbd>Ctrl</kbd> to navigate, <kbd>Shift</kbd> to split, or <kbd>Alt</kbd> to peek. This works on links in pages, on Library rows (click or <kbd>Enter</kbd>), and in search. A Library row's right-click menu also has Peek and Open in split.</li>
-    <li>Without a modifier, a link does what its page asked for. Otherwise, a link to a board page follows Settings → Links (Navigate at first), and a website opens in your browser. <kbd>Ctrl</kbd>+click on a website always goes to the browser.</li>
+    <li>Without a modifier, a link does what its page asked for. Otherwise, a link to a Scribe page follows Settings → Links (Navigate at first), and a website opens in your browser. <kbd>Ctrl</kbd>+click on a website always goes to the browser.</li>
     <li>A peek closes with <kbd>Esc</kbd>, a click outside it, or ×. Its header can open the page as a tab or move it into a split, without reloading it. A link to another page inside a peek stacks, and ← goes back.</li>
     <li>A split belongs to the tab that opened it: switch away and it hides, come back and it's there. Drag the border between the panes to resize it; double-click the border to go back to half and half. In narrow windows a split opens as a peek instead.</li>
-    <li>Some websites don't allow being shown inside other pages. Their peek or split says so and offers to open them in your browser. A site that relies on its login may look logged out inside the board.</li>
-    <li>When you close a tab you reached through a link, the board returns you to the page the link was on.</li>
+    <li>Some websites don't allow being shown inside other pages. Their peek or split says so and offers to open them in your browser. A site that relies on its login may look logged out inside Scribe.</li>
+    <li>When you close a tab you reached through a link, Scribe returns you to the page the link was on.</li>
   </ul>
 
   <h2>Library and templates</h2>
@@ -118,14 +118,14 @@
 
   <h2>Import and export</h2>
   <ul>
-    <li><kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the current page as a plain HTML file. Interactive data and attached images are not included, so that file is a snapshot of the markup, not a working board page.</li>
-    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.board.json</code> pack: HTML, title, pin, open or closed, Library folder and position, JSON state, and images. A page made from a template also carries that template and its form values. Export all is the same format with every user page and every template; right-click a folder to export just that folder. The Welcome page is skipped.</li>
-    <li>Import accepts a saved HTML file, a single-page export, or an export-all file. It detects the type from the contents. Existing pages are not overwritten; a colliding key gets a suffix. Imported template pages stay linked to their template. If the board already has an identical template, it is reused; a template with the same name but different content is added as a separate template.</li>
+    <li><kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the current page as a plain HTML file. Interactive data and attached images are not included, so that file is a snapshot of the markup, not a working Scribe page.</li>
+    <li>Settings (logo) has Import, Export, and Export all. Export is a <code>.scribe.json</code> pack: HTML, title, pin, open or closed, Library folder and position, JSON state, and images. A page made from a template also carries that template and its form values. Export all is the same format with every user page and every template; right-click a folder to export just that folder. The Welcome page is skipped.</li>
+    <li>Import accepts a saved HTML file, a single-page export, or an export-all file. It detects the type from the contents. Existing pages are not overwritten; a colliding key gets a suffix. Imported template pages stay linked to their template. If Scribe already has an identical template, it is reused; a template with the same name but different content is added as a separate template.</li>
     <li>Drop a file on the settings overlay (anywhere while Settings is open), on the tab strip, or on the Library sidebar. Settings and the tab strip keep the open or closed status from the file (default open). The Library sidebar imports everything closed.</li>
   </ul>
 
   <h2>Persistence</h2>
-  <p>The Library, its folders, open tabs, each page's state, and the last 10 deletes are saved to <code>%LOCALAPPDATA%\agent-board\board.sqlite</code>, so they survive Cursor and Agent Board restarts. The Library is not capped; pages stay until you delete them. Override the folder with the <code>AGENT_BOARD_HOME</code> environment variable if needed.</p>
+  <p>The Library, its folders, open tabs, each page's state, and the last 10 deletes are saved to <code>%LOCALAPPDATA%\scribe\scribe.sqlite</code>, so they survive Cursor and Scribe restarts. The Library is not capped; pages stay until you delete them. Override the folder with the <code>SCRIBE_HOME</code> environment variable if needed.</p>
   <p class="muted">Ask the agent to present an investigation, analysis, or design here instead of writing a throwaway HTML file.</p>
 </body>
 </html>

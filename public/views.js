@@ -6,8 +6,8 @@
  */
 window.createViews = function createViews(host) {
   const mainEl = host.mainEl;
-  const SPLITS_KEY = "agent-board.splits";
-  const SPLIT_RATIO_KEY = "agent-board.splitRatio";
+  const SPLITS_KEY = "scribe.splits";
+  const SPLIT_RATIO_KEY = "scribe.splitRatio";
   /** Below this page-area width a split opens as a peek instead. */
   const SPLIT_MIN_MAIN = 720;
   const SPLIT_MIN_PANE = 280;
@@ -348,7 +348,7 @@ window.createViews = function createViews(host) {
       return;
     }
     pendingAnchor = null;
-    const send = () => entry.el.contentWindow?.postMessage({ type: "agent-board-scroll", id: frameId, anchor }, "*");
+    const send = () => entry.el.contentWindow?.postMessage({ type: "scribe-scroll", id: frameId, anchor }, "*");
     if (entry.el.dataset.loaded) {
       send();
     } else {

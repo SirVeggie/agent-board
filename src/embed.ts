@@ -6,7 +6,7 @@ const ATTR = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>
 const HEAD_SCAN_CHARS = 16_384;
 
 /**
- * A page with <meta name="agent-board-embed" content="URL"> is shown by pointing the tab
+ * A page with <meta name="scribe-embed" content="URL"> is shown by pointing the tab
  * iframe at URL directly, so the site's own cookies work. Only http(s) URLs outside the
  * board's origin qualify: a javascript: URL or the board itself would run with the board's
  * origin and reach its API.
@@ -14,7 +14,7 @@ const HEAD_SCAN_CHARS = 16_384;
 export function embedUrlFromHtml(html: string): string | undefined {
   for (const tag of html.slice(0, HEAD_SCAN_CHARS).match(META_TAG) ?? []) {
     const attrs = parseAttrs(tag);
-    if (attrs.get("name")?.toLowerCase() === "agent-board-embed") {
+    if (attrs.get("name")?.toLowerCase() === "scribe-embed") {
       return safeEmbedUrl(attrs.get("content") ?? "");
     }
   }

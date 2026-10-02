@@ -29,7 +29,7 @@ function loadSdk(): Promise<Sdk> {
 const IDLE_CLOSE_MS = 15 * 60 * 1000;
 const MODELS_TTL_MS = 6 * 60 * 60 * 1000;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-const BOARD_SERVER = "agent-board";
+const BOARD_SERVER = "scribe";
 
 const EFFORT_LABELS: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
@@ -252,7 +252,7 @@ export function describeTool(name: string, input: unknown, cwd: string | null): 
     const [, server, ...rest] = name.split("__");
     const tool = rest.join("__");
     const key = str(inp.key) ?? str(inp.title) ?? str(inp.query);
-    return { title: `${server === BOARD_SERVER ? "Board" : server}: ${tool}${key ? ` · ${key}` : ""}` };
+    return { title: `${server === BOARD_SERVER ? "Scribe" : server}: ${tool}${key ? ` · ${key}` : ""}` };
   }
   switch (name) {
     case "Read":
@@ -419,7 +419,7 @@ class ClaudeSession implements ProviderSession {
           },
         ],
       },
-      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "agent-board/1" },
+      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" },
       stderr: (data) => {
         this.stderrTail = (this.stderrTail + data).slice(-4000);
       },
@@ -717,7 +717,7 @@ class ClaudeSession implements ProviderSession {
       }
     }
     if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite"].includes(name)) {
-      return { behavior: "deny", message: "This thread is in Board mode: only board tools and web search are available." };
+      return { behavior: "deny", message: "This thread is in Pages mode: only board tools and web search are available." };
     }
     const described = describeTool(name, input, this.thread.cwd);
     const options = [

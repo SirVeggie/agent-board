@@ -119,7 +119,7 @@ export function setRules(input: { provider: ProviderId; scope: PermissionScope; 
   const next = { ...data, permissions: perms };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // Write next to the file and rename, so a reader never sees half a file.
-  const tmp = `${file}.agent-board-${process.pid}.tmp`;
+  const tmp = `${file}.scribe-${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
   fs.renameSync(tmp, file);
   return listPermissions(dir).find((set) => set.provider === provider && set.scope === scope)!;

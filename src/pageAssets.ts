@@ -10,7 +10,7 @@ import {
 
 /**
  * Blobs a page saves from its own code (`board.saveAsset`). Unlike agent-attached assets
- * (src/assets.ts), they live in board.sqlite and are addressed by a random id that the page
+ * (src/assets.ts), they live in scribe.sqlite and are addressed by a random id that the page
  * keeps in its state. Any occurrence of the id in the page's state or HTML counts as a
  * reference; an asset nobody references for PAGE_ASSET_ORPHAN_GRACE_MS is deleted.
  */
@@ -154,7 +154,7 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** A local file the agent attaches to a page's state (board_set_state `assets`). */
+/** A local file the agent attaches to a page's state (page_update `assets`). */
 export type PageAssetFile = {
   path: string;
   name?: string;

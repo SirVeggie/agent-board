@@ -19,7 +19,7 @@ export class HtmlEditError extends Error {
 export class RevisionConflictError extends Error {
   constructor(expected: number, actual: number, note?: string) {
     super(
-      `tab changed since revision ${expected} (now ${actual}).${note ? ` ${note}` : ""} board_read it again (toFile: true for a fresh checkout) and reapply your change.`
+      `tab changed since revision ${expected} (now ${actual}).${note ? ` ${note}` : ""} page_read it again (toFile: true for a fresh checkout) and reapply your change.`
     );
     this.name = "RevisionConflictError";
   }
@@ -102,7 +102,7 @@ const MIN_USEFUL_PREFIX = 12;
 export function describeMiss(haystack: string, needle: string): string {
   const matched = longestPresentPrefix(haystack, needle);
   if (matched < MIN_USEFUL_PREFIX) {
-    return "No meaningful part of it is in the stored HTML. Check that this is the right page, or board_read it (fragments are stored wrapped in a full document).";
+    return "No meaningful part of it is in the stored HTML. Check that this is the right page, or page_read it (fragments are stored wrapped in a full document).";
   }
   const prefix = needle.slice(0, matched);
   const at = haystack.indexOf(prefix);

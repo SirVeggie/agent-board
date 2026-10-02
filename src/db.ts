@@ -525,15 +525,15 @@ export class BoardDb {
       const row = db.prepare("SELECT v FROM meta WHERE k = ?").get("schema") as { v: string } | undefined;
       const version = Number(row?.v);
       if (!Number.isInteger(version)) {
-        throw new Error(`board.sqlite is missing a schema version (${sqlitePath})`);
+        throw new Error(`scribe.sqlite is missing a schema version (${sqlitePath})`);
       }
       if (version > SCHEMA_VERSION) {
-        throw new Error(`board.sqlite schema ${version} is newer than this daemon (${SCHEMA_VERSION})`);
+        throw new Error(`scribe.sqlite schema ${version} is newer than this daemon (${SCHEMA_VERSION})`);
       }
       if (version === 1) {
         migrateV1ToLibrarySchema(db);
       } else if (version < SCHEMA_VERSION) {
-        throw new Error(`board.sqlite schema ${version} cannot be opened by this daemon`);
+        throw new Error(`scribe.sqlite schema ${version} cannot be opened by this daemon`);
       }
       ensureTemplateSchema(db);
       ensurePageAssetSchema(db);

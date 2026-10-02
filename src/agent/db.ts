@@ -5,7 +5,7 @@ import { dataDir } from "../config.js";
 import type { Item, Thread, Turn } from "./types.js";
 
 /**
- * Agent chat data lives in its own file next to board.sqlite, so the board schema is untouched.
+ * Agent chat data lives in its own file next to scribe.sqlite, so the board schema is untouched.
  * Rows keep their payload as JSON; the columns are only what queries need. See docs/migrations.md.
  */
 const CREATE_SQL = `

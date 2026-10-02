@@ -53,7 +53,6 @@
   const settingsToggle = document.getElementById("settings-toggle");
   const themeList = document.getElementById("theme-list");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
-  const copyKeyPrefixToggle = document.getElementById("copy-key-prefix");
   const tightSmallToggle = document.getElementById("tight-small");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
@@ -72,28 +71,26 @@
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
   const EMBED_ALLOW = "fullscreen; clipboard-read; clipboard-write";
   const LIVE_FRAME_CAP = 5;
-  const SIDE_OPEN_KEY = "agent-board.archiveOpen";
-  const SIDEBAR_TAB_KEY = "agent-board.sidebarTab";
-  const SIDE_WIDTH_KEY = "agent-board.archiveWidth";
+  const SIDE_OPEN_KEY = "scribe.archiveOpen";
+  const SIDEBAR_TAB_KEY = "scribe.sidebarTab";
+  const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
   const BOARD_VERSION = "2.5.0";
-  const BUILTIN_OPEN_KEY = "agent-board.builtinTemplatesOpen";
+  const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
   const TOGGLE_HOVER_OPEN_MS = 500;
-  const THEME_KEY = "agent-board.theme";
-  const SMOOTH_SCROLL_KEY = "agent-board.smoothScroll";
-  // Named for the old Copy ID action; kept so the saved setting carries over.
-  const COPY_KEY_PREFIX_KEY = "agent-board.copyIdPrefix";
+  const THEME_KEY = "scribe.theme";
+  const SMOOTH_SCROLL_KEY = "scribe.smoothScroll";
   /** What a page link without a mode or modifier does: "tab", "peek", or "split". */
-  const LINK_MODE_KEY = "agent-board.linkMode";
+  const LINK_MODE_KEY = "scribe.linkMode";
   const LINK_MODES = [
     { id: "tab", name: "Navigate" },
     { id: "peek", name: "Peek" },
     { id: "split", name: "Split" },
   ];
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
-  const TIGHT_SMALL_KEY = "agent-board.tightSmall";
+  const TIGHT_SMALL_KEY = "scribe.tightSmall";
   const DEFAULT_THEME = "neutral";
   const THEMES = [
     { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "/favicon.svg?v=4" },
@@ -261,7 +258,6 @@
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
-  applyFlag(copyKeyPrefixToggle, COPY_KEY_PREFIX_KEY, true);
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   renderThemeList();
@@ -275,7 +271,7 @@
       state.connected = true;
       renderChrome();
       reportViewer();
-      dispatchEvent(new CustomEvent("agent-board:connection", { detail: { connected: true } }));
+      dispatchEvent(new CustomEvent("scribe:connection", { detail: { connected: true } }));
     });
     ws.addEventListener("message", (event) => {
       applyEvent(JSON.parse(event.data));
@@ -286,7 +282,7 @@
       }
       state.connected = false;
       renderChrome();
-      dispatchEvent(new CustomEvent("agent-board:connection", { detail: { connected: false } }));
+      dispatchEvent(new CustomEvent("scribe:connection", { detail: { connected: false } }));
       setTimeout(connect, 1000);
     });
   }
@@ -307,7 +303,7 @@
   }
 
   /** The desktop app reports its window hidden in the tray, so agents open it instead of assuming it is seen. */
-  window.agentBoardSetHidden = (hidden) => {
+  window.scribeSetHidden = (hidden) => {
     viewerHidden = Boolean(hidden);
     reportViewer();
   };
@@ -325,7 +321,7 @@
 
   function applyEvent(msg) {
     if (typeof msg.type === "string" && msg.type.startsWith("agent_")) {
-      dispatchEvent(new CustomEvent("agent-board:agent-event", { detail: msg }));
+      dispatchEvent(new CustomEvent("scribe:agent-event", { detail: msg }));
       return;
     }
     if (msg.type === "snapshot") {
@@ -489,7 +485,7 @@
       if (entry?.el.contentWindow) {
         entry.el.contentWindow.postMessage(
           {
-            type: "agent-board-state",
+            type: "scribe-state",
             id: msg.id,
             state: msg.state,
             stateRevision: msg.stateRevision,
@@ -540,7 +536,7 @@
         if (id.startsWith("url:") || findAnyTab(id)?.embedUrl) {
           continue;
         }
-        entry.el.contentWindow?.postMessage({ type: "agent-board-pages-changed", id }, "*");
+        entry.el.contentWindow?.postMessage({ type: "scribe-pages-changed", id }, "*");
       }
     }, 150);
   }
@@ -590,7 +586,7 @@
 
   /** Every Library page: open tabs and closed pages, without the help page. */
   function libraryPages() {
-    return [...state.tabs, ...state.closed].filter((tab) => tab.key !== "welcome");
+    return [...state.tabs, ...state.closed].filter((tab) => tab.key !== "scribe:welcome");
   }
 
   /** Position of the current history entry among the board's own entries; see onHistoryStep. */
@@ -902,7 +898,7 @@
       (tab.id === state.activeId ? " active" : "") +
       (tab.pinned ? " pinned" : "") +
       (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "") +
-      (window.agentBoardChat?.pageStatus(tab.id) ? ` agent-${window.agentBoardChat.pageStatus(tab.id)}` : "");
+      (window.scribeChat?.pageStatus(tab.id) ? ` agent-${window.scribeChat.pageStatus(tab.id)}` : "");
     if (drag?.moved && drag.id === tab.id) {
       el.classList.add("dragging");
     }
@@ -1137,7 +1133,7 @@
     positionDraggedTab(event.clientX, event.clientY);
     trackToggleHover(event.clientX, event.clientY);
     const tab = state.tabs.find((item) => item.id === drag.id);
-    const overLibrary = Boolean(tab && tab.key !== "welcome" && library.stripDragMove(tab, event.clientX, event.clientY));
+    const overLibrary = Boolean(tab && tab.key !== "scribe:welcome" && library.stripDragMove(tab, event.clientX, event.clientY));
     drag.el.classList.toggle("to-library", overLibrary);
     if (overLibrary) {
       updateDragScroll(Number.NaN);
@@ -1779,7 +1775,7 @@
 
   async function copyTemplateId(id) {
     try {
-      await navigator.clipboard.writeText(flagOn(copyKeyPrefixToggle) ? `Agent Board template ${id}` : id);
+      await navigator.clipboard.writeText(id);
       showNotice(`Copied ${id}`);
     } catch {
       showNotice("Could not copy to clipboard");
@@ -2098,7 +2094,7 @@
   function renderFrames() {
     const tab = activeTab();
     emptyEl.hidden = Boolean(tab);
-    document.title = tab ? tab.title + " · Agent Board" : "Agent Board";
+    document.title = tab ? tab.title + " · Scribe" : "Scribe";
     views.layout();
   }
 
@@ -2135,7 +2131,7 @@
     renderTabs();
     library.render();
     renderTemplates();
-    dispatchEvent(new CustomEvent("agent-board:render"));
+    dispatchEvent(new CustomEvent("scribe:render"));
   }
 
   function matchesPendingFocus(tab) {
@@ -2197,7 +2193,7 @@
   /** Closing keeps the page in the Library; `permanent` deletes it (Ctrl+Z or the notice undoes it). */
   async function closeTab(id, { permanent = false } = {}) {
     const tab = findAnyTab(id);
-    if (tab?.key === "welcome" || !permanent) {
+    if (tab?.key === "scribe:welcome" || !permanent) {
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
       return;
     }
@@ -2315,14 +2311,14 @@
     });
   }
 
-  /** Copies the key, not the id: keys survive export and import, and read as words when pasted. */
+  /** Copies the key ("scribe:…"), not the id: keys survive export and import, and agents recognize them when pasted. */
   async function copyTabKey(id) {
     const key = findAnyTab(id)?.key;
     if (!key) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(flagOn(copyKeyPrefixToggle) ? `Agent Board tab ${key}` : key);
+      await navigator.clipboard.writeText(key);
       showNotice(`Copied ${key}`);
     } catch {
       showNotice("Could not copy to clipboard");
@@ -2331,26 +2327,26 @@
 
   async function openWelcome() {
     const html = await fetch("/welcome.html").then((res) => res.text());
-    pendingFocus = { key: "welcome" };
+    pendingFocus = { key: "scribe:welcome" };
     const res = await fetch("/api/tabs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        key: "welcome",
+        key: "scribe:welcome",
         title: "Welcome",
         html,
         activate: true,
       }),
     });
     if (!res.ok) {
-      if (pendingFocus?.key === "welcome") {
+      if (pendingFocus?.key === "scribe:welcome") {
         pendingFocus = null;
       }
       return;
     }
     const data = await res.json();
     const id = data?.tab?.id;
-    if (id && pendingFocus?.key === "welcome" && state.tabs.some((tab) => tab.id === id)) {
+    if (id && pendingFocus?.key === "scribe:welcome" && state.tabs.some((tab) => tab.id === id)) {
       pendingFocus = null;
       selectTab(id, { fromUser: true });
     }
@@ -2596,7 +2592,7 @@
     } else if (action === "reopen") {
       undoClose();
     } else if (action.startsWith("agent-")) {
-      window.agentBoardChat?.shortcut(action.slice("agent-".length));
+      window.scribeChat?.shortcut(action.slice("agent-".length));
     }
   }
 
@@ -2615,7 +2611,7 @@
       return;
     }
     if (event.key === "Escape") {
-      if (window.agentBoardChat?.escape()) {
+      if (window.scribeChat?.escape()) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -2733,7 +2729,7 @@
   function onPageAgent(event) {
     const data = event.data;
     const reply = (result) => {
-      event.source?.postMessage({ type: "agent-board-open-result", id: data.id, reqId: data.reqId, result }, "*");
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
     };
     const frameId = frameIdByWindow(event.source);
     const tab = frameId ? findAnyTab(frameId) : null;
@@ -2741,7 +2737,7 @@
       reply({ ok: false, error: "not_a_page" });
       return;
     }
-    const chat = window.agentBoardChat;
+    const chat = window.scribeChat;
     if (!chat?.pageRequest) {
       reply({ ok: false, error: "no_agent" });
       return;
@@ -2758,9 +2754,9 @@
     const data = event.data;
     const frameId = frameIdByWindow(event.source);
     const reply = (result) => {
-      event.source?.postMessage({ type: "agent-board-open-result", id: data.id, reqId: data.reqId, result }, "*");
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
     };
-    if (data.type === "agent-board-resolve") {
+    if (data.type === "scribe-resolve") {
       reply({ ok: true, pages: views.resolve(data.targets) });
       return;
     }
@@ -2979,9 +2975,9 @@
   );
 
   window.addEventListener("keydown", onBoardShortcut, true);
-  window.agentBoardShortcut = runShortcut;
+  window.scribeShortcut = runShortcut;
   /** What the agent chat (agent.js) needs from the shell. */
-  window.agentBoardApp = {
+  window.scribeApp = {
     activeTab,
     findAnyTab,
     tabs: () => state.tabs,
@@ -3001,26 +2997,26 @@
     if (event.origin !== contentOrigin() || !frameByWindow(event.source)) {
       return;
     }
-    if (event.data?.type === "agent-board-download") {
+    if (event.data?.type === "scribe-download") {
       downloadActive();
-    } else if (event.data?.type === "agent-board-undo") {
+    } else if (event.data?.type === "scribe-undo") {
       undoClose();
-    } else if (event.data?.type === "agent-board-help") {
+    } else if (event.data?.type === "scribe-help") {
       openWelcome();
-    } else if (event.data?.type === "agent-board-palette") {
+    } else if (event.data?.type === "scribe-palette") {
       togglePalette();
-    } else if (event.data?.type === "agent-board-activity") {
+    } else if (event.data?.type === "scribe-activity") {
       noteEdit();
-    } else if (event.data?.type === "agent-board-open" || event.data?.type === "agent-board-resolve") {
+    } else if (event.data?.type === "scribe-open" || event.data?.type === "scribe-resolve") {
       onPageLink(event);
-    } else if (event.data?.type === "agent-board-escape") {
-      if (!window.agentBoardChat?.escape()) {
+    } else if (event.data?.type === "scribe-escape") {
+      if (!window.scribeChat?.escape()) {
         views.escape();
       }
-    } else if (event.data?.type === "agent-board-agent") {
+    } else if (event.data?.type === "scribe-agent") {
       onPageAgent(event);
-    } else if (event.data?.type === "agent-board-chat-key") {
-      window.agentBoardChat?.shortcut(String(event.data.action || ""));
+    } else if (event.data?.type === "scribe-chat-key") {
+      window.scribeChat?.shortcut(String(event.data.action || ""));
     }
   });
 
@@ -3068,7 +3064,6 @@
     }
   });
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
-  copyKeyPrefixToggle.addEventListener("click", () => toggleFlag(copyKeyPrefixToggle, COPY_KEY_PREFIX_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });

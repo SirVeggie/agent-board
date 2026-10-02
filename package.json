@@ -1,9 +1,9 @@
 {
-  "name": "agent-board",
+  "name": "scribe",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local tabbed HTML board the Cursor agent can drive over MCP",
+  "description": "Scribe: a local hub of HTML pages that you and your agents share over MCP",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js --daemon",

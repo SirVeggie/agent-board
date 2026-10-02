@@ -39,6 +39,7 @@ import { applyStateOps } from "./stateOps.js";
 import {
   TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
+  PAGE_KEY_PREFIX,
   WELCOME_KEY,
   isAppTab,
   isPlainObject,
@@ -149,6 +150,11 @@ export class BoardStore extends EventEmitter {
     for (const row of snapshot.rows) {
       const tab = withStateDefaults(row.tab);
       applyBinding(tab, bindings.get(tab.id));
+      // Keys from before the Scribe rename have no prefix.
+      if (!tab.key.startsWith(PAGE_KEY_PREFIX)) {
+        tab.key = pageKey(tab.key) || `${PAGE_KEY_PREFIX}${tab.id}`;
+        this.markDirty(tab.id);
+      }
       this.lastSeq = Math.max(this.lastSeq, tab.stripSeq);
       if (row.status === "open") {
         delete tab.closedAt;
@@ -1855,7 +1861,7 @@ export class BoardStore extends EventEmitter {
       throw err;
     }
     const now = Date.now();
-    const requested = page.key && normalizeKey(page.key) !== WELCOME_KEY ? page.key : undefined;
+    const requested = page.key && pageKey(page.key) !== WELCOME_KEY ? page.key : undefined;
     const tab: Tab = {
       id,
       key: uniqueKey(this, requested, title, id, reserved),
@@ -1916,7 +1922,7 @@ export class BoardStore extends EventEmitter {
     if (closedById) {
       return { tab: closedById, where: "closed" };
     }
-    const key = normalizeKey(idOrKey);
+    const key = pageKey(idOrKey);
     for (const id of this.order) {
       const tab = this.tabs.get(id);
       if (tab && tab.key === key) {
@@ -2947,6 +2953,15 @@ function normalizeKey(value: string): string {
   return cleaned.slice(0, 80);
 }
 
+/**
+ * Page keys read "scribe:<slug>" so a pasted key is recognizable on its own. Lookups accept
+ * the slug with or without the prefix.
+ */
+export function pageKey(value: string): string {
+  const slug = normalizeKey(value.trim().replace(/^(scribe:)+/i, ""));
+  return slug ? `${PAGE_KEY_PREFIX}${slug}` : "";
+}
+
 function newTemplateId(): string {
   return "tpl_" + randomBytes(4).toString("hex");
 }
@@ -2989,7 +3004,7 @@ function applyBinding(tab: Tab, binding: TemplateBinding | undefined): void {
 }
 
 function boundHtmlError(tab: Tab, label: string): string {
-  return `This page (${tab.key}) is bound to template "${label}". Edit the template with board_template_upsert instead of changing this page's HTML.`;
+  return `This page (${tab.key}) is bound to template "${label}". Edit the template with template_upsert instead of changing this page's HTML.`;
 }
 
 function uniqueKey(
@@ -3005,7 +3020,7 @@ function uniqueKey(
     return key;
   };
   if (requested) {
-    const key = normalizeKey(requested);
+    const key = pageKey(requested);
     if (key && !taken(key)) {
       return claim(key);
     }
@@ -3013,7 +3028,7 @@ function uniqueKey(
       return claim(`${key}-${id.slice(2)}`);
     }
   }
-  const base = normalizeKey(title) || "page";
+  const base = pageKey(title) || `${PAGE_KEY_PREFIX}page`;
   if (!taken(base)) {
     return claim(base);
   }

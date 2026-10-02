@@ -1,0 +1,480 @@
+---
+name: scribe
+description: Present investigation results, analyses, design suggestions, comparisons, and other structured visual HTML on the local Scribe tab viewer via the scribe MCP (board_* tools). Also use for interactive pages whose state you want to read back or wait on, such as todo lists, checklists, reviews, and forms, and whenever the user refers to something already on the board, such as a page by title, a pasted "Scribe tab <key>" reference, or their todo list or kanban, to read or change it. Prefer it over workspace .html files and the host's own canvas or artifact features unless the user asked for those. Use page_screenshot only when iterating on a UI design meant for the current project, never to polish throwaway information pages.
+---
+
+# Scribe
+
+A localhost tabbed HTML viewer the user keeps open. Drive it with the `scribe` MCP. Do **not** write one-off HTML files into the workspace for presentation.
+
+Some hosts list MCP tools as deferred: load the `board_*` tools you need with your tool search first. Only if `page_show` is truly absent, the MCP is not connected: tell the user to reload MCP servers in their client's MCP config, and fall back to a concise chat summary.
+
+If `page_list` exists but `library_search` or `page_patch` does not even after loading (or you only see `board_archive` / `board_restore`), the MCP is stale. Tell the user to reload MCP. Do not invent keys or skip the Library.
+
+## Library model
+
+The **Library** holds every page on the board, organized by the user into folders and a manual order. The tab strip is just the pages that are currently **open**. Closing a tab keeps the page in the Library; only a delete removes it. The user owns the organization: never move pages between folders or reorder them.
+
+## When to use it
+
+Use the board for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Put those pages up and stop — do not screenshot them to tweak layout or type.
+
+Use `page_screenshot` only when the page **is** the design work for this project (a UI mock, layout, or component the user asked you to design or implement). Then the board is the design surface and the screenshot is how you see it.
+
+Skip the board for code edits, short factual answers, drafts meant to be copied, or when the user asked for a specific other artifact.
+
+After a page is up, answer small follow-up questions in chat. Do not patch or re-show the page for a clarification, a yes/no, a short extra fact, or anything that does not need to stay on the board. Update the page when the user asked to change it, or when the new material is substantial enough to belong there.
+
+Prefer Scribe over the host's own canvas or artifact features and over workspace `.html` files, unless the user asked for one of those.
+
+## Find a page
+
+**By pasted reference**: the user can copy a tab reference from the board, which looks like `Scribe tab sprint-notes`. Pass the part after `tab` as `key` straight to `page_read`, `page_patch`, etc. It works for open and closed pages; no search needed. Older references carry an id instead (`Scribe tab t_1a2b3c4d`); pass that as `id`.
+
+The user names pages by **title** (“my Jira issues page”). Keys are slugs you invented earlier. Never guess a key.
+
+**By title** (usual):
+
+1. `page_list` — every **open** tab. Each row has `id`, `key`, **`title`**, `folder`. Scan titles.
+2. If it is not there and `closedCount` > 0, `library_search` (no query: Library order, default 20, max 50; if `remaining` > 0, pass `offset`). Pass `folder: "CLIMS/Releases"` when the user names a folder.
+
+**By content** (body or JSON state, or the title scan missed it): `library_search({ query })`. It searches every page, open or closed; each row says whether it is `open` and which `folder` it is in.
+
+Then `page_read` with that `id` or `key` when you need the HTML (works on closed pages without opening them). The HTML comes back as its own unescaped text block after the metadata — copy `oldString`s from it verbatim. Prefer `page_patch` over rewriting what you read. For a large page, check it out to a file instead (see below).
+
+**Search keywords.** Use 1–3 distinctive words (`jira`, `clims-18595`, a phrase from the page or its state). Do not paste the whole utterance (`my jira issues page`). Filler like *my / page / tab / the* is ignored; every remaining word must match. Both tools search **title, key, visible page text, and JSON state**. Title matches rank first.
+
+Do not dump the Library into context. Page it (default 20, max 50). The Library is not capped.
+
+## Show or update
+
+Before writing HTML or calling `page_show` / `page_patch`, mention in a new line that the board is being updated so the pause does not look like the chat stopped.
+
+**Create or rewrite** with `page_show` once:
+
+- `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`)
+- `title`: short tab label
+- `html`: a complete HTML document with inline CSS, or a fragment (the board wraps fragments)
+- `assets`: omit unless the page needs images
+- `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing the board). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or during a **project design** screenshot loop they should not see yet.
+- `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
+- `folder`: for a **new** page, call `library_folders` first and pass an existing path when the page clearly belongs there (e.g. a CLIMS release analysis → `"CLIMS/Releases"`). Pass a path that does not exist yet only when the user asked for that folder (it is created). Otherwise omit: new pages land at the top of the Library root. It only applies when the page is created; re-showing never moves a page.
+
+If the result has `titleKept: true`, the user renamed that page in the last 24 hours and your `title` was ignored. Keep using their title; do not fight it.
+
+**Small markup edits** to a page that already exists: `page_patch` (see below). Do not `page_show` the whole document again.
+
+Do not pass a second tool to open or refresh. Do not pass `activate` — that flag is gone; `background` is the only one.
+
+| User said | Call | After |
+| --- | --- | --- |
+| show me / put it on the board | `page_show` (default) | Focused. A closed page is opened on the strip. |
+| update in the background / don’t switch | `page_show` or `page_patch` with `background: true` | Open: unread blip on that tab. Closed: stays closed, unread blip on Library. |
+| tweak a section / fix a line / add a paragraph | `page_patch` | Same focus rules as show. Does not rewrite the rest of the page. |
+| a small follow-up about what’s already on the page | nothing — answer in chat | Leave the tab as-is. |
+| bring it back / open it | `page_open` | Strip, focused. |
+| change todos / notes / checklist | `page_update` | Never focuses. Unread blip if they are not on that tab (open or closed). |
+
+If `page_show` or `page_patch` returns `open: false`, tell the user the blip is on Library, not the tab strip.
+
+Mention in chat that it is on the board, with the tab title. Do not paste the HTML into chat.
+
+### Patch an existing page
+
+Prefer `page_patch` when the tab already exists and you are changing a few snippets — a heading, a paragraph, a table row, a CSS rule. It is cheaper than rewriting `html` and will not accidentally clobber the rest of the page.
+
+```
+page_patch({
+  key: "clims-12345-analysis",
+  background: true,
+  edits: [
+    { oldString: "<p>Status: in progress</p>", newString: "<p>Status: ready</p>" },
+    { oldString: "</section>", newString: "<h2>Next</h2><p>Ship it.</p></section>" }
+  ]
+})
+```
+
+Rules:
+
+- Identify the tab by the same `key` (or `id`) you used in `page_show`. The tab must already exist — this does not create.
+- `oldString` is an exact substring of the **stored** HTML. If you originally passed a fragment, the stored page is wrapped (doctype + default CSS); match the body you wrote, not the wrapper.
+- Each `oldString` must match exactly once. If it matches several times, add surrounding context or pass `replaceAll: true`.
+- Edits apply in order, atomically. A failure changes nothing. The error says how much of your `oldString` matched, at which line, and quotes the stored text where it diverged — fix the snippet from that. Do not retry with a guess.
+- Do not `page_read` first when the original markup is still in the conversation.
+- Pass `expectedRevision` (from `page_read` or the previous `page_patch` result) when the user may have changed the page since you read it. A stale revision is refused.
+- Same `background` / focus rules as `page_show`. Does not clear wait signals or JSON state.
+- Still `page_show` for a new page, new `assets`, or seeding `state`.
+
+### Large pages: check out to a file
+
+When a page is large (tens of KB, like a keep-using app) or you are rewriting a big part of it, do not paste it through tool arguments. Check it out, edit it with your normal file tools, and check it back in:
+
+```
+page_read({ key: "todo-page", toFile: true })
+  → { path: "C:/Users/me/AppData/Local/Temp/scribe/todo-page.html", revision: 23, ... }
+
+// edit that path with your normal file tools
+
+page_patch({ key: "todo-page", htmlPath: "<that path>", expectedRevision: 23, background: true })
+```
+
+- The checkout is a scratch copy in the system temp folder, not a workspace file. The tab stays the source of truth; the file is only for editing.
+- Check-in replaces the whole HTML but keeps title, page state, and wait signals (unlike `page_show`). `htmlPath` and `edits` are mutually exclusive.
+- Always pass the checkout's `revision` as `expectedRevision`. If it is refused, the page moved: check out again and redo your edits on the fresh copy.
+- Template-bound pages cannot be checked out.
+
+### Updating vs replacing
+
+Do not replace a page with a new page without asking, even if it is a continuation of the previous subject.
+
+Allowed page edits without clear intention:
+- some edits, additions or otherwise improving the page
+
+Not allowed:
+- replacing all or most of the page content
+- replacing the page with a continuation
+
+If the content page would change a lot, it is better to make a new page, otherwise the user loses the ability to refer back to some older information if they want. If the subject remains the same and is a continuation, instead of replacing the page directly, close the old tab (`page_close`, which keeps it in the Library) and create a new one with a new `key`.
+
+## HTML
+
+- Self-contained: inline CSS. Do not link workspace files as `<img src="./foo.png">` or `file://` — those do not load.
+- Full documents start with `<!DOCTYPE html>` or `<html`.
+- Keep pages focused. Typical size is well under 200 KB (hard limit 2 MB). Images passed via `assets` do not count toward that cap.
+- Do not rely on the parent page's styles; tab content renders in an iframe.
+
+## Linking pages
+
+Pages can link to other board pages and to websites. The user opens a link as a tab (navigate), a **peek** (a fixed card over the page, for a quick look without opening a tab), or a **split** (a pane beside the current tab). Links keep related pages connected instead of one page trying to hold everything.
+
+```html
+<a data-scribe-open="clims-12345-analysis">Analysis</a>                              <!-- no mode: the user's Settings (Navigate by default) -->
+<a data-scribe-open="clims-12345-logs" data-scribe-mode="peek">raw logs</a>          <!-- a quick look -->
+<a data-scribe-open="clims-12345-analysis#risks" data-scribe-mode="split">Risks</a>  <!-- beside this page, scrolled to id="risks" -->
+<a href="https://tauri.app/reference/config/">Tauri config reference</a>          <!-- a website: opens the browser -->
+<a data-scribe-open="clims-12345-logs"></a>                                         <!-- empty: shows the target page's title -->
+```
+
+When to link:
+
+- A summary page with the details on their own pages: link each finding to its evidence page with `peek`, so the user checks it without losing their place.
+- A page the user will read side by side with another (a spec beside its review checklist, a diff beside its notes): `split`.
+- A page the user should go and work on (their todo list, the next step's form): leave the mode off. Their Settings decide what a plain link does, and holding Ctrl, Shift, or Alt always overrides you.
+- Existing pages the user already has: find them with `page_list` / `library_search` and link by their `key`.
+
+Rules:
+
+- Link by **key**: the keys you chose in `page_show`, or ones from `page_list` / `library_search`. Never guess a key. A link to a key with no page is struck through, and fixes itself as soon as a page with that key exists, so you may show a hub page before its detail pages as long as you create them in the same turn.
+- `#anchor` scrolls the target to the element with that `id`. Give the target the id.
+- A plain `href` to a website opens the browser. `data-scribe-mode="peek"` or `"split"` shows the site inside the board, but many sites refuse to be framed (GitHub, Google, most logins) and then show an Open in browser card instead. Sites the user is signed in to may appear signed out. Use peek or split for docs and references, not for apps.
+- Do not use `target="_blank"` or scripts for navigation; the link attributes cover it. `scribe.open(target, { mode, anchor })` is the script form for a click handler (it resolves to `{ ok, mode, id }` or `{ ok: false, error: "not_found" | "in_trash" }`). It refuses calls outside a click or key press, so a page can never switch the user's view on load.
+- `scribe.resolve([keys])` returns `{ key: { id, title, open } | null }`, for a page that builds its link list from state.
+- The built-in Todo list and Kanban board link pages in item titles, descriptions, and comments with `[[key]]` (shows the page's title), `[[target|text]]`, `[[peek:target]]`, or `[[split:target]]`. A bare page id (`t_1a2b3c4d`) links too. Write these in their state, not raw HTML.
+- You cannot open a peek or split yourself: `page_show` / `page_open` focus a tab. Links are for the user to follow.
+
+## Images
+
+User-provided image files (chat attachments, local paths) go on a page through `assets` on `page_show`. Reference them as `asset:<name>`:
+
+```
+page_show({
+  key: "mockup",
+  title: "Mockup",
+  assets: [{ path: "C:/Users/me/Pictures/hero.png", name: "hero.png" }],
+  html: `<img src="asset:hero.png" alt="Hero">`
+})
+```
+
+`assets` may also be a list of paths. The name is then the file's basename (`photo.png` → `asset:photo.png`). Prefer passing `name` when the filename is long, has spaces, or you want a short slug.
+
+Rules:
+
+- Use `asset:name`. Do not use `file://`, a workspace-relative path, or a base64 data URI for user photos.
+- png, jpg, gif, webp, svg, ico, avif. 8 MB each, 16 per tab, 32 MB total.
+- Re-showing the same `key` without `assets` keeps images already attached. The same `name` replaces that file.
+- The tool result lists the attached names — use those in `src`.
+
+## Visual feedback (project designs only)
+
+`page_screenshot` is for **designs that belong to the current project** — a mock, layout, or component the user asked you to design or ship. It is not a proofreader for board pages.
+
+Do **not** screenshot investigation results, analyses, architecture notes, ticket dumps, checklists, walkthroughs, or any other throwaway information page. Show (or patch) those once. The user can see them. Polishing their spacing or type wastes tokens.
+
+When it **is** project design work:
+
+1. `page_show` with the same `key`, `background: true` (so the tab does not steal focus).
+2. `page_screenshot` with that `key`. Default is a 1280×800 viewport of the page.
+3. Inspect the image. For a small markup change, `page_patch` with `background: true`. For a larger rewrite, `page_show` again with `background: true`. Then screenshot again.
+
+```
+page_show({ key: "hero", title: "Hero", html, background: true })
+page_screenshot({ key: "hero" })
+page_screenshot({ key: "hero", selector: ".hero" })   // one component
+page_screenshot({ key: "hero", fullPage: true })      // tall page; height is capped
+```
+
+Rules:
+
+- Always `background: true` on `page_show` / `page_patch` in this loop unless the user should look at the tab right now.
+- Identify the tab by the same `key` (or `id`) you used in `page_show`.
+- `selector` is a CSS selector; it captures the first match. If it is missing or not visible, the tool errors — fix the markup or selector, do not retry blindly.
+- After `page_update` or `page_patch`, screenshot again without re-showing the full HTML. The capture loads current HTML + state from the daemon.
+- The image is a canonical viewport, not the user's window size, zoom, or currently focused tab. Inactive / hidden board tabs still screenshot correctly.
+- Do not pin design-test pages. Do not write the HTML to a workspace file.
+- If `page_screenshot` is missing, the Scribe MCP is on an old build — tell the user to reload MCP after rebuilding the daemon.
+
+When you are done iterating and the user should see the result, `page_show` or `page_patch` once more **without** `background` so the tab comes to the front.
+
+## Testing interactions
+
+The board shows each page in an iframe that browser tools cannot reach. To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `page_show`, `page_patch`, and `page_read`) directly in the browser tool. There, the page runs on its own with a live `window.scribe`.
+
+- `scribe.set` and signals from that page write to the **real tab**. Do not test destructive interactions on a page the user relies on (their todo list). Show a copy under a temp key with `background: true`, test its `viewUrl`, then delete it with `page_close({ key, permanent: true })`.
+- Looking without changing anything (snapshot, reading the DOM, a script that only reads) is fine on the real page.
+- Loaded directly, the page does not receive live updates from `page_update` or other viewers. Reload it to see them.
+- This is for testing behavior. For a picture of the layout, `page_screenshot` is still the tool.
+
+## Interactive pages
+
+Every tab owns a JSON state object stored by the daemon. Use it for anything the user can change — todo lists, checklists, notes, review queues — and you can read back exactly what they did.
+
+**Never use `localStorage` in a board page.** All tab pages share one origin, so it collides across tabs, and you cannot read it.
+
+`window.scribe` is injected before your page scripts run:
+
+```js
+scribe.state                     // current state, available synchronously
+scribe.set({ todos })            // merge top-level keys, saved on a short debounce
+scribe.signal("submitted")       // wake page_wait; flushes pending scribe.set first
+scribe.onChange(render)          // a remote change arrived; not fired for your own scribe.set
+scribe.bind(el, "notes")         // two-way bind an input, textarea, or checkbox
+scribe.revision                  // current stateRevision
+scribe.saveAsset(file)           // store an image/file for this page; see Page assets
+scribe.open("key", { mode })     // open a page or URL as "tab", "peek", or "split"; see Linking pages
+scribe.agent.start(prompt)       // start an agent chat thread for this page; see Pages that use the agent
+```
+
+Declarative wake-ups (do **not** also call `scribe.signal` in the same click):
+
+```html
+<button type="button" data-scribe-signal="submitted">Submit</button>
+<form data-scribe-signal="submitted">...</form>
+```
+
+Seed a page's shape with the `state` argument to `page_show`. It applies only when the tab has no state yet, so re-showing a revised page never resets what the user has done.
+
+Rules that keep pages well behaved:
+
+- Bind every text field with `scribe.bind` rather than wiring inputs by hand. It protects in-flight typing: a remote change to a field the user is inside does not touch their caret.
+- In `onChange`, re-render only the parts that changed. Do not rebuild a container that holds a bound field.
+- Keep in-progress form input under a `draft` key and never write that key from the agent.
+- State is JSON only, 256 KB per tab. Images, files, and other binary data go in page assets (below), never base64 in state.
+
+### Page assets (images and files saved by the page)
+
+When the user adds an image or file on the page itself (a kanban card's picture, a pasted screenshot, a dropped PDF), save it with `scribe.saveAsset` and keep its id in state:
+
+```js
+const asset = await scribe.saveAsset(file);          // Blob, File, ArrayBuffer, or typed array
+// asset: { id, url, name, mimeType, bytes, usage }
+scribe.set({ cards: [...cards, { title, image: asset.id }] });
+img.src = scribe.assetUrl(card.image);               // "/blob/<id>"; works for an id or a stored url
+await scribe.deleteAsset(id);                        // optional; unreferenced ones are cleaned up anyway
+const { assets, usage } = await scribe.listAssets();
+```
+
+- An asset stays as long as its id (or url) appears anywhere in the page's state or HTML. Once nothing mentions it for 10 minutes it is deleted, so an undo right after removing a card still works. Save the id to state right after the upload.
+- Deleting the page permanently deletes its assets with it. Export and import carry them.
+- Limits: 32 MB per asset, 2000 assets and 256 MB per page. `usage.warning` is set (and the board shows a notice) once a page is 80% full; `saveAsset` rejects past the limit, so handle the error.
+- To show a local image in the page's markup, use `assets` on `page_show` (see Images). To put a local file into the page's *data* (an image on a todo item, a card, a gallery entry), use `assets` on `page_update` and write the whole string `"asset:<name>"` where its URL belongs. It is stored as a page asset and replaced with `/blob/<id>`:
+
+```
+page_update({
+  key: "groceries",
+  expectedRevision: 4,
+  assets: ["C:/Users/me/Pictures/apples.jpg"],
+  state: { todos: [...current, { id: "t9", text: "Apples", done: false, description: "", col: 0,
+    images: [{ id: "i1", name: "apples.jpg", data: "asset:apples.jpg" }] }] }
+})
+```
+
+Every file must be referenced and every `asset:<name>` needs a file; otherwise the write is refused. The built-in Todo list keeps images per item as `images: [{ id, name, data }]` and shows one inline in the description with `![alt](#img-<image id>)`.
+
+The shape to follow — bind the fields once, render the rest from state, and call `render()` yourself after your own writes:
+
+```js
+scribe.bind(document.getElementById("notes"), "notes");
+
+function items() {
+  return Array.isArray(scribe.state.todos) ? scribe.state.todos : [];
+}
+
+function render() {
+  listEl.replaceChildren();          // rebuilds the list only, never the bound fields
+  for (const todo of items()) { /* build one row */ }
+}
+
+function toggle(id, done) {
+  scribe.set({ todos: items().map((t) => (t.id === id ? { ...t, done } : t)) });
+  render();
+}
+
+scribe.onChange(render);
+render();
+```
+
+### Pages that use the agent
+
+A page can start the board's own agent chat and read its replies with `scribe.agent`. Use it for buttons like "Summarise", "Break this card down" or "Draft a reply", where the page builds the prompt from its state and shows the answer itself.
+
+```js
+const { ok, threadId, error } = await scribe.agent.start(prompt, { title: "Card #12", mode: "board", show: "dock" });
+await scribe.agent.send(threadId, "Shorter, please.");     // queued if the thread is still working
+const { reply } = await scribe.agent.wait(threadId);       // resolves when the thread is idle (default 10 min)
+const { threads } = await scribe.agent.threads();          // this page's threads, newest first
+const { thread, reply: last } = await scribe.agent.get(threadId);
+scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
+```
+
+- `start` and `send` only work inside a click or key press, like `scribe.open`; otherwise they resolve `{ ok: false, error: "no_gesture" }`. Call them first in the handler, before other `await`s.
+- A page only sees and drives **its own** threads (scoped to that page). It cannot reach other threads.
+- Threads a page starts are Pages mode (`mode: "ask"` for read-only Q&A), so they get board tools and the web, not files or shell. The model and provider follow the user's defaults.
+- `show: "dock"` or `"sidebar"` opens the thread in that chat; omit it to run quietly. The tab still shows its working dot.
+- Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
+- Keep the thread id in `scribe.set` state if the page should continue the same conversation later.
+
+## Waiting for user input
+
+`page_wait` is a single blocked call. The page fires a **named signal** when the thing you care about happens; you wait for that name. Typing, `scribe.set`, and `scribe.bind` do **not** wake you.
+
+Handshake:
+
+1. Pick a short signal name (`submitted`, `chosen`, `all_done`, `approved`).
+2. The page fires that name when the condition is met — `data-scribe-signal="submitted"` or `scribe.signal("submitted")`.
+3. `page_show` the page (this clears any previous signal on that tab).
+4. `page_wait` with the same `key` and `signal`. Use the returned `state`; do not follow with `page_state` unless you need a later read.
+
+`scribe.signal` flushes pending `scribe.set` in the same request, so the wait result includes what the user just saved.
+
+Do **not** signal on every keystroke, bind, or `onChange`. Do **not** wait for `stateRevision` to change.
+
+### After the wait
+
+- `timedOut: true` — tell the user you are still waiting, then call `page_wait` again with the **same** `afterSignalRevision` you used (omit / `0` if this was the first wait after `page_show`).
+- `closed: true` — the tab was closed (the page is still in the Library); reopen it with `page_open` if you still need the handshake, or stop.
+- `deleted: true` — the page was deleted; stop.
+- `signal` is set — continue from `state`. Branch on `signal.name` when you waited for more than one outcome.
+
+Waiting again on the **same** page without `page_show`: pass `afterSignalRevision` = the previous `signal.revision`, or you instantly get the old signal. After a new `page_show`, omit it.
+
+Default timeout is 2 hours, with no maximum. Keep the default unless you have a reason to stop waiting sooner; the user can interrupt you at any time. Never poll `page_state` in a loop.
+
+### Patterns
+
+Submit a form (bound fields are already in state):
+
+```html
+<button type="button" data-scribe-signal="submitted">Submit</button>
+```
+
+```
+page_wait({ key: "review", signal: "submitted" })
+```
+
+Choice buttons — save the value, then signal. Use `type="button"` and **either** `data-scribe-signal` **or** `scribe.signal`, not both:
+
+```html
+<button type="button" onclick="pick('a')">Option A</button>
+<button type="button" onclick="pick('b')">Option B</button>
+<script>
+function pick(id) {
+  scribe.set({ choice: id });
+  scribe.signal("chosen");
+}
+</script>
+```
+
+```
+page_wait({ key: "options", signal: "chosen" })
+```
+
+Different outcomes:
+
+```html
+<button type="button" data-scribe-signal="approved">Approve</button>
+<button type="button" data-scribe-signal="rejected">Reject</button>
+```
+
+```
+page_wait({ key: "pr-review", signal: "approved,rejected" })
+```
+
+Then branch on the returned `signal.name`.
+
+All todos checked — signal from the condition, not from each toggle:
+
+```js
+function toggle(id, done) {
+  const todos = items().map((t) => (t.id === id ? { ...t, done } : t));
+  scribe.set({ todos });
+  render();
+  if (todos.length && todos.every((t) => t.done)) {
+    scribe.signal("all_done");
+  }
+}
+```
+
+```
+page_wait({ key: "todos", signal: "all_done" })
+```
+
+Keyboard (Ctrl/Cmd+Enter):
+
+```js
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+  event.preventDefault();
+  scribe.signal("submitted");
+});
+```
+
+## Reading and writing page state
+
+- `page_state` (`id` or `key`) returns `state`, `stateRevision`, and the last `signal`. Use it when you are **not** blocked on the user (they said “look at my notes”). Do not poll it.
+- `page_update` merges the keys you pass, so send only what you are changing. An open page applies it live without reloading. It does **not** focus the tab and does **not** open a closed page. Unfocused open tabs and closed pages show an unread blip.
+- Pass `expectedRevision` from your last read. If the user changed the page in between, the write is refused and the error carries their current state — merge your change into it and retry with the revision it reports. Do not reach for `force`; it exists for deliberately resetting a page.
+- Read state before acting on a page the user has had time to touch. Do not assume the state you wrote earlier is still current.
+
+### Large state: read and change one item
+
+When a page keeps a big array (a Kanban board's `cards`, a long todo list), do not read or resend the whole thing to change one item. Use paths:
+
+- `page_state({ key, path: "cards/num=12" })` returns just that value. `where` filters an array: `{ path: "cards", where: { col: "col_ab12" } }`.
+- `page_update({ key, ops: [...] })` edits items in place. Ops: `set`, `merge` (a `null` field removes it), `remove`, `insert` (into the array at `path`), `move` (within its array). `insert` and `move` take `before` / `after` (a selector) or `at` (`"start"`, `"end"`, an index).
+- A path is `/`-separated. On an object a segment is a key; on an array it picks an item by `id` (`cards/c_12ab`), by `field=value` (`cards/num=12`), or by `#<index>`.
+- Ops apply in order, all or nothing, to the latest state. With ops alone `expectedRevision` is optional, so a change elsewhere on the page doesn't refuse your write. Pass it when your edit depends on a value you read (taking the next number from a counter).
+
+```
+page_update({ key: "sprint-board", ops: [
+  { op: "merge", path: "cards/num=12", value: { col: "col_done", status: null } },
+  { op: "insert", path: "cards/num=12/comments", value: { id: "cm_1", by: "agent", at: 1790000000000, text: "Done." } }
+] })
+```
+
+If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `page_wait` **next, in the same turn**, with the same signal name the page fires. Do not poll `page_state`.
+
+## Pin, open, close
+
+- `page_pin` / `page_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `page_show` `pin`.
+- `page_close` closes one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Closed pages stay in the Library. Pass `permanent: true` to delete instead; deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one).
+- `page_open` (`id`/`key`) opens a closed page on the strip (focused).
+- Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
+- Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
+
+## Templates
+
+Do **not** create, edit, or delete board templates unless the user explicitly asked. Everyday pages still use `page_show` / `page_patch`.
+
+When they do ask, read `TEMPLATES.md` in this skill folder before using `board_template_*`. A page bound to a template cannot have its HTML changed — update the template instead. You may still change that page's state, title, and pin.
+
+Pages made from a template (a Kanban board, a Todo list) can come with an **agent guide**: the state shape, the signals the page fires, and how to change it. The first `page_state`, `page_read`, `page_wait`, or `template_open` on such a page in a session appends the guide to the result. Read it before writing that page's state, and follow it over general advice here. Later results only point back to it; `page_state` with `guide: true` shows it again.

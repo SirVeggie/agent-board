@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const EXE = "board.exe";
-const PREVIOUS_EXES = ["agent-board-desktop.exe"];
+const EXE = "scribe.exe";
+const PREVIOUS_EXES = ["agent-board-desktop.exe", "board.exe"];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const built = path.join(root, "desktop", "target", "release", EXE);
 const tauriJs = path.join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");

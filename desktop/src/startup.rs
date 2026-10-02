@@ -11,9 +11,13 @@ pub fn set_enabled(on: bool) -> Result<(), String> {
 }
 
 /// Point an existing entry at this exe, so a copy installed somewhere else keeps starting.
+/// An entry left under the old "Agent Board" name moves to the current one.
 /// Debug builds leave it alone: they come and go with `cargo clean`.
 pub fn refresh() {
-    if !cfg!(debug_assertions) && is_enabled() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    if imp::take_legacy() || is_enabled() {
         let _ = imp::set_enabled(true);
     }
 }
@@ -30,7 +34,24 @@ mod imp {
     const RUN: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
     /// Task Manager's Startup tab keeps its own on/off switch for each Run entry here.
     const APPROVED: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
-    const NAME: PCWSTR = w!("Agent Board");
+    const NAME: PCWSTR = w!("Scribe");
+    /// The entry's name before the app was renamed to Scribe.
+    const LEGACY_NAME: PCWSTR = w!("Agent Board");
+
+    /// Remove an entry under the old name. True when it was there and switched on.
+    pub fn take_legacy() -> bool {
+        let exists =
+            unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN, LEGACY_NAME, RRF_RT_REG_SZ, None, None, None) }.is_ok();
+        if !exists {
+            return false;
+        }
+        let on = approved_as(LEGACY_NAME);
+        unsafe {
+            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN, LEGACY_NAME);
+            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED, LEGACY_NAME);
+        }
+        on
+    }
 
     pub fn is_enabled() -> bool {
         let exists = unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN, NAME, RRF_RT_REG_SZ, None, None, None) }.is_ok();
@@ -39,13 +60,17 @@ mod imp {
 
     /// No switch means on. Task Manager writes an odd first byte when it turns an entry off.
     fn approved() -> bool {
+        approved_as(NAME)
+    }
+
+    fn approved_as(name: PCWSTR) -> bool {
         let mut bytes = [0u8; 12];
         let mut len = bytes.len() as u32;
         let status = unsafe {
             RegGetValueW(
                 HKEY_CURRENT_USER,
                 APPROVED,
-                NAME,
+                name,
                 RRF_RT_REG_BINARY,
                 None,
                 Some(bytes.as_mut_ptr().cast()),
@@ -93,6 +118,10 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     pub fn is_enabled() -> bool {
+        false
+    }
+
+    pub fn take_legacy() -> bool {
         false
     }
 

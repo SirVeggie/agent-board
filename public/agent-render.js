@@ -129,6 +129,8 @@
       const t = target.trim();
       return `[${(label || t).replace(/[\[\]]/g, "")}](#board:${encodeURIComponent(t)}${label ? "" : "|auto"})`;
     });
+    // [label](scribe:key): a page key is its own link target. board: is the old form, still in older transcripts.
+    out = out.replace(/\]\((scribe:[^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
     out = out.replace(/\]\(board:([^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
     return out;
   }
@@ -168,7 +170,7 @@
         a.className = "ag-board-link";
         a.dataset.boardTarget = target;
         a.tabIndex = 0;
-        a.title = `Board page · ${target} (Ctrl navigate, Shift split, Alt peek)`;
+        a.title = `Scribe page · ${target} (Ctrl navigate, Shift split, Alt peek)`;
         if (auto) autoLinks.push(a);
       } else if (/^https?:/i.test(href)) {
         a.classList.add("ag-web-link");

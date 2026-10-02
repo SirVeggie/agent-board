@@ -31,10 +31,10 @@ export async function ensureDaemon(): Promise<string> {
     return url;
   }
   if (running) {
-    log(`Replacing agent-board daemon ${running.version ?? "unknown"} with ${VERSION}`);
+    log(`Replacing scribe daemon ${running.version ?? "unknown"} with ${VERSION}`);
     await stopDaemon();
   }
-  log("Starting agent-board daemon");
+  log("Starting scribe daemon");
   const args = process.argv.slice(1).filter((arg) => arg !== "--daemon" && arg !== "--stop" && arg !== "--ensure");
   args.push("--daemon");
   const child = spawn(process.execPath, args, {
@@ -50,7 +50,7 @@ export async function ensureDaemon(): Promise<string> {
       return url;
     }
   }
-  throw new Error(`Agent Board daemon did not start at ${url}`);
+  throw new Error(`Scribe daemon did not start at ${url}`);
 }
 
 /** A daemon from another build answers health but speaks a different API, so it must be replaced. */
@@ -66,10 +66,10 @@ async function stopDaemon(): Promise<void> {
       return;
     }
   }
-  throw new Error(`Agent Board daemon at ${baseUrl()} did not stop`);
+  throw new Error(`Scribe daemon at ${baseUrl()} did not stop`);
 }
 
-/** node:http rather than fetch: fetch gives up on a response after 5 minutes, which would cut board_wait short. */
+/** node:http rather than fetch: fetch gives up on a response after 5 minutes, which would cut page_wait short. */
 export async function api(
   method: string,
   pathname: string,

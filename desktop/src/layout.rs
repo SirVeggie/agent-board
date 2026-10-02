@@ -205,7 +205,7 @@ pub fn push_state<R: Runtime>(window: &WebviewWindow<R>) {
         return;
     };
     let _ = window.eval(format!(
-        "window.agentBoardDesktop && window.agentBoardDesktop.setState({json})"
+        "window.scribeDesktop && window.scribeDesktop.setState({json})"
     ));
 }
 

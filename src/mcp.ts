@@ -56,7 +56,7 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
   if (!force && deliveredGuides.get(guide.id) === guide.text) {
     result.content.push({
       type: "text",
-      text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; board_get_state with guide: true shows it again.`,
+      text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; page_state with guide: true shows it again.`,
     });
     return result;
   }
@@ -68,27 +68,27 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
   return result;
 }
 
-/** Clients show these to the model on connect, even when the agent-board skill is not loaded. */
+/** Clients show these to the model on connect, even when the scribe skill is not loaded. */
 const INSTRUCTIONS = [
-  "Agent Board is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
-  "Also use it whenever the user refers to something on the board: a page title, a pasted `Agent Board tab <key>` reference (pass the part after `tab` as key straight to board_read / board_patch / board_get_state; an older t_… reference is an id), or their todo list or kanban.",
-  "If the agent-board skill is available, load it before building or changing pages; it has the full rules.",
-  "Show a page once with board_show and a stable key; for small edits to an existing page use board_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
-  "Find pages by title with board_list (open tabs), then board_library (every page). Never guess a key.",
-  "Pages keep user data in board state (board.set / board.bind in the page, board_get_state / board_set_state from you, with expectedRevision). Never use localStorage in a page.",
-  "Pages can link to each other by key: <a data-board-open=\"key\" data-board-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with board_list / board_library.",
-  "When the page asks the user to submit, choose, or finish something, call board_wait next with the signal name the page fires. Never poll board_get_state.",
-  "Only use board_screenshot for UI designs that belong to the current project, never to polish information pages.",
+  "Scribe is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
+  "Also use it whenever the user refers to something on the board: a page title, a pasted `Scribe tab <key>` reference (pass the part after `tab` as key straight to page_read / page_patch / page_state; an older t_… reference is an id), or their todo list or kanban.",
+  "If the scribe skill is available, load it before building or changing pages; it has the full rules.",
+  "Show a page once with page_show and a stable key; for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
+  "Find pages by title with page_list (open tabs), then library_search (every page). Never guess a key.",
+  "Pages keep user data in board state (board.set / board.bind in the page, page_state / page_update from you, with expectedRevision). Never use localStorage in a page.",
+  "Pages can link to each other by key: <a data-scribe-open=\"key\" data-scribe-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with page_list / library_search.",
+  "When the page asks the user to submit, choose, or finish something, call page_wait next with the signal name the page fires. Never poll page_state.",
+  "Only use page_screenshot for UI designs that belong to the current project, never to polish information pages.",
   "Do not create, edit, or delete templates unless the user asked. Pages from a template come with an agent guide in tool results; follow it.",
 ].join(" ");
 
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
-  const server = new McpServer({ name: "agent-board", version: VERSION }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: INSTRUCTIONS });
 
   server.tool(
-    "board_show",
-    "Present an HTML page on the local Agent Board. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; a closed page stays closed with a Library blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer board_patch instead of rewriting html.",
+    "page_show",
+    "Present an HTML page on the local Scribe. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; a closed page stays closed with a Library blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
     {
       key: z
         .string()
@@ -124,7 +124,7 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Pass an existing path from board_folders when the new page clearly belongs there, or a new path only when the user asked for that folder. Otherwise omit (the page lands in the Library root)."
+          "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Pass an existing path from library_folders when the new page clearly belongs there, or a new path only when the user asked for that folder. Otherwise omit (the page lands in the Library root)."
         ),
       state: z
         .record(z.string(), z.unknown())
@@ -185,8 +185,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_patch",
-    "Patch snippets on an existing Agent Board page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not clear wait signals or page state. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over board_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with board_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
+    "page_patch",
+    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not clear wait signals or page state. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with page_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -211,13 +211,13 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          "Local HTML file that replaces the whole page, usually the path returned by board_read toFile: true after you edited it. Keeps title, page state, and wait signals. Mutually exclusive with edits."
+          "Local HTML file that replaces the whole page, usually the path returned by page_read toFile: true after you edited it. Keeps title, page state, and wait signals. Mutually exclusive with edits."
         ),
       expectedRevision: z
         .number()
         .optional()
         .describe(
-          "Refuse the change if the page's revision is no longer this one (someone else edited it). Pass the revision from board_read or the previous board_patch."
+          "Refuse the change if the page's revision is no longer this one (someone else edited it). Pass the revision from page_read or the previous page_patch."
         ),
       title: z
         .string()
@@ -293,8 +293,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_list",
-    "List or search open tabs only. Omit query to list every open tab (id, key, title, folder, pinned, dates, size) plus activeId and closedCount — not paged. Pass query to search title, key, visible page text, and JSON state (same rules as board_library). Closed pages are never included; if the page is missing and closedCount > 0, call board_library with the same query (it searches every page). Do not invent a key. If board_library is missing, the MCP is stale — tell the user to reload it.",
+    "page_list",
+    "List or search open tabs only. Omit query to list every open tab (id, key, title, folder, pinned, dates, size) plus activeId and closedCount — not paged. Pass query to search title, key, visible page text, and JSON state (same rules as library_search). Closed pages are never included; if the page is missing and closedCount > 0, call library_search with the same query (it searches every page). Do not invent a key. If library_search is missing, the MCP is stale — tell the user to reload it.",
     {
       query: z
         .string()
@@ -343,17 +343,17 @@ export async function startMcp(): Promise<void> {
         note: searched
           ? `Searched open tabs only (${payload.matchCount ?? 0} match(es) of ${payload.openCount ?? 0}). Closed pages are not included` +
             (closedCount > 0
-              ? ` — call board_library with the same query to search every page (${closedCount} closed).`
+              ? ` — call library_search with the same query to search every page (${closedCount} closed).`
               : ".")
           : closedCount > 0
-            ? `${closedCount} closed page(s) are not listed here. Call board_library to page or search the whole Library.`
+            ? `${closedCount} closed page(s) are not listed here. Call library_search to page or search the whole Library.`
             : undefined,
       });
     }
   );
 
   server.tool(
-    "board_library",
+    "library_search",
     "Page or search the Library: every page on the board, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context.",
     {
       query: z
@@ -414,8 +414,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_folders",
-    "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with the number of pages directly inside it. Use before board_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for board_library. Never create a new folder unless the user asked for one.",
+    "library_folders",
+    "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with the number of pages directly inside it. Use before page_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for library_search. Never create a new folder unless the user asked for one.",
     {},
     { readOnlyHint: true },
     async () => {
@@ -432,8 +432,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_open",
-    "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from board_library. The page stays where it is in the Library.",
+    "page_open",
+    "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from library_search. The page stays where it is in the Library.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -457,8 +457,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_read",
-    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your normal file tools, then check it in with board_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
+    "page_read",
+    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your normal file tools, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -466,7 +466,7 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe(
-          "Check the page out to a temp file instead of returning the HTML. Returns path and revision for board_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
+          "Check the page out to a temp file instead of returning the HTML. Returns path and revision for page_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
         ),
     },
     { readOnlyHint: true },
@@ -501,7 +501,7 @@ export async function startMcp(): Promise<void> {
               templateId: tab.templateId,
               templateValues: tab.templateValues ?? {},
               templateCompatible: tab.templateCompatible !== false,
-              note: "This page is bound to a template. Do not edit its HTML — update the template with board_template_upsert.",
+              note: "This page is bound to a template. Do not edit its HTML — update the template with template_upsert.",
             }
           : {}),
       };
@@ -518,7 +518,7 @@ export async function startMcp(): Promise<void> {
         return jsonResult({
           ...meta,
           path: file,
-          note: `Checked out. Edit the file, then board_patch({ key: "${tab.key}", htmlPath, expectedRevision: ${tab.revision} }).`,
+          note: `Checked out. Edit the file, then page_patch({ key: "${tab.key}", htmlPath, expectedRevision: ${tab.revision} }).`,
         });
       }
       const result: ToolResult = {
@@ -532,8 +532,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_screenshot",
-    "Capture a screenshot of a board page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or closed). Show or update the page with board_show first; pass background: true on board_show so the capture does not steal focus.",
+    "page_screenshot",
+    "Capture a screenshot of a board page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -598,14 +598,14 @@ export async function startMcp(): Promise<void> {
           ],
         };
       } catch (err) {
-        return errorResult((err as Error).message || "board_screenshot failed");
+        return errorResult((err as Error).message || "page_screenshot failed");
       }
     }
   );
 
   server.tool(
-    "board_get_state",
-    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, closed, or the browser is open. On a large page, pass path (and where) to read just one part, e.g. one card. Do not poll this tool while waiting for the user — use board_wait.",
+    "page_state",
+    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to page_update as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, closed, or the browser is open. On a large page, pass path (and where) to read just one part, e.g. one card. Do not poll this tool while waiting for the user — use page_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -613,7 +613,7 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          `Return only the value at this path instead of the whole state. "/"-separated: a key on an object; on an array an item's id ("cards/c_12ab"), a field=value match ("cards/num=31"), or "#<index>". Same paths as board_set_state ops.`
+          `Return only the value at this path instead of the whole state. "/"-separated: a key on an object; on an array an item's id ("cards/c_12ab"), a field=value match ("cards/num=31"), or "#<index>". Same paths as page_update ops.`
         ),
       where: z
         .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
@@ -653,21 +653,21 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_wait",
-    "Block until the board page fires a named signal (board.signal or data-board-signal), then return that signal plus the live state. Use this instead of polling board_get_state. Show the page with board_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call board_wait again with the same afterSignalRevision. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with board_open or stop. If deleted is true, the page was deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. board_show clears the last signal, so the next wait can omit afterSignalRevision.",
+    "page_wait",
+    "Block until the board page fires a named signal (board.signal or data-scribe-signal), then return that signal plus the live state. Use this instead of polling page_state. Show the page with page_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same afterSignalRevision. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. page_show clears the last signal, so the next wait can omit afterSignalRevision.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
       signal: z
         .string()
         .describe(
-          "Signal name the page fires. Must match board.signal(\"name\") or data-board-signal=\"name\". For more than one outcome, pass a comma-separated list: approved,rejected"
+          "Signal name the page fires. Must match board.signal(\"name\") or data-scribe-signal=\"name\". For more than one outcome, pass a comma-separated list: approved,rejected"
         ),
       afterSignalRevision: z
         .number()
         .optional()
         .describe(
-          "Ignore signals at or below this revision. Omit (or 0) after board_show. After a successful wait, pass the returned signal.revision to wait for the next one on the same page."
+          "Ignore signals at or below this revision. Omit (or 0) after page_show. After a successful wait, pass the returned signal.revision to wait for the next one on the same page."
         ),
       timeoutMs: z
         .number()
@@ -718,7 +718,7 @@ export async function startMcp(): Promise<void> {
         }
         return withGuide(jsonResult(data), which);
       } catch (err) {
-        return errorResult((err as Error).message || "board_wait failed");
+        return errorResult((err as Error).message || "page_wait failed");
       } finally {
         clearInterval(heartbeat);
       }
@@ -726,8 +726,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_set_state",
-    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Two ways to write: state merges whole top-level keys (send only the keys you change); ops edit single items inside them by path (change, add, move, or remove one card or todo) without sending the rest of the array. Prefer ops on a page with large arrays. With state, pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft). To put a local image or file into the page's data (an image on a todo item, a card, a gallery), pass it in assets and reference it as \"asset:<name>\" in state or an op's value.",
+    "page_update",
+    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Two ways to write: state merges whole top-level keys (send only the keys you change); ops edit single items inside them by path (change, add, move, or remove one card or todo) without sending the rest of the array. Prefer ops on a page with large arrays. With state, pass expectedRevision from page_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft). To put a local image or file into the page's data (an image on a todo item, a card, a gallery), pass it in assets and reference it as \"asset:<name>\" in state or an op's value.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -768,7 +768,7 @@ export async function startMcp(): Promise<void> {
         .number()
         .optional()
         .describe(
-          "stateRevision from your last board_get_state. Required with state, except when seeding a page that has no state yet. Optional with ops alone; pass it if your edit depends on values you read."
+          "stateRevision from your last page_state. Required with state, except when seeding a page that has no state yet. Optional with ops alone; pass it if your edit depends on values you read."
         ),
       replace: z
         .boolean()
@@ -827,7 +827,7 @@ export async function startMcp(): Promise<void> {
         const conflict = data as { state: unknown; stateRevision: number };
         if (opsOnly) {
           return errorResult(
-            `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Re-read what your ops depend on (board_get_state with path) and retry, or omit expectedRevision.`
+            `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Re-read what your ops depend on (page_state with path) and retry, or omit expectedRevision.`
           );
         }
         return errorResult(
@@ -847,8 +847,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_pin",
-    "Pin an Agent Board tab so Clear and close-unpinned keep it. Identify the tab by id or key.",
+    "page_pin",
+    "Pin an Scribe tab so Clear and close-unpinned keep it. Identify the tab by id or key.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -857,8 +857,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_unpin",
-    "Unpin an Agent Board tab so Clear and close-unpinned can close it. Identify the tab by id or key.",
+    "page_unpin",
+    "Unpin an Scribe tab so Clear and close-unpinned can close it. Identify the tab by id or key.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
@@ -867,8 +867,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_close",
-    "Close Agent Board tabs (same as the UI close button). The pages stay in the Library and can be reopened with board_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one).",
+    "page_close",
+    "Close Scribe tabs (same as the UI close button). The pages stay in the Library and can be reopened with page_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one).",
     {
       id: z.string().optional().describe("Tab id to close or delete."),
       key: z.string().optional().describe("Tab key to close or delete."),
@@ -905,8 +905,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_template_upsert",
-    "Create or update a reusable Agent Board template. Only use when the user explicitly asked to create or edit a board template. Built-in templates are read-only: to change one, use a new key (board_template_get the built-in for its HTML), or update its local copy (localId from board_template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
+    "template_upsert",
+    "Create or update a reusable Scribe template. Only use when the user explicitly asked to create or edit a board template. Built-in templates are read-only: to change one, use a new key (template_get the built-in for its HTML), or update its local copy (localId from template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
     {
       key: z.string().optional().describe("Stable template identity. Reusing the same key updates that template."),
       title: z.string().describe("Name shown in the Templates sidebar."),
@@ -963,7 +963,7 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe(
-          "For a built-in's local copy with builtinUpdate: pass true once this upsert brings in the built-in's latest changes (board_template_get the built-in), to clear the flag."
+          "For a built-in's local copy with builtinUpdate: pass true once this upsert brings in the built-in's latest changes (template_get the built-in), to clear the flag."
         ),
     },
     async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, syncedWithBuiltin }) => {
@@ -987,8 +987,8 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_template_list",
-    "List Agent Board templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). builtinUpdate on a copy means its built-in changed and the copy was not updated automatically; see the agent-board skill's TEMPLATES.md before updating it. Only use when the user asked to work with board templates.",
+    "template_list",
+    "List Scribe templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). builtinUpdate on a copy means its built-in changed and the copy was not updated automatically; see the scribe skill's TEMPLATES.md before updating it. Only use when the user asked to work with board templates.",
     {},
     { readOnlyHint: true },
     async () => {
@@ -1001,7 +1001,7 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_template_get",
+    "template_get",
     "Read a template's HTML, fields, and metadata, including a built-in's. Only use when the user asked to work with board templates.",
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
@@ -1022,7 +1022,7 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_template_delete",
+    "template_delete",
     "Delete a template. Pages created from it stay, keep their last HTML, and become ordinary editable pages. Only use when the user asked to delete a board template.",
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
@@ -1043,7 +1043,7 @@ export async function startMcp(): Promise<void> {
   );
 
   server.tool(
-    "board_template_open",
+    "template_open",
     "Create a pinned page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance. Opening a built-in opens its local copy, creating that copy first if needed.",
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
@@ -1113,9 +1113,9 @@ async function pinResult(which: string | undefined, pin: boolean) {
 
 function showNote(closed: boolean, activate: boolean, titleKept: boolean | undefined, shown: string, updated: string): string {
   const base = closed
-    ? `${updated} in the Library (tab closed). The unread blip is on Library, not the tab strip. Use board_open to bring it back.`
+    ? `${updated} in the Library (tab closed). The unread blip is on Library, not the tab strip. Use page_open to bring it back.`
     : activate
-      ? `${shown} on Agent Board. Do not write this HTML to a workspace file.`
+      ? `${shown} on Scribe. Do not write this HTML to a workspace file.`
       : `${updated} in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.`;
   return titleKept ? `${base} The user renamed this page recently, so its title was kept.` : base;
 }
@@ -1137,7 +1137,7 @@ function viewUrl(id: string): string {
 }
 
 function writeCheckout(tab: Tab): string {
-  const dir = path.join(os.tmpdir(), "agent-board");
+  const dir = path.join(os.tmpdir(), "scribe");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${safeStem(tab.key)}.html`);
   fs.writeFileSync(file, tab.html, "utf8");

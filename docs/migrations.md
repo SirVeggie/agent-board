@@ -50,10 +50,10 @@
 - **Initial order:** Everything lands in the root. Open tabs first in strip order (pinned first), then archived pages newest first.
 - **Where:** `src/dbMigrate.ts` (`migrateV1ToLibrarySchema`), called from `BoardDb.openExisting` in `src/db.ts` when `meta.schema` is `1`. It runs in one transaction and rolls back on failure. The table DDL is shared with new databases through `src/schema.ts` (`TABS_TABLE_SQL`, `FOLDERS_TABLE_SQL`), which also breaks the `db.ts` ↔ `dbMigrate.ts` import cycle.
 - **Other shape changes (no migration code):**
-  - MCP tools were renamed without aliases: `board_archive` → `board_library`, `board_restore` → `board_open`. Result fields `archived` / `archiveCount` became `open` / `closedCount`; `board_wait` reports `closed` (tab closed, page kept) and `deleted`. Agents with a stale MCP need a reload.
+  - MCP tools were renamed without aliases: `board_archive` → `library_search`, `board_restore` → `page_open`. Result fields `archived` / `archiveCount` became `open` / `closedCount`; `page_wait` reports `closed` (tab closed, page kept) and `deleted`. Agents with a stale MCP need a reload.
   - HTTP: `/api/archive` → `/api/library`; `/api/tabs/:id/restore` → `/api/tabs/:id/open`.
   - Export files: `archivedAt` → `closedAt`, plus optional `folderPath` and `libPos`. `EXPORT_VERSION` stays `1`. Old exports still import (as open pages in the root); their `archivedAt` is ignored, with no fallback.
-  - Browser localStorage keys keep their old names (`agent-board.archiveOpen`, `agent-board.archiveWidth`); a stored sidebar tab of `archive` is read as `library`. No transform.
+  - Browser localStorage keys keep their old names (`scribe.archiveOpen`, `scribe.archiveWidth`); a stored sidebar tab of `archive` is read as `library`. No transform.
 - **How to verify:** The `a schema v1 board migrates archived tabs into the Library` test in `src/store.test.ts` builds a v1 database, opens it, and checks the migrated statuses, `closedAt`, and the initial Library order. Manually: copy an old `board.sqlite`, start the new daemon against it, and confirm open tabs and former archive rows show in the Library in that order.
 - **When to remove:** Once every board in use has been opened by a schema 2 daemon, delete `migrateV1ToLibrarySchema` and `ensureAgentHiddenColumn` and make `openExisting` reject schema 1. For a local-only tool, one release after this lands is enough.
 

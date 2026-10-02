@@ -20,7 +20,7 @@ import {
   type TemplateValues,
 } from "./types.js";
 
-export const EXPORT_FORMAT = "agent-board-export";
+export const EXPORT_FORMAT = "scribe-export";
 export const EXPORT_VERSION = 1;
 
 export type BoardExportAsset = {
@@ -169,7 +169,7 @@ export function parseImport(input: Buffer | string, filename = ""): ParsedImport
       ],
     };
   }
-  throw new Error("not a recognized Agent Board file");
+  throw new Error("not a recognized Scribe file");
 }
 
 export function titleFromHtml(html: string, fallback: string): string {
@@ -183,14 +183,14 @@ export function titleFromHtml(html: string, fallback: string): string {
 
 export function titleFromFilename(name: string): string {
   let stem = path.basename(name);
-  stem = stem.replace(/\.board\.json$/i, "");
+  stem = stem.replace(/\.(scribe|board)\.json$/i, "");
   stem = stem.replace(/\.(json|html?|xhtml)$/i, "");
   stem = stem.replace(/[-_]+/g, " ").trim();
   return stem || "Imported page";
 }
 
 export function exportFilename(title: string): string {
-  return `${safeStem(title)}.board.json`;
+  return `${safeStem(title)}.scribe.json`;
 }
 
 export function exportAllFilename(at = Date.now()): string {
@@ -198,7 +198,7 @@ export function exportAllFilename(at = Date.now()): string {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
-  return `agent-board-${year}-${month}-${day}.json`;
+  return `scribe-${year}-${month}-${day}.json`;
 }
 
 export function safeStem(title: string): string {
@@ -208,7 +208,7 @@ export function safeStem(title: string): string {
 
 function contentFromExport(value: unknown): Pick<ParsedImport, "templates" | "pages"> {
   if (!isExportFile(value)) {
-    throw new Error("not an Agent Board export");
+    throw new Error("not an Scribe export");
   }
   if (value.version !== EXPORT_VERSION) {
     throw new Error(`unsupported export version: ${value.version}`);

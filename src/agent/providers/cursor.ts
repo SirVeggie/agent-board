@@ -17,7 +17,7 @@ import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type
 
 const IDLE_KILL_MS = 15 * 60 * 1000;
 /** Name of the board MCP server this daemon hands each Cursor session. */
-export const BOARD_MCP = "board";
+export const BOARD_MCP = "scribe-chat";
 const MODELS_TTL_MS = 30 * 60 * 1000;
 
 type AgentBinary = { node: string; entry: string; version: string };
@@ -91,7 +91,7 @@ const INIT_PARAMS = {
     terminal: false,
     _meta: { parameterizedModelPicker: true },
   },
-  clientInfo: { name: "agent-board", version: "1" },
+  clientInfo: { name: "scribe", version: "1" },
 };
 
 function mapModels(raw: unknown): ModelOption[] {
@@ -375,7 +375,7 @@ class CursorSession implements ProviderSession {
 
   private mcpServers(): unknown[] {
     const { command, args, env } = this.ctx.boardMcp;
-    // Not "agent-board": a session server with the same name as one in ~/.cursor/mcp.json gets its calls rejected.
+    // Not "scribe": a session server with the same name as one in ~/.cursor/mcp.json gets its calls rejected.
     return [{ name: BOARD_MCP, command, args, env: Object.entries(env).map(([name, value]) => ({ name, value })) }];
   }
 

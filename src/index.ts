@@ -2,6 +2,7 @@ import { startHttp } from "./http.js";
 import { startMcp } from "./mcp.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
+import { migrateLegacyData } from "./config.js";
 
 const args = new Set(process.argv.slice(2));
 
@@ -9,7 +10,7 @@ async function main(): Promise<void> {
   if (args.has("--stop")) {
     const info = await health();
     if (!info) {
-      log("Agent Board is not running");
+      log("Scribe is not running");
       return;
     }
     await api("POST", "/api/shutdown");
@@ -18,6 +19,7 @@ async function main(): Promise<void> {
   }
 
   if (args.has("--daemon")) {
+    migrateLegacyData(log);
     await startHttp();
     return;
   }

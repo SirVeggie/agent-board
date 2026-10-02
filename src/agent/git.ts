@@ -57,7 +57,7 @@ export async function findRepo(cwd: string | null | undefined): Promise<string |
 export async function snapshotTree(repo: string): Promise<string | null> {
   const indexPath = await git(["rev-parse", "--git-path", "index"], repo, { timeoutMs: 5000 });
   const realIndex = indexPath.code === 0 ? path.resolve(repo, indexPath.stdout.trim()) : null;
-  const tmp = path.join(os.tmpdir(), `agent-board-index-${crypto.randomBytes(6).toString("hex")}`);
+  const tmp = path.join(os.tmpdir(), `scribe-index-${crypto.randomBytes(6).toString("hex")}`);
   try {
     if (realIndex && fs.existsSync(realIndex)) {
       fs.copyFileSync(realIndex, tmp);

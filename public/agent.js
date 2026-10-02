@@ -2,19 +2,19 @@
 (() => {
   const R = window.AgentRender;
   const { el, icon, button } = R;
-  const app = () => window.agentBoardApp;
+  const app = () => window.scribeApp;
 
   const LS = {
-    side: "agent-board.agent.sideOpen",
-    width: "agent-board.agent.width",
-    current: "agent-board.agent.current",
-    dock: "agent-board.agent.dockShown",
-    filter: "agent-board.agent.filter",
-    reasoning: "agent-board.agent.reasoningOpen",
-    button: "agent-board.agent.showButton",
-    dockStyle: "agent-board.agent.dockStyle",
-    emptyEnter: "agent-board.agent.emptyEnter",
-    tips: "agent-board.agent.showTips",
+    side: "scribe.agent.sideOpen",
+    width: "scribe.agent.width",
+    current: "scribe.agent.current",
+    dock: "scribe.agent.dockShown",
+    filter: "scribe.agent.filter",
+    reasoning: "scribe.agent.reasoningOpen",
+    button: "scribe.agent.showButton",
+    dockStyle: "scribe.agent.dockStyle",
+    emptyEnter: "scribe.agent.emptyEnter",
+    tips: "scribe.agent.showTips",
   };
   const DOCK_STYLES = [
     { id: "bar", label: "Bar" },
@@ -40,7 +40,7 @@
     { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
     { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits" },
     { id: "plan", label: "Plan", detail: "Investigate and propose a plan before changing anything" },
-    { id: "board", label: "Board", detail: "Board pages and web only, no shell (Cursor can still write files)" },
+    { id: "board", label: "Pages", detail: "Scribe pages and web only, no shell (Cursor can still write files)" },
   ];
   const APPROVALS = [
     { id: "ask", label: "Ask first", detail: "Ask before edits and commands that are not allowlisted" },
@@ -173,14 +173,14 @@
 
   /* ---------- events ---------- */
 
-  window.addEventListener("agent-board:agent-event", (event) => onEvent(event.detail));
-  window.addEventListener("agent-board:connection", (event) => {
+  window.addEventListener("scribe:agent-event", (event) => onEvent(event.detail));
+  window.addEventListener("scribe:connection", (event) => {
     if (event.detail?.connected) {
       loadConfig();
       loadThreads();
     }
   });
-  window.addEventListener("agent-board:render", () => {
+  window.addEventListener("scribe:render", () => {
     const active = app()?.activeTab?.()?.id || null;
     if (active !== S.lastActiveId) {
       S.lastActiveId = active;
@@ -870,7 +870,7 @@
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L, or Ctrl+Up from the chat)"));
         acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)"));
       } else if (this.variant === "full") {
-        acts.append(button(icon("collapse"), "ag-icon-btn", () => full.close(), "Back to the board (Esc)"));
+        acts.append(button(icon("collapse"), "ag-icon-btn", () => full.close(), "Back to Scribe (Esc)"));
       }
       this.header.append(acts);
     }
@@ -940,7 +940,7 @@
           label: "Delete thread",
           danger: true,
           run: async () => {
-            if (!confirm(`Delete “${t.title}”? This removes its transcript from the board.`)) return;
+            if (!confirm(`Delete “${t.title}”? This removes its transcript from Scribe.`)) return;
             await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
           },
         },
@@ -2168,7 +2168,7 @@
   function newThreadMenu(anchor, view) {
     const tab = activeTab();
     const items = [{ header: "New thread for" }];
-    if (tab) items.push({ label: tab.title, detail: "This page (Board mode)", icon: "page", run: () => view.startDraft({ kind: "page", ref: tab.id }) });
+    if (tab) items.push({ label: tab.title, detail: "This page (Pages mode)", icon: "page", run: () => view.startDraft({ kind: "page", ref: tab.id }) });
     if (tab?.folderId) items.push({ label: folderPath(tab.folderId), detail: "This folder", icon: "folder", run: () => view.startDraft({ kind: "folder", ref: tab.folderId }) });
     for (const dir of prefs().recentWorkspaces.slice(0, 5)) {
       items.push({ label: R.basename(dir), detail: dir, icon: "box", run: () => view.startDraft({ kind: "workspace", ref: dir }, { cwd: dir }) });
@@ -2286,7 +2286,7 @@
           label: "Delete thread",
           danger: true,
           run: async () => {
-            if (!confirm(`Delete “${t.title}”? This removes its transcript from the board.`)) return;
+            if (!confirm(`Delete “${t.title}”? This removes its transcript from Scribe.`)) return;
             await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
           },
         },
@@ -2907,7 +2907,7 @@
         el(
           "p",
           "ag-muted ag-meter-none",
-          provider === "claude" ? "Shows after the next Claude turn: Claude Code reports the plan's usage as it runs." : "Cursor does not report plan usage to the board (its ACP server has no usage call)."
+          provider === "claude" ? "Shows after the next Claude turn: Claude Code reports the plan's usage as it runs." : "Cursor does not report plan usage to Scribe (its ACP server has no usage call)."
         )
       );
       return box;
@@ -3016,7 +3016,7 @@
       const intro = el(
         "p",
         "settings-hint",
-        "The rules Claude Code and Cursor apply before they ask you. They live in the providers' own config files; the board only edits their permission lists. \"Always allow\" on an approval adds a rule here too."
+        "The rules Claude Code and Cursor apply before they ask you. They live in the providers' own config files; Scribe only edits their permission lists. \"Always allow\" on an approval adds a rule here too."
       );
       const pick = el("div", "setting-row");
       const label = el("span", null, "Workspace");
@@ -3331,7 +3331,7 @@
     if (t.scope.kind !== "page" || !t.scope.ref) return;
     if (prev && prev.status === t.status && prev.title === t.title && prev.queued === t.queued) return;
     const settle = t.status === "idle" && !t.queued;
-    const send = (reply) => app()?.postToPage?.(t.scope.ref, { type: "agent-board-agent-event", thread: { ...pageBrief(t), ...(reply !== undefined ? { reply } : {}) } });
+    const send = (reply) => app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-event", thread: { ...pageBrief(t), ...(reply !== undefined ? { reply } : {}) } });
     if (!settle) {
       send();
       return;
@@ -3617,7 +3617,7 @@
     }
   });
 
-  window.agentBoardChat = { shortcut, escape, pageStatus, pageRequest };
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest };
 
   /* ---------- boot ---------- */
 

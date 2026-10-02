@@ -8,7 +8,7 @@
   const root = document.documentElement;
   const chrome = document.querySelector(".chrome");
   const actions = chrome.querySelector(".actions");
-  const HIDDEN_KEY = "agent-board.desktop.hiddenButtons";
+  const HIDDEN_KEY = "scribe.desktop.hiddenButtons";
   root.classList.add("desktop");
 
   // Empty strip space and the spacing around panels move the window; double-click maximizes.
@@ -217,7 +217,7 @@
   );
   const openRow = settingRow(
     "desktop-open",
-    "Agents open the board in this app instead of the browser",
+    "Agents open Scribe in this app instead of the browser",
     desktop.openFromAgents,
     (on) => saveSetting("openFromAgents", on)
   );
@@ -325,19 +325,19 @@
       return;
     }
     if (state.hidden !== desktop.hidden) {
-      window.agentBoardSetHidden?.(state.hidden);
+      window.scribeSetHidden?.(state.hidden);
     }
     desktop = state;
     root.classList.toggle("compact", state.compact);
     render();
   }
 
-  window.agentBoardDesktop = { setState };
+  window.scribeDesktop = { setState };
 
   // Lost the daemon for more than a moment (it restarts for a new build in about that long):
   // the app swaps in its offline page, which brings the board back once the daemon answers.
   let offlineTimer = 0;
-  addEventListener("agent-board:connection", (event) => {
+  addEventListener("scribe:connection", (event) => {
     if (event.detail.connected) {
       clearTimeout(offlineTimer);
       offlineTimer = 0;

@@ -1,17 +1,17 @@
 /**
- * Injected into every tab page. Gives the page `window.board` over the tab's
- * server-owned state: `board.state`, `board.set`, `board.onChange`, `board.bind`,
- * `board.signal`, page-saved blobs: `board.saveAsset`, `board.assetUrl`,
- * `board.deleteAsset`, `board.listAssets`, and page links: `board.open`, `board.resolve`,
- * `data-board-open`, and external hrefs (opened in the browser, a peek, or a split).
+ * Injected into every tab page. Gives the page `window.scribe` over the tab's
+ * server-owned state: `scribe.state`, `scribe.set`, `scribe.onChange`, `scribe.bind`,
+ * `scribe.signal`, page-saved blobs: `scribe.saveAsset`, `scribe.assetUrl`,
+ * `scribe.deleteAsset`, `scribe.listAssets`, and page links: `scribe.open`, `scribe.resolve`,
+ * `data-scribe-open`, and external hrefs (opened in the browser, a peek, or a split).
  *
- * Boot state is inlined ahead of this script so `board.state` is readable
+ * Boot state is inlined ahead of this script so `scribe.state` is readable
  * synchronously by page scripts.
  */
 export const BOARD_BRIDGE_JS = `
 (function () {
-  var boot = window.__BOARD_BOOT__ || {};
-  try { delete window.__BOARD_BOOT__; } catch (err) { window.__BOARD_BOOT__ = undefined; }
+  var boot = window.__SCRIBE_BOOT__ || {};
+  try { delete window.__SCRIBE_BOOT__; } catch (err) { window.__SCRIBE_BOOT__ = undefined; }
 
   var IDLE_MS = 250;
   var MAX_WAIT_MS = 1000;
@@ -63,14 +63,14 @@ export const BOARD_BRIDGE_JS = `
       var el = bindings[i].el;
       var key = bindings[i].key;
       if (!(key in current) || sameEl(el, current[key])) {
-        el.classList.remove("board-stale");
+        el.classList.remove("scribe-stale");
         continue;
       }
       if (document.activeElement === el) {
-        el.classList.add("board-stale");
+        el.classList.add("scribe-stale");
         continue;
       }
-      el.classList.remove("board-stale");
+      el.classList.remove("scribe-stale");
       writeEl(el, current[key]);
     }
   }
@@ -258,7 +258,7 @@ export const BOARD_BRIDGE_JS = `
     el.addEventListener("input", onEdit);
     el.addEventListener("change", onEdit);
     el.addEventListener("blur", function () {
-      el.classList.remove("board-stale");
+      el.classList.remove("scribe-stale");
       if (pending && key in pending) {
         flush();
         return;
@@ -298,7 +298,7 @@ export const BOARD_BRIDGE_JS = `
       return;
     }
     var data = event.data;
-    if (!data || data.type !== "agent-board-state" || data.id !== tabId) {
+    if (!data || data.type !== "scribe-state" || data.id !== tabId) {
       return;
     }
     applyRemote(data);
@@ -312,7 +312,7 @@ export const BOARD_BRIDGE_JS = `
     }
     lastActivityPing = now;
     try {
-      parent.postMessage({ type: "agent-board-activity", id: tabId }, "*");
+      parent.postMessage({ type: "scribe-activity", id: tabId }, "*");
     } catch (err) {}
   }
 
@@ -347,11 +347,11 @@ export const BOARD_BRIDGE_JS = `
     if (!target || !target.closest) {
       return;
     }
-    var src = target.closest("[data-board-signal]");
+    var src = target.closest("[data-scribe-signal]");
     if (!src) {
       return;
     }
-    var name = src.getAttribute("data-board-signal");
+    var name = src.getAttribute("data-scribe-signal");
     if (!name) {
       return;
     }
@@ -368,7 +368,7 @@ export const BOARD_BRIDGE_JS = `
     if (!form || !form.getAttribute) {
       return;
     }
-    var name = form.getAttribute("data-board-signal");
+    var name = form.getAttribute("data-scribe-signal");
     if (!name) {
       return;
     }
@@ -376,7 +376,7 @@ export const BOARD_BRIDGE_JS = `
     signal(name);
   }, false);
 
-  /* ---------- page links: board.open, data-board-open, external hrefs ---------- */
+  /* ---------- page links: scribe.open, data-scribe-open, external hrefs ---------- */
 
   var LINK_MODES = { tab: true, peek: true, split: true };
   var embedded = window.parent !== window;
@@ -471,7 +471,7 @@ export const BOARD_BRIDGE_JS = `
       return Promise.resolve({ ok: false, error: "not_found" });
     }
     if (!hasGesture()) {
-      console.warn("[board] board.open needs a click or key press; ignored " + raw);
+      console.warn("[board] scribe.open needs a click or key press; ignored " + raw);
       return Promise.resolve({ ok: false, error: "no_gesture" });
     }
     var mode = cleanMode(opts.mode);
@@ -495,7 +495,7 @@ export const BOARD_BRIDGE_JS = `
       return Promise.resolve({ ok: true, mode: "tab" });
     }
     return askBoard({
-      type: "agent-board-open",
+      type: "scribe-open",
       target: url || raw,
       mode: mode,
       anchor: anchor || null,
@@ -516,7 +516,7 @@ export const BOARD_BRIDGE_JS = `
     if (!clean.length) {
       return Promise.resolve({});
     }
-    return askBoard({ type: "agent-board-resolve", targets: clean }).then(function (reply) {
+    return askBoard({ type: "scribe-resolve", targets: clean }).then(function (reply) {
       return reply && reply.pages ? reply.pages : {};
     });
   }
@@ -525,12 +525,12 @@ export const BOARD_BRIDGE_JS = `
     if (!target || !target.closest) {
       return null;
     }
-    var el = target.closest("[data-board-open], a[href]");
+    var el = target.closest("[data-scribe-open], a[href]");
     if (!el) {
       return null;
     }
-    if (el.hasAttribute("data-board-open")) {
-      return { el: el, target: el.getAttribute("data-board-open") || "" };
+    if (el.hasAttribute("data-scribe-open")) {
+      return { el: el, target: el.getAttribute("data-scribe-open") || "" };
     }
     if (el.hasAttribute("download")) {
       return null;
@@ -565,14 +565,14 @@ export const BOARD_BRIDGE_JS = `
       return;
     }
     event.preventDefault();
-    var mode = modeFromEvent(event) || cleanMode(link.el.getAttribute("data-board-mode"));
+    var mode = modeFromEvent(event) || cleanMode(link.el.getAttribute("data-scribe-mode"));
     open(link.target, { mode: mode }).then(function (result) {
       if (!result || result.error === "no_gesture" || result.error === "timeout" || result.error === "no_board") {
         return;
       }
       // The page was deleted or restored since the links were checked: recheck every link, not just this one.
       var missing = result.error === "not_found" || result.error === "in_trash";
-      if (missing !== link.el.classList.contains("board-link-missing")) {
+      if (missing !== link.el.classList.contains("scribe-link-missing")) {
         recheckLinks();
       }
     });
@@ -585,27 +585,27 @@ export const BOARD_BRIDGE_JS = `
     if (!embedded) {
       return;
     }
-    var els = document.querySelectorAll("[data-board-open]:not([data-board-link-checked])");
+    var els = document.querySelectorAll("[data-scribe-open]:not([data-scribe-link-checked])");
     if (!els.length) {
       return;
     }
     var targets = [];
     for (var i = 0; i < els.length; i += 1) {
-      els[i].setAttribute("data-board-link-checked", "");
-      targets.push(els[i].getAttribute("data-board-open") || "");
+      els[i].setAttribute("data-scribe-link-checked", "");
+      targets.push(els[i].getAttribute("data-scribe-open") || "");
     }
     resolve(targets).then(function (pages) {
       for (var j = 0; j < els.length; j += 1) {
         var el = els[j];
-        var raw = (el.getAttribute("data-board-open") || "").split("#")[0].trim();
+        var raw = (el.getAttribute("data-scribe-open") || "").split("#")[0].trim();
         if (externalUrl(raw)) {
           continue;
         }
         var page = pages[raw];
-        el.classList.toggle("board-link-missing", !page);
+        el.classList.toggle("scribe-link-missing", !page);
         // An empty link shows its page's title, kept current on each recheck; the target itself while the page is missing.
-        if (el.hasAttribute("data-board-autotitle") || (!el.textContent.trim() && !el.children.length)) {
-          el.setAttribute("data-board-autotitle", "");
+        if (el.hasAttribute("data-scribe-autotitle") || (!el.textContent.trim() && !el.children.length)) {
+          el.setAttribute("data-scribe-autotitle", "");
           el.textContent = page ? page.title : raw;
         }
         if (page && !el.getAttribute("title")) {
@@ -616,9 +616,9 @@ export const BOARD_BRIDGE_JS = `
   }
   /** Pages were created, deleted, or restored: check every link again. */
   function recheckLinks() {
-    var els = document.querySelectorAll("[data-board-open][data-board-link-checked]");
+    var els = document.querySelectorAll("[data-scribe-open][data-scribe-link-checked]");
     for (var i = 0; i < els.length; i += 1) {
-      els[i].removeAttribute("data-board-link-checked");
+      els[i].removeAttribute("data-scribe-link-checked");
     }
     queueLabels();
   }
@@ -639,7 +639,7 @@ export const BOARD_BRIDGE_JS = `
       var changed = false;
       for (var i = 0; i < records.length; i += 1) {
         if (records[i].type === "attributes") {
-          records[i].target.removeAttribute("data-board-link-checked");
+          records[i].target.removeAttribute("data-scribe-link-checked");
           changed = true;
         } else if (records[i].addedNodes.length) {
           changed = true;
@@ -648,7 +648,7 @@ export const BOARD_BRIDGE_JS = `
       if (changed) {
         queueLabels();
       }
-    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-board-open"] });
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-scribe-open"] });
   }
 
   function scrollToAnchor(anchor) {
@@ -670,15 +670,15 @@ export const BOARD_BRIDGE_JS = `
     if (!data || data.id !== tabId) {
       return;
     }
-    if (data.type === "agent-board-open-result" && linkRequests[data.reqId]) {
+    if (data.type === "scribe-open-result" && linkRequests[data.reqId]) {
       var done = linkRequests[data.reqId];
       delete linkRequests[data.reqId];
       done(data.result || { ok: false, error: "unknown" });
-    } else if (data.type === "agent-board-scroll") {
+    } else if (data.type === "scribe-scroll") {
       scrollToAnchor(data.anchor);
-    } else if (data.type === "agent-board-pages-changed") {
+    } else if (data.type === "scribe-pages-changed") {
       recheckLinks();
-    } else if (data.type === "agent-board-agent-event") {
+    } else if (data.type === "scribe-agent-event") {
       agentListeners.slice().forEach(function (fn) {
         try {
           fn(data.thread);
@@ -776,7 +776,7 @@ export const BOARD_BRIDGE_JS = `
 
   // ---------- agent ----------
   // A page can start agent chat threads of its own and continue them. Starting or sending needs a
-  // click or key press, like board.open (the board checks again on its side); reading does not.
+  // click or key press, like scribe.open (the board checks again on its side); reading does not.
   var agentListeners = [];
 
   function agentText(value) {
@@ -784,13 +784,13 @@ export const BOARD_BRIDGE_JS = `
   }
 
   function agentCall(message, timeoutMs) {
-    message.type = "agent-board-agent";
+    message.type = "scribe-agent";
     return askBoard(message, timeoutMs || 30000);
   }
 
   function agentWrite(message) {
     if (!hasGesture()) {
-      console.warn("[board] board.agent." + message.op + " needs a click or key press; ignored");
+      console.warn("[board] scribe.agent." + message.op + " needs a click or key press; ignored");
       return Promise.resolve({ ok: false, error: "no_gesture" });
     }
     return agentCall(message);
@@ -831,7 +831,7 @@ export const BOARD_BRIDGE_JS = `
     }
   };
 
-  window.board = {
+  window.scribe = {
     id: tabId,
     template: template,
     saveAsset: saveAsset,
@@ -865,7 +865,7 @@ export const BOARD_BRIDGE_JS = `
 `.trim();
 
 export const BOARD_STALE_CSS = `
-.board-stale { outline: 1px dashed rgba(224, 179, 74, 0.7); outline-offset: 2px; }
-[data-board-open] { cursor: pointer; }
-.board-link-missing { text-decoration: line-through !important; opacity: 0.6; cursor: not-allowed !important; }
+.scribe-stale { outline: 1px dashed rgba(224, 179, 74, 0.7); outline-offset: 2px; }
+[data-scribe-open] { cursor: pointer; }
+.scribe-link-missing { text-decoration: line-through !important; opacity: 0.6; cursor: not-allowed !important; }
 `.trim();

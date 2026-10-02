@@ -944,14 +944,14 @@ export async function startHttp(): Promise<http.Server> {
   store.on("persist_error", (error: string) => broadcast({ type: "persist_error", error }));
   store.on("persist_ok", () => broadcast({ type: "persist_ok" }));
 
-  // Covers receiving the request (large imports), not a slow response, so it does not bound board_wait.
+  // Covers receiving the request (large imports), not a slow response, so it does not bound page_wait.
   server.requestTimeout = REQUEST_TIMEOUT_MS;
   contentServer.requestTimeout = REQUEST_TIMEOUT_MS;
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
 
-  log(`Agent Board listening on ${baseUrl()} (tab pages on ${contentBaseUrl()})`);
+  log(`Scribe listening on ${baseUrl()} (tab pages on ${contentBaseUrl()})`);
   return server;
 }
 
@@ -1163,8 +1163,8 @@ function listen(server: http.Server, port: number, host: string): Promise<void> 
   });
 }
 
-const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CSS}</style>
-<script data-agent-board-keys>
+const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</style>
+<script data-scribe-keys>
 (function () {
   function typing(el) {
     if (!el || el === document.body) return false;
@@ -1177,28 +1177,28 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
     var key = event.key.toLowerCase();
     if (key === "s" && !event.shiftKey) {
       event.preventDefault();
-      parent.postMessage({ type: "agent-board-download" }, "*");
+      parent.postMessage({ type: "scribe-download" }, "*");
       return;
     }
     if (key === "h" && !event.shiftKey) {
       event.preventDefault();
-      parent.postMessage({ type: "agent-board-help" }, "*");
+      parent.postMessage({ type: "scribe-help" }, "*");
       return;
     }
     if (key === "z" && !event.shiftKey && !typing(event.target)) {
       event.preventDefault();
-      parent.postMessage({ type: "agent-board-undo" }, "*");
+      parent.postMessage({ type: "scribe-undo" }, "*");
       return;
     }
     if (key === "d" && !event.shiftKey) {
       event.preventDefault();
-      parent.postMessage({ type: "agent-board-palette" }, "*");
+      parent.postMessage({ type: "scribe-palette" }, "*");
     }
   }, true);
   // Bubble phase: a page that handles Esc itself (closing its own menu) keeps it.
   window.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && !event.defaultPrevented) {
-      parent.postMessage({ type: "agent-board-escape" }, "*");
+      parent.postMessage({ type: "scribe-escape" }, "*");
       return;
     }
     // Agent chat: Ctrl+K floating chat, Ctrl+Shift+K new thread, Ctrl+L sidebar, Ctrl+Shift+L full window,
@@ -1215,7 +1215,7 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
       : chatKey === "j" && !event.shiftKey ? "threads" : "";
     if (action) {
       event.preventDefault();
-      parent.postMessage({ type: "agent-board-chat-key", action: action }, "*");
+      parent.postMessage({ type: "scribe-chat-key", action: action }, "*");
     }
   });
 })();
@@ -1223,7 +1223,7 @@ const BOARD_CHROME_INJECT = `<style data-agent-board-scroll>${BOARD_SCROLLBAR_CS
 
 function injectBoardRuntime(tab: Tab): string {
   const html = injectBoardKeys(rewriteAssetRefs(tab.html, tab.id));
-  if (html.includes("data-agent-board-bridge")) {
+  if (html.includes("data-scribe-bridge")) {
     return html;
   }
   const boot = jsonForScript({
@@ -1239,15 +1239,15 @@ function injectBoardRuntime(tab: Tab): string {
         }
       : null,
   });
-  const snippet = `<style data-agent-board-bridge>${BOARD_STALE_CSS}</style>
-<script>window.__BOARD_BOOT__=${boot};
+  const snippet = `<style data-scribe-bridge>${BOARD_STALE_CSS}</style>
+<script>window.__SCRIBE_BOOT__=${boot};
 ${BOARD_BRIDGE_JS}
 </script>`;
   return injectIntoHead(html, snippet);
 }
 
 function injectBoardKeys(html: string): string {
-  if (html.includes("data-agent-board-keys")) {
+  if (html.includes("data-scribe-keys")) {
     return html;
   }
   const idx = html.toLowerCase().lastIndexOf("</body>");

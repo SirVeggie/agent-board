@@ -66,7 +66,7 @@ test("parseImport reads a single-page export including state and assets", () => 
       folderPath: "Work/Lists",
     },
   ]);
-  const parsed = parseImport(serializeExport(file), "todos.board.json");
+  const parsed = parseImport(serializeExport(file), "todos.scribe.json");
   assert.equal(parsed.kind, "export");
   assert.equal(parsed.pages.length, 1);
   const page = parsed.pages[0];
@@ -96,7 +96,7 @@ test("parseImport reads a multi-page export", () => {
 });
 
 test("parseImport rejects random JSON", () => {
-  assert.throws(() => parseImport('{"hello":true}'), /not an Agent Board export/);
+  assert.throws(() => parseImport('{"hello":true}'), /not an Scribe export/);
 });
 
 test("parseImport rejects an unsupported version", () => {
@@ -133,7 +133,7 @@ test("parseImport rejects empty or unknown files", () => {
 
 test("title helpers", () => {
   assert.equal(titleFromHtml("<title>  Hello &amp; Co </title>", "x"), "Hello & Co");
-  assert.equal(titleFromFilename("Notes.board.json"), "Notes");
-  assert.equal(exportFilename("My Page"), "My-Page.board.json");
-  assert.match(exportAllFilename(Date.UTC(2026, 8, 23)), /^agent-board-\d{4}-\d{2}-\d{2}\.json$/);
+  assert.equal(titleFromFilename("Notes.scribe.json"), "Notes");
+  assert.equal(exportFilename("My Page"), "My-Page.scribe.json");
+  assert.match(exportAllFilename(Date.UTC(2026, 8, 23)), /^scribe-\d{4}-\d{2}-\d{2}\.json$/);
 });

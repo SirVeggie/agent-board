@@ -65,7 +65,7 @@
     font: inherit;
     padding: 10px 12px;
   }
-  .composer input.board-stale {
+  .composer input.scribe-stale {
     outline: 1px dashed rgba(224, 179, 74, 0.7);
     outline-offset: 2px;
   }
@@ -572,14 +572,14 @@
   <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
 <script>
 (function () {
-  if (!window.board) {
+  if (!window.scribe) {
     document.getElementById("empty").className = "need-reload";
     document.getElementById("empty").textContent =
-      "Reload the Agent Board tab so this page can use shared state.";
+      "Reload the Scribe tab so this page can use shared state.";
     return;
   }
 
-  var values = (board.template && board.template.values) || {};
+  var values = (scribe.template && scribe.template.values) || {};
   var ITEM = String(values.item || "a task");
   var ITEMS = String(values.items || "tasks");
   var CHECKS = values.checkboxes !== false;
@@ -628,10 +628,10 @@
   }
   columnsEl.style.setProperty("--cols", String(COLS));
 
-  board.bind(input, "draft");
-  board.bind(mdEditor, "draftDesc");
-  board.bind(titleInput, "draftTitle");
-  board.bind(colInput, "draftColumn");
+  scribe.bind(input, "draft");
+  scribe.bind(mdEditor, "draftDesc");
+  scribe.bind(titleInput, "draftTitle");
+  scribe.bind(colInput, "draftColumn");
 
   function buildColumns() {
     for (var i = 0; i < COLS; i++) {
@@ -663,7 +663,7 @@
   }
 
   function items() {
-    var list = Array.isArray(board.state.todos) ? board.state.todos : [];
+    var list = Array.isArray(scribe.state.todos) ? scribe.state.todos : [];
     return list.map(function (t) {
       return {
         id: t.id,
@@ -681,7 +681,7 @@
   }
 
   function columnTitles() {
-    return Array.isArray(board.state.columnTitles) ? board.state.columnTitles : [];
+    return Array.isArray(scribe.state.columnTitles) ? scribe.state.columnTitles : [];
   }
 
   function columnTitle(index) {
@@ -690,7 +690,7 @@
   }
 
   function current() {
-    var id = board.state.openId;
+    var id = scribe.state.openId;
     var list = items();
     for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
     return null;
@@ -701,17 +701,17 @@
   }
 
   function setTodos(next) {
-    board.set({ todos: next });
+    scribe.set({ todos: next });
     render();
   }
 
   function addItem() {
-    var text = String(board.state.draft != null ? board.state.draft : input.value || "").trim();
+    var text = String(scribe.state.draft != null ? scribe.state.draft : input.value || "").trim();
     if (!text) {
       input.focus();
       return;
     }
-    board.set({
+    scribe.set({
       todos: items().concat([{ id: newId("t"), text: text, done: false, description: "", images: [], col: 0 }]),
       draft: ""
     });
@@ -728,7 +728,7 @@
 
   function remove(id) {
     var next = items().filter(function (todo) { return todo.id !== id; });
-    if (board.state.openId === id) board.set({ openId: "" });
+    if (scribe.state.openId === id) scribe.set({ openId: "" });
     setTodos(next);
   }
 
@@ -749,8 +749,8 @@
       var a = document.createElement("div");
       a.innerHTML = links[Number(i)];
       var link = a.firstChild;
-      var target = link.getAttribute("data-board-open");
-      var mode = link.getAttribute("data-board-mode");
+      var target = link.getAttribute("data-scribe-open");
+      var mode = link.getAttribute("data-scribe-mode");
       var label = link.textContent;
       return "[[" + (mode ? mode + ":" : "") + target + (label ? "|" + label : "") + "]]";
     });
@@ -864,7 +864,7 @@
     editingCol = index;
     cancelCol = false;
     var text = columnTitle(index);
-    board.set({ draftColumn: text });
+    scribe.set({ draftColumn: text });
     colInput.value = text;
     titleEls[index].classList.add("hidden");
     titleEls[index].after(colInput);
@@ -883,11 +883,11 @@
       cancelCol = false;
       return;
     }
-    var text = String(board.state.draftColumn != null ? board.state.draftColumn : colInput.value).trim();
+    var text = String(scribe.state.draftColumn != null ? scribe.state.draftColumn : colInput.value).trim();
     var titles = columnTitles().slice();
     while (titles.length <= index) titles.push("");
     titles[index] = text;
-    board.set({ columnTitles: titles });
+    scribe.set({ columnTitles: titles });
     titleEls[index].textContent = columnTitle(index);
   }
 
@@ -1209,14 +1209,14 @@
     mdPreview.classList.remove("hidden");
     titleInput.classList.add("hidden");
     modalTitle.classList.remove("hidden");
-    board.set({ openId: id, draftDesc: "", draftTitle: "" });
+    scribe.set({ openId: id, draftDesc: "", draftTitle: "" });
     syncModal();
   }
 
   function closeModal() {
     if (editingDesc) saveDesc();
     if (editingTitle) saveTitle();
-    board.set({ openId: "" });
+    scribe.set({ openId: "" });
     overlay.classList.add("hidden");
     lightbox.classList.add("hidden");
   }
@@ -1252,7 +1252,7 @@
     if (!item || editingTitle) return;
     if (editingDesc) saveDesc();
     editingTitle = true;
-    board.set({ draftTitle: item.text });
+    scribe.set({ draftTitle: item.text });
     titleInput.value = item.text;
     modalTitle.classList.add("hidden");
     titleInput.classList.remove("hidden");
@@ -1265,7 +1265,7 @@
     editingTitle = false;
     var item = current();
     if (!item) return;
-    var text = String(board.state.draftTitle != null ? board.state.draftTitle : titleInput.value).trim();
+    var text = String(scribe.state.draftTitle != null ? scribe.state.draftTitle : titleInput.value).trim();
     if (!text) text = item.text;
     titleInput.classList.add("hidden");
     modalTitle.classList.remove("hidden");
@@ -1279,7 +1279,7 @@
     if (!item || editingDesc) return;
     if (editingTitle) saveTitle();
     editingDesc = true;
-    board.set({ draftDesc: item.description || "" });
+    scribe.set({ draftDesc: item.description || "" });
     mdEditor.value = item.description || "";
     mdPreview.classList.add("hidden");
     mdEditor.classList.remove("hidden");
@@ -1291,7 +1291,7 @@
     editingDesc = false;
     var item = current();
     if (!item) return;
-    var text = String(board.state.draftDesc != null ? board.state.draftDesc : mdEditor.value);
+    var text = String(scribe.state.draftDesc != null ? scribe.state.draftDesc : mdEditor.value);
     mdEditor.classList.add("hidden");
     mdPreview.classList.remove("hidden");
     setTodos(items().map(function (t) {
@@ -1351,11 +1351,11 @@
     var probe = {
       todos: nextTodos,
       columnTitles: columnTitles(),
-      draft: board.state.draft || "",
-      draftDesc: board.state.draftDesc || "",
-      draftTitle: board.state.draftTitle || "",
-      draftColumn: board.state.draftColumn || "",
-      openId: board.state.openId || ""
+      draft: scribe.state.draft || "",
+      draftDesc: scribe.state.draftDesc || "",
+      draftTitle: scribe.state.draftTitle || "",
+      draftColumn: scribe.state.draftColumn || "",
+      openId: scribe.state.openId || ""
     };
     return JSON.stringify(probe).length < STATE_MAX;
   }
@@ -1385,7 +1385,7 @@
         setHint("Could not read that image.", true);
         return;
       }
-      board.saveAsset(blob, { name: file.name || "image" }).then(function (asset) {
+      scribe.saveAsset(blob, { name: file.name || "image" }).then(function (asset) {
         placeImage(target.id, asset.url, asset.name, intoMarkdown);
         if (asset.usage && asset.usage.warning) {
           setHint("Image added. Storage is filling up: " + asset.usage.warning + ".", true);
@@ -1414,7 +1414,7 @@
       next = next.map(function (t) {
         return t.id === itemId ? Object.assign({}, t, { description: mdEditor.value }) : t;
       });
-      board.set({ todos: next, draftDesc: mdEditor.value });
+      scribe.set({ todos: next, draftDesc: mdEditor.value });
       renderGallery(current());
       renderLists();
       setHint("Image added.");
@@ -1430,7 +1430,7 @@
     var v = textarea.value;
     textarea.value = v.slice(0, start) + text + v.slice(end);
     textarea.selectionStart = textarea.selectionEnd = start + text.length;
-    board.set({ draftDesc: textarea.value });
+    scribe.set({ draftDesc: textarea.value });
   }
 
   /** Small files are kept as they are (animated gifs stay animated); large ones are scaled down to a JPEG. */
@@ -1487,29 +1487,29 @@
   }
 
   // ---------- page links ----------
-  // [[key or id]] shows the page's title, [[target|label]] your own text, [[peek:target]] / [[split:target]] pick a
-  // mode, and [label](board:target) / (peek:…) / (split:…) is the markdown form. A reference pasted from Copy key
-  // ("Agent Board tab some-key") or a bare page id (t_1a2b3c4d) links too. The board resolves titles and strikes out missing pages.
-  var LINK_MODES = { board: "", tab: "tab", peek: "peek", split: "split" };
+  // [[scribe:key]] (or a bare page id) shows the page's title, [[target|label]] your own text, [[peek:target]] /
+  // [[split:target]] pick a mode, and [label](scribe:key) / (peek:…) / (split:…) is the markdown form. A key or id
+  // written on its own (scribe:some-key, t_1a2b3c4d) links too. Scribe resolves titles and strikes out missing pages.
+  var LINK_MODES = { tab: "tab", peek: "peek", split: "split" };
   var PAGE_LINK_RES = [
-    /\[\[\s*(?:(board|tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
-    /\[([^\]]+)\]\((board|tab|peek|split):([^)\s]+)\)/g,
-    /(^|[^\w\/#-])(?:Agent Board tab ([a-z0-9._:-]*[a-z0-9_-])|(t_[0-9a-f]{8}))(?![\w-])/g
+    /\[\[\s*(?:(tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
+    /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|(scribe:[^)\s]+))\)/g,
+    /(^|[^\w\/#:-])(scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?![\w-])/g
   ];
   function pageLinkHtml(target, label, mode) {
-    return '<a href="#" class="page-link" data-board-open="' + escapeHtml(target) + '"' +
-      (mode ? ' data-board-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
+    return '<a href="#" class="page-link" data-scribe-open="' + escapeHtml(target) + '"' +
+      (mode ? ' data-scribe-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
   }
   /** Replace page links in raw text with held anchors; `hold` returns a placeholder the caller swaps back. */
   function holdPageLinks(s, hold) {
     s = s.replace(PAGE_LINK_RES[0], function (_, mode, target, label) {
-      return hold(pageLinkHtml(target, String(label || "").trim(), LINK_MODES[mode || "board"]));
+      return hold(pageLinkHtml(target, String(label || "").trim(), mode ? LINK_MODES[mode] : ""));
     });
-    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target) {
-      return hold(pageLinkHtml(target, label, LINK_MODES[mode]));
+    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target, key) {
+      return hold(pageLinkHtml(target || key, label, mode ? LINK_MODES[mode] : ""));
     });
-    return s.replace(PAGE_LINK_RES[2], function (_, pre, key, id) {
-      return pre + hold(pageLinkHtml(key || id, "", ""));
+    return s.replace(PAGE_LINK_RES[2], function (_, pre, target) {
+      return pre + hold(pageLinkHtml(target, "", ""));
     });
   }
   /** Plain text (a title, a comment) as HTML with only its page links live. */
@@ -1526,7 +1526,7 @@
     return String(raw == null ? "" : raw)
       .replace(PAGE_LINK_RES[0], function (_, mode, target, label) { return String(label || "").trim() || target; })
       .replace(PAGE_LINK_RES[1], "$1")
-      .replace(PAGE_LINK_RES[2], "$1$2$3");
+      .replace(PAGE_LINK_RES[2], "$1$2");
   }
 
   function mdInline(raw, images) {
@@ -1750,7 +1750,7 @@
     if (current()) closeModal();
   });
 
-  board.onChange(function () {
+  scribe.onChange(function () {
     if (drag && drag.moved) return;
     renderLists();
     if (!editingDesc && !editingTitle) syncModal();

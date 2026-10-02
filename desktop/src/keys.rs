@@ -24,7 +24,7 @@ use crate::layout;
 enum Shortcut {
     /// Ctrl+Shift+M
     Compact,
-    /// Board actions the page runs through `window.agentBoardShortcut`. Ctrl+Z stays with the
+    /// Board actions the page runs through `window.scribeShortcut`. Ctrl+Z stays with the
     /// page: an embed's text field needs its own undo, and board frames already forward it.
     /// Ctrl+Shift+T reopens without that caveat.
     Board(&'static str),
@@ -162,7 +162,7 @@ pub fn install(window: &WebviewWindow) {
                     let window = target.clone();
                     std::thread::spawn(move || {
                         let _ = window.eval(format!(
-                            "window.agentBoardShortcut && window.agentBoardShortcut({action:?})"
+                            "window.scribeShortcut && window.scribeShortcut({action:?})"
                         ));
                     });
                 }

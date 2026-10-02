@@ -132,9 +132,9 @@ export type Tab = {
   state: BoardState;
   stateRevision: number;
   stateUpdatedAt: number;
-  /** Monotonic counter; survives board_show clearing `signal`. */
+  /** Monotonic counter; survives page_show clearing `signal`. */
   signalRevision: number;
-  /** Last signal, or null after board_show resets the wait handshake. */
+  /** Last signal, or null after page_show resets the wait handshake. */
   signal: TabSignal | null;
   assets: TabAsset[];
   templateId?: string;
@@ -176,7 +176,8 @@ export type TrashBatch = {
 export const USER_TITLE_HOLD_MS = 24 * 60 * 60 * 1000;
 
 /** Reserved for the in-app help page. Closing it discards the tab instead of archiving. */
-export const WELCOME_KEY = "welcome";
+export const PAGE_KEY_PREFIX = "scribe:";
+export const WELCOME_KEY = "scribe:welcome";
 
 export function isAppTab(tab: { key: string }): boolean {
   return tab.key === WELCOME_KEY;

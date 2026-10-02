@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_PORT: u16 = 4747;
 
 pub fn port() -> u16 {
-    std::env::var("AGENT_BOARD_PORT")
+    std::env::var("SCRIBE_PORT")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_PORT)
@@ -26,9 +26,9 @@ pub fn is_running() -> bool {
     TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok()
 }
 
-/// The agent-board checkout whose `dist/index.js` runs the daemon. Defaults to the clone this app was built from.
+/// The Scribe checkout whose `dist/index.js` runs the daemon. Defaults to the clone this app was built from.
 fn repo_dir() -> PathBuf {
-    match std::env::var_os("AGENT_BOARD_DIR") {
+    match std::env::var_os("SCRIBE_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."),
     }
@@ -36,14 +36,14 @@ fn repo_dir() -> PathBuf {
 
 /// Same folder as `dataDir()` in src/config.ts.
 pub fn data_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("AGENT_BOARD_HOME") {
+    if let Some(home) = std::env::var_os("SCRIBE_HOME") {
         return PathBuf::from(home);
     }
     let root = std::env::var_os("LOCALAPPDATA")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    root.join("agent-board")
+    root.join("scribe")
 }
 
 /// Starts the daemon, or replaces one from another build, through the same code path the MCP uses.
@@ -51,7 +51,7 @@ pub fn ensure_daemon() -> Result<(), String> {
     let script = repo_dir().join("dist").join("index.js");
     if !script.is_file() {
         return Err(format!(
-            "{} is missing. Run npm install and npm run build in the agent-board folder, or set AGENT_BOARD_DIR.",
+            "{} is missing. Run npm install and npm run build in the Scribe folder, or set SCRIBE_DIR.",
             script.display()
         ));
     }

@@ -20,7 +20,7 @@ window.createLibrary = function createLibrary(host) {
   const cleanupList = document.getElementById("cleanup-list");
   const cleanupSubmit = document.getElementById("cleanup-submit");
 
-  const COLLAPSED_KEY = "agent-board.libraryCollapsed";
+  const COLLAPSED_KEY = "scribe.libraryCollapsed";
   const ROW_CARD_DELAY = 700;
   const DRAG_THRESHOLD = 4;
   const EXPAND_DELAY = 600;
@@ -28,7 +28,7 @@ window.createLibrary = function createLibrary(host) {
   const SCROLL_EDGE = 40;
   const INDENT = 14;
   const ROW_PAD = 8;
-  const CLEANUP_KEY = "agent-board.cleanup";
+  const CLEANUP_KEY = "scribe.cleanup";
   const CLEANUP_BASIS_HELP = {
     activity: "The latest of an edit, a data change, or closing the tab.",
     edited: "The last change to the page's content or data.",

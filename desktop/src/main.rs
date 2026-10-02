@@ -1,4 +1,4 @@
-//! Agent Board desktop: a native window over the same daemon and UI the browser uses.
+//! Scribe desktop: a native window over the same daemon and UI the browser uses.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -158,7 +158,7 @@ fn main() {
             let base = board::base_url();
             // Only the board's own origin gets IPC. Tab pages (127.0.0.2) and embedded sites do not.
             app.add_capability(
-                CapabilityBuilder::new("board")
+                CapabilityBuilder::new("scribe")
                     .remote(format!("{base}/*"))
                     .window(MAIN)
                     .permission("core:window:allow-start-dragging")
@@ -182,7 +182,7 @@ fn main() {
                 url.set_fragment(Some(&tab));
             }
             let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
-                .title("Agent Board")
+                .title("Scribe")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(320.0, 240.0)
                 .decorations(true)
@@ -216,5 +216,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running Agent Board");
+        .expect("error while running Scribe");
 }

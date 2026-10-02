@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Board</title>
+  <title>Scribe</title>
   <link rel="icon" href="/favicon.svg?v=4" type="image/svg+xml" sizes="any">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,10 +12,18 @@
   <link rel="stylesheet" href="/agent.css?v=12">
   <script>
     (() => {
-      if (localStorage.getItem("agent-board.tightSmall") !== "0") {
+      // Settings saved before the rename from Agent Board keep working.
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith("agent-board.")) {
+          const next = "scribe." + key.slice("agent-board.".length);
+          if (localStorage.getItem(next) === null) localStorage.setItem(next, localStorage.getItem(key));
+          localStorage.removeItem(key);
+        }
+      }
+      if (localStorage.getItem("scribe.tightSmall") !== "0") {
         document.documentElement.classList.add("tight-small");
       }
-      const theme = localStorage.getItem("agent-board.theme");
+      const theme = localStorage.getItem("scribe.theme");
       if (["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(theme)) {
         document.documentElement.dataset.theme = theme;
       }
@@ -66,11 +74,11 @@
     </div>
   </header>
   <div id="persist-banner" class="persist-banner" hidden role="alert">
-    <p><strong>Could not save the board.</strong> Changes live only in this session until this is fixed. Ask an agent to look at it, or export the page.</p>
+    <p><strong>Could not save Scribe's data.</strong> Changes live only in this session until this is fixed. Ask an agent to look at it, or export the page.</p>
     <p id="persist-banner-detail" class="persist-banner-detail"></p>
   </div>
   <div id="version-banner" class="persist-banner" hidden role="alert">
-    <p><strong>The board daemon is out of date.</strong> This page needs a newer daemon, so closing, opening, and the Library will not work. Restart it with <code>npm run stop</code> in the agent-board folder; the next agent board call starts the new one.</p>
+    <p><strong>The Scribe daemon is out of date.</strong> This page needs a newer daemon, so closing, opening, and the Library will not work. Restart it with <code>npm run stop</code> in the scribe folder; the next Scribe call starts the new one.</p>
     <p id="version-banner-detail" class="persist-banner-detail"></p>
   </div>
   <div class="workspace">
@@ -170,10 +178,6 @@
           <span id="smooth-scroll-label">Smooth scrolling tab strip</span>
           <button type="button" class="pill-toggle" id="smooth-scroll" role="switch" aria-checked="true" aria-labelledby="smooth-scroll-label"></button>
         </div>
-        <div class="setting-row">
-          <span id="copy-key-prefix-label">Copy key includes "Agent Board tab" prefix</span>
-          <button type="button" class="pill-toggle" id="copy-key-prefix" role="switch" aria-checked="true" aria-labelledby="copy-key-prefix-label"></button>
-        </div>
       </section>
       <section class="settings-section">
         <h3>Links</h3>
@@ -181,7 +185,7 @@
           <span id="link-mode-label">Page links open as</span>
           <div class="button-track text-track" id="link-mode" role="group" aria-labelledby="link-mode-label"></div>
         </div>
-        <p class="settings-hint settings-hint-after">For links to board pages that don't choose for themselves. Hold <kbd>Ctrl</kbd> to navigate, <kbd>Shift</kbd> to split, or <kbd>Alt</kbd> to peek, on links, in the Library, and in search. Web links open in your browser unless the page or a modifier says otherwise.</p>
+        <p class="settings-hint settings-hint-after">For links to Scribe pages that don't choose for themselves. Hold <kbd>Ctrl</kbd> to navigate, <kbd>Shift</kbd> to split, or <kbd>Alt</kbd> to peek, on links, in the Library, and in search. Web links open in your browser unless the page or a modifier says otherwise.</p>
       </section>
       <section class="settings-section">
         <h3>Layout</h3>

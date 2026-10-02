@@ -1,14 +1,14 @@
 [package]
-name = "agent-board-desktop"
+name = "scribe-desktop"
 version = "1.0.0"
-description = "Desktop window for Agent Board"
+description = "Desktop window for Scribe"
 edition = "2021"
 rust-version = "1.90"
-default-run = "board"
+default-run = "scribe"
 autobins = false
 
 [[bin]]
-name = "board"
+name = "scribe"
 path = "src/main.rs"
 
 [build-dependencies]
