@@ -125,14 +125,18 @@
   .select-list .empty-row { color: var(--muted); padding: 7px 9px; font-size: 12.5px; }
   .search { width: 220px; }
   .tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: var(--panel);
     box-shadow: var(--depth);
     padding: 7px 12px;
+    min-height: calc(1.45em + 14px);
     color: var(--muted);
   }
   .tool:hover { color: var(--text); box-shadow: var(--depth-hover); }
   .tool.on { color: var(--text); box-shadow: var(--depth), 0 0 0 1px var(--accent); }
-  .tool.icon { display: inline-flex; align-items: center; justify-content: center; padding: 7px 9px; }
+  .tool.icon { padding: 7px 10px; min-width: calc(1.45em + 14px); }
   .tool.icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .spacer { flex: 1; }
 
