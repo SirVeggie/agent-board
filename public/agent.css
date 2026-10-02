@@ -2692,6 +2692,91 @@ button.ag-usage:hover {
   color: var(--muted);
 }
 
+/* Allowlists dialog */
+.ag-perm-dialog .settings-panel {
+  width: min(680px, 100%);
+}
+
+.ag-perm-body .settings-section {
+  margin-top: 18px;
+}
+
+.ag-perm-help {
+  margin: 0 0 10px;
+}
+
+.ag-perm-set {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: rgba(var(--lift-rgb), 0.035);
+}
+
+.ag-perm-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.ag-perm-path {
+  font: 11px var(--ag-mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ag-perm-error {
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+.ag-perm-kind {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 8px;
+  align-items: start;
+  margin: 6px 0;
+}
+
+.ag-perm-kind-label {
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 4px;
+}
+
+.ag-perm-kind.k-deny .ag-perm-kind-label {
+  color: var(--danger);
+}
+
+.ag-perm-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+}
+
+.ag-perm-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 1px 2px 1px 8px;
+  border-radius: 7px;
+  background: rgba(var(--lift-rgb), 0.07);
+}
+
+.ag-perm-rule code {
+  font: 11.5px var(--ag-mono);
+  overflow-wrap: anywhere;
+}
+
+.ag-perm-add {
+  flex: 1;
+  min-width: 160px;
+}
+
 /* Agent settings: the key list. */
 .ag-keys {
   display: grid;

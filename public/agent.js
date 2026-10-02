@@ -2985,6 +2985,142 @@
     return track;
   }
 
+  /* ---------- allowlists: the providers' own allow / ask / deny rules ---------- */
+
+  const RULE_HELP = {
+    claude: "Tool name, optionally with a pattern: Bash(npm test:*), Bash(git status), Read(./src/**), Edit, WebFetch(domain:docs.rs), mcp__server__tool.",
+    cursor: "Shell(git status) allows that command (prefix match), Read(**/*.md), Write(src/**), Mcp(server:tool), WebFetch(docs.rs).",
+  };
+  const SCOPE_LABEL = { user: "Everywhere (user)", project: "This workspace (shared)", local: "This workspace (only you)" };
+  const KIND_LABEL = { allow: "Allow", ask: "Always ask", deny: "Deny" };
+
+  const allowlists = {
+    root: null,
+    body: null,
+    picker: null,
+    cwd: null,
+    mount() {
+      const root = el("div", "settings ag-perm-dialog");
+      root.hidden = true;
+      const backdrop = el("div", "settings-backdrop");
+      backdrop.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        this.close();
+      });
+      const panel = el("div", "settings-panel");
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-labelledby", "ag-perm-title");
+      const title = el("h2", "settings-title", "Command allowlists");
+      title.id = "ag-perm-title";
+      const intro = el(
+        "p",
+        "settings-hint",
+        "The rules Claude Code and Cursor apply before they ask you. They live in the providers' own config files; the board only edits their permission lists. \"Always allow\" on an approval adds a rule here too."
+      );
+      const pick = el("div", "setting-row");
+      const label = el("span", null, "Workspace");
+      label.id = "ag-perm-ws-label";
+      this.picker = el("select");
+      this.picker.setAttribute("aria-labelledby", label.id);
+      this.picker.addEventListener("change", () => {
+        this.cwd = this.picker.value || null;
+        void this.load();
+      });
+      pick.append(label, this.picker);
+      this.body = el("div", "ag-perm-body");
+      panel.append(title, intro, pick, this.body);
+      root.append(backdrop, panel);
+      document.body.append(root);
+      this.root = root;
+      this.pickerWrap = window.createSelect ? window.createSelect(this.picker) : null;
+    },
+    isOpen() {
+      return Boolean(this.root && !this.root.hidden);
+    },
+    open() {
+      if (!this.root) return;
+      const current = targetView().settings().cwd || null;
+      const dirs = [...new Set([current, ...(prefs().recentWorkspaces || [])].filter(Boolean))];
+      this.picker.replaceChildren(...dirs.map((dir) => el("option", null, dir)), el("option", null, "No workspace: user rules only"));
+      [...this.picker.options].forEach((option, i) => (option.value = i < dirs.length ? dirs[i] : ""));
+      this.cwd = dirs[0] || null;
+      this.picker.value = this.cwd || "";
+      this.pickerWrap?.syncSelect?.();
+      this.root.hidden = false;
+      void this.load();
+    },
+    close() {
+      if (!this.isOpen()) return false;
+      this.root.hidden = true;
+      return true;
+    },
+    async load() {
+      this.body.replaceChildren(el("div", "ag-muted", "Loading…"));
+      try {
+        const { sets } = await api("GET", `/permissions${this.cwd ? `?cwd=${encodeURIComponent(this.cwd)}` : ""}`);
+        this.render(sets);
+      } catch (err) {
+        this.body.replaceChildren(el("div", "ag-muted", err.message));
+      }
+    },
+    render(sets) {
+      this.body.replaceChildren();
+      for (const provider of ["claude", "cursor"]) {
+        const mine = sets.filter((set) => set.provider === provider);
+        if (!mine.length) continue;
+        const section = el("section", "settings-section");
+        section.append(el("h3", null, PROVIDER_LABEL[provider]), el("p", "settings-hint ag-perm-help", RULE_HELP[provider]));
+        for (const set of mine) section.append(this.renderSet(set));
+        this.body.append(section);
+      }
+    },
+    renderSet(set) {
+      const box = el("div", "ag-perm-set");
+      box.dataset.key = `${set.provider}:${set.scope}`;
+      const head = el("div", "ag-perm-head");
+      head.append(el("strong", null, SCOPE_LABEL[set.scope]), el("span", "ag-perm-path", set.path + (set.exists ? "" : " (created when you add a rule)")));
+      box.append(head);
+      if (set.error) {
+        box.append(el("div", "ag-perm-error", `Can't read this file, so it is left alone: ${set.error}`));
+        return box;
+      }
+      for (const kind of set.kinds) {
+        const list = set[kind] || [];
+        const group = el("div", `ag-perm-kind k-${kind}`);
+        group.append(el("span", "ag-perm-kind-label", KIND_LABEL[kind]));
+        const rows = el("div", "ag-perm-rules");
+        for (const rule of list) {
+          const row = el("span", "ag-perm-rule");
+          row.append(el("code", null, rule), button(icon("close"), "ag-chip-x", () => this.save(set, kind, list.filter((r) => r !== rule)), `Remove ${rule}`));
+          rows.append(row);
+        }
+        const input = el("input", "ag-input small ag-perm-add");
+        input.placeholder = list.length ? "Add a rule" : kind === "allow" ? (set.provider === "claude" ? "e.g. Bash(npm test:*)" : "e.g. Shell(npm test)") : "Add a rule";
+        input.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" || !input.value.trim()) return;
+          event.preventDefault();
+          void this.save(set, kind, [...list, input.value.trim()]);
+        });
+        rows.append(input);
+        group.append(rows);
+        box.append(group);
+      }
+      return box;
+    },
+    async save(set, kind, rules) {
+      try {
+        const { set: next } = await api("PUT", "/permissions", { provider: set.provider, scope: set.scope, cwd: this.cwd, kind, rules });
+        const old = this.body.querySelector(`.ag-perm-set[data-key="${set.provider}:${set.scope}"]`);
+        const fresh = this.renderSet(next);
+        old?.replaceWith(fresh);
+        fresh.querySelector(`.k-${kind} .ag-perm-add`)?.focus();
+      } catch (err) {
+        notice(err.message);
+      }
+    },
+  };
+
   const agentSettings = {
     root: null,
     status: null,
@@ -3015,6 +3151,12 @@
           }
           notice("Models refreshed");
           renderAll();
+        })
+      );
+      actions.append(
+        button("Allowlists…", null, () => {
+          this.close();
+          allowlists.open();
         })
       );
       providers.append(el("h3", null, "Providers"), this.status, actions);
@@ -3422,6 +3564,7 @@
   }
 
   function escape() {
+    if (allowlists.close()) return true;
     if (agentSettings.close()) return true;
     if (openMenuEl) {
       closeMenu();
@@ -3483,6 +3626,7 @@
     full.mount();
     dock.mount();
     agentSettings.mount();
+    allowlists.mount();
     applyButton();
     document.getElementById("agent-toggle")?.addEventListener("click", () => shortcut("side"));
     const origSetThread = sidebar.view.setThread.bind(sidebar.view);

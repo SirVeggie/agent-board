@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import express from "express";
+import { listPermissions, setRules } from "./permissions.js";
 import type { AgentHost } from "./host.js";
 import { baseUrl } from "../config.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
@@ -36,6 +37,21 @@ export function agentRouter(host: AgentHost): express.Router {
       models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor") },
       limits: host.limits(),
     }))
+  );
+
+  // The providers' own allow / deny / ask lists (Claude Code settings, Cursor CLI config).
+  router.get("/permissions", wrap((req) => ({ sets: listPermissions(typeof req.query.cwd === "string" ? req.query.cwd : null) })));
+
+  router.put(
+    "/permissions",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const provider = body.provider === "cursor" ? "cursor" : body.provider === "claude" ? "claude" : null;
+      if (!provider) throw new Error("Unknown provider");
+      const scope = body.scope === "project" || body.scope === "local" ? body.scope : "user";
+      const kind = body.kind === "deny" || body.kind === "ask" ? body.kind : "allow";
+      return { set: setRules({ provider, scope, kind, cwd: typeof body.cwd === "string" ? body.cwd : null, rules: body.rules }) };
+    })
   );
 
   router.put(
