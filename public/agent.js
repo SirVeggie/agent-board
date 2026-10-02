@@ -1451,6 +1451,22 @@
     renderQuestion(it) {
       const node = el("div", `ag-card ag-question s-${it.status}`);
       node.dataset.itemId = it.id;
+      if (it.status !== "pending") {
+        node.classList.add("done");
+        const parts = it.questions.map((q) => {
+          const picked = (it.answers?.[q.id] || []).map((id) => q.options.find((o) => o.id === id)?.label || id);
+          const note = it.notes?.[q.id];
+          const answer = picked.length ? picked.join(", ") : it.status === "skipped" ? "Skipped" : "—";
+          return `${q.prompt}: ${answer}${note ? ` (${note})` : ""}`;
+        });
+        const line = el("span", "ag-card-line", parts.join(" · ") || (it.status === "skipped" ? "Skipped" : "Not answered"));
+        line.title = line.textContent;
+        node.append(
+          icon(it.status === "answered" ? "check" : "cross", `ag-ico ${it.status === "answered" ? "ag-st-ok" : "ag-st-err"}`),
+          line
+        );
+        return node;
+      }
       const head = el("div", "ag-card-head");
       head.append(icon("question"), el("span", "ag-card-title", it.title || (it.questions.length > 1 ? "The agent has questions" : "The agent has a question")));
       node.append(head);
@@ -1461,10 +1477,8 @@
         if (q.header) block.append(el("div", "ag-q-header", q.header));
         block.append(el("div", "ag-q-prompt", q.prompt));
         const opts = el("div", "ag-q-opts");
-        const answered = it.answers?.[q.id] || [];
         for (const o of q.options) {
-          const b = button("", `ag-q-opt${answered.includes(o.id) ? " on" : ""}`, () => {
-            if (it.status !== "pending") return;
+          const b = button("", "ag-q-opt", () => {
             const cur = new Set(picks.get(q.id) || []);
             if (q.multi) {
               if (cur.has(o.id)) cur.delete(o.id);
@@ -1479,37 +1493,27 @@
           b.dataset.opt = o.id;
           b.append(el("span", "ag-q-label", o.label));
           if (o.description) b.append(el("span", "ag-q-desc", o.description));
-          b.disabled = it.status !== "pending";
           opts.append(b);
         }
         block.append(opts);
-        if (it.status === "pending") {
-          const other = el("input", "ag-input small");
-          other.placeholder = "Other / add detail";
-          other.addEventListener("input", () => notes.set(q.id, other.value));
-          block.append(other);
-        } else if (it.notes?.[q.id]) {
-          block.append(el("div", "ag-muted", it.notes[q.id]));
-        }
+        const other = el("input", "ag-input small");
+        other.placeholder = "Other / add detail";
+        other.addEventListener("input", () => notes.set(q.id, other.value));
+        block.append(other);
         node.append(block);
       }
-      if (it.status === "pending") {
-        const actions = el("div", "ag-card-actions");
-        actions.append(
-          button("Submit", "ag-btn small primary", async () => {
-            const answers = Object.fromEntries(it.questions.map((q) => [q.id, picks.get(q.id) || []]));
-            const noteObj = Object.fromEntries([...notes].filter(([, v]) => v.trim()));
-            await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { answers, notes: noteObj }).catch((err) => notice(err.message));
-          }),
-          button("Skip", "ag-btn small", async () => {
-            await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { skip: true }).catch((err) => notice(err.message));
-          })
-        );
-        node.append(actions);
-      } else {
-        node.classList.add("done");
-        node.append(el("div", "ag-muted small", it.status === "answered" ? "Answered" : it.status === "skipped" ? "Skipped" : "Not answered"));
-      }
+      const actions = el("div", "ag-card-actions");
+      actions.append(
+        button("Submit", "ag-btn small primary", async () => {
+          const answers = Object.fromEntries(it.questions.map((q) => [q.id, picks.get(q.id) || []]));
+          const noteObj = Object.fromEntries([...notes].filter(([, v]) => v.trim()));
+          await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { answers, notes: noteObj }).catch((err) => notice(err.message));
+        }),
+        button("Skip", "ag-btn small", async () => {
+          await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { skip: true }).catch((err) => notice(err.message));
+        })
+      );
+      node.append(actions);
       return node;
     }
 
