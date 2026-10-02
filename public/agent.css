@@ -154,6 +154,18 @@ html.tight-small .agent-pane {
   /* follows the side pane's spacing rules */
 }
 
+@media (max-width: 760px), (max-height: 480px) {
+  html.tight-small .agent-pane {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  html.tight-small .agent-pane:not(.closed) {
+    margin-left: 0;
+    border-left: 1px solid var(--border);
+  }
+}
+
 /* ---------- chat view ---------- */
 
 .ag-view {
@@ -1425,6 +1437,20 @@ button.ag-change-row .ag-fname {
 
 .ag-view .ag-composer:focus-within {
   box-shadow: var(--ag-raised), 0 0 0 1.5px rgba(var(--accent-rgb), 0.16);
+}
+
+/* Sidebar: the pane is already the card. Don't float a second composer on top of it. */
+.ag-view-side .ag-composer,
+.ag-view-side .ag-composer:focus-within {
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  border-top: 1px solid var(--border);
+}
+
+.ag-view-side .ag-compose-bar {
+  border-radius: 0;
 }
 
 .ag-view .ag-ctx {
