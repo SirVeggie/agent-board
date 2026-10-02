@@ -314,6 +314,41 @@
     return { icon: "box", text: R.basename(scope.ref) || scope.ref };
   }
 
+  function dirKey(dir) {
+    return String(dir || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
+  /** Last used folders, with `prefer` first when it is not already among them. */
+  function recentWorkspaceDirs(prefer) {
+    const out = [];
+    const seen = new Set();
+    const add = (dir) => {
+      if (!dir) return;
+      const key = dirKey(dir);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(dir);
+    };
+    add(prefer);
+    for (const dir of prefs().recentWorkspaces || []) add(dir);
+    return out.slice(0, 3);
+  }
+
+  /** Unique disk folders that existing (non-archived) threads are attached to. */
+  function threadWorkspaces() {
+    const byKey = new Map();
+    for (const t of S.threads.values()) {
+      if (t.archived) continue;
+      const dir = t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : t.cwd;
+      if (!dir) continue;
+      const key = dirKey(dir);
+      const cur = byKey.get(key);
+      if (cur) cur.n++;
+      else byKey.set(key, { path: dir, n: 1 });
+    }
+    return [...byKey.values()].sort((a, b) => b.n - a.n || a.path.localeCompare(b.path));
+  }
+
   function sameScope(a, b) {
     return a && b && a.kind === b.kind && (a.ref || null) === (b.ref || null);
   }
@@ -506,11 +541,15 @@
       input.value = initial || prefs().recentWorkspaces[0] || "";
       const use = button("Use folder", "ag-btn primary", () => finish(input.value.trim() || null));
       row.append(input, use);
-      const recent = el("div", "ag-ws-recent");
-      for (const dir of prefs().recentWorkspaces.slice(0, 8)) {
-        const chip = button(R.basename(dir), "ag-chip", () => finish(dir), dir);
-        chip.prepend(icon("box"));
-        recent.append(chip);
+      const used = el("div", "ag-ws-used");
+      const withThreads = threadWorkspaces();
+      if (withThreads.length) {
+        used.append(el("div", "ag-ws-used-label", "Workspaces with threads"));
+        for (const { path: dir, n } of withThreads) {
+          const item = button("", "ag-ws-used-item", () => finish(dir), dir);
+          item.append(icon("box"), el("span", "ag-ws-used-name", R.basename(dir)), el("span", "ag-ws-used-count", n === 1 ? "1 thread" : `${n} threads`));
+          used.append(item);
+        }
       }
       const browser = el("div", "ag-ws-browser");
       const crumbs = el("div", "ag-ws-path");
@@ -546,7 +585,7 @@
       const actions = el("div", "ag-modal-actions");
       actions.append(button("Browse here", "ag-btn ghost", () => load(input.value.trim())), el("span", "ag-grow"), button("Cancel", "ag-btn", () => finish(null)));
       panel.append(title, hint, row);
-      if (recent.childElementCount) panel.append(recent);
+      if (used.childElementCount) panel.append(used);
       panel.append(browser, actions);
       load(input.value.trim());
       setTimeout(() => input.focus(), 0);
@@ -853,7 +892,8 @@
       title.title = t ? "Double-click to rename" : "";
       if (t) title.addEventListener("dblclick", () => this.rename(title));
       const sc = scopeLabel(s.scope);
-      const scope = button("", "ag-scope-chip", (event) => this.scopeMenu(event.currentTarget), "Where this thread belongs");
+      const needsFolder = s.mode !== "board" && s.mode !== "ask" && !s.cwd;
+      const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
       scope.append(icon(sc.icon), el("span", null, sc.text));
       titleWrap.append(title, scope);
       if (t && t.stats.files) {
@@ -913,12 +953,28 @@
       const items = [{ header: "Belongs to" }];
       if (tab) items.push({ label: tab.title, detail: "This page", icon: "page", checked: s.scope.kind === "page" && s.scope.ref === tab.id, run: () => this.setScope({ kind: "page", ref: tab.id }) });
       if (tab?.folderId) items.push({ label: folderPath(tab.folderId), detail: "This page's folder", icon: "folder", checked: s.scope.kind === "folder" && s.scope.ref === tab.folderId, run: () => this.setScope({ kind: "folder", ref: tab.folderId }) });
-      if (s.cwd) items.push({ label: R.basename(s.cwd), detail: s.cwd, icon: "box", checked: s.scope.kind === "workspace" && s.scope.ref === s.cwd, run: () => this.setScope({ kind: "workspace", ref: s.cwd }) });
       items.push({ label: "Global", detail: "Not tied to a page or folder", icon: "globe", checked: s.scope.kind === "global", run: () => this.setScope({ kind: "global", ref: null }) });
+      items.push({ separator: true });
+      const currentWs = s.scope.kind === "workspace" ? s.scope.ref : null;
+      for (const dir of recentWorkspaceDirs(currentWs)) {
+        items.push({
+          label: R.basename(dir),
+          detail: dir,
+          icon: "box",
+          checked: Boolean(currentWs && dirKey(dir) === dirKey(currentWs)),
+          run: () => this.setWorkspace(dir),
+        });
+      }
+      items.push({
+        label: "Another workspace…",
+        detail: "Browse or pick a folder with threads",
+        icon: "folder",
+        run: () => this.pickOtherWorkspace(),
+      });
       if (s.scope.kind === "page" && s.scope.ref !== tab?.id && s.scope.ref) {
         items.push({ separator: true }, { label: "Open its page", icon: "page", run: () => app()?.openLink(s.scope.ref) });
       }
-      openMenu(anchor, items);
+      openMenu(anchor, items, { width: 280 });
     }
 
     async setScope(scope) {
@@ -929,6 +985,24 @@
         return;
       }
       await this.updateSettings({ scope });
+    }
+
+    async setWorkspace(dir) {
+      if (!dir) return;
+      const scope = { kind: "workspace", ref: dir };
+      const t = this.thread();
+      if (!t) {
+        this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir } };
+        this.renderAll();
+        return;
+      }
+      await this.updateSettings({ scope, cwd: dir });
+    }
+
+    async pickOtherWorkspace() {
+      const dir = await pickWorkspace(this.settings().cwd);
+      if (dir) await this.setWorkspace(dir);
+      this.focus();
     }
 
     threadMenu(anchor) {
@@ -1785,11 +1859,6 @@
       const web = button("", `ag-pill toggle${s.web ? " on" : ""}`, () => this.updateSettings({ web: !s.web }), s.web ? "Web search is on" : "Web search is off");
       web.append(icon("fetch"), el("span", null, "Web"));
       if (this.variant !== "dock") bar.append(web);
-      if (s.mode !== "board") {
-        const ws = button("", `ag-pill ws${s.cwd ? "" : " warn"}`, () => this.chooseWorkspace(), s.cwd || "Choose a workspace folder");
-        ws.append(icon("box"), el("span", null, s.cwd ? R.basename(s.cwd) : "Workspace…"));
-        bar.append(ws);
-      }
       if (this.variant === "dock") {
         const meter = usageChip(s.provider);
         if (meter) bar.append(meter);
@@ -1810,13 +1879,6 @@
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
       }
       tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : "Send (Enter)"));
-    }
-
-    async chooseWorkspace() {
-      const s = this.settings();
-      const dir = await pickWorkspace(s.cwd);
-      if (dir) await this.updateSettings({ cwd: dir });
-      this.focus();
     }
 
     /** Starred models only, plus the current one; "Show all models" opens the full, searchable list. */
@@ -2034,7 +2096,9 @@
       if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) {
         const dir = await pickWorkspace(null);
         if (!dir) return;
-        await this.updateSettings({ cwd: dir });
+        const patch = { cwd: dir };
+        if (s.scope.kind === "global" || s.scope.kind === "workspace") patch.scope = { kind: "workspace", ref: dir };
+        await this.updateSettings(patch);
       }
       const tab = activeTab();
       const context = [];
@@ -2178,18 +2242,19 @@
     const items = [{ header: "New thread for" }];
     if (tab) items.push({ label: tab.title, detail: "This page (Pages mode)", icon: "page", run: () => view.startDraft({ kind: "page", ref: tab.id }) });
     if (tab?.folderId) items.push({ label: folderPath(tab.folderId), detail: "This folder", icon: "folder", run: () => view.startDraft({ kind: "folder", ref: tab.folderId }) });
-    for (const dir of prefs().recentWorkspaces.slice(0, 5)) {
+    items.push({ label: "Global", detail: "Not tied to a page or folder", icon: "globe", run: () => view.startDraft({ kind: "global", ref: null }) });
+    items.push({ separator: true });
+    for (const dir of recentWorkspaceDirs(null)) {
       items.push({ label: R.basename(dir), detail: dir, icon: "box", run: () => view.startDraft({ kind: "workspace", ref: dir }, { cwd: dir }) });
     }
     items.push({
-      label: "Other workspace…",
+      label: "Another workspace…",
       icon: "folder",
       run: async () => {
         const dir = await pickWorkspace(null);
         if (dir) view.startDraft({ kind: "workspace", ref: dir }, { cwd: dir });
       },
     });
-    items.push({ label: "Global", detail: "Not tied to a page or folder", icon: "globe", run: () => view.startDraft({ kind: "global", ref: null }) });
     openMenu(anchor, items, { width: 280 });
   }
 
@@ -2474,7 +2539,7 @@
       // Bar: status, thread and scope on the left; settings and window tools on the right.
       this.status = el("span", "dock-status");
       this.titleBtn = button("", "dock-title", (event) => this.threadMenu(event.currentTarget), "Switch thread");
-      this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), "Where this thread belongs");
+      this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
       const left = el("div", "dock-bar-left");
       left.append(this.status, this.titleBtn, this.scopeBtn);
       const right = el("div", "dock-bar-right");
@@ -2570,6 +2635,8 @@
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread for this page"), icon("chevron", "ag-ico ag-chev-down"));
       const sc = scopeLabel(s.scope);
       this.scopeBtn.replaceChildren(icon(sc.icon), el("span", null, sc.text));
+      this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
+      this.scopeBtn.title = "Page, folder, or workspace this thread belongs to";
       this.orb.textContent = s.provider === "claude" ? "C" : "⌘";
       this.orb.title = `Model: ${modelLabel(s.provider, s.model)}`;
       this.renderHandle();
