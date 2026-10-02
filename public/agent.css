@@ -272,12 +272,29 @@ button.ag-stat-chip:hover {
   color: var(--text);
 }
 
+/*
+ * Chat scrollbars: app.css's arrowless thin bars on a transparent track, with a dimmer handle.
+ * No scrollbar-width here: Chromium would drop these rules and draw native bars with arrows.
+ */
+@supports not selector(::-webkit-scrollbar) {
+  .ag-view, .ag-view * {
+    scrollbar-color: rgba(127, 127, 127, 0.28) transparent;
+  }
+}
+
+.ag-view ::-webkit-scrollbar-thumb {
+  background-color: rgba(127, 127, 127, 0.28);
+}
+
+.ag-view ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(127, 127, 127, 0.45);
+}
+
 .ag-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-width: thin;
 }
 
 .ag-transcript {
@@ -1790,7 +1807,6 @@ button.ag-seg-btn.on {
   min-height: 0;
   overflow-y: auto;
   padding: 0 8px 12px;
-  scrollbar-width: thin;
 }
 
 .ag-list-group {
