@@ -72,9 +72,9 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `board_folders` | List Library folders as paths (`"CLIMS/Releases"`) in the user's order, each with its direct page count, so an agent can file a new page in a matching folder via `board_show`'s `folder`. |
 | `board_open` | Open a closed page on the strip |
 | `board_read` | Read a page's HTML so it can be revised (open or closed). `toFile: true` checks it out to a temp file for editing with file tools instead |
-| `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page |
+| `board_get_state` | Read what the user has actually typed, added, or checked off on an interactive page. `path` / `where` return one part (e.g. one card) |
 | `board_wait` | Block until the page fires a named signal (`board.signal` / `data-board-signal`), then return that signal plus the live state. Default 2 hours, no maximum. Do not poll `board_get_state`. |
-| `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. Optional `assets` (local files) are stored as page assets; each state value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
+| `board_set_state` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. `ops` edit single items by path (merge, insert, move, remove one card) without resending the array. Optional `assets` (local files) are stored as page assets; each state value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
 | `board_pin` / `board_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `board_close` | Close one tab, all unpinned tabs, or everything; the pages stay in the Library. Pass `permanent: true` to delete instead |
 | `board_template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar). A template can carry an agent `guide` (built-ins: `templates/builtin/<key>.guide.md`), which the MCP appends to the first tool result that touches one of its pages in a session. |
@@ -154,6 +154,8 @@ Writes merge at the top level, so the agent updating `todos` never disturbs the 
 ### Conflicts
 
 `board_get_state` returns a `stateRevision`. Passing it back as `expectedRevision` makes the write conditional: if the user changed the page in between, it is refused with `409` and the response carries their current state, so the agent can merge and retry. Agent writes without an `expectedRevision` are refused on a page that already has state, unless `force` is set. Writes from the page itself are never blocked — the person looking at the screen wins ties.
+
+Agent writes made only of `ops` may skip `expectedRevision`. Each op names its target by id or field, so it applies to the latest state, and a change elsewhere on the page doesn't refuse it. If a target is gone, the whole write fails and nothing changes.
 
 `board_wait` blocks until `board.signal("name")` (or `data-board-signal="name"`) fires on that tab. It returns the signal plus the current state. Waiting for any state change would wake on every keystroke; the named signal is the handshake. After a successful wait, pass `signal.revision` as `afterSignalRevision` to wait for the next one without re-showing the page.
 

@@ -345,6 +345,7 @@ export async function startHttp(): Promise<http.Server> {
       }
       const result = store.setState(req.params.id, {
         state: req.body?.state,
+        ...(req.body?.ops !== undefined ? { ops: req.body.ops } : {}),
         replace: req.body?.replace === true,
         ...(assetFiles.length ? { assets: assetFiles } : {}),
         expectedRevision:

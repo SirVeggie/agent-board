@@ -1,4 +1,5 @@
 import { embedUrlFromHtml } from "./embed.js";
+import type { StateOp } from "./stateOps.js";
 import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
 import type { AgentEvent } from "./agent/types.js";
 
@@ -246,7 +247,9 @@ export type UpsertInput = {
 };
 
 export type SetStateInput = {
-  state: BoardState;
+  state?: BoardState;
+  /** Targeted edits applied after `state` merges in; see stateOps.ts. */
+  ops?: StateOp[];
   replace?: boolean;
   expectedRevision?: number;
   client?: string;

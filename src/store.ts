@@ -35,6 +35,7 @@ import {
   type PageAssetUsage,
 } from "./pageAssets.js";
 import { normalizeSignalName } from "./signal.js";
+import { applyStateOps } from "./stateOps.js";
 import {
   TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
@@ -1128,13 +1129,20 @@ export class BoardStore extends EventEmitter {
       throw new Error(`tab not found: ${idOrKey}`);
     }
     const tab = located.tab;
-    if (!isPlainObject(input.state)) {
+    if (input.state === undefined && input.ops === undefined) {
+      throw new Error("pass state or ops");
+    }
+    if (input.state !== undefined && !isPlainObject(input.state)) {
       throw new Error("state must be a JSON object");
     }
     if (input.expectedRevision !== undefined && input.expectedRevision !== tab.stateRevision) {
       return { ok: false, state: tab.state, stateRevision: tab.stateRevision };
     }
-    let next: BoardState = input.replace ? { ...input.state } : { ...tab.state, ...input.state };
+    const given = input.state ?? {};
+    let next: BoardState = input.replace ? { ...given } : { ...tab.state, ...given };
+    if (input.ops !== undefined) {
+      next = applyStateOps(next, input.ops);
+    }
     const attached = input.assets?.length ? this.prepareStateAssets(tab, next, input.assets) : undefined;
     if (attached) {
       next = attached.state;

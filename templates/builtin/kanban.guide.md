@@ -1,6 +1,6 @@
 # Kanban board: agent guide
 
-Read state with `board_get_state`, change it with `board_set_state` and `expectedRevision`. Write whole top-level keys: to change one card, send the full `cards` array with that card edited. If the write is refused as stale, merge into the returned state and retry.
+A board's state is often tens of KB, so work on single cards: read with `board_get_state` and a `path`, change with `board_set_state` `ops`. Don't send the whole `cards` array to change one card.
 
 ## State
 
@@ -27,6 +27,45 @@ settings: { hideAddColumn?, showDoneDate? } // the user's page settings; leave t
 - `status` is yours: `{ kind: "working" | "blocked" | "info", text }`. It shows on the card; remove it when you finish.
 - Leave out fields you don't need; the page fills in ids, `num`, empty arrays and timestamps. Keep `archived` cards; they are the user's archive.
 - Images: pass the file in `board_set_state` `assets` and put `data: "asset:<file name>"` in the image entry. The first image is the card's cover.
+
+## Reading and changing cards
+
+Paths pick a card by `num` or `id`: `cards/num=12`, `cards/c_ab12`. A few read patterns:
+
+```
+board_get_state({ key, path: "columns" })                         // column ids and roles
+board_get_state({ key, path: "cards/num=12" })                    // one card
+board_get_state({ key, path: "cards", where: { col: "<agent column id>" } })  // a column's cards
+```
+
+Change cards with `ops`. They apply to the latest state, so another agent's or the user's change to a different card does not conflict, and you don't need `expectedRevision`. The ops in one call apply together or not at all.
+
+```
+// Claim #12
+ops: [
+  { op: "merge", path: "cards/num=12", value: { col: "<working id>", movedAt: <now>, assignee: "agent",
+      status: { kind: "working", text: "Fixing the export" } } },
+  { op: "move", path: "cards/num=12", before: "col=<working id>" }
+]
+
+// Comment on it
+ops: [{ op: "insert", path: "cards/num=12/comments", value: { id: "cm_<unique>", by: "agent", at: <now>, text: "..." } }]
+
+// Finish it: no status (null removes a field), into done, first in that column
+ops: [
+  { op: "merge", path: "cards/num=12", value: { status: null, col: "<done id>", movedAt: <now>, doneAt: <now> } },
+  { op: "move", path: "cards/num=12", before: "col=<done id>" }
+]
+
+// New card: read nextNum first
+ops: [
+  { op: "insert", path: "cards", value: { id: "c_<unique>", num: 52, col: "<column id>", title: "...", createdAt: <now>, movedAt: <now> },
+    before: "col=<column id>" },
+  { op: "set", path: "nextNum", value: 53 }
+]
+```
+
+`before: "col=<id>"` places the card above the first card in that column, or at the end of `cards` when the column is empty. Use it so a moved card lands at the top of its new column. When creating a card, pass `expectedRevision` from the read that gave you `nextNum` (`board_get_state({ key, path: "nextNum" })`), so two agents can't take the same number. On a conflict, read `nextNum` again and retry.
 
 ## Column roles
 

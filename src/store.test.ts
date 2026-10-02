@@ -1136,6 +1136,28 @@ test("updatedAt only moves when content changes", () => {
   store.closeDb();
 });
 
+test("setState applies ops after the state merge, all or nothing", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  store.setState("page", { state: { cards: [{ id: "c1", num: 1, col: "a" }, { id: "c2", num: 2, col: "a" }], n: 1 } });
+  const revision = store.get("page")!.stateRevision;
+  const result = store.setState("page", {
+    state: { n: 2 },
+    ops: [{ op: "merge", path: "cards/num=2", value: { col: "b" } }, { op: "move", path: "cards/c2", at: "start" }],
+  });
+  assert.equal(result.ok, true);
+  const tab = store.get("page")!;
+  assert.equal(tab.stateRevision, revision + 1);
+  assert.deepEqual(tab.state, { cards: [{ id: "c2", num: 2, col: "b" }, { id: "c1", num: 1, col: "a" }], n: 2 });
+  assert.throws(
+    () => store.setState("page", { state: { n: 3 }, ops: [{ op: "remove", path: "cards/c9" }] }),
+    /no item matches "c9"/
+  );
+  assert.equal(store.get("page")!.state.n, 2);
+  assert.throws(() => store.setState("page", {}), /pass state or ops/);
+  store.closeDb();
+});
+
 test("built-in templates are listed apart from the user's own", () => {
   const store = loaded();
   const builtins = store.listBuiltinTemplates();

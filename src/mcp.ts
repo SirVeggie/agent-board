@@ -11,6 +11,7 @@ import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { openBoard } from "./openBoard.js";
 import { clampWaitMs, parseSignalNames } from "./signal.js";
+import { STATE_OP_NAMES, filterItems, getAt } from "./stateOps.js";
 import { clampLibraryPage } from "./librarySearch.js";
 import { withAgentDates } from "./dates.js";
 import type { PageAssetUsage } from "./pageAssets.js";
@@ -604,17 +605,27 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_get_state",
-    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, closed, or the browser is open. Do not poll this tool while waiting for the user — use board_wait.",
+    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to board_set_state as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, closed, or the browser is open. On a large page, pass path (and where) to read just one part, e.g. one card. Do not poll this tool while waiting for the user — use board_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          `Return only the value at this path instead of the whole state. "/"-separated: a key on an object; on an array an item's id ("cards/c_12ab"), a field=value match ("cards/num=31"), or "#<index>". Same paths as board_set_state ops.`
+        ),
+      where: z
+        .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+        .optional()
+        .describe(`With a path to an array: return only the items whose fields equal these values, e.g. path "cards", where { col: "col_ab12" }.`),
       guide: z
         .boolean()
         .optional()
         .describe("Include the page's template guide even if it was already sent in this session."),
     },
     { readOnlyHint: true },
-    async ({ id, key, guide }) => {
+    async ({ id, key, path: statePath, where, guide }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -623,7 +634,20 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const result = jsonResult(data);
+      let view: unknown = data;
+      if (statePath !== undefined || where !== undefined) {
+        const { state, ...rest } = data as { state: unknown } & Record<string, unknown>;
+        try {
+          let value = statePath ? getAt(state, statePath) : state;
+          if (where) {
+            value = filterItems(value, where);
+          }
+          view = { ...rest, path: statePath ?? "", ...(where ? { where } : {}), value };
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+      const result = jsonResult(view);
       return (data as { templateId?: string }).templateId ? withGuide(result, which, guide === true) : result;
     }
   );
@@ -703,15 +727,49 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "board_set_state",
-    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Keys merge into the existing state, so send only what you are changing. Pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft). To put a local image or file into the page's data (an image on a todo item, a card, a gallery), pass it in assets and reference it as \"asset:<name>\" in state.",
+    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Two ways to write: state merges whole top-level keys (send only the keys you change); ops edit single items inside them by path (change, add, move, or remove one card or todo) without sending the rest of the array. Prefer ops on a page with large arrays. With state, pass expectedRevision from board_get_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft). To put a local image or file into the page's data (an image on a todo item, a card, a gallery), pass it in assets and reference it as \"asset:<name>\" in state or an op's value.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Tab key used when the page was shown."),
-      state: z.record(z.string(), z.unknown()).describe("Top-level keys to write. Merges unless replace is true."),
+      state: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("Top-level keys to write. Merges unless replace is true. Applied before ops."),
+      ops: z
+        .array(
+          z.object({
+            op: z
+              .enum(STATE_OP_NAMES)
+              .describe(
+                "set: put value at path (an object key, or replace an array item). merge: copy value's fields onto the object at path; a null field removes that key. remove: delete the key or array item at path. insert: add value to the array at path (created if missing). move: reposition the array item at path within its array."
+              ),
+            path: z
+              .string()
+              .describe(
+                `"/"-separated. On an object a segment is a key; on an array it picks an item by id ("cards/c_12ab"), by field=value ("cards/num=31"), or by "#<index>". Examples: merge "cards/num=31", insert "cards/num=31/comments", set "nextNum".`
+              ),
+            value: z.unknown().optional().describe("For set, merge, insert."),
+            before: z
+              .string()
+              .optional()
+              .describe(`For insert and move: place before the first item matching this selector, e.g. "col=col_ab12". A field=value selector with no match places at the end.`),
+            after: z.string().optional().describe("For insert and move: place after the item matching this selector."),
+            at: z
+              .union([z.enum(["start", "end"]), z.number().int().min(0)])
+              .optional()
+              .describe(`For insert and move: "start", "end" (default), or an index.`),
+          })
+        )
+        .optional()
+        .describe(
+          "Targeted edits, applied in order, all or nothing: if one fails (e.g. no item matches), nothing changes and the error names the op. Ops address items by id or field, so with ops alone expectedRevision is optional: they apply to the latest state, and a concurrent change elsewhere on the page does not conflict."
+        ),
       expectedRevision: z
         .number()
         .optional()
-        .describe("stateRevision from your last board_get_state. Omit only when seeding a page that has no state yet."),
+        .describe(
+          "stateRevision from your last board_get_state. Required with state, except when seeding a page that has no state yet. Optional with ops alone; pass it if your edit depends on values you read."
+        ),
       replace: z
         .boolean()
         .optional()
@@ -741,20 +799,25 @@ export async function startMcp(): Promise<void> {
           "Local files (images or any other file, 32 MB each) to store as page assets. Put the whole string \"asset:<name>\" as a value in state wherever the file's URL belongs, e.g. { todos: [..., { images: [{ id: \"i1\", name: \"photo.png\", data: \"asset:photo.png\" }] }] }; it is replaced with a /blob/<id> URL the page can use as an img src. Every file must be referenced and every asset:<name> must have a file."
         ),
     },
-    async ({ id, key, state, expectedRevision, replace, force, resolveIncompatibility, assets }) => {
+    async ({ id, key, state, ops, expectedRevision, replace, force, resolveIncompatibility, assets }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
       }
+      if (state === undefined && ops === undefined) {
+        return errorResult("Provide state or ops");
+      }
+      const opsOnly = state === undefined && !replace;
       let resolvedAssets: { path: string; name?: string }[] = [];
       try {
         resolvedAssets = resolveAssetPaths(assets);
       } catch (err) {
         return errorResult((err as Error).message);
       }
-      const guardRevision = force ? undefined : (expectedRevision ?? 0);
+      const guardRevision = force || (opsOnly && expectedRevision === undefined) ? undefined : (expectedRevision ?? 0);
       const { status, data } = await api("PUT", `/api/tabs/${encodeURIComponent(which)}/state`, {
         state,
+        ...(ops ? { ops } : {}),
         replace,
         expectedRevision: guardRevision,
         resolveIncompatibility,
@@ -762,12 +825,22 @@ export async function startMcp(): Promise<void> {
       });
       if (status === 409) {
         const conflict = data as { state: unknown; stateRevision: number };
+        if (opsOnly) {
+          return errorResult(
+            `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Re-read what your ops depend on (board_get_state with path) and retry, or omit expectedRevision.`
+          );
+        }
         return errorResult(
           `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Merge your change into the state below and retry with expectedRevision ${conflict.stateRevision}.\n\n${JSON.stringify(conflict.state, null, 2)}`
         );
       }
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      if (opsOnly) {
+        // Echoing a large state back costs the agent what ops saved; it can read a path if it needs to.
+        const { state: _state, ...rest } = data as { state: unknown } & Record<string, unknown>;
+        return jsonResult({ ok: true, ...rest });
       }
       return jsonResult(data);
     }

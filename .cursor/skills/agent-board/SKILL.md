@@ -445,6 +445,22 @@ document.addEventListener("keydown", (event) => {
 - Pass `expectedRevision` from your last read. If the user changed the page in between, the write is refused and the error carries their current state — merge your change into it and retry with the revision it reports. Do not reach for `force`; it exists for deliberately resetting a page.
 - Read state before acting on a page the user has had time to touch. Do not assume the state you wrote earlier is still current.
 
+### Large state: read and change one item
+
+When a page keeps a big array (a Kanban board's `cards`, a long todo list), do not read or resend the whole thing to change one item. Use paths:
+
+- `board_get_state({ key, path: "cards/num=12" })` returns just that value. `where` filters an array: `{ path: "cards", where: { col: "col_ab12" } }`.
+- `board_set_state({ key, ops: [...] })` edits items in place. Ops: `set`, `merge` (a `null` field removes it), `remove`, `insert` (into the array at `path`), `move` (within its array). `insert` and `move` take `before` / `after` (a selector) or `at` (`"start"`, `"end"`, an index).
+- A path is `/`-separated. On an object a segment is a key; on an array it picks an item by `id` (`cards/c_12ab`), by `field=value` (`cards/num=12`), or by `#<index>`.
+- Ops apply in order, all or nothing, to the latest state. With ops alone `expectedRevision` is optional, so a change elsewhere on the page doesn't refuse your write. Pass it when your edit depends on a value you read (taking the next number from a counter).
+
+```
+board_set_state({ key: "sprint-board", ops: [
+  { op: "merge", path: "cards/num=12", value: { col: "col_done", status: null } },
+  { op: "insert", path: "cards/num=12/comments", value: { id: "cm_1", by: "agent", at: 1790000000000, text: "Done." } }
+] })
+```
+
 If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `board_wait` **next, in the same turn**, with the same signal name the page fires. Do not poll `board_get_state`.
 
 ## Pin, open, close
