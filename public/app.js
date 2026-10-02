@@ -75,7 +75,7 @@
   const SIDEBAR_TAB_KEY = "scribe.sidebarTab";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "2.5.0";
+  const BOARD_VERSION = "3.0.0";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -84,6 +84,7 @@
   const SMOOTH_SCROLL_KEY = "scribe.smoothScroll";
   /** What a page link without a mode or modifier does: "tab", "peek", or "split". */
   const LINK_MODE_KEY = "scribe.linkMode";
+  const VIEWER_ID_KEY = "scribe.viewerId";
   const LINK_MODES = [
     { id: "tab", name: "Navigate" },
     { id: "peek", name: "Peek" },
@@ -487,9 +488,11 @@
           {
             type: "scribe-state",
             id: msg.id,
-            state: msg.state,
+            fromRevision: msg.fromRevision,
             stateRevision: msg.stateRevision,
+            ops: msg.ops,
             client: msg.client,
+            writeId: msg.writeId,
           },
           "*"
         );
@@ -651,7 +654,17 @@
     if (tab.embedUrl) {
       return tab.embedUrl;
     }
-    return `${contentOrigin()}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}`;
+    return `${contentOrigin()}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}&viewer=${viewerId()}`;
+  }
+
+  /** Names this app or browser to pages, so scribe.local keeps one copy per place you view them from. */
+  function viewerId() {
+    let id = localStorage.getItem(VIEWER_ID_KEY);
+    if (!id || !/^[A-Za-z0-9_-]{1,40}$/.test(id)) {
+      id = (window.__TAURI__ ? "desktop_" : "browser_") + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem(VIEWER_ID_KEY, id);
+    }
+    return id;
   }
 
   function contentOrigin() {

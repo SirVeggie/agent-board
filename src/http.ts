@@ -841,7 +841,7 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(injectBoardRuntime(tab));
+    res.type("html").send(injectBoardRuntime(tab, viewerIdOf(req.query.viewer)));
   });
 
   app.get("/download/:id", (req, res) => {
@@ -1320,7 +1320,7 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
 })();
 </script>`;
 
-function injectBoardRuntime(tab: Tab): string {
+function injectBoardRuntime(tab: Tab, viewer: string | null): string {
   const html = injectBoardKeys(rewriteAssetRefs(tab.html, tab.id));
   if (html.includes("data-scribe-bridge")) {
     return html;
@@ -1329,6 +1329,8 @@ function injectBoardRuntime(tab: Tab): string {
     id: tab.id,
     state: tab.state,
     stateRevision: tab.stateRevision,
+    viewer,
+    local: viewer ? store.getLocal(tab.id, viewer) : {},
     template: tab.templateId
       ? {
           id: tab.templateId,

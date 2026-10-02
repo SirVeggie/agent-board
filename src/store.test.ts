@@ -1549,7 +1549,7 @@ test("a page from a built-in copy gets the built-in's guide; a user template kee
   const { template: copy } = store.copyBuiltinTemplate("kanban");
   const guide = store.templateGuide(copy.id);
   assert.equal(guide?.id, "builtin:kanban");
-  assert.match(guide?.text ?? "", /Column roles/);
+  assert.match(guide?.text ?? "", /`claim` \{ card, text\? \}/);
   assert.equal(store.templateGuide("embed"), undefined);
 
   const { template } = store.upsertTemplate({ key: "log", title: "Log", html: "<p>log</p>", guide: "  Append to entries.  " });

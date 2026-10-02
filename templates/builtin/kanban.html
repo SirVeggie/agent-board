@@ -971,8 +971,9 @@
   function liveCards() {
     return allCards().filter(function (c) { return !c.archived; });
   }
+  /** The filter is this viewer's own (scribe.local): another window keeps its own. */
   function view() {
-    var v = scribe.state.view;
+    var v = scribe.local.view;
     return v && typeof v === "object" ? v : {};
   }
   function settings() {
@@ -1070,6 +1071,9 @@
     fixed.forEach(function (c) { if (c.num >= next) next = c.num + 1; });
     fixed.forEach(function (c) { if (!c.num) { c.num = next; next += 1; } });
     if (JSON.stringify(fixed) !== JSON.stringify(raw)) patch.cards = fixed;
+    ["view", "draftDesc", "lastEvent"].forEach(function (key) {
+      if (key in scribe.state) patch[key] = undefined;
+    });
     if (next !== scribe.state.nextNum) patch.nextNum = next;
     if (Object.keys(patch).length) scribe.set(patch);
   }
@@ -1128,8 +1132,8 @@
     if (!AGENT_MODE || fromCol === toCol) return;
     var col = column(toCol);
     if (col && col.role === "agent") {
-      scribe.set({ lastEvent: { type: "card_ready", cardId: cardId, at: Date.now() } });
-      scribe.signal("card_ready");
+      var moved = card(cardId);
+      scribe.signal("card_ready", { card: cardId, num: moved ? moved.num : null });
     }
   }
 
@@ -1160,7 +1164,7 @@
     return true;
   }
   function setView(patch) {
-    scribe.set({ view: Object.assign({}, view(), patch) });
+    scribe.setLocal({ view: Object.assign({}, view(), patch) });
     render();
   }
   function assigneeNames() {
@@ -2160,6 +2164,7 @@
 
     var times = ["Created " + ago(c.createdAt)];
     if (col) times.push("In " + col.title + " since " + ago(c.movedAt));
+    if (c.claim) times.push("Held by " + c.claim.holder + (c.claim.stale ? " (gone quiet)" : "") + " since " + ago(c.claim.at));
     if (c.doneAt) times.push("Done " + ago(c.doneAt));
     if (c.archivedAt && c.archived) times.push("Archived " + ago(c.archivedAt));
     mTimes.replaceChildren();
@@ -2184,10 +2189,8 @@
     var c = openId && card(openId);
     if (c && c.description !== mdEditor.value) {
       var text = mdEditor.value;
-      scribe.set({ draftDesc: "" });
       updateCard(c.id, function (x) { x.description = text; return x; });
     } else {
-      scribe.set({ draftDesc: "" });
       renderModal();
     }
   }
@@ -2304,8 +2307,8 @@
       return x;
     });
     if (AGENT_MODE) {
-      scribe.set({ lastEvent: { type: "comment", cardId: openId, at: Date.now() } });
-      scribe.signal("comment");
+      var commented = card(openId);
+      scribe.signal("comment", { card: openId, num: commented ? commented.num : null });
     }
     return true;
   }
@@ -2621,6 +2624,7 @@
     var target = firstRole("done");
     var next = Object.assign({}, c);
     delete next.status;
+    delete next.claim;
     var cards = allCards().filter(function (x) { return x.id !== id; });
     if (target && next.col !== target.id) {
       var top = completes(next, target.id);
@@ -2629,8 +2633,8 @@
     } else {
       cards = allCards().map(function (x) { return x.id === id ? next : x; });
     }
-    scribe.set({ cards: cards, lastEvent: { type: "approved", cardId: id, at: Date.now() } });
-    scribe.signal("approved");
+    scribe.set({ cards: cards });
+    scribe.signal("approved", { card: id, num: c.num });
     render();
     setHint("#" + c.num + " approved.");
   }
@@ -2645,12 +2649,13 @@
       var next = Object.assign({}, x);
       if (text) next.comments = next.comments.concat([{ id: newId("cm"), by: "user", at: now, text: text }]);
       delete next.status;
+      delete next.claim;
       if (target) enterColumn(next, target.id, now);
       return next;
     });
     commentBox.value = "";
-    scribe.set({ cards: cards, lastEvent: { type: "changes", cardId: id, at: now } });
-    scribe.signal("changes");
+    scribe.set({ cards: cards });
+    scribe.signal("changes", { card: id, num: c.num });
     render();
     setHint("Sent back" + (target ? " to " + target.title : "") + ".");
   }
@@ -3084,7 +3089,7 @@
   fDue.addEventListener("change", function () { setView({ due: fDue.value }); });
   clearFilterBtn.addEventListener("click", function () {
     searchEl.value = "";
-    scribe.set({ view: {} });
+    scribe.setLocal({ view: {} });
     render();
   });
 

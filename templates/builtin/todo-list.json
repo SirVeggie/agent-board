@@ -47,9 +47,7 @@
   "titleTemplate": "{{title}}",
   "initialState": {
     "todos": [],
-    "columnTitles": [],
-    "draft": "",
-    "openId": ""
+    "columnTitles": []
   },
   "stateVersion": 1
 }

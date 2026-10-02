@@ -140,7 +140,7 @@
 
   var editing = false;
 
-  scribe.bind(editor, "draftText");
+  scribe.bind(editor, "draftText", { local: true });
 
   function text() {
     return typeof scribe.state.text === "string" ? scribe.state.text : "";
@@ -161,7 +161,7 @@
     if (editing) return;
     editing = true;
     var src = text();
-    scribe.set({ draftText: src });
+    scribe.setLocal({ draftText: src });
     editor.value = src;
     preview.classList.add("hidden");
     editor.classList.remove("hidden");
@@ -172,7 +172,7 @@
   function stopEdit() {
     if (!editing) return;
     editing = false;
-    var src = String(scribe.state.draftText != null ? scribe.state.draftText : editor.value);
+    var src = String(scribe.local.draftText != null ? scribe.local.draftText : editor.value);
     scribe.set({ text: src });
     editor.classList.add("hidden");
     preview.classList.remove("hidden");
@@ -327,9 +327,11 @@
       var s = editor.selectionStart, e = editor.selectionEnd;
       editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(e);
       editor.selectionStart = editor.selectionEnd = s + 2;
-      scribe.set({ draftText: editor.value });
+      scribe.setLocal({ draftText: editor.value });
     }
   };
+
+  if ("draftText" in scribe.state) scribe.set({ draftText: undefined });
 
   scribe.onChange(function () {
     if (!editing) showPreview();

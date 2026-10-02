@@ -1,33 +1,54 @@
+import { createStateOps } from "./stateOps.js";
+
 /**
- * Injected into every tab page. Gives the page `window.scribe` over the tab's
- * server-owned state: `scribe.state`, `scribe.set`, `scribe.onChange`, `scribe.bind`,
- * `scribe.signal`, page-saved blobs: `scribe.saveAsset`, `scribe.assetUrl`,
- * `scribe.deleteAsset`, `scribe.listAssets`, and page links: `scribe.open`, `scribe.resolve`,
- * `data-scribe-open`, and external hrefs (opened in the browser, a peek, or a split).
+ * Injected into every tab page. Gives the page `window.scribe`:
  *
- * Boot state is inlined ahead of this script so `scribe.state` is readable
- * synchronously by page scripts.
+ * - state: `scribe.state`, `scribe.update(ops)`, `scribe.set(partial)` (diffed into ops),
+ *   `scribe.onChange`, `scribe.bind`. Writes apply locally at once, go to the daemon as ops, and
+ *   are rebased onto other writers' deltas, so concurrent edits to different items both survive.
+ * - `scribe.local` / `scribe.setLocal`: this viewer's own state (filters, open panels, drafts).
+ * - `scribe.signal(name, data)` and `data-scribe-signal`: events agents wait on.
+ * - `scribe.action(name, args)`: the page template's actions.
+ * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
+ *   and `scribe.agent` for chat threads the page starts.
+ *
+ * Boot data is inlined ahead of this script so `scribe.state` is readable synchronously.
+ * The ops engine is the daemon's own (stateOps.ts), embedded by source.
  */
+const ENGINE_SRC = createStateOps.toString();
+
 export const BOARD_BRIDGE_JS = `
 (function () {
   var boot = window.__SCRIBE_BOOT__ || {};
   try { delete window.__SCRIBE_BOOT__; } catch (err) { window.__SCRIBE_BOOT__ = undefined; }
+
+  var engine = (${ENGINE_SRC})();
 
   var IDLE_MS = 250;
   var MAX_WAIT_MS = 1000;
 
   var tabId = boot.id || "";
   var client = "c_" + Math.random().toString(36).slice(2, 10);
-  var current = boot.state && typeof boot.state === "object" ? boot.state : {};
+  var writeSeq = 0;
+
+  // base: the daemon's state at revision. current: base plus the writes it hasn't confirmed yet.
+  var base = boot.state && typeof boot.state === "object" ? boot.state : {};
   var revision = typeof boot.stateRevision === "number" ? boot.stateRevision : 0;
+  var current = engine.clone(base);
+  var pending = [];          // ops not sent yet
+  var inFlight = null;       // { writeId, ops } sent, not confirmed
+  var pendingSince = 0;
+  var timer = null;
+  var queuedSignals = [];
+  var resyncing = false;
+  var heldDeltas = [];
 
   var listeners = [];
   var bindings = [];
-  var pending = null;
-  var pendingSince = 0;
-  var timer = null;
-  var inFlight = false;
-  var queuedSignal = null;
+
+  function warn(message, detail) {
+    console.warn("[scribe] " + message, detail === undefined ? "" : detail);
+  }
 
   function readEl(el) {
     return el.type === "checkbox" ? el.checked : el.value;
@@ -53,16 +74,21 @@ export const BOARD_BRIDGE_JS = `
       try {
         listeners[i](current);
       } catch (err) {
-        console.error("[board] onChange handler failed", err);
+        console.error("[scribe] onChange handler failed", err);
       }
     }
+  }
+
+  function sourceOf(binding) {
+    return binding.local ? local : current;
   }
 
   function applyBindings() {
     for (var i = 0; i < bindings.length; i += 1) {
       var el = bindings[i].el;
       var key = bindings[i].key;
-      if (!(key in current) || sameEl(el, current[key])) {
+      var source = sourceOf(bindings[i]);
+      if (!(key in source) || sameEl(el, source[key])) {
         el.classList.remove("scribe-stale");
         continue;
       }
@@ -71,7 +97,7 @@ export const BOARD_BRIDGE_JS = `
         continue;
       }
       el.classList.remove("scribe-stale");
-      writeEl(el, current[key]);
+      writeEl(el, source[key]);
     }
   }
 
@@ -84,6 +110,16 @@ export const BOARD_BRIDGE_JS = `
     setTimeout(applyBindings, 0);
   }
 
+  /** Rebuild current from base and the unconfirmed writes. Ops that no longer apply are dropped. */
+  function rebase() {
+    var mine = (inFlight ? inFlight.ops : []).concat(pending);
+    var result = engine.apply(base, mine, { lenient: true });
+    current = result.state;
+    if (result.skipped.length) {
+      warn("dropped edits that no longer apply after another change", result.skipped);
+    }
+  }
+
   function schedule() {
     if (!pendingSince) {
       pendingSince = Date.now();
@@ -94,177 +130,195 @@ export const BOARD_BRIDGE_JS = `
     timer = setTimeout(flush, Math.min(IDLE_MS, Math.max(0, pendingSince + MAX_WAIT_MS - Date.now())));
   }
 
+  function post(path, method, body) {
+    return fetch("/api/tabs/" + encodeURIComponent(tabId) + path, {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive: true
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) {
+          throw new Error((data && data.error) || "request failed (" + res.status + ")");
+        }
+        return data;
+      });
+    });
+  }
+
+  function nextWrite() {
+    writeSeq += 1;
+    return client + ":" + writeSeq;
+  }
+
+  /** Send pending ops; one write is in flight at a time so they reach the daemon in order. */
   function flush() {
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    if (!pending || inFlight || !tabId) {
+    if (inFlight || !tabId) {
       return;
     }
-    var sent = pending;
-    pending = null;
+    if (queuedSignals.length) {
+      sendSignal();
+      return;
+    }
+    if (!pending.length) {
+      return;
+    }
+    inFlight = { writeId: nextWrite(), ops: pending };
+    pending = [];
     pendingSince = 0;
-    inFlight = true;
-    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/state", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: sent, client: client }),
-      keepalive: true
-    })
-      .then(function (res) {
-        return res.ok ? res.json() : null;
-      })
+    var sent = inFlight.writeId;
+    post("/state", "PUT", { ops: inFlight.ops, lenient: true, client: client, writeId: sent })
       .then(function (data) {
-        inFlight = false;
-        if (data) {
-          revision = data.stateRevision;
-          adopt(data.state);
-        }
-        if (queuedSignal) {
-          sendSignal();
-        } else if (pending) {
-          schedule();
-        }
+        confirm(sent, data);
       })
       .catch(function (err) {
-        inFlight = false;
-        console.error("[board] save failed", err);
-        if (queuedSignal) {
-          sendSignal();
-        } else if (pending) {
-          schedule();
+        console.error("[scribe] save failed", err);
+        // Keep the edits: put them back in front of anything typed since, and try again soon.
+        if (inFlight && inFlight.writeId === sent) {
+          pending = inFlight.ops.concat(pending);
+          inFlight = null;
         }
+        setTimeout(schedule, 2000);
       });
   }
 
   function sendSignal() {
-    if (!queuedSignal || inFlight || !tabId) {
+    if (inFlight || !tabId || !queuedSignals.length) {
       return;
     }
-    var name = queuedSignal;
-    queuedSignal = null;
+    var next = queuedSignals.shift();
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    var body = { name: name, client: client };
-    if (pending) {
-      body.state = pending;
-      pending = null;
-      pendingSince = 0;
+    // The event carries the edits made before it, so an agent woken by it reads them.
+    inFlight = { writeId: nextWrite(), ops: pending };
+    pending = [];
+    pendingSince = 0;
+    var sent = inFlight.writeId;
+    var body = { name: next.name, client: client, writeId: sent };
+    if (next.data !== undefined) {
+      body.data = next.data;
     }
-    inFlight = true;
-    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/signal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      keepalive: true
-    })
-      .then(function (res) {
-        return res.ok ? res.json() : null;
-      })
+    if (inFlight.ops.length) {
+      body.ops = inFlight.ops;
+    }
+    post("/events", "POST", body)
       .then(function (data) {
-        inFlight = false;
-        if (data) {
-          if (typeof data.stateRevision === "number") {
-            revision = data.stateRevision;
-          }
-          if (data.state) {
-            adopt(data.state);
-          }
-        }
-        if (queuedSignal) {
-          sendSignal();
-        } else if (pending) {
-          schedule();
-        }
+        confirm(sent, data);
       })
       .catch(function (err) {
-        inFlight = false;
-        console.error("[board] signal failed", err);
-        if (queuedSignal) {
-          sendSignal();
-        } else if (pending) {
-          schedule();
+        console.error("[scribe] signal failed", err);
+        if (inFlight && inFlight.writeId === sent) {
+          pending = inFlight.ops.concat(pending);
+          inFlight = null;
         }
+        afterWrite();
       });
   }
 
-  function signal(name) {
-    var next = name == null ? "" : String(name).trim();
-    if (!next) {
-      console.error("[board] signal name is required");
+  /** The daemon answered our write. Its delta may already have arrived; otherwise apply it now. */
+  function confirm(writeId, data) {
+    if (!inFlight || inFlight.writeId !== writeId) {
+      afterWrite();
       return;
     }
-    queuedSignal = next;
-    if (inFlight) {
-      return;
-    }
-    sendSignal();
-  }
-
-  /** Take the server's view, keeping any local edits made while the save was in flight. */
-  function adopt(serverState) {
-    if (!serverState || typeof serverState !== "object") {
-      return;
-    }
-    var next = {};
-    var key;
-    for (key in serverState) {
-      next[key] = serverState[key];
-    }
-    if (pending) {
-      for (key in pending) {
-        next[key] = pending[key];
+    if (data && typeof data.stateRevision === "number" && data.stateRevision > revision) {
+      if (data.fromRevision === revision && Array.isArray(data.applied)) {
+        base = engine.apply(base, data.applied, { lenient: true }).state;
+        revision = data.stateRevision;
+      } else {
+        // Someone else's delta is still on its way; the full state settles it.
+        inFlight = null;
+        resync();
+        afterWrite();
+        return;
       }
     }
-    if (JSON.stringify(next) === JSON.stringify(current)) {
-      current = next;
-      return;
+    var skipped = data && Array.isArray(data.skipped) ? data.skipped : [];
+    inFlight = null;
+    if (skipped.length) {
+      warn("Scribe skipped edits that no longer apply", skipped);
+      rebase();
+      applyBindings();
+      notify();
     }
-    current = next;
-    applyBindings();
-    notify();
+    afterWrite();
   }
 
-  function set(partial) {
-    if (!partial || typeof partial !== "object") {
+  function afterWrite() {
+    if (queuedSignals.length) {
+      sendSignal();
+    } else if (pending.length) {
+      schedule();
+    }
+  }
+
+  /** Change state with ops (see the scribe skill). Applies at once; throws if an op can't apply. */
+  function update(ops) {
+    var list = Array.isArray(ops) ? ops : [ops];
+    if (!list.length) {
       return;
     }
-    if (!pending) {
-      pending = {};
-    }
-    for (var key in partial) {
-      current[key] = partial[key];
-      pending[key] = partial[key];
+    current = engine.apply(current, list).state;
+    for (var i = 0; i < list.length; i += 1) {
+      pending.push(list[i]);
     }
     schedule();
   }
 
-  function bind(el, key) {
+  /** Replace top-level keys. Arrays of items with ids are diffed, so only what changed is sent. */
+  function set(partial) {
+    if (!partial || typeof partial !== "object") {
+      return;
+    }
+    var next = {};
+    var key;
+    for (key in current) {
+      next[key] = current[key];
+    }
+    var keys = [];
+    for (key in partial) {
+      next[key] = partial[key];
+      keys.push(key);
+    }
+    var ops = engine.diff(current, next, keys);
+    if (ops.length) {
+      update(ops);
+    }
+  }
+
+  function bind(el, key, options) {
     if (!el || !key) {
       return;
     }
-    bindings.push({ el: el, key: key });
-    if (key in current) {
-      writeEl(el, current[key]);
+    var binding = { el: el, key: key, local: Boolean(options && options.local) };
+    var write = binding.local ? setLocal : set;
+    bindings.push(binding);
+    var source = sourceOf(binding);
+    if (key in source) {
+      writeEl(el, source[key]);
     } else if (readEl(el)) {
-      set(single(key, readEl(el)));
+      write(single(key, readEl(el)));
     }
     function onEdit() {
-      set(single(key, readEl(el)));
+      write(single(key, readEl(el)));
     }
     el.addEventListener("input", onEdit);
     el.addEventListener("change", onEdit);
     el.addEventListener("blur", function () {
       el.classList.remove("scribe-stale");
-      if (pending && key in pending) {
+      if (!binding.local && pending.length) {
         flush();
         return;
       }
-      if (key in current && !sameEl(el, current[key])) {
-        writeEl(el, current[key]);
+      var now = sourceOf(binding);
+      if (key in now && !sameEl(el, now[key])) {
+        writeEl(el, now[key]);
       }
     });
   }
@@ -275,22 +329,127 @@ export const BOARD_BRIDGE_JS = `
     return one;
   }
 
-  function applyRemote(message) {
-    if (message.client === client) {
+  /** A delta from the daemon (relayed by Scribe). In order: apply. A gap: fetch the whole state. */
+  function applyDelta(message) {
+    if (resyncing) {
+      heldDeltas.push(message);
       return;
     }
-    if (typeof message.stateRevision === "number" && message.stateRevision <= revision) {
+    if (typeof message.stateRevision !== "number" || message.stateRevision <= revision) {
       return;
     }
+    if (message.fromRevision !== revision || !Array.isArray(message.ops)) {
+      resync();
+      return;
+    }
+    base = engine.apply(base, message.ops, { lenient: true }).state;
     revision = message.stateRevision;
-    current = message.state && typeof message.state === "object" ? message.state : {};
-    if (pending) {
-      for (var key in pending) {
-        current[key] = pending[key];
+    var own = Boolean(inFlight && message.writeId && message.writeId === inFlight.writeId);
+    // Our own write comes back as is unless the daemon skipped some of it; only then is there news.
+    var news = !own || message.ops.length !== inFlight.ops.length;
+    if (own) {
+      inFlight = null;
+    }
+    rebase();
+    if (news) {
+      applyBindings();
+      notify();
+    }
+    if (own) {
+      afterWrite();
+    }
+  }
+
+  function resync() {
+    if (resyncing || !tabId) {
+      return;
+    }
+    resyncing = true;
+    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/state")
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        resyncing = false;
+        if (data && data.state && typeof data.stateRevision === "number" && data.stateRevision >= revision) {
+          base = data.state;
+          revision = data.stateRevision;
+        }
+        var held = heldDeltas;
+        heldDeltas = [];
+        rebase();
+        applyBindings();
+        notify();
+        for (var i = 0; i < held.length; i += 1) {
+          applyDelta(held[i]);
+        }
+      })
+      .catch(function (err) {
+        resyncing = false;
+        console.error("[scribe] could not reload state", err);
+      });
+  }
+
+  /* ---------- local state: this viewer's own, never shared ---------- */
+
+  var viewer = typeof boot.viewer === "string" ? boot.viewer : "";
+  var local = boot.local && typeof boot.local === "object" ? boot.local : {};
+  var localTimer = null;
+
+  function setLocal(partial) {
+    if (!partial || typeof partial !== "object") {
+      return;
+    }
+    var next = {};
+    var key;
+    for (key in local) {
+      next[key] = local[key];
+    }
+    for (key in partial) {
+      if (partial[key] === undefined) {
+        delete next[key];
+      } else {
+        next[key] = partial[key];
       }
     }
-    applyBindings();
-    notify();
+    local = next;
+    if (!viewer || !tabId) {
+      return;
+    }
+    if (localTimer) {
+      clearTimeout(localTimer);
+    }
+    localTimer = setTimeout(saveLocal, IDLE_MS);
+  }
+
+  function saveLocal() {
+    localTimer = null;
+    if (!viewer || !tabId) {
+      return;
+    }
+    post("/local?viewer=" + encodeURIComponent(viewer), "PUT", { state: local }).catch(function (err) {
+      console.error("[scribe] could not save local state", err);
+    });
+  }
+
+  /* ---------- events and actions ---------- */
+
+  function signal(name, data) {
+    var next = name == null ? "" : String(name).trim();
+    if (!next) {
+      console.error("[scribe] signal name is required");
+      return;
+    }
+    queuedSignals.push(data === undefined ? { name: next } : { name: next, data: data });
+    if (!inFlight) {
+      sendSignal();
+    }
+  }
+
+  /** Run one of the page template's actions; resolves with its result. State changes arrive as a delta. */
+  function action(name, args) {
+    flush();
+    return post("/action", "POST", { action: String(name || ""), args: args || {} }).then(function (data) {
+      return data.result;
+    });
   }
 
   window.addEventListener("message", function (event) {
@@ -301,7 +460,7 @@ export const BOARD_BRIDGE_JS = `
     if (!data || data.type !== "scribe-state" || data.id !== tabId) {
       return;
     }
-    applyRemote(data);
+    applyDelta(data);
   });
 
   var lastActivityPing = 0;
@@ -323,20 +482,18 @@ export const BOARD_BRIDGE_JS = `
   document.addEventListener("keydown", pingActivity, true);
   document.addEventListener("pointerdown", pingActivity, true);
 
-  window.addEventListener("pagehide", function () {
-    if (queuedSignal) {
-      sendSignal();
-      return;
-    }
+  function flushAll() {
     flush();
-  });
+    if (localTimer) {
+      clearTimeout(localTimer);
+      saveLocal();
+    }
+  }
+
+  window.addEventListener("pagehide", flushAll);
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "hidden") {
-      if (queuedSignal) {
-        sendSignal();
-        return;
-      }
-      flush();
+      flushAll();
       return;
     }
     applyBindings();
@@ -406,7 +563,7 @@ export const BOARD_BRIDGE_JS = `
     return LINK_MODES[mode] ? mode : null;
   }
 
-  /** An http(s) URL outside the board, or null. Everything else is a page key or id. */
+  /** An http(s) URL outside Scribe, or null. Everything else is a page key or id. */
   function externalUrl(raw) {
     var text = raw == null ? "" : String(raw).trim();
     if (!/^https?:/i.test(text)) {
@@ -461,8 +618,8 @@ export const BOARD_BRIDGE_JS = `
   }
 
   /**
-   * Open a board page (by key or id) or an http(s) URL as a tab, a peek, or a split.
-   * Without a mode, a page follows the board's Settings default and a URL opens in the browser.
+   * Open a Scribe page (by key or id) or an http(s) URL as a tab, a peek, or a split.
+   * Without a mode, a page follows the Settings default and a URL opens in the browser.
    */
   function open(target, options) {
     var opts = options || {};
@@ -471,7 +628,7 @@ export const BOARD_BRIDGE_JS = `
       return Promise.resolve({ ok: false, error: "not_found" });
     }
     if (!hasGesture()) {
-      console.warn("[board] scribe.open needs a click or key press; ignored " + raw);
+      console.warn("[scribe] scribe.open needs a click or key press; ignored " + raw);
       return Promise.resolve({ ok: false, error: "no_gesture" });
     }
     var mode = cleanMode(opts.mode);
@@ -503,7 +660,7 @@ export const BOARD_BRIDGE_JS = `
     });
   }
 
-  /** Look up board pages by key or id: { [target]: { id, title, open } | null }. */
+  /** Look up Scribe pages by key or id: { [target]: { id, title, open } | null }. */
   function resolve(targets) {
     var list = Array.isArray(targets) ? targets : [targets];
     var clean = [];
@@ -695,13 +852,8 @@ export const BOARD_BRIDGE_JS = `
     if (!tabId || !template) {
       return;
     }
-    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/template-incompatible", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: reason == null ? "" : String(reason) }),
-      keepalive: true
-    }).catch(function (err) {
-      console.error("[board] reportIncompatible failed", err);
+    post("/template-incompatible", "POST", { reason: reason == null ? "" : String(reason) }).catch(function (err) {
+      console.error("[scribe] reportIncompatible failed", err);
     });
   }
 
@@ -722,13 +874,13 @@ export const BOARD_BRIDGE_JS = `
 
   function warnUsage(usage) {
     if (usage && usage.warning) {
-      console.warn("[board] " + usage.warning);
+      console.warn("[scribe] " + usage.warning);
     }
   }
 
   /**
    * Store a Blob, File, ArrayBuffer, or typed array for this page. Keep the returned id (or
-   * url) in board state: an asset nothing in the state or HTML mentions is deleted after a
+   * url) in page state: an asset nothing in the state or HTML mentions is deleted after a
    * grace period.
    */
   function saveAsset(data, options) {
@@ -776,7 +928,7 @@ export const BOARD_BRIDGE_JS = `
 
   // ---------- agent ----------
   // A page can start agent chat threads of its own and continue them. Starting or sending needs a
-  // click or key press, like scribe.open (the board checks again on its side); reading does not.
+  // click or key press, like scribe.open (Scribe checks again on its side); reading does not.
   var agentListeners = [];
 
   function agentText(value) {
@@ -790,7 +942,7 @@ export const BOARD_BRIDGE_JS = `
 
   function agentWrite(message) {
     if (!hasGesture()) {
-      console.warn("[board] scribe.agent." + message.op + " needs a click or key press; ignored");
+      console.warn("[scribe] scribe.agent." + message.op + " needs a click or key press; ignored");
       return Promise.resolve({ ok: false, error: "no_gesture" });
     }
     return agentCall(message);
@@ -844,13 +996,27 @@ export const BOARD_BRIDGE_JS = `
     get revision() {
       return revision;
     },
+    get local() {
+      return local;
+    },
+    update: update,
     set: set,
+    setLocal: setLocal,
     bind: bind,
-    flush: flush,
+    flush: flushAll,
     signal: signal,
+    action: action,
     open: open,
     resolve: resolve,
     agent: agent,
+    /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
+    ops: {
+      get: engine.getAt,
+      diff: engine.diff,
+      apply: function (state, ops) {
+        return engine.apply(state, ops).state;
+      }
+    },
     reportIncompatible: reportIncompatible,
     onChange: function (fn) {
       listeners.push(fn);

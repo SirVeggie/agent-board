@@ -628,10 +628,10 @@
   }
   columnsEl.style.setProperty("--cols", String(COLS));
 
-  scribe.bind(input, "draft");
-  scribe.bind(mdEditor, "draftDesc");
-  scribe.bind(titleInput, "draftTitle");
-  scribe.bind(colInput, "draftColumn");
+  scribe.bind(input, "draft", { local: true });
+  scribe.bind(mdEditor, "draftDesc", { local: true });
+  scribe.bind(titleInput, "draftTitle", { local: true });
+  scribe.bind(colInput, "draftColumn", { local: true });
 
   function buildColumns() {
     for (var i = 0; i < COLS; i++) {
@@ -690,7 +690,7 @@
   }
 
   function current() {
-    var id = scribe.state.openId;
+    var id = scribe.local.openId;
     var list = items();
     for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
     return null;
@@ -706,15 +706,13 @@
   }
 
   function addItem() {
-    var text = String(scribe.state.draft != null ? scribe.state.draft : input.value || "").trim();
+    var text = String(scribe.local.draft != null ? scribe.local.draft : input.value || "").trim();
     if (!text) {
       input.focus();
       return;
     }
-    scribe.set({
-      todos: items().concat([{ id: newId("t"), text: text, done: false, description: "", images: [], col: 0 }]),
-      draft: ""
-    });
+    scribe.set({ todos: items().concat([{ id: newId("t"), text: text, done: false, description: "", images: [], col: 0 }]) });
+    scribe.setLocal({ draft: "" });
     input.value = "";
     render();
     input.focus();
@@ -728,7 +726,7 @@
 
   function remove(id) {
     var next = items().filter(function (todo) { return todo.id !== id; });
-    if (scribe.state.openId === id) scribe.set({ openId: "" });
+    if (scribe.local.openId === id) scribe.setLocal({ openId: "" });
     setTodos(next);
   }
 
@@ -864,7 +862,7 @@
     editingCol = index;
     cancelCol = false;
     var text = columnTitle(index);
-    scribe.set({ draftColumn: text });
+    scribe.setLocal({ draftColumn: text });
     colInput.value = text;
     titleEls[index].classList.add("hidden");
     titleEls[index].after(colInput);
@@ -883,7 +881,7 @@
       cancelCol = false;
       return;
     }
-    var text = String(scribe.state.draftColumn != null ? scribe.state.draftColumn : colInput.value).trim();
+    var text = String(scribe.local.draftColumn != null ? scribe.local.draftColumn : colInput.value).trim();
     var titles = columnTitles().slice();
     while (titles.length <= index) titles.push("");
     titles[index] = text;
@@ -1209,14 +1207,14 @@
     mdPreview.classList.remove("hidden");
     titleInput.classList.add("hidden");
     modalTitle.classList.remove("hidden");
-    scribe.set({ openId: id, draftDesc: "", draftTitle: "" });
+    scribe.setLocal({ openId: id, draftDesc: "", draftTitle: "" });
     syncModal();
   }
 
   function closeModal() {
     if (editingDesc) saveDesc();
     if (editingTitle) saveTitle();
-    scribe.set({ openId: "" });
+    scribe.setLocal({ openId: "" });
     overlay.classList.add("hidden");
     lightbox.classList.add("hidden");
   }
@@ -1252,7 +1250,7 @@
     if (!item || editingTitle) return;
     if (editingDesc) saveDesc();
     editingTitle = true;
-    scribe.set({ draftTitle: item.text });
+    scribe.setLocal({ draftTitle: item.text });
     titleInput.value = item.text;
     modalTitle.classList.add("hidden");
     titleInput.classList.remove("hidden");
@@ -1265,7 +1263,7 @@
     editingTitle = false;
     var item = current();
     if (!item) return;
-    var text = String(scribe.state.draftTitle != null ? scribe.state.draftTitle : titleInput.value).trim();
+    var text = String(scribe.local.draftTitle != null ? scribe.local.draftTitle : titleInput.value).trim();
     if (!text) text = item.text;
     titleInput.classList.add("hidden");
     modalTitle.classList.remove("hidden");
@@ -1279,7 +1277,7 @@
     if (!item || editingDesc) return;
     if (editingTitle) saveTitle();
     editingDesc = true;
-    scribe.set({ draftDesc: item.description || "" });
+    scribe.setLocal({ draftDesc: item.description || "" });
     mdEditor.value = item.description || "";
     mdPreview.classList.add("hidden");
     mdEditor.classList.remove("hidden");
@@ -1291,7 +1289,7 @@
     editingDesc = false;
     var item = current();
     if (!item) return;
-    var text = String(scribe.state.draftDesc != null ? scribe.state.draftDesc : mdEditor.value);
+    var text = String(scribe.local.draftDesc != null ? scribe.local.draftDesc : mdEditor.value);
     mdEditor.classList.add("hidden");
     mdPreview.classList.remove("hidden");
     setTodos(items().map(function (t) {
@@ -1351,11 +1349,11 @@
     var probe = {
       todos: nextTodos,
       columnTitles: columnTitles(),
-      draft: scribe.state.draft || "",
-      draftDesc: scribe.state.draftDesc || "",
-      draftTitle: scribe.state.draftTitle || "",
-      draftColumn: scribe.state.draftColumn || "",
-      openId: scribe.state.openId || ""
+      draft: scribe.local.draft || "",
+      draftDesc: scribe.local.draftDesc || "",
+      draftTitle: scribe.local.draftTitle || "",
+      draftColumn: scribe.local.draftColumn || "",
+      openId: scribe.local.openId || ""
     };
     return JSON.stringify(probe).length < STATE_MAX;
   }
@@ -1414,7 +1412,8 @@
       next = next.map(function (t) {
         return t.id === itemId ? Object.assign({}, t, { description: mdEditor.value }) : t;
       });
-      scribe.set({ todos: next, draftDesc: mdEditor.value });
+      scribe.set({ todos: next });
+      scribe.setLocal({ draftDesc: mdEditor.value });
       renderGallery(current());
       renderLists();
       setHint("Image added.");
@@ -1430,7 +1429,7 @@
     var v = textarea.value;
     textarea.value = v.slice(0, start) + text + v.slice(end);
     textarea.selectionStart = textarea.selectionEnd = start + text.length;
-    scribe.set({ draftDesc: textarea.value });
+    scribe.setLocal({ draftDesc: textarea.value });
   }
 
   /** Small files are kept as they are (animated gifs stay animated); large ones are scaled down to a JPEG. */
@@ -1749,6 +1748,13 @@
     if (editingDesc || editingTitle || editingCol >= 0) return;
     if (current()) closeModal();
   });
+
+  // Drafts and the open item used to live in shared state; they are this viewer's own now.
+  var legacy = {};
+  ["draft", "draftDesc", "draftTitle", "draftColumn", "openId"].forEach(function (key) {
+    if (key in scribe.state) legacy[key] = undefined;
+  });
+  if (Object.keys(legacy).length) scribe.set(legacy);
 
   scribe.onChange(function () {
     if (drag && drag.moved) return;
