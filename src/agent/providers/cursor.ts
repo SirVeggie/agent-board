@@ -374,7 +374,9 @@ class CursorSession implements ProviderSession {
   }
 
   private mcpServers(): unknown[] {
-    const { command, args, env } = this.ctx.boardMcp;
+    const { command, args } = this.ctx.boardMcp;
+    // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
+    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: this.thread.id };
     // Not "scribe": a session server with the same name as one in ~/.cursor/mcp.json gets its calls rejected.
     return [{ name: BOARD_MCP, command, args, env: Object.entries(env).map(([name, value]) => ({ name, value })) }];
   }

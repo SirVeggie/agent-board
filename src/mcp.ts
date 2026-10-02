@@ -7,10 +7,10 @@ import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { safeStem } from "./boardExport.js";
 import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, contentBaseUrl } from "./config.js";
-import { api, ensureDaemon, health } from "./daemon.js";
+import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
 import { log } from "./log.js";
 import { openBoard } from "./openBoard.js";
-import { clampWaitMs, parseSignalNames } from "./signal.js";
+import { clampWaitMs, parseEventNames } from "./signal.js";
 import { STATE_OP_NAMES, filterItems, getAt } from "./stateOps.js";
 import { clampLibraryPage } from "./librarySearch.js";
 import { withAgentDates } from "./dates.js";
@@ -70,14 +70,14 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
 
 /** Clients show these to the model on connect, even when the scribe skill is not loaded. */
 const INSTRUCTIONS = [
-  "Scribe is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
-  "Also use it whenever the user refers to something on the board: a page title, a pasted `Scribe tab <key>` reference (pass the part after `tab` as key straight to page_read / page_patch / page_state; an older t_… reference is an id), or their todo list or kanban.",
+  "Scribe is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms, kanban boards). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
+  "Also use it whenever the user refers to something in Scribe: a page title, a pasted page key (keys look like scribe:some-page; pass it as key to page_read / page_patch / page_state as is), or their todo list or kanban.",
   "If the scribe skill is available, load it before building or changing pages; it has the full rules.",
   "Show a page once with page_show and a stable key; for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
   "Find pages by title with page_list (open tabs), then library_search (every page). Never guess a key.",
-  "Pages keep user data in board state (board.set / board.bind in the page, page_state / page_update from you, with expectedRevision). Never use localStorage in a page.",
-  "Pages can link to each other by key: <a data-scribe-open=\"key\" data-scribe-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with page_list / library_search.",
-  "When the page asks the user to submit, choose, or finish something, call page_wait next with the signal name the page fires. Never poll page_state.",
+  "Pages keep user data in page state (scribe.state / scribe.update / scribe.bind in the page). Read it with page_state (pass path to read one part), change it with page_update ops, or with page_action when the page's template has actions (its guide lists them). Never use localStorage in a page.",
+  "Pages can link to each other by key: <a data-scribe-open=\"scribe:key\" data-scribe-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with page_list / library_search.",
+  "When the page asks the user to submit, choose, or finish something, call page_wait next with the event name the page sends. Never poll page_state.",
   "Only use page_screenshot for UI designs that belong to the current project, never to polish information pages.",
   "Do not create, edit, or delete templates unless the user asked. Pages from a template come with an agent guide in tool results; follow it.",
 ].join(" ");
@@ -85,16 +85,23 @@ const INSTRUCTIONS = [
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: INSTRUCTIONS });
+  // Claims on cards show who holds them; the client's own name is the best label we get.
+  server.server.oninitialized = () => {
+    const client = server.server.getClientVersion();
+    if (client?.name) {
+      setAgentLabel(client.name);
+    }
+  };
 
   server.tool(
     "page_show",
-    "Present an HTML page on the local Scribe. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing the board. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; a closed page stays closed with a Library blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
+    "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; a closed page stays closed with a Library blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
     {
       key: z
         .string()
         .optional()
-        .describe("Stable identity for this page. Reusing the same key updates that tab instead of opening another."),
-      title: z.string().describe("Tab title shown in the board."),
+        .describe("Stable identity for this page, e.g. sprint-notes; Scribe stores it as scribe:sprint-notes. Reusing the same key updates that page instead of opening another."),
+      title: z.string().describe("Tab title shown in Scribe."),
       html: z.string().describe("HTML document or fragment to render in the tab."),
       assets: z
         .array(
@@ -117,7 +124,7 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe(
-          "If true, do not focus this tab and do not bring the board window forward. Use when the user said update in the background, stay where I am, or don’t switch tabs, and for private screenshot loops. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
+          "If true, do not focus this tab and do not bring the Scribe window forward. Use when the user said update in the background, stay where I am, or don’t switch tabs, and for private screenshot loops. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
         ),
       pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned will keep it."),
       folder: z
@@ -130,7 +137,7 @@ export async function startMcp(): Promise<void> {
         .record(z.string(), z.unknown())
         .optional()
         .describe(
-          "Initial state for an interactive page, readable in the page as board.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
+          "Initial state for an interactive page, readable in the page as scribe.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
         ),
     },
     async ({ key, title, html, assets, pin, state, background, folder }) => {
@@ -186,10 +193,10 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_patch",
-    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not clear wait signals or page state. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with page_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
+    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with page_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
       edits: z
         .array(
           z.object({
@@ -211,7 +218,7 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          "Local HTML file that replaces the whole page, usually the path returned by page_read toFile: true after you edited it. Keeps title, page state, and wait signals. Mutually exclusive with edits."
+          "Local HTML file that replaces the whole page, usually the path returned by page_read toFile: true after you edited it. Keeps title, page state, and events. Mutually exclusive with edits."
         ),
       expectedRevision: z
         .number()
@@ -229,7 +236,7 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe(
-          "If true, do not focus this tab and do not bring the board window forward. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
+          "If true, do not focus this tab and do not bring the Scribe window forward. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
         ),
     },
     async ({ id, key, edits, htmlPath, expectedRevision, title, background }) => {
@@ -354,7 +361,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "library_search",
-    "Page or search the Library: every page on the board, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context.",
+    "Page or search the Library: every page in Scribe, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context.",
     {
       query: z
         .string()
@@ -436,7 +443,7 @@ export async function startMcp(): Promise<void> {
     "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from library_search. The page stays where it is in the Library.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
     },
     async ({ id, key }) => {
       const which = id || key;
@@ -458,10 +465,10 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_read",
-    "Read a board tab's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your normal file tools, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
+    "Read a page's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your normal file tools, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
       toFile: z
         .boolean()
         .optional()
@@ -533,10 +540,10 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_screenshot",
-    "Capture a screenshot of a board page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
+    "Capture a screenshot of a page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
       selector: z
         .string()
         .optional()
@@ -605,20 +612,20 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_state",
-    "Read the live state of an interactive board page: what the user has actually added, edited, or checked off. Returns the state object plus stateRevision, which you pass back to page_update as expectedRevision, and the last signal (if any). Works whether or not the tab is focused, closed, or the browser is open. On a large page, pass path (and where) to read just one part, e.g. one card. Do not poll this tool while waiting for the user — use page_wait.",
+    "Read the live state of an interactive page: what the user has actually added, edited, or checked off. Returns the state (or, with path, just that part), stateRevision, and eventCursor (pass it to page_wait to wait for events after this read). Works whether or not the tab is focused, closed, or the browser is open. On a page with large arrays, read one part: path \"cards/num=12\", or path \"cards\" with where. Pages with template actions often have a cheaper list action. Do not poll this tool while waiting for the user — use page_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
       path: z
         .string()
         .optional()
         .describe(
-          `Return only the value at this path instead of the whole state. "/"-separated: a key on an object; on an array an item's id ("cards/c_12ab"), a field=value match ("cards/num=31"), or "#<index>". Same paths as page_update ops.`
+          `Return only the value at this path. "/"-separated: a key on an object; on an array an item's id ("cards/c_12ab"), a field=value match ("cards/num=31"), or "#<index>". Same paths as page_update ops.`
         ),
       where: z
         .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
         .optional()
-        .describe(`With a path to an array: return only the items whose fields equal these values, e.g. path "cards", where { col: "col_ab12" }.`),
+        .describe(`With a path to an array: only the items whose fields equal these values, e.g. path "cards", where { col: "col_ab12" }.`),
       guide: z
         .boolean()
         .optional()
@@ -654,20 +661,21 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_wait",
-    "Block until the board page fires a named signal (board.signal or data-scribe-signal), then return that signal plus the live state. Use this instead of polling page_state. Show the page with page_show first, then call this in the same turn with the same signal name the page fires. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same afterSignalRevision. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. If you already got a signal and need the next one without re-showing the page, pass that signal's revision as afterSignalRevision. page_show clears the last signal, so the next wait can omit afterSignalRevision.",
+    "Block until the page logs an event (scribe.signal(name, data) or data-scribe-signal in the page; Scribe itself logs some too, like claim_lost), then return the matching events, oldest first, and a cursor. Events carry a small data payload (e.g. { card: \"c_12\" }), not the page's state: read what you need with page_state path or a page action. Pass the returned cursor as after on the next wait so no event is missed or seen twice; without after, only events from now on count. Use this instead of polling page_state. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same after. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. missed: true means older events dropped out of the log (it keeps the last 500): scan the page's state instead.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
-      signal: z
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
+      events: z
         .string()
+        .optional()
         .describe(
-          "Signal name the page fires. Must match board.signal(\"name\") or data-scribe-signal=\"name\". For more than one outcome, pass a comma-separated list: approved,rejected"
+          "Event names to wait for, comma-separated (approved,rejected). Must match scribe.signal(\"name\") or data-scribe-signal=\"name\" in the page. Omit to wake on any event."
         ),
-      afterSignalRevision: z
+      after: z
         .number()
         .optional()
         .describe(
-          "Ignore signals at or below this revision. Omit (or 0) after page_show. After a successful wait, pass the returned signal.revision to wait for the next one on the same page."
+          "Cursor from the previous page_wait (or eventCursor from page_state). Events at or below it are skipped. Omit to wait only for new events."
         ),
       timeoutMs: z
         .number()
@@ -675,14 +683,14 @@ export async function startMcp(): Promise<void> {
         .describe("How long to wait, in milliseconds. Defaults to 7200000 (2 hours). There is no maximum; the user can interrupt you at any time."),
     },
     { readOnlyHint: true },
-    async ({ id, key, signal, afterSignalRevision, timeoutMs }, extra) => {
+    async ({ id, key, events, after, timeoutMs }, extra) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
       }
       let names: string[];
       try {
-        names = parseSignalNames(signal);
+        names = parseEventNames(events);
       } catch (err) {
         return errorResult((err as Error).message);
       }
@@ -690,6 +698,7 @@ export async function startMcp(): Promise<void> {
       // Clients abort a call that stays silent too long (Claude Code: 30 minutes for stdio), so report progress while waiting.
       const progressToken = extra._meta?.progressToken;
       const startedAt = Date.now();
+      const label = names.length ? names.join(" or ") : "any event";
       const heartbeat =
         progressToken === undefined
           ? undefined
@@ -698,7 +707,7 @@ export async function startMcp(): Promise<void> {
               extra
                 .sendNotification({
                   method: "notifications/progress",
-                  params: { progressToken, progress: seconds, message: `Waiting for ${names.join(" or ")} (${seconds}s)` },
+                  params: { progressToken, progress: seconds, message: `Waiting for ${label} (${seconds}s)` },
                 })
                 .catch(() => {});
             }, WAIT_HEARTBEAT_MS);
@@ -706,11 +715,7 @@ export async function startMcp(): Promise<void> {
         const { status, data } = await api(
           "POST",
           `/api/tabs/${encodeURIComponent(which)}/wait`,
-          {
-            signal: names,
-            afterSignalRevision: afterSignalRevision ?? 0,
-            timeoutMs: waitMs,
-          },
+          { events: names, ...(after !== undefined ? { after } : {}), timeoutMs: waitMs },
           { timeoutMs: waitMs + 15_000, signal: extra.signal }
         );
         if (status >= 400) {
@@ -727,57 +732,40 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_update",
-    "Update the state of an interactive board page without focusing or reopening it. An open page applies the write live without reloading. An unfocused open tab and a closed page both show an unread blip. Two ways to write: state merges whole top-level keys (send only the keys you change); ops edit single items inside them by path (change, add, move, or remove one card or todo) without sending the rest of the array. Prefer ops on a page with large arrays. With state, pass expectedRevision from page_state: if the user changed the page in the meantime the write is refused and the response carries their current state, so you can merge your change into it and retry. Never write a key the page uses for in-progress typing (by convention, draft). To put a local image or file into the page's data (an image on a todo item, a card, a gallery), pass it in assets and reference it as \"asset:<name>\" in state or an op's value.",
+    "Change an interactive page's state with ops, without focusing or reopening it. An open page applies them live; an unfocused tab or a closed page shows an unread blip. Ops address items by path, so you send only what changes: merge one card, insert one comment, move one item, set one key. They apply in order, all or nothing (if one fails, nothing changes and the error names it), to the latest state, so you don't need expectedRevision unless your edit depends on a value you read. Replace a whole top-level key with { op: \"set\", path: \"todos\", value: [...] }. When the page's template has actions (its guide lists them), prefer page_action: it applies the page's rules for you. Never write a key the page uses for in-progress typing (by convention, draft). To put a local file into the page's data (an image on a todo item or a card), pass it in assets and write \"asset:<name>\" as the value where its URL belongs.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
-      state: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe("Top-level keys to write. Merges unless replace is true. Applied before ops."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
       ops: z
         .array(
           z.object({
             op: z
               .enum(STATE_OP_NAMES)
               .describe(
-                "set: put value at path (an object key, or replace an array item). merge: copy value's fields onto the object at path; a null field removes that key. remove: delete the key or array item at path. insert: add value to the array at path (created if missing). move: reposition the array item at path within its array."
+                "set: put value at path (an object key, or replace an array item; path \"\" replaces the whole state). merge: copy value's fields onto the object at path; a null field removes that key. remove: delete the key or array item at path. insert: add value to the array at path (created if missing). move: reposition the array item at path within its array. test: fail the whole write unless the value at path equals value (null matches a missing value)."
               ),
             path: z
               .string()
               .describe(
                 `"/"-separated. On an object a segment is a key; on an array it picks an item by id ("cards/c_12ab"), by field=value ("cards/num=31"), or by "#<index>". Examples: merge "cards/num=31", insert "cards/num=31/comments", set "nextNum".`
               ),
-            value: z.unknown().optional().describe("For set, merge, insert."),
+            value: z.unknown().optional().describe("For set, merge, insert, test."),
             before: z
               .string()
               .optional()
-              .describe(`For insert and move: place before the first item matching this selector, e.g. "col=col_ab12". A field=value selector with no match places at the end.`),
-            after: z.string().optional().describe("For insert and move: place after the item matching this selector."),
+              .describe(`For insert and move: place before the first item matching this selector, e.g. "col=col_ab12". No match places at the end.`),
+            after: z.string().optional().describe("For insert and move: place after the item matching this selector. No match places at the end."),
             at: z
               .union([z.enum(["start", "end"]), z.number().int().min(0)])
               .optional()
               .describe(`For insert and move: "start", "end" (default), or an index.`),
           })
         )
-        .optional()
-        .describe(
-          "Targeted edits, applied in order, all or nothing: if one fails (e.g. no item matches), nothing changes and the error names the op. Ops address items by id or field, so with ops alone expectedRevision is optional: they apply to the latest state, and a concurrent change elsewhere on the page does not conflict."
-        ),
+        .describe("The changes, applied in order."),
       expectedRevision: z
         .number()
         .optional()
-        .describe(
-          "stateRevision from your last page_state. Required with state, except when seeding a page that has no state yet. Optional with ops alone; pass it if your edit depends on values you read."
-        ),
-      replace: z
-        .boolean()
-        .optional()
-        .describe("Replace the whole state object instead of merging keys into it."),
-      force: z
-        .boolean()
-        .optional()
-        .describe("Skip the revision check and overwrite whatever is there. Only for deliberately resetting a page."),
+        .describe("Refuse the write if the page's stateRevision is no longer this one. Only needed when your edit depends on a value you read."),
       resolveIncompatibility: z
         .boolean()
         .optional()
@@ -796,53 +784,59 @@ export async function startMcp(): Promise<void> {
         )
         .optional()
         .describe(
-          "Local files (images or any other file, 32 MB each) to store as page assets. Put the whole string \"asset:<name>\" as a value in state wherever the file's URL belongs, e.g. { todos: [..., { images: [{ id: \"i1\", name: \"photo.png\", data: \"asset:photo.png\" }] }] }; it is replaced with a /blob/<id> URL the page can use as an img src. Every file must be referenced and every asset:<name> must have a file."
+          "Local files (images or any other file, 32 MB each) to store as page assets. Write the whole string \"asset:<name>\" as a value in an op wherever the file's URL belongs, e.g. { op: \"insert\", path: \"todos/t_1/images\", value: { id: \"i1\", name: \"photo.png\", data: \"asset:photo.png\" } }; it becomes a /blob/<id> URL the page can use as an img src. Every file must be referenced and every asset:<name> must have a file."
         ),
     },
-    async ({ id, key, state, ops, expectedRevision, replace, force, resolveIncompatibility, assets }) => {
+    async ({ id, key, ops, expectedRevision, resolveIncompatibility, assets }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
       }
-      if (state === undefined && ops === undefined) {
-        return errorResult("Provide state or ops");
-      }
-      const opsOnly = state === undefined && !replace;
       let resolvedAssets: { path: string; name?: string }[] = [];
       try {
         resolvedAssets = resolveAssetPaths(assets);
       } catch (err) {
         return errorResult((err as Error).message);
       }
-      const guardRevision = force || (opsOnly && expectedRevision === undefined) ? undefined : (expectedRevision ?? 0);
       const { status, data } = await api("PUT", `/api/tabs/${encodeURIComponent(which)}/state`, {
-        state,
-        ...(ops ? { ops } : {}),
-        replace,
-        expectedRevision: guardRevision,
+        ops,
+        ...(expectedRevision !== undefined ? { expectedRevision } : {}),
         resolveIncompatibility,
         ...(resolvedAssets.length ? { assets: resolvedAssets } : {}),
       });
       if (status === 409) {
-        const conflict = data as { state: unknown; stateRevision: number };
-        if (opsOnly) {
-          return errorResult(
-            `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Re-read what your ops depend on (page_state with path) and retry, or omit expectedRevision.`
-          );
-        }
+        const conflict = data as { stateRevision: number };
         return errorResult(
-          `Conflict: the page changed since revision ${guardRevision}. Current stateRevision is ${conflict.stateRevision}. Merge your change into the state below and retry with expectedRevision ${conflict.stateRevision}.\n\n${JSON.stringify(conflict.state, null, 2)}`
+          `Conflict: the page changed since revision ${expectedRevision}. Current stateRevision is ${conflict.stateRevision}. Re-read what your ops depend on (page_state with path) and retry.`
         );
       }
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      if (opsOnly) {
-        // Echoing a large state back costs the agent what ops saved; it can read a path if it needs to.
-        const { state: _state, ...rest } = data as { state: unknown } & Record<string, unknown>;
-        return jsonResult({ ok: true, ...rest });
+      const { applied, ...rest } = data as { applied?: unknown[] } & Record<string, unknown>;
+      return withGuide(jsonResult({ ok: true, ...rest, applied: applied?.length ?? 0 }), which);
+    }
+  );
+
+  server.tool(
+    "page_action",
+    "Run one of the page template's actions, e.g. on a Kanban board: list, get, create, comment, move, claim, finish. Actions apply the page's own rules (timestamps, ordering, numbering, who holds a card) in one atomic step, and read the latest state, so there's nothing to merge or retry. The page's agent guide lists its actions and their arguments; an unknown action name returns the list. Pages without a template (or with a template that has no actions) use page_update.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Page key, e.g. scribe:agent-todo."),
+      action: z.string().describe("Action name from the page's guide."),
+      args: z.record(z.string(), z.unknown()).optional().describe("The action's arguments, as the guide lists them."),
+    },
+    async ({ id, key, action, args }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
       }
-      return jsonResult(data);
+      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/action`, { action, args: args ?? {} });
+      if (status >= 400) {
+        return withGuide(errorResult((data as ApiError).error || `HTTP ${status}`), which);
+      }
+      return withGuide(jsonResult(data), which);
     }
   );
 
@@ -851,7 +845,7 @@ export async function startMcp(): Promise<void> {
     "Pin an Scribe tab so Clear and close-unpinned keep it. Identify the tab by id or key.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
     },
     async ({ id, key }) => pinResult(id || key, true)
   );
@@ -861,7 +855,7 @@ export async function startMcp(): Promise<void> {
     "Unpin an Scribe tab so Clear and close-unpinned can close it. Identify the tab by id or key.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
-      key: z.string().optional().describe("Tab key used when the page was shown."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
     },
     async ({ id, key }) => pinResult(id || key, false)
   );
@@ -906,7 +900,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "template_upsert",
-    "Create or update a reusable Scribe template. Only use when the user explicitly asked to create or edit a board template. Built-in templates are read-only: to change one, use a new key (template_get the built-in for its HTML), or update its local copy (localId from template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
+    "Create or update a reusable Scribe template. Only use when the user explicitly asked to create or edit a Scribe template. Built-in templates are read-only: to change one, use a new key (template_get the built-in for its HTML), or update its local copy (localId from template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
     {
       key: z.string().optional().describe("Stable template identity. Reusing the same key updates that template."),
       title: z.string().describe("Name shown in the Templates sidebar."),
@@ -914,12 +908,12 @@ export async function startMcp(): Promise<void> {
       html: z
         .string()
         .describe(
-          "Template HTML. Use {{fieldKey}} for form values (HTML-escaped). Page scripts can also read board.template.values."
+          "Template HTML. Use {{fieldKey}} for form values (HTML-escaped). Page scripts can also read scribe.template.values."
         ),
       fields: z
         .array(
           z.object({
-            key: z.string().describe("Identifier used in {{key}} and board.template.values. JS identifier."),
+            key: z.string().describe("Identifier used in {{key}} and scribe.template.values. JS identifier."),
             label: z.string().describe("Label on the Open / Edit form."),
             type: z.enum(["text", "textarea", "number", "select", "checkbox"]),
             required: z.boolean().optional(),
@@ -948,7 +942,7 @@ export async function startMcp(): Promise<void> {
       initialState: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe("Seeded as board.state when a new page is opened from this template."),
+        .describe("Seeded as scribe.state when a new page is opened from this template."),
       stateVersion: z
         .number()
         .optional()
@@ -957,7 +951,7 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          "Markdown for agents that later work with pages from this template: the state shape, signals the page fires, and conventions (how to add an item, which keys to leave alone). Tool results hand it to an agent the first time it touches such a page. Omit to keep the current guide; an empty string removes it."
+          "Markdown for agents that later work with pages from this template: the state shape, events the page sends, and conventions (how to add an item, which keys to leave alone). Tool results hand it to an agent the first time it touches such a page. Omit to keep the current guide; an empty string removes it."
         ),
       syncedWithBuiltin: z
         .boolean()
@@ -988,7 +982,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "template_list",
-    "List Scribe templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). builtinUpdate on a copy means its built-in changed and the copy was not updated automatically; see the scribe skill's TEMPLATES.md before updating it. Only use when the user asked to work with board templates.",
+    "List Scribe templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). builtinUpdate on a copy means its built-in changed and the copy was not updated automatically; see the scribe skill's TEMPLATES.md before updating it. Only use when the user asked to work with Scribe templates.",
     {},
     { readOnlyHint: true },
     async () => {
@@ -1002,7 +996,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "template_get",
-    "Read a template's HTML, fields, and metadata, including a built-in's. Only use when the user asked to work with board templates.",
+    "Read a template's HTML, fields, and metadata, including a built-in's. Only use when the user asked to work with Scribe templates.",
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
@@ -1023,7 +1017,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "template_delete",
-    "Delete a template. Pages created from it stay, keep their last HTML, and become ordinary editable pages. Only use when the user asked to delete a board template.",
+    "Delete a template. Pages created from it stay, keep their last HTML, and become ordinary editable pages. Only use when the user asked to delete a Scribe template.",
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34."),
       key: z.string().optional().describe("Template key."),

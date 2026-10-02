@@ -388,7 +388,9 @@ class ClaudeSession implements ProviderSession {
     const thread = this.thread;
     const board = thread.mode === "board";
     const webTools = thread.web ? ["WebSearch", "WebFetch"] : [];
-    const { command, args, env } = this.ctx.boardMcp;
+    const { command, args } = this.ctx.boardMcp;
+    // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
+    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id };
     const permissionMode = permissionModeFor(thread);
     const options: Options = {
       cwd: this.cwd(),

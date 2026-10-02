@@ -1,5 +1,4 @@
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from "./config.js";
-import type { Tab, TabSignal } from "./types.js";
 
 const SIGNAL_NAME = /^[A-Za-z0-9._:-]{1,64}$/;
 
@@ -13,8 +12,8 @@ export function normalizeSignalName(value: string): string {
   return name;
 }
 
-/** One name, a comma-separated list, or an array. */
-export function parseSignalNames(input: unknown): string[] {
+/** One name, a comma-separated list, or an array. Empty (or missing) means any event. */
+export function parseEventNames(input: unknown): string[] {
   const raw: string[] = [];
   if (typeof input === "string") {
     raw.push(...input.split(","));
@@ -26,9 +25,6 @@ export function parseSignalNames(input: unknown): string[] {
     }
   }
   const names = [...new Set(raw.map((item) => item.trim()).filter(Boolean))].map(normalizeSignalName);
-  if (names.length === 0) {
-    throw new Error("signal is required");
-  }
   return names;
 }
 
@@ -39,20 +35,10 @@ export function clampWaitMs(value: unknown): number {
   return Math.min(MAX_WAIT_MS, Math.max(1, Math.floor(value)));
 }
 
-export function parseAfterRevision(value: unknown): number {
+/** A wait cursor: the seq of the last event already seen. Undefined means "from now on". */
+export function parseCursor(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return 0;
+    return undefined;
   }
   return Math.floor(value);
-}
-
-export function signalMatches(tab: Tab, names: string[], afterRevision: number): boolean {
-  return Boolean(tab.signal && tab.signal.revision > afterRevision && names.includes(tab.signal.name));
-}
-
-export function toSignalView(signal: TabSignal | null): TabSignal | null {
-  if (!signal) {
-    return null;
-  }
-  return { name: signal.name, revision: signal.revision, at: signal.at };
 }

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { FOLDERS_TABLE_SQL, PAGE_ASSETS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
+import { FOLDERS_TABLE_SQL, PAGE_ASSETS_TABLE_SQL, PAGE_LOCAL_TABLE_SQL, TABS_TABLE_V2_SQL } from "./schema.js";
 
 /**
  * Additive template tables; CREATE IF NOT EXISTS only. See docs/migrations.md.
@@ -86,7 +86,7 @@ export function migrateV1ToLibrarySchema(db: DatabaseSync): void {
       DROP INDEX IF EXISTS idx_tabs_status_deleted;
       ALTER TABLE tabs RENAME TO tabs_v1;
     `);
-    db.exec(TABS_TABLE_SQL);
+    db.exec(TABS_TABLE_V2_SQL);
     db.exec(FOLDERS_TABLE_SQL);
     db.exec(`
       INSERT INTO tabs (
@@ -120,4 +120,42 @@ export function migrateV1ToLibrarySchema(db: DatabaseSync): void {
     }
     throw err;
   }
+}
+
+/**
+ * Schema 2 → 3 (the Scribe release): a page's single signal slot becomes an event log.
+ * signal_revision / signal are renamed to event_seq / events, and a last signal is kept as the
+ * log's first event. Page keys get their scribe: prefix when the store loads (see store.load).
+ */
+export function migrateV2ToV3(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      ALTER TABLE tabs RENAME COLUMN signal_revision TO event_seq;
+      ALTER TABLE tabs RENAME COLUMN signal TO events;
+    `);
+    const rows = db.prepare("SELECT id, event_seq, events FROM tabs").all() as Array<{ id: string; event_seq: number; events: string | null }>;
+    const update = db.prepare("UPDATE tabs SET events = ? WHERE id = ?");
+    for (const row of rows) {
+      let events: unknown[] = [];
+      try {
+        const last = row.events ? (JSON.parse(row.events) as { name?: unknown; at?: unknown } | null) : null;
+        if (last && typeof last.name === "string") {
+          events = [{ seq: row.event_seq, name: last.name, at: typeof last.at === "number" ? last.at : 0, by: "user" }];
+        }
+      } catch {
+        events = [];
+      }
+      update.run(JSON.stringify(events), row.id);
+    }
+    db.prepare("UPDATE meta SET v = ? WHERE k = ?").run("3", "schema");
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+export function ensurePageLocalSchema(db: DatabaseSync): void {
+  db.exec(PAGE_LOCAL_TABLE_SQL);
 }

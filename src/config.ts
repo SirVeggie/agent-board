@@ -9,7 +9,12 @@ export const HOST = "127.0.0.1";
 export const CONTENT_HOST = "127.0.0.2";
 export const PORT = Number(process.env.SCRIBE_PORT || 4747);
 export const MAX_HTML_BYTES = 2 * 1024 * 1024;
-export const MAX_STATE_BYTES = 256 * 1024;
+export const MAX_STATE_BYTES = 4 * 1024 * 1024;
+/** Events each page keeps for waits to read; older ones drop off. */
+export const MAX_PAGE_EVENTS = 500;
+export const MAX_EVENT_DATA_BYTES = 4096;
+/** Per-viewer page state (board.local): filters, open panels, drafts. */
+export const MAX_LOCAL_STATE_BYTES = 64 * 1024;
 export const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 export const MAX_ASSETS_PER_TAB = 16;
 export const MAX_ASSETS_TOTAL_BYTES = 32 * 1024 * 1024;
@@ -36,6 +41,12 @@ export const REQUEST_TIMEOUT_MS = 10 * 60 * 1000 + 30_000;
 /** The MCP marks its requests with this header so tabs hidden from the agent stay invisible to them. */
 export const CLIENT_HEADER = "x-scribe-client";
 export const AGENT_CLIENT = "agent";
+/** One MCP server process; claims it holds stay live while it keeps calling. */
+export const SESSION_HEADER = "x-scribe-session";
+/** The Scribe chat thread an MCP server was started for (SCRIBE_THREAD in its environment). */
+export const THREAD_HEADER = "x-scribe-thread";
+/** The MCP client's name, shown as the holder of a claim. */
+export const AGENT_LABEL_HEADER = "x-scribe-agent";
 
 export function baseUrl(): string {
   return `http://${HOST}:${PORT}`;

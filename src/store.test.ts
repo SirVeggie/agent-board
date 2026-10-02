@@ -296,8 +296,6 @@ test("migrates state.json once into scribe.sqlite", () => {
           state: {},
           stateRevision: 0,
           stateUpdatedAt: 0,
-          signalRevision: 0,
-          signal: null,
           assets: [],
         },
         {
@@ -312,8 +310,6 @@ test("migrates state.json once into scribe.sqlite", () => {
           state: {},
           stateRevision: 0,
           stateUpdatedAt: 0,
-          signalRevision: 0,
-          signal: null,
           assets: [],
         },
       ],
@@ -385,8 +381,6 @@ test("load drops closed welcome tabs", () => {
           state: {},
           stateRevision: 0,
           stateUpdatedAt: 0,
-          signalRevision: 0,
-          signal: null,
           assets: [],
         },
       ],
@@ -404,8 +398,6 @@ test("load drops closed welcome tabs", () => {
             state: {},
             stateRevision: 0,
             stateUpdatedAt: 0,
-            signalRevision: 0,
-            signal: null,
             assets: [],
           },
         },
@@ -517,10 +509,10 @@ test("template open creates a pinned bound page and blocks html edits", () => {
   store.closeDb();
 });
 
-test("patchHtml with html replaces the body but keeps state and the wait signal", () => {
+test("patchHtml with html replaces the body but keeps state and events", () => {
   const store = loaded();
   const { tab } = store.upsert({ key: "page", title: "Page", html: "<!DOCTYPE html><p>old</p>", state: { n: 1 } });
-  store.signal("page", { name: "submitted" });
+  store.logEvent("page", { name: "submitted", by: "user" });
   const { tab: patched, applied } = store.patchHtml("page", {
     html: "<!DOCTYPE html><p>new</p>",
     expectedRevision: tab.revision,
@@ -529,7 +521,7 @@ test("patchHtml with html replaces the body but keeps state and the wait signal"
   assert.equal(patched.html, "<!DOCTYPE html><p>new</p>");
   assert.equal(patched.revision, 2);
   assert.deepEqual(patched.state, { n: 1 });
-  assert.equal(patched.signal?.name, "submitted");
+  assert.equal(patched.events.at(-1)?.name, "submitted");
   store.closeDb();
 });
 
@@ -582,7 +574,7 @@ test("updating a template re-renders instances and can mark them incompatible", 
   assert.ok(again);
   assert.match(again.html, /v2/);
   assert.equal(again.templateCompatible, false);
-  const resolved = store.setState(tab.id, { state: { todos: [] }, resolveIncompatibility: true });
+  const resolved = store.writeState(tab.id, { ops: [{ op: "set", path: "todos", value: [] }], resolveIncompatibility: true });
   assert.equal(resolved.ok, true);
   assert.equal(store.get(tab.id)?.templateCompatible, true);
   store.closeDb();
@@ -875,7 +867,7 @@ test("a schema v1 board migrates archived tabs into the Library", () => {
   const check = new DatabaseSync(path.join(dir, "scribe.sqlite"));
   const schema = check.prepare("SELECT v FROM meta WHERE k = 'schema'").get() as { v: string };
   check.close();
-  assert.equal(schema.v, "2");
+  assert.equal(schema.v, "3");
   const again = loaded();
   assert.equal(again.get("old")?.agentHidden, true);
   again.closeDb();
@@ -1128,33 +1120,90 @@ test("updatedAt only moves when content changes", () => {
   const { tab } = store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
   const at = tab.updatedAt;
   store.update("page", { pin: true, activate: false });
-  store.signal("page", { name: "go" });
-  store.setState("page", { state: { n: 1 } });
+  store.logEvent("page", { name: "go", by: "user" });
+  store.writeState("page", { ops: [{ op: "set", path: "n", value: 1 }] });
   store.closeTab("page");
   store.openPage("page", { activate: false });
   assert.equal(store.get("page")?.updatedAt, at);
   store.closeDb();
 });
 
-test("setState applies ops after the state merge, all or nothing", () => {
+test("writeState applies ops strictly or leniently and reports what applied", () => {
   const store = loaded();
   store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
-  store.setState("page", { state: { cards: [{ id: "c1", num: 1, col: "a" }, { id: "c2", num: 2, col: "a" }], n: 1 } });
+  store.writeState("page", { ops: [{ op: "set", path: "", value: { cards: [{ id: "c1", num: 1, col: "a" }, { id: "c2", num: 2, col: "a" }], n: 1 } }] });
   const revision = store.get("page")!.stateRevision;
-  const result = store.setState("page", {
-    state: { n: 2 },
-    ops: [{ op: "merge", path: "cards/num=2", value: { col: "b" } }, { op: "move", path: "cards/c2", at: "start" }],
+  const deltas: unknown[] = [];
+  store.on("tab_state", (_tab, delta) => deltas.push(delta));
+  const result = store.writeState("page", {
+    ops: [{ op: "set", path: "n", value: 2 }, { op: "merge", path: "cards/num=2", value: { col: "b" } }, { op: "move", path: "cards/c2", at: "start" }],
+    client: "c_1",
   });
-  assert.equal(result.ok, true);
+  assert.ok(result.ok);
+  assert.equal(result.fromRevision, revision);
+  assert.equal(result.applied.length, 3);
   const tab = store.get("page")!;
   assert.equal(tab.stateRevision, revision + 1);
   assert.deepEqual(tab.state, { cards: [{ id: "c2", num: 2, col: "b" }, { id: "c1", num: 1, col: "a" }], n: 2 });
+  assert.deepEqual(deltas, [{ fromRevision: revision, ops: result.applied, client: "c_1", writeId: undefined }]);
   assert.throws(
-    () => store.setState("page", { state: { n: 3 }, ops: [{ op: "remove", path: "cards/c9" }] }),
+    () => store.writeState("page", { ops: [{ op: "set", path: "n", value: 3 }, { op: "remove", path: "cards/c9" }] }),
     /no item matches "c9"/
   );
   assert.equal(store.get("page")!.state.n, 2);
-  assert.throws(() => store.setState("page", {}), /pass state or ops/);
+  const lenient = store.writeState("page", { ops: [{ op: "set", path: "n", value: 3 }, { op: "remove", path: "cards/c9" }], lenient: true });
+  assert.ok(lenient.ok);
+  assert.equal(lenient.skipped.length, 1);
+  assert.equal(store.get("page")!.state.n, 3);
+  assert.deepEqual(store.writeState("page", { ops: [], expectedRevision: 1 }), { ok: false, stateRevision: revision + 2 });
+  store.closeDb();
+});
+
+test("events are logged with a sequence, kept to the newest 500, and survive a reload", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>a</p>", state: { cards: [] } });
+  const first = store.logEvent("page", { name: "card_ready", data: { card: "c1" }, by: "user", ops: [{ op: "insert", path: "cards", value: { id: "c1" } }] });
+  assert.equal(first.event.seq, 1);
+  assert.deepEqual(first.tab.state.cards, [{ id: "c1" }]);
+  for (let i = 0; i < 505; i += 1) {
+    store.logEvent("page", { name: "tick", by: "agent" });
+  }
+  const tab = store.get("page")!;
+  assert.equal(tab.eventSeq, 506);
+  assert.equal(tab.events.length, 500);
+  assert.equal(tab.events[0].seq, 7);
+  assert.throws(() => store.logEvent("page", { name: "big", by: "user", data: { text: "x".repeat(5000) } }), /too large/);
+  assert.throws(() => store.logEvent("page", { name: "bad name!", by: "user" }), /invalid signal name/);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.get("page")!.eventSeq, 506);
+  assert.equal(again.get("page")!.events.at(-1)?.name, "tick");
+  again.closeDb();
+});
+
+test("local state is kept per viewer and goes with the page", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  store.setLocal("page", "desktop", { filter: "mine" });
+  store.setLocal("page", "browser", { filter: "all" });
+  assert.deepEqual(store.getLocal("page", "desktop"), { filter: "mine" });
+  assert.deepEqual(store.getLocal("scribe:page", "browser"), { filter: "all" });
+  assert.deepEqual(store.getLocal("page", "other"), {});
+  assert.throws(() => store.setLocal("page", "desktop", { big: "x".repeat(70 * 1024) }), /too large/);
+  store.setLocal("page", "desktop", {});
+  assert.deepEqual(store.getLocal("page", "desktop"), {});
+  store.deletePermanent(tab.id);
+  store.closeDb();
+});
+
+test("page keys get the scribe: prefix, and lookups take either form", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "Sprint Notes", title: "Sprint", html: "<p>a</p>" });
+  assert.equal(tab.key, "scribe:sprint-notes");
+  assert.equal(store.get("sprint-notes")?.id, tab.id);
+  assert.equal(store.get("scribe:sprint-notes")?.id, tab.id);
+  assert.equal(store.upsert({ key: "scribe:sprint-notes", title: "Sprint 2", html: "<p>b</p>" }).tab.id, tab.id);
   store.closeDb();
 });
 
@@ -1385,7 +1434,7 @@ test("page assets stay while referenced and go once unreferenced past the grace 
   const kept = store.savePageAsset("kanban", { data: Buffer.from("a") }).asset;
   const dropped = store.savePageAsset("kanban", { data: Buffer.from("b") }).asset;
   const neverUsed = store.savePageAsset("kanban", { data: Buffer.from("c") }).asset;
-  store.setState("kanban", { state: { cards: [{ image: kept.id }, { image: `/blob/${dropped.id}` }] } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "cards", value: [{ image: kept.id }, { image: `/blob/${dropped.id}` }] }] });
   store.persist();
   assert.deepEqual(Object.fromEntries(pageAssetRows().map((row) => [row.id, row.orphaned_at === null])), {
     [kept.id]: true,
@@ -1393,7 +1442,7 @@ test("page assets stay while referenced and go once unreferenced past the grace 
     [neverUsed.id]: false,
   });
 
-  store.setState("kanban", { state: { cards: [{ image: kept.id }] } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "cards", value: [{ image: kept.id }] }] });
   store.persist();
   // Within the grace period nothing is deleted, so an undo can bring the card back.
   assert.equal(pageAssetRows().length, 3);
@@ -1409,11 +1458,11 @@ test("a reference restored within the grace period keeps the asset", () => {
   const store = loaded();
   store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
   const asset = store.savePageAsset("kanban", { data: Buffer.from("a") }).asset;
-  store.setState("kanban", { state: { image: asset.id } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "image", value: asset.id }] });
   store.persist();
-  store.setState("kanban", { state: { image: null } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "image", value: null }] });
   store.persist();
-  store.setState("kanban", { state: { image: asset.id } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "image", value: asset.id }] });
   store.persist();
   ageOrphans();
   store.sweepAssets();
@@ -1425,7 +1474,7 @@ test("page assets survive the Trash and go with the page when it is purged", () 
   const store = loaded();
   const { tab } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
   const asset = store.savePageAsset("kanban", { data: Buffer.from("a") }).asset;
-  store.setState("kanban", { state: { image: asset.id } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "image", value: asset.id }] });
   store.deleteMany([tab.id]);
   store.persist();
   assert.equal(pageAssetRows().length, 1);
@@ -1455,7 +1504,7 @@ test("export and import carry page assets and re-id them when the ids are taken"
   const store = loaded();
   const { tab } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>board</p>" });
   const asset = store.savePageAsset("kanban", { name: "card.png", mimeType: "image/png", data: Buffer.from("img") }).asset;
-  store.setState("kanban", { state: { cards: [{ image: `/blob/${asset.id}` }] } });
+  store.writeState("kanban", { ops: [{ op: "set", path: "cards", value: [{ image: `/blob/${asset.id}` }] }] });
   const file = parseImport(Buffer.from(serializeExport(store.exportFile({ id: tab.id }))), "kanban.json");
   assert.equal(file.pages[0].pageAssets?.length, 1);
 
@@ -1470,13 +1519,13 @@ test("export and import carry page assets and re-id them when the ids are taken"
   store.closeDb();
 });
 
-test("setState stores local files as page assets and swaps asset:<name> for their URLs", () => {
+test("writeState stores local files as page assets and swaps asset:<name> in ops for their URLs", () => {
   const store = loaded();
   store.upsert({ key: "todos", title: "Todos", html: "<p>list</p>", state: { todos: [] } });
   const file = path.join(dir, "photo.png");
   fs.writeFileSync(file, "png");
-  const result = store.setState("todos", {
-    state: { todos: [{ id: "t1", text: "Buy", images: [{ id: "i1", name: "photo.png", data: "asset:Photo.png" }] }] },
+  const result = store.writeState("todos", {
+    ops: [{ op: "insert", path: "todos", value: { id: "t1", text: "Buy", images: [{ id: "i1", name: "photo.png", data: "asset:Photo.png" }] } }],
     assets: [{ path: file }],
   });
   assert.ok(result.ok);
@@ -1488,7 +1537,7 @@ test("setState stores local files as page assets and swaps asset:<name> for thei
   assert.equal(pageAssetRows()[0].orphaned_at, null);
 
   assert.throws(
-    () => store.setState("todos", { state: { note: "asset:missing.png" }, assets: [{ path: file }] }),
+    () => store.writeState("todos", { ops: [{ op: "set", path: "note", value: "asset:missing.png" }], assets: [{ path: file }] }),
     /asset:missing.png but no such file was passed.*no state value is exactly asset:<name> for photo.png/
   );
   assert.equal(pageAssetRows().length, 1);

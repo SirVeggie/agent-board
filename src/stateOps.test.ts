@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyStateOps, filterItems, getAt } from "./stateOps.js";
+import { applyOps, applyStateOps, diffState, filterItems, getAt } from "./stateOps.js";
 
 const board = () => ({
   cards: [
@@ -81,4 +81,97 @@ test("a failing op changes nothing and names itself", () => {
     /ops\[1\] \(merge cards\/c9\): no item matches "c9"/
   );
   assert.equal((getAt(state, "cards/c1") as { title: string }).title, "One");
+});
+
+test("test op guards a write", () => {
+  const state = board();
+  assert.throws(
+    () => applyStateOps(state, [{ op: "test", path: "cards/c1/assignee", value: null }, { op: "test", path: "cards/c2/col", value: "todo" }]),
+    /ops\[1\] \(test cards\/c2\/col\): test failed: cards\/c2\/col is "done"/
+  );
+  const next = applyStateOps(state, [
+    { op: "test", path: "cards/c1/assignee", value: null },
+    { op: "merge", path: "cards/c1", value: { assignee: "agent" } },
+  ]);
+  assert.equal((getAt(next, "cards/c1") as Record<string, unknown>).assignee, "agent");
+});
+
+test("lenient apply skips failing ops and keeps the rest", () => {
+  const result = applyOps(board(), [
+    { op: "merge", path: "cards/c9", value: { title: "gone" } },
+    { op: "merge", path: "cards/c1", value: { title: "kept" } },
+    { op: "move", path: "cards/c1", after: "c_missing" },
+  ], { lenient: true });
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].index, 0);
+  assert.equal(result.applied.length, 2);
+  assert.deepEqual((result.state.cards as { id: string }[]).map((c) => c.id), ["c2", "c3", "c1"]);
+  assert.equal((getAt(result.state, "cards/c1") as { title: string }).title, "kept");
+});
+
+test("paths escape slashes, and the empty path sets the whole state", () => {
+  const next = applyStateOps({ "a/b": { x: 1 } }, [{ op: "merge", path: "a~1b", value: { y: 2 } }]);
+  assert.deepEqual(next, { "a/b": { x: 1, y: 2 } });
+  assert.deepEqual(applyStateOps(next, [{ op: "set", path: "", value: { fresh: true } }]), { fresh: true });
+  assert.throws(() => applyStateOps(next, [{ op: "remove", path: "" }]), /empty path/);
+});
+
+test("diff turns a whole-array rewrite into item ops", () => {
+  const before = board();
+  const after = board();
+  after.cards[1].title = "Two edited";
+  after.cards.splice(2, 1);
+  after.cards.unshift({ id: "c4", num: 4, col: "todo", title: "Four", comments: [] });
+  after.cards[1].comments.push({ id: "m1", text: "hi" });
+  const ops = diffState(before, after);
+  assert.deepEqual(ops.map((op) => `${op.op} ${op.path}`), [
+    "remove cards/id=c3",
+    "insert cards",
+    "insert cards/id=c1/comments",
+    "merge cards/id=c2",
+  ]);
+  assert.deepEqual(applyStateOps(before, ops), after);
+});
+
+test("diff ops rebase onto someone else's change to another item", () => {
+  const base = board();
+  const mine = board();
+  mine.cards[0].title = "Mine";
+  const ops = diffState(base, mine, ["cards"]);
+  const theirs = applyStateOps(base, [{ op: "merge", path: "cards/c3", value: { title: "Theirs" } }]);
+  const merged = applyOps(theirs, ops, { lenient: true }).state;
+  assert.equal((getAt(merged, "cards/c1") as { title: string }).title, "Mine");
+  assert.equal((getAt(merged, "cards/c3") as { title: string }).title, "Theirs");
+});
+
+test("diff then apply reproduces random edits", () => {
+  let seed = 7;
+  const rand = (n: number) => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed % n;
+  };
+  for (let round = 0; round < 300; round += 1) {
+    const ids = Array.from({ length: rand(8) }, (_, i) => `i${i}`);
+    const before = { list: ids.map((id) => ({ id, v: rand(3), tags: [rand(2)] })), n: rand(4), obj: { a: rand(2), b: "x" } };
+    const after = JSON.parse(JSON.stringify(before));
+    for (let k = 0; k < 4; k += 1) {
+      const pick = rand(6);
+      if (pick === 0 && after.list.length) after.list.splice(rand(after.list.length), 1);
+      if (pick === 1) after.list.splice(rand(after.list.length + 1), 0, { id: `n${round}_${k}`, v: rand(3), tags: [] });
+      if (pick === 2 && after.list.length) {
+        const [item] = after.list.splice(rand(after.list.length), 1);
+        after.list.splice(rand(after.list.length + 1), 0, item);
+      }
+      if (pick === 3 && after.list.length) after.list[rand(after.list.length)].v = rand(9);
+      if (pick === 4) after.obj = rand(2) ? { a: rand(5) } : { a: 1, b: "x", c: null };
+      if (pick === 5) after.n = rand(9);
+    }
+    const ops = diffState(before, after);
+    assert.deepEqual(applyStateOps(before, ops), after, JSON.stringify({ before, after, ops }));
+  }
+});
+
+test("diff removes keys that are gone", () => {
+  assert.deepEqual(diffState({ a: 1, b: 2 }, { a: 1 }, ["a", "b"]), [{ op: "remove", path: "b" }]);
+  assert.deepEqual(diffState({}, { a: [1] }), [{ op: "set", path: "a", value: [1] }]);
 });

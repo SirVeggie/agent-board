@@ -5,19 +5,21 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
-import { AGENT_CLIENT, CLIENT_HEADER, CONTENT_HOST, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
-import { clampWaitMs, parseAfterRevision, parseSignalNames, toSignalView } from "./signal.js";
+import { clampWaitMs, parseCursor, parseEventNames } from "./signal.js";
+import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
-import { isPlainObject, toMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isPlainObject, toMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
-import { waitForSignal } from "./wait.js";
+import { waitForEvents } from "./wait.js";
+import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
 import { agentRouter } from "./agent/routes.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
@@ -59,11 +61,21 @@ export async function startHttp(): Promise<http.Server> {
   app.disable("x-powered-by");
   app.use(contentOriginGate);
   app.use(noStoreShell);
-  agentHost = new AgentHost((event) => broadcast(event));
+  agentHost = new AgentHost((event) => {
+    broadcast(event);
+    // A turn that ends may leave a claimed card behind; check soon rather than at the next tick.
+    if (event.type === "agent_turn" && event.turn.status !== "running") {
+      scheduleSweep(2000);
+    }
+  });
+  const sweepTimer = setInterval(() => scheduleSweep(0), 60_000);
+  sweepTimer.unref?.();
+  scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
   app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js")));
   app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js")));
-  app.use(express.json({ limit: "3mb" }));
+  app.use(express.json({ limit: "6mb" }));
+  app.use(noteAgentSession);
   app.use(express.static(publicDir));
 
   app.param("id", (req, res, next, id: string) => {
@@ -288,8 +300,7 @@ export async function startHttp(): Promise<http.Server> {
       state: tab.state,
       stateRevision: tab.stateRevision,
       stateUpdatedAt: tab.stateUpdatedAt,
-      signal: toSignalView(tab.signal),
-      signalRevision: tab.signalRevision,
+      eventCursor: tab.eventSeq,
       ...(tab.templateId
         ? {
             templateId: tab.templateId,
@@ -303,18 +314,23 @@ export async function startHttp(): Promise<http.Server> {
     });
   });
 
-  app.post("/api/tabs/:id/signal", (req, res) => {
+  /** Log an event (a page's signal, or an agent's note), after any state ops sent with it. */
+  app.post("/api/tabs/:id/events", (req, res) => {
     try {
-      const tab = store.signal(req.params.id, {
+      const by = !isContentHost(req) && viewerOf(req) === "agent" ? "agent" : "user";
+      const { event, tab, write } = store.logEvent(req.params.id, {
         name: String(req.body?.name ?? ""),
-        state: isPlainObject(req.body?.state) ? req.body.state : undefined,
+        data: req.body?.data,
+        by,
+        ops: Array.isArray(req.body?.ops) ? req.body.ops : undefined,
         client: optionalString(req.body?.client),
+        writeId: optionalString(req.body?.writeId),
       });
-        res.json({
-          signal: toSignalView(tab.signal),
-          state: tab.state,
-          stateRevision: tab.stateRevision,
-        });
+      res.json({
+        event,
+        stateRevision: tab.stateRevision,
+        ...(write?.ok ? { fromRevision: write.fromRevision, applied: write.applied, skipped: write.skipped } : {}),
+      });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
@@ -322,51 +338,87 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.post("/api/tabs/:id/wait", (req, res) => {
-    handleWait(req, res, req.body?.signal ?? req.body?.signals, req.body?.afterSignalRevision, req.body?.timeoutMs);
+    handleWait(req, res, req.body?.events ?? req.body?.names, req.body?.after, req.body?.timeoutMs);
   });
 
   app.get("/api/tabs/:id/wait", (req, res) => {
-    handleWait(
-      req,
-      res,
-      req.query.signal ?? req.query.signals,
-      req.query.afterSignalRevision ?? req.query.after,
-      req.query.timeoutMs
-    );
+    handleWait(req, res, req.query.events ?? req.query.names, req.query.after, req.query.timeoutMs);
   });
 
+  /**
+   * Write state as ops (see stateOps.ts). Pages send lenient writes; agents strict ones. The reply
+   * carries the ops that applied, never the whole state: viewers get the same ops as a delta.
+   */
   app.put("/api/tabs/:id/state", (req, res) => {
     try {
       const assetFiles = parseAssetInputs(req.body?.assets);
       // Reading local files is for the agent; a page must not be able to pull files off the disk.
       if (assetFiles.length && isContentHost(req)) {
-        res.status(403).json({ error: "pages save assets with board.saveAsset, not file paths" });
+        res.status(403).json({ error: "pages save assets with scribe.saveAsset, not file paths" });
         return;
       }
-      const result = store.setState(req.params.id, {
-        state: req.body?.state,
-        ...(req.body?.ops !== undefined ? { ops: req.body.ops } : {}),
-        replace: req.body?.replace === true,
+      if (!Array.isArray(req.body?.ops)) {
+        res.status(400).json({ error: "send ops: an array of state ops (see the scribe skill)" });
+        return;
+      }
+      const result = store.writeState(req.params.id, {
+        ops: req.body.ops,
+        lenient: req.body?.lenient === true,
         ...(assetFiles.length ? { assets: assetFiles } : {}),
         expectedRevision:
           typeof req.body?.expectedRevision === "number" ? req.body.expectedRevision : undefined,
         client: optionalString(req.body?.client),
+        writeId: optionalString(req.body?.writeId),
         resolveIncompatibility: req.body?.resolveIncompatibility === true,
       });
       if (!result.ok) {
-        res.status(409).json({
-          error: "stale expectedRevision",
-          conflict: true,
-          state: result.state,
-          stateRevision: result.stateRevision,
-        });
+        res.status(409).json({ error: "stale expectedRevision", conflict: true, stateRevision: result.stateRevision });
         return;
       }
       res.json({
-        state: result.tab.state,
+        fromRevision: result.fromRevision,
         stateRevision: result.tab.stateRevision,
+        applied: result.applied,
+        skipped: result.skipped,
         ...(result.assets ? { assets: result.assets.map(assetView), usage: store.pageAssetUsageOf(result.tab.id) } : {}),
       });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  /** Run a template action (see src/actions). Agents through page_action; pages through scribe.action. */
+  app.post("/api/tabs/:id/action", (req, res) => {
+    try {
+      const { result, stateRevision } = store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req));
+      res.json({ result: result ?? null, stateRevision });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  /** Per-viewer page state (scribe.local). Never broadcast and never shown to agents. */
+  app.get("/api/tabs/:id/local", (req, res) => {
+    const viewer = viewerIdOf(req.query.viewer);
+    const tab = store.get(req.params.id);
+    if (!tab || !viewer) {
+      res.status(tab ? 400 : 404).json({ error: tab ? "viewer is required" : `tab not found: ${req.params.id}` });
+      return;
+    }
+    res.json({ state: store.getLocal(tab.id, viewer) });
+  });
+
+  app.put("/api/tabs/:id/local", (req, res) => {
+    try {
+      const viewer = viewerIdOf(req.query.viewer ?? req.body?.viewer);
+      if (!viewer) {
+        res.status(400).json({ error: "viewer is required" });
+        return;
+      }
+      store.setLocal(req.params.id, viewer, req.body?.state);
+      res.json({ ok: true });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
@@ -921,20 +973,18 @@ export async function startHttp(): Promise<http.Server> {
   store.on("tab_deleted", (id: string) => broadcast({ type: "tab_deleted", id }));
   store.on("folders", (folders: Folder[]) => broadcast({ type: "folders", folders }));
   store.on("trash", () => broadcast({ type: "trash" }));
-  store.on("tab_state", (tab: Tab, client?: string) =>
+  store.on("tab_state", (tab: Tab, delta: { fromRevision: number; ops: StateOp[]; client?: string; writeId?: string }) =>
     broadcast({
       type: "tab_state",
       id: tab.id,
-      state: tab.state,
+      fromRevision: delta.fromRevision,
       stateRevision: tab.stateRevision,
-      client,
+      ops: delta.ops,
+      ...(delta.client ? { client: delta.client } : {}),
+      ...(delta.writeId ? { writeId: delta.writeId } : {}),
     })
   );
-  store.on("tab_signal", (tab: Tab) => {
-    if (tab.signal) {
-      broadcast({ type: "tab_signal", id: tab.id, signal: tab.signal });
-    }
-  });
+  store.on("tab_event", (tab: Tab, event: PageEvent) => broadcast({ type: "tab_event", id: tab.id, event }));
   store.on("template_upserted", (template: TemplateMeta) => broadcast({ type: "template_upserted", template }));
   store.on("template_deleted", (id: string) => broadcast({ type: "template_deleted", id }));
   store.on("builtin_templates", (templates: BuiltinTemplateMeta[]) => broadcast({ type: "builtin_templates", templates }));
@@ -1034,13 +1084,13 @@ function optionalNumber(value: unknown): number | undefined {
 function handleWait(
   req: express.Request,
   res: express.Response,
-  signalInput: unknown,
+  namesInput: unknown,
   afterInput: unknown,
   timeoutInput: unknown
 ): void {
   let names: string[];
   try {
-    names = parseSignalNames(signalInput);
+    names = parseEventNames(namesInput);
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
     return;
@@ -1058,20 +1108,17 @@ function handleWait(
   };
   res.on("close", onClientGone);
 
-  waitForSignal({
+  waitForEvents({
     idOrKey: req.params.id,
     names,
-    afterRevision: parseAfterRevision(typeof afterInput === "string" ? Number(afterInput) : afterInput),
+    after: parseCursor(typeof afterInput === "string" ? Number(afterInput) : afterInput),
     timeoutMs,
     viewer: viewerOf(req),
     abort: abort.signal,
   })
     .then((result) => {
       if (!res.writableEnded) {
-        res.json({
-          ...result,
-          signal: toSignalView(result.signal),
-        });
+        res.json(result);
       }
     })
     .catch((err: Error) => {
@@ -1085,12 +1132,60 @@ function handleWait(
     });
 }
 
+/** Last request from each MCP session, for telling a live agent's claims from an abandoned one's. */
+const sessionSeen = new Map<string, number>();
+
+function noteAgentSession(req: express.Request, _res: express.Response, next: express.NextFunction): void {
+  const session = req.get(SESSION_HEADER);
+  if (session && !isContentHost(req)) {
+    sessionSeen.set(session.slice(0, 40), Date.now());
+  }
+  next();
+}
+
+function callerOf(req: express.Request): ActionCaller {
+  if (isContentHost(req) || viewerOf(req) !== "agent") {
+    return { by: "user", label: "user" };
+  }
+  const session = req.get(SESSION_HEADER)?.slice(0, 40);
+  const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+  const threadTitle = thread && agentHost ? agentHost.runInfo(thread) : undefined;
+  const label =
+    threadTitle && threadTitle.exists ? `Scribe chat: ${threadTitle.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
+  return { by: "agent", label, ...(session ? { session } : {}), ...(thread ? { thread } : {}) };
+}
+
+let sweepQueued: NodeJS.Timeout | null = null;
+
+/** Release or flag claims whose agent stopped. Debounced: turn ends come in bursts. */
+function scheduleSweep(delayMs: number): void {
+  if (sweepQueued) {
+    return;
+  }
+  sweepQueued = setTimeout(() => {
+    sweepQueued = null;
+    store.sweepActions({
+      now: Date.now(),
+      thread: (id) => (agentHost ? agentHost.runInfo(id) : { exists: false }),
+      sessionSeenAt: (session) => sessionSeen.get(session),
+    });
+  }, delayMs);
+  sweepQueued.unref?.();
+}
+
+/** A viewer id from the page's boot (set per desktop app or browser by the Scribe UI). */
+function viewerIdOf(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(value) ? value : null;
+}
+
 function isContentHost(req: express.Request): boolean {
   return req.hostname === CONTENT_HOST;
 }
 
 const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
-const SIGNAL_PATH = /^\/api\/tabs\/[^/]+\/signal$/;
+const EVENTS_PATH = /^\/api\/tabs\/[^/]+\/events$/;
+const LOCAL_PATH = /^\/api\/tabs\/[^/]+\/local$/;
+const ACTION_PATH = /^\/api\/tabs\/[^/]+\/action$/;
 const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/;
 const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
@@ -1110,7 +1205,11 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
       next();
       return;
     }
-    if (req.method === "POST" && SIGNAL_PATH.test(req.path)) {
+    if (req.method === "POST" && (EVENTS_PATH.test(req.path) || ACTION_PATH.test(req.path))) {
+      next();
+      return;
+    }
+    if ((req.method === "GET" || req.method === "PUT") && LOCAL_PATH.test(req.path)) {
       next();
       return;
     }

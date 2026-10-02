@@ -1,3 +1,4 @@
+import type { ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -239,6 +240,20 @@ export class AgentHost {
 
   listThreads(): ThreadView[] {
     return [...this.threads.values()].sort((a, b) => b.activityAt - a.activityAt).map((thread) => this.view(thread));
+  }
+
+  /** Whether a thread is still working, and how its last turn ended. Pages use it to release claims. */
+  runInfo(id: string): ThreadRunInfo {
+    const thread = this.threads.get(id);
+    if (!thread) return { exists: false };
+    const status = this.status.get(id) ?? "idle";
+    const last = this.db.listTurns(id).at(-1);
+    return {
+      exists: true,
+      running: status !== "idle",
+      title: thread.title,
+      ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}) } } : {}),
+    };
   }
 
   getThread(id: string): Thread | null {

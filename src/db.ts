@@ -3,19 +3,20 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensurePageAssetSchema, ensureTemplateSchema, migrateV1ToLibrarySchema } from "./dbMigrate.js";
+import { ensurePageAssetSchema, ensurePageLocalSchema, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
   isPlainObject,
   type BoardState,
   type Folder,
   type Tab,
-  type TabSignal,
+  type PageEvent,
   type Template,
   type TemplateBinding,
 } from "./types.js";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type TabStatus = "open" | "closed" | "deleted";
 
@@ -97,8 +98,8 @@ type TabRow = {
   revision: number;
   state_revision: number;
   state_updated_at: number;
-  signal_revision: number;
-  signal: string | null;
+  event_seq: number;
+  events: string | null;
   assets: string;
   agent_hidden: number;
   folder_id: string | null;
@@ -153,7 +154,7 @@ const UPSERT_SQL = `
 INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
-  revision, state_revision, state_updated_at, signal_revision, signal, assets, agent_hidden,
+  revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
   folder_id, lib_pos, deleted_batch, user_title_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
@@ -176,8 +177,8 @@ ON CONFLICT(id) DO UPDATE SET
   revision = excluded.revision,
   state_revision = excluded.state_revision,
   state_updated_at = excluded.state_updated_at,
-  signal_revision = excluded.signal_revision,
-  signal = excluded.signal,
+  event_seq = excluded.event_seq,
+  events = excluded.events,
   assets = excluded.assets,
   agent_hidden = excluded.agent_hidden,
   folder_id = excluded.folder_id,
@@ -267,6 +268,7 @@ export class BoardDb {
       db.exec(CREATE_SQL);
       ensureTemplateSchema(db);
       ensurePageAssetSchema(db);
+      ensurePageLocalSchema(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -369,6 +371,25 @@ export class BoardDb {
   }
 
   /** New assets start orphaned at their creation time, so an upload the page never references is swept too. */
+  readLocal(tabId: string, viewer: string): string | undefined {
+    const row = this.db.prepare("SELECT state FROM page_local WHERE tab_id = ? AND viewer = ?").get(tabId, viewer) as
+      | { state: string }
+      | undefined;
+    return row?.state;
+  }
+
+  writeLocal(tabId: string, viewer: string, state: string | null): void {
+    if (state === null) {
+      this.db.prepare("DELETE FROM page_local WHERE tab_id = ? AND viewer = ?").run(tabId, viewer);
+      return;
+    }
+    this.db
+      .prepare(
+        "INSERT INTO page_local (tab_id, viewer, state, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(tab_id, viewer) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at"
+      )
+      .run(tabId, viewer, state, Date.now());
+  }
+
   insertPageAssets(tabId: string, assets: PageAssetDraft[]): void {
     const stmt = this.db.prepare(
       `INSERT INTO page_assets (${PAGE_ASSET_COLUMNS}, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -532,11 +553,13 @@ export class BoardDb {
       }
       if (version === 1) {
         migrateV1ToLibrarySchema(db);
-      } else if (version < SCHEMA_VERSION) {
-        throw new Error(`scribe.sqlite schema ${version} cannot be opened by this daemon`);
+      }
+      if (version <= 2) {
+        migrateV2ToV3(db);
       }
       ensureTemplateSchema(db);
       ensurePageAssetSchema(db);
+      ensurePageLocalSchema(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -576,8 +599,8 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.revision,
     tab.stateRevision,
     tab.stateUpdatedAt,
-    tab.signalRevision,
-    tab.signal ? JSON.stringify(tab.signal) : null,
+    tab.eventSeq,
+    JSON.stringify(tab.events ?? []),
     JSON.stringify(tab.assets ?? []),
     tab.agentHidden ? 1 : 0,
     tab.folderId ?? null,
@@ -629,20 +652,11 @@ function rowToStored(row: TabRow): StoredTab {
   } catch {
     state = {};
   }
-  let signal: TabSignal | null = null;
-  if (row.signal) {
-    try {
-      const parsed = JSON.parse(row.signal) as TabSignal;
-      if (parsed && typeof parsed.name === "string") {
-        signal = {
-          name: parsed.name,
-          revision: typeof parsed.revision === "number" ? parsed.revision : 0,
-          at: typeof parsed.at === "number" ? parsed.at : 0,
-        };
-      }
-    } catch {
-      signal = null;
-    }
+  let events: PageEvent[] = [];
+  try {
+    events = normalizeEvents(row.events ? JSON.parse(row.events) : []);
+  } catch {
+    events = [];
   }
   let assets: Tab["assets"] = [];
   try {
@@ -664,8 +678,8 @@ function rowToStored(row: TabRow): StoredTab {
     state,
     stateRevision: row.state_revision,
     stateUpdatedAt: row.state_updated_at,
-    signalRevision: row.signal_revision,
-    signal,
+    eventSeq: row.event_seq,
+    events,
     assets,
   };
   if (row.agent_hidden) {
@@ -733,14 +747,6 @@ function coerceLegacyTab(raw: LegacyTab | undefined, seq: number): Tab | undefin
   if (!raw?.id || !raw.html) {
     return undefined;
   }
-  const signal =
-    raw.signal && typeof raw.signal === "object" && typeof raw.signal.name === "string"
-      ? {
-          name: raw.signal.name,
-          revision: typeof raw.signal.revision === "number" ? raw.signal.revision : 0,
-          at: typeof raw.signal.at === "number" ? raw.signal.at : 0,
-        }
-      : null;
   return {
     id: raw.id,
     key: typeof raw.key === "string" && raw.key ? raw.key : raw.id,
@@ -755,8 +761,8 @@ function coerceLegacyTab(raw: LegacyTab | undefined, seq: number): Tab | undefin
     state: isPlainObject(raw.state) ? raw.state : {},
     stateRevision: typeof raw.stateRevision === "number" ? raw.stateRevision : 0,
     stateUpdatedAt: typeof raw.stateUpdatedAt === "number" ? raw.stateUpdatedAt : 0,
-    signalRevision: typeof raw.signalRevision === "number" ? raw.signalRevision : (signal?.revision ?? 0),
-    signal,
+    eventSeq: 0,
+    events: [],
     assets: normalizeTabAssets(raw.assets),
   };
 }

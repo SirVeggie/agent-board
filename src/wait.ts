@@ -1,8 +1,13 @@
-import { parseAfterRevision, signalMatches } from "./signal.js";
 import { store } from "./store.js";
-import { visibleTo, type BoardState, type Tab, type TabSignal, type Viewer } from "./types.js";
+import { visibleTo, type PageEvent, type Tab, type Viewer } from "./types.js";
 
 export type WaitResult = {
+  /** Matching events after the cursor, oldest first. Empty when the wait ended another way. */
+  events: PageEvent[];
+  /** Pass as `after` to the next wait. Covers every event seen, matching or not. */
+  cursor: number;
+  /** Events between the cursor and the oldest one still kept were dropped from the log. */
+  missed: boolean;
   timedOut: boolean;
   /** The page was deleted (or hidden from the agent). */
   deleted: boolean;
@@ -10,34 +15,27 @@ export type WaitResult = {
   closed: boolean;
   id: string;
   key: string;
-  signal: TabSignal | null;
-  state: BoardState;
   stateRevision: number;
 };
 
-type Outcome = "signal" | "timeout" | "deleted" | "closed";
-
-export function waitForSignal(opts: {
+/**
+ * Resolve with the events after `after` whose name is in `names` (any name when empty).
+ * Without `after`, only events logged from now on count.
+ */
+export function waitForEvents(opts: {
   idOrKey: string;
   names: string[];
-  afterRevision?: unknown;
+  after?: number;
   timeoutMs: number;
   viewer: Viewer;
   abort?: AbortSignal;
 }): Promise<WaitResult> {
-  const afterRevision = parseAfterRevision(opts.afterRevision);
   const initial = store.get(opts.idOrKey, opts.viewer);
   if (!initial) {
     return Promise.reject(new Error(`tab not found: ${opts.idOrKey}`));
   }
   const tabId = initial.id;
-  const tabKey = initial.key;
-  if (signalMatches(initial, opts.names, afterRevision)) {
-    return Promise.resolve(toWaitResult(initial, "signal"));
-  }
-  if (store.isClosed(tabId)) {
-    return Promise.resolve(toWaitResult(initial, "closed"));
-  }
+  const after = typeof opts.after === "number" && opts.after >= 0 ? Math.floor(opts.after) : initial.eventSeq;
 
   return new Promise((resolve) => {
     let settled = false;
@@ -55,24 +53,23 @@ export function waitForSignal(opts: {
     const check = (timedOut: boolean) => {
       const current = store.get(tabId);
       if (!current || !visibleTo(current, opts.viewer)) {
-        finish(
-          current
-            ? { ...emptyResult(tabId, tabKey), deleted: true }
-            : toWaitResult(last, "deleted")
-        );
+        finish({ ...result(last, []), deleted: true });
         return;
       }
       last = current;
-      if (store.isClosed(tabId)) {
-        finish(toWaitResult(current, "closed"));
+      const matching = current.events.filter(
+        (event) => event.seq > after && (!opts.names.length || opts.names.includes(event.name))
+      );
+      if (matching.length) {
+        finish(result(current, matching));
         return;
       }
-      if (signalMatches(current, opts.names, afterRevision)) {
-        finish(toWaitResult(current, "signal"));
+      if (store.isClosed(tabId)) {
+        finish({ ...result(current, []), closed: true });
         return;
       }
       if (timedOut) {
-        finish(toWaitResult(current, "timeout"));
+        finish({ ...result(current, []), timedOut: true });
       }
     };
 
@@ -83,11 +80,9 @@ export function waitForSignal(opts: {
       }
     };
     const onAbort = () => check(true);
-
     const timer = setTimeout(() => check(true), opts.timeoutMs);
-    const poll = setInterval(() => check(false), 50);
 
-    store.on("tab_signal", onEvent);
+    store.on("tab_event", onEvent);
     store.on("tab_deleted", onEvent);
     store.on("tab_closed", onEvent);
     if (opts.abort) {
@@ -102,32 +97,26 @@ export function waitForSignal(opts: {
 
     function cleanup() {
       clearTimeout(timer);
-      clearInterval(poll);
-      store.off("tab_signal", onEvent);
+      store.off("tab_event", onEvent);
       store.off("tab_deleted", onEvent);
       store.off("tab_closed", onEvent);
       opts.abort?.removeEventListener("abort", onAbort);
     }
   });
-}
 
-function emptyResult(id: string, key: string): WaitResult {
-  return { timedOut: false, deleted: false, closed: false, id, key, signal: null, state: {}, stateRevision: 0 };
-}
-
-function toWaitResult(tab: Tab, outcome: Outcome): WaitResult {
-  return {
-    timedOut: outcome === "timeout",
-    deleted: outcome === "deleted",
-    closed: outcome === "closed",
-    id: tab.id,
-    key: tab.key,
-    signal: snapshotSignal(tab.signal),
-    state: { ...tab.state },
-    stateRevision: tab.stateRevision,
-  };
-}
-
-function snapshotSignal(signal: TabSignal | null): TabSignal | null {
-  return signal ? { name: signal.name, revision: signal.revision, at: signal.at } : null;
+  function result(tab: Tab, events: PageEvent[]): WaitResult {
+    const oldest = tab.events[0]?.seq;
+    return {
+      events: events.map((event) => ({ ...event })),
+      // Non-matching events are consumed too, so the next wait doesn't look at them again.
+      cursor: Math.max(after, tab.eventSeq),
+      missed: oldest !== undefined && after < oldest - 1,
+      timedOut: false,
+      deleted: false,
+      closed: false,
+      id: tab.id,
+      key: tab.key,
+      stateRevision: tab.stateRevision,
+    };
+  }
 }

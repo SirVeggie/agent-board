@@ -8,6 +8,9 @@ import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } 
 import {
   ASSET_SWEEP_INTERVAL_MS,
   MAX_HTML_BYTES,
+  MAX_EVENT_DATA_BYTES,
+  MAX_LOCAL_STATE_BYTES,
+  MAX_PAGE_EVENTS,
   MAX_STATE_BYTES,
   PAGE_ASSET_ORPHAN_GRACE_MS,
   dbPath,
@@ -35,7 +38,9 @@ import {
   type PageAssetUsage,
 } from "./pageAssets.js";
 import { normalizeSignalName } from "./signal.js";
-import { applyStateOps } from "./stateOps.js";
+import { applyOps } from "./stateOps.js";
+import { normalizeEvents } from "./events.js";
+import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionSet, type SweepContext } from "./actions/index.js";
 import {
   TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
@@ -52,9 +57,10 @@ import {
   type Folder,
   type ImportDestination,
   type RestorePlacement,
-  type SetStateInput,
-  type SetStateResult,
-  type SignalInput,
+  type EventInput,
+  type PageEvent,
+  type StateWriteInput,
+  type StateWriteResult,
   type Tab,
   type TabAsset,
   type TabMeta,
@@ -363,11 +369,86 @@ export class BoardStore extends EventEmitter {
       return undefined;
     }
     const { template } = found;
-    if (template.guide) {
-      return { id: template.id, title: template.title, text: template.guide };
+    const builtinKey = template.source?.builtin ?? (isBuiltinId(template.id) ? template.key : undefined);
+    const builtin = builtinKey ? this.locateBuiltin(builtinKey) : undefined;
+    const text = template.guide || builtin?.guide;
+    if (!text) {
+      return undefined;
     }
-    const builtin = template.source ? this.locateBuiltin(template.source.builtin) : undefined;
-    return builtin?.guide ? { id: builtin.id, title: builtin.title, text: builtin.guide } : undefined;
+    // The action list comes from the code that runs the actions, so the guide can't drift from it.
+    const actions = builtinKey ? BUILTIN_ACTIONS[builtinKey] : undefined;
+    const withActions = actions && text.includes("{{actions}}") ? text.replace("{{actions}}", describeActions(actions)) : text;
+    const source = template.guide ? template : (builtin ?? template);
+    return { id: source.id, title: source.title, text: withActions };
+  }
+
+  /** The actions a page's template provides, or undefined. */
+  actionsFor(tab: Tab): ActionSet | undefined {
+    if (!tab.templateId) {
+      return undefined;
+    }
+    const template = this.templates.get(tab.templateId);
+    const key = template?.source?.builtin;
+    return key ? BUILTIN_ACTIONS[key] : undefined;
+  }
+
+  /** Run a template action: it reads the latest state and its ops apply all or nothing. */
+  runAction(idOrKey: string, name: string, args: unknown, caller: ActionCaller): { result: unknown; stateRevision: number; tab: Tab } {
+    const located = this.locate(idOrKey);
+    if (!located) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const tab = located.tab;
+    const set = this.actionsFor(tab);
+    if (!set) {
+      throw new Error(`${tab.key} has no actions; change its state with ops`);
+    }
+    const def = Object.prototype.hasOwnProperty.call(set.actions, name) ? set.actions[name] : undefined;
+    if (!def) {
+      throw new Error(`no action "${name}" on ${tab.key}. Actions: ${Object.keys(set.actions).join(", ")}`);
+    }
+    if (args !== undefined && (typeof args !== "object" || args === null || Array.isArray(args))) {
+      throw new Error("args must be an object");
+    }
+    const outcome = def.run(tab.state, (args ?? {}) as Record<string, unknown>, {
+      caller,
+      now: Date.now(),
+      values: tab.templateValues ?? {},
+    });
+    if (outcome.ops.length) {
+      const write = this.writeState(tab.id, { ops: outcome.ops });
+      if (!write.ok) {
+        throw new Error("the page changed while the action ran; try again");
+      }
+    }
+    for (const event of outcome.events ?? []) {
+      this.logEvent(tab.id, { name: event.name, data: event.data, by: caller.by });
+    }
+    return { result: outcome.result, stateRevision: tab.stateRevision, tab };
+  }
+
+  /** Let each page's actions tidy up after agents that stopped (stale claims). */
+  sweepActions(ctx: SweepContext): void {
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      const set = this.actionsFor(tab);
+      if (!set?.sweep) {
+        continue;
+      }
+      try {
+        const outcome = set.sweep(tab.state, ctx);
+        if (!outcome) {
+          continue;
+        }
+        if (outcome.ops.length) {
+          this.writeState(tab.id, { ops: outcome.ops, lenient: true });
+        }
+        for (const event of outcome.events ?? []) {
+          this.logEvent(tab.id, { name: event.name, data: event.data, by: "scribe" });
+        }
+      } catch (err) {
+        log(`Action sweep failed on ${tab.key}`, String(err));
+      }
+    }
   }
 
   /** The user's own templates only. findTemplate also looks at built-ins. */
@@ -761,7 +842,6 @@ export class BoardStore extends EventEmitter {
       tab.html = html;
       tab.updatedAt = now;
       tab.revision += 1;
-      tab.signal = null;
       seedState(tab, input.state);
       if (input.pin !== undefined) {
         tab.pinned = input.pin;
@@ -782,7 +862,6 @@ export class BoardStore extends EventEmitter {
       tab.html = html;
       tab.updatedAt = now;
       tab.revision += 1;
-      tab.signal = null;
       seedState(tab, input.state);
       let pinIndex: number | undefined;
       if (input.pin !== undefined && tab.pinned !== input.pin) {
@@ -831,8 +910,8 @@ export class BoardStore extends EventEmitter {
       state: {},
       stateRevision: 0,
       stateUpdatedAt: 0,
-      signalRevision: 0,
-      signal: null,
+      eventSeq: 0,
+      events: [],
       assets,
     };
     seedState(tab, input.state);
@@ -1129,97 +1208,119 @@ export class BoardStore extends EventEmitter {
     return this.moveByAdjacentSwaps(tab.id, target);
   }
 
-  setState(idOrKey: string, input: SetStateInput): SetStateResult {
+  /**
+   * Apply ops to a page's state. Strict by default (all or nothing); lenient skips ops that fail.
+   * Viewers get the applied ops as a delta, so they never need the whole state again.
+   */
+  writeState(idOrKey: string, input: StateWriteInput): StateWriteResult {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
     const tab = located.tab;
-    if (input.state === undefined && input.ops === undefined) {
-      throw new Error("pass state or ops");
-    }
-    if (input.state !== undefined && !isPlainObject(input.state)) {
-      throw new Error("state must be a JSON object");
-    }
     if (input.expectedRevision !== undefined && input.expectedRevision !== tab.stateRevision) {
-      return { ok: false, state: tab.state, stateRevision: tab.stateRevision };
+      return { ok: false, stateRevision: tab.stateRevision };
     }
-    const given = input.state ?? {};
-    let next: BoardState = input.replace ? { ...given } : { ...tab.state, ...given };
-    if (input.ops !== undefined) {
-      next = applyStateOps(next, input.ops);
-    }
-    const attached = input.assets?.length ? this.prepareStateAssets(tab, next, input.assets) : undefined;
+    let ops = input.ops;
+    const attached = input.assets?.length ? this.prepareStateAssets(tab, ops, input.assets) : undefined;
     if (attached) {
-      next = attached.state;
+      ops = attached.value as unknown[];
     }
+    const result = applyOps(tab.state, ops, { lenient: input.lenient === true });
     const resolved = this.applyResolveIncompatibility(tab, input.resolveIncompatibility);
-    const serialized = JSON.stringify(next);
-    const stateChanged = serialized !== JSON.stringify(tab.state);
-    if (!stateChanged && !resolved) {
-      return { ok: true, tab };
-    }
-    if (stateChanged) {
-      const bytes = Buffer.byteLength(serialized, "utf8");
-      if (bytes > MAX_STATE_BYTES) {
-        throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
-      }
-      const assets = attached ? this.insertPageAssetDrafts(tab, attached.drafts) : undefined;
-      tab.state = next;
-      tab.stateRevision += 1;
-      tab.stateUpdatedAt = Date.now();
-      this.markDirty(tab.id);
-      this.persistSoon();
-      this.emit("tab_state", tab, input.client);
-      if (located.where === "closed" || resolved) {
+    const fromRevision = tab.stateRevision;
+    const serialized = JSON.stringify(result.state);
+    const stateChanged = result.applied.length > 0 && serialized !== JSON.stringify(tab.state);
+    if (!stateChanged) {
+      if (resolved) {
+        this.markDirty(tab.id);
+        this.persistSoon();
         this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
       }
-      return { ok: true, tab, ...(assets ? { assets } : {}) };
+      return { ok: true, tab, fromRevision, applied: [], skipped: result.skipped };
     }
+    const bytes = Buffer.byteLength(serialized, "utf8");
+    if (bytes > MAX_STATE_BYTES) {
+      throw new Error(`state would be too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
+    }
+    const assets = attached ? this.insertPageAssetDrafts(tab, attached.drafts) : undefined;
+    tab.state = result.state;
+    tab.stateRevision += 1;
+    tab.stateUpdatedAt = Date.now();
     this.markDirty(tab.id);
     this.persistSoon();
-    if (stateChanged) {
-      this.emit("tab_state", tab, input.client);
-    }
+    this.emit("tab_state", tab, { fromRevision, ops: result.applied, client: input.client, writeId: input.writeId });
     if (located.where === "closed" || resolved) {
-      this.emit("tab_upserted", toMeta(tab), undefined, {
-        activate: false,
-        structural: false,
-      });
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     }
-    return { ok: true, tab };
+    return { ok: true, tab, fromRevision, applied: result.applied, skipped: result.skipped, ...(assets ? { assets } : {}) };
   }
 
-  signal(idOrKey: string, input: SignalInput): Tab {
+  /** A viewer's own state for a page (scribe.local): filters, open panels, drafts. */
+  getLocal(idOrKey: string, viewer: string): BoardState {
+    const tab = this.locate(idOrKey)?.tab;
+    if (!tab || !this.db) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(this.db.readLocal(tab.id, viewer) ?? "{}") as unknown;
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  setLocal(idOrKey: string, viewer: string, state: unknown): void {
+    const tab = this.locate(idOrKey)?.tab;
+    if (!tab) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    if (!isPlainObject(state)) {
+      throw new Error("local state must be a JSON object");
+    }
+    const text = JSON.stringify(state);
+    if (Buffer.byteLength(text, "utf8") > MAX_LOCAL_STATE_BYTES) {
+      throw new Error(`local state is too large (max ${MAX_LOCAL_STATE_BYTES} bytes)`);
+    }
+    // The row points at the page's row, so a page created moments ago is written first.
+    if (this.dirty.has(tab.id)) {
+      this.persist();
+    }
+    this.requireDb().writeLocal(tab.id, viewer, Object.keys(state).length ? text : null);
+  }
+
+  /** Log an event on a page, after applying any ops that came with it. Waits wake on it. */
+  logEvent(idOrKey: string, input: EventInput): { tab: Tab; event: PageEvent; write?: StateWriteResult } {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
-    const tab = located.tab;
     const name = normalizeSignalName(input.name);
-    if (input.state !== undefined) {
-      if (!isPlainObject(input.state)) {
-        throw new Error("state must be a JSON object");
+    let data: unknown;
+    if (input.data !== undefined && input.data !== null) {
+      const text = JSON.stringify(input.data);
+      if (text === undefined) {
+        throw new Error("event data must be JSON");
       }
-      const next = { ...tab.state, ...input.state };
-      const serialized = JSON.stringify(next);
-      if (serialized !== JSON.stringify(tab.state)) {
-        const bytes = Buffer.byteLength(serialized, "utf8");
-        if (bytes > MAX_STATE_BYTES) {
-          throw new Error(`state is too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
-        }
-        tab.state = next;
-        tab.stateRevision += 1;
-        tab.stateUpdatedAt = Date.now();
-        this.emit("tab_state", tab, input.client);
+      if (Buffer.byteLength(text, "utf8") > MAX_EVENT_DATA_BYTES) {
+        throw new Error(`event data is too large (max ${MAX_EVENT_DATA_BYTES} bytes); keep ids in it and the rest in state`);
       }
+      data = JSON.parse(text);
     }
-    tab.signalRevision += 1;
-    tab.signal = { name, revision: tab.signalRevision, at: Date.now() };
+    const write = input.ops?.length
+      ? this.writeState(located.tab.id, { ops: input.ops, lenient: true, client: input.client, writeId: input.writeId })
+      : undefined;
+    const tab = located.tab;
+    tab.eventSeq += 1;
+    const event: PageEvent = { seq: tab.eventSeq, name, ...(data !== undefined ? { data } : {}), at: Date.now(), by: input.by };
+    tab.events.push(event);
+    if (tab.events.length > MAX_PAGE_EVENTS) {
+      tab.events.splice(0, tab.events.length - MAX_PAGE_EVENTS);
+    }
     this.markDirty(tab.id);
     this.persistSoon();
-    this.emit("tab_signal", tab);
-    return tab;
+    this.emit("tab_event", tab, event);
+    return { tab, event, ...(write ? { write } : {}) };
   }
 
   focus(idOrKey: string): Tab {
@@ -1876,8 +1977,8 @@ export class BoardStore extends EventEmitter {
       state: {},
       stateRevision: 0,
       stateUpdatedAt: 0,
-      signalRevision: 0,
-      signal: null,
+      eventSeq: 0,
+      events: [],
       assets,
       ...(page.agentHidden ? { agentHidden: true } : {}),
     };
@@ -2711,11 +2812,12 @@ export class BoardStore extends EventEmitter {
    * Read the agent's files and swap each `asset:<name>` string in the state for the URL its
    * asset will have. Nothing is stored yet, so a state that turns out too large leaves nothing behind.
    */
+  /** Swap "asset:<name>" strings in a write (ops or a state object) for the stored files' URLs. */
   private prepareStateAssets(
     tab: Tab,
-    state: BoardState,
+    value: unknown,
     files: PageAssetFile[]
-  ): { state: BoardState; drafts: PageAssetDraft[] } {
+  ): { value: unknown; drafts: PageAssetDraft[] } {
     const now = Date.now();
     const urls = new Map<string, string>();
     const drafts: PageAssetDraft[] = [];
@@ -2736,7 +2838,7 @@ export class BoardStore extends EventEmitter {
     );
     const used = new Set<string>();
     const missing = new Set<string>();
-    const next = substituteStateAssets(state, urls, used, missing) as BoardState;
+    const next = substituteStateAssets(value, urls, used, missing);
     const unused = drafts.filter((draft) => !used.has(draft.name.toLowerCase())).map((draft) => draft.name);
     if (missing.size || unused.length) {
       const parts = [
@@ -2745,7 +2847,7 @@ export class BoardStore extends EventEmitter {
       ];
       throw new Error(`${parts.join("; ")}. Put "asset:<name>" as a whole string value where each file's URL should go.`);
     }
-    return { state: next, drafts };
+    return { value: next, drafts };
   }
 
   /** Asset rows point at page rows, so imported pages are written before their assets. */
@@ -2896,14 +2998,7 @@ function agoText(ms: number): string {
 }
 
 function withStateDefaults(tab: Tab): Tab {
-  const signal =
-    tab.signal && typeof tab.signal === "object" && typeof tab.signal.name === "string"
-      ? {
-          name: tab.signal.name,
-          revision: typeof tab.signal.revision === "number" ? tab.signal.revision : 0,
-          at: typeof tab.signal.at === "number" ? tab.signal.at : 0,
-        }
-      : null;
+  const events = normalizeEvents(tab.events);
   return {
     ...tab,
     libPos: typeof tab.libPos === "number" && Number.isFinite(tab.libPos) ? tab.libPos : 0,
@@ -2911,11 +3006,13 @@ function withStateDefaults(tab: Tab): Tab {
     state: isPlainObject(tab.state) ? tab.state : {},
     stateRevision: typeof tab.stateRevision === "number" ? tab.stateRevision : 0,
     stateUpdatedAt: typeof tab.stateUpdatedAt === "number" ? tab.stateUpdatedAt : 0,
-    signalRevision: typeof tab.signalRevision === "number" ? tab.signalRevision : (signal?.revision ?? 0),
-    signal,
+    eventSeq: Math.max(typeof tab.eventSeq === "number" ? tab.eventSeq : 0, events.at(-1)?.seq ?? 0),
+    events,
     assets: normalizeTabAssets(tab.assets),
   };
 }
+
+
 
 function applyAssets(tabId: string, current: TabAsset[], incoming: UpsertInput["assets"]): TabAsset[] {
   if (!incoming?.length) {

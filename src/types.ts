@@ -1,14 +1,20 @@
 import { embedUrlFromHtml } from "./embed.js";
-import type { StateOp } from "./stateOps.js";
+import type { SkippedOp, StateOp } from "./stateOps.js";
 import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
 import type { AgentEvent } from "./agent/types.js";
 
 export type BoardState = Record<string, unknown>;
 
-export type TabSignal = {
+/** One entry in a page's event log: a signal from the page, or a note from Scribe itself. */
+export type PageEvent = {
+  /** Per-page sequence number, starting at 1. Waits resume after a seq. */
+  seq: number;
   name: string;
-  revision: number;
+  /** Small JSON payload, e.g. { card: "c_12" }. */
+  data?: unknown;
   at: number;
+  /** "user" for page code (the user clicked something), "agent" for an agent, "scribe" for the daemon. */
+  by: "user" | "agent" | "scribe";
 };
 
 export type TabAsset = {
@@ -132,10 +138,10 @@ export type Tab = {
   state: BoardState;
   stateRevision: number;
   stateUpdatedAt: number;
-  /** Monotonic counter; survives page_show clearing `signal`. */
-  signalRevision: number;
-  /** Last signal, or null after page_show resets the wait handshake. */
-  signal: TabSignal | null;
+  /** Seq of the newest event ever logged on this page. */
+  eventSeq: number;
+  /** The newest events, oldest first, at most MAX_PAGE_EVENTS. */
+  events: PageEvent[];
   assets: TabAsset[];
   templateId?: string;
   templateValues?: TemplateValues;
@@ -146,7 +152,7 @@ export type Tab = {
   agentHidden?: boolean;
 };
 
-export type TabMeta = Omit<Tab, "html" | "state" | "signal" | "signalRevision" | "stripSeq"> & {
+export type TabMeta = Omit<Tab, "html" | "state" | "events" | "eventSeq" | "stripSeq"> & {
   htmlBytes: number;
   /** Set when the page asks to be shown as a direct iframe of this URL. */
   embedUrl?: string;
@@ -221,8 +227,9 @@ export type BoardEvent =
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }
   | { type: "tab_focus_request"; id: string }
-  | { type: "tab_state"; id: string; state: BoardState; stateRevision: number; client?: string }
-  | { type: "tab_signal"; id: string; signal: TabSignal }
+  /** A state change as the ops that made it. A viewer at fromRevision applies them; one behind refetches. */
+  | { type: "tab_state"; id: string; fromRevision: number; stateRevision: number; ops: StateOp[]; client?: string; writeId?: string }
+  | { type: "tab_event"; id: string; event: PageEvent }
   | { type: "folders"; folders: Folder[] }
   | { type: "trash" }
   | { type: "template_upserted"; template: TemplateMeta }
@@ -247,22 +254,28 @@ export type UpsertInput = {
   viewer?: Viewer;
 };
 
-export type SetStateInput = {
-  state?: BoardState;
-  /** Targeted edits applied after `state` merges in; see stateOps.ts. */
-  ops?: StateOp[];
-  replace?: boolean;
+export type StateWriteInput = {
+  /** See stateOps.ts. */
+  ops: unknown[];
+  /** Skip ops that fail instead of refusing the whole write. Pages write this way. */
+  lenient?: boolean;
   expectedRevision?: number;
+  /** The bridge instance that wrote, so it can recognize its own delta. */
   client?: string;
+  writeId?: string;
   resolveIncompatibility?: boolean;
-  /** Local files to store as page assets; state strings `asset:<name>` become their URLs. */
+  /** Local files to store as page assets; op values `asset:<name>` become their URLs. */
   assets?: PageAssetFile[];
 };
 
-export type SignalInput = {
+export type EventInput = {
   name: string;
-  state?: BoardState;
+  data?: unknown;
+  by: PageEvent["by"];
+  /** State ops applied (leniently) just before the event is logged, so a wait sees them. */
+  ops?: unknown[];
   client?: string;
+  writeId?: string;
 };
 
 export type RestorePlacement = "append" | "index";
@@ -270,10 +283,10 @@ export type RestorePlacement = "append" | "index";
 /** Where imported pages land. `meta` follows each page's closedAt (missing → open). */
 export type ImportDestination = "meta" | "closed";
 
-/** A stale expectedRevision resolves to ok:false carrying the current state so the caller can merge and retry. */
-export type SetStateResult =
-  | { ok: true; tab: Tab; assets?: PageAssetMeta[] }
-  | { ok: false; state: BoardState; stateRevision: number };
+/** A stale expectedRevision resolves to ok:false with the current revision. */
+export type StateWriteResult =
+  | { ok: true; tab: Tab; fromRevision: number; applied: StateOp[]; skipped: SkippedOp[]; assets?: PageAssetMeta[] }
+  | { ok: false; stateRevision: number };
 
 export function toMeta(tab: Tab): TabMeta {
   const embedUrl = embedUrlFromHtml(tab.html);

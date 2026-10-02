@@ -1,6 +1,16 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { AGENT_CLIENT, CLIENT_HEADER, VERSION, baseUrl } from "./config.js";
+import { randomBytes } from "node:crypto";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, SESSION_HEADER, THREAD_HEADER, VERSION, baseUrl } from "./config.js";
+
+/** Identifies this MCP process to the daemon, so claims can tell a live agent from one that stopped. */
+const SESSION_ID = randomBytes(6).toString("hex");
+let agentLabel = "";
+
+/** The MCP client's name (e.g. "claude-code"), once the client has introduced itself. */
+export function setAgentLabel(label: string): void {
+  agentLabel = label.replace(/[^\x20-\x7e]/g, "").slice(0, 60);
+}
 import { log } from "./log.js";
 
 type Health = {
@@ -87,6 +97,9 @@ export async function api(
         method,
         headers: {
           [CLIENT_HEADER]: AGENT_CLIENT,
+          [SESSION_HEADER]: SESSION_ID,
+          ...(process.env.SCRIBE_THREAD ? { [THREAD_HEADER]: process.env.SCRIBE_THREAD } : {}),
+          ...(agentLabel ? { [AGENT_LABEL_HEADER]: agentLabel } : {}),
           ...(payload === undefined
             ? {}
             : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }),
