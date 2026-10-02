@@ -403,6 +403,13 @@
     if (event.button === 0 && openMenuAnchor?.contains(event.target)) return;
     closeMenu();
   }
+  // Clicks inside a page iframe never reach this document; they do take focus, so blur closes the menu.
+  window.addEventListener("blur", () => {
+    closeMenu();
+    for (const view of views()) {
+      if (view.slash) view.slash.hidden = true;
+    }
+  });
 
   /**
    * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
