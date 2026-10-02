@@ -14,6 +14,7 @@
     button: "agent-board.agent.showButton",
     dockStyle: "agent-board.agent.dockStyle",
     emptyEnter: "agent-board.agent.emptyEnter",
+    tips: "agent-board.agent.showTips",
   };
   const DOCK_STYLES = [
     { id: "bar", label: "Bar" },
@@ -1007,6 +1008,7 @@
       const meta = el("div", "ag-empty-meta");
       meta.append(icon(sc.icon), el("span", null, sc.text));
       box.append(meta);
+      if (localStorage.getItem(LS.tips) === "0") return box;
       const tips =
         s.mode === "board"
           ? ["Summarize this page", "Add a table of the key points", "Find related pages in the Library"]
@@ -3042,6 +3044,17 @@
             dock.apply();
           }),
           { id: "ag-dock-style-label" }
+        ),
+        settingRow(
+          "Suggestions in a new thread",
+          switchControl(
+            () => localStorage.getItem(LS.tips) !== "0",
+            () => {
+              localStorage.setItem(LS.tips, localStorage.getItem(LS.tips) === "0" ? "1" : "0");
+              for (const view of views()) if (!view.thread() || !S.details.get(view.threadId)?.items.length) view.renderTranscript();
+            }
+          ),
+          { id: "ag-tips-label" }
         ),
         settingRow(
           "Show reasoning expanded",
