@@ -3698,7 +3698,7 @@
     } else if (event.key === "ArrowUp" && !event.shiftKey && (dockFocused() || sideFocused())) {
       event.preventDefault();
       shortcut("up");
-    } else if (event.key === "ArrowDown" && !event.shiftKey && (S.fullOpen || (dockFocused() && S.dockExpanded))) {
+    } else if (event.key === "ArrowDown" && !event.shiftKey && (S.fullOpen || dockFocused())) {
       event.preventDefault();
       shortcut("down");
     }
