@@ -769,7 +769,7 @@
         <div>
           <div class="section-label">Description</div>
           <div class="md-preview" id="mdPreview"></div>
-          <textarea class="md-editor hidden" id="mdEditor" placeholder="Markdown. Paste an image to embed it."></textarea>
+          <textarea class="md-editor hidden" id="mdEditor" placeholder="Markdown. Paste an image to embed it. Ctrl+Enter saves."></textarea>
 
           <div class="section-label">Checklist <span class="progress" id="clProgress"><i></i></span><span id="clCount"></span></div>
           <ul class="checklist" id="checklist"></ul>
@@ -2218,6 +2218,7 @@
   mdEditor.addEventListener("blur", function () { if (editingDesc) saveDescription(); });
   mdEditor.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { e.stopPropagation(); mdEditor.blur(); }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); mdEditor.blur(); }
   });
 
   var editingCheck = null;
