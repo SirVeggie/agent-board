@@ -201,6 +201,7 @@ export type AgentEvent =
   | { type: "agent_thread"; thread: ThreadView }
   | { type: "agent_thread_deleted"; id: string }
   | { type: "agent_item"; item: Item }
+  | { type: "agent_item_deleted"; threadId: string; id: string }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn };
 

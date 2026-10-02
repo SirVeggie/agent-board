@@ -120,6 +120,8 @@ export interface ProviderSession {
   steer?(input: SteerInput): string;
   /** Withdraw a steered message that has not reached the model yet, so it never runs. */
   dropSteer?(steerId: string): void;
+  /** Take a steered message back for editing. Resolves false when it already reached the model. */
+  withdrawSteer?(steerId: string): Promise<boolean>;
   cancel(): Promise<void>;
   /** The thread's settings changed; apply them live or restart before the next turn. */
   update(thread: Thread): void;

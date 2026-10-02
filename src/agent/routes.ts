@@ -140,6 +140,9 @@ export function agentRouter(host: AgentHost): express.Router {
   // Enter on an empty composer while a turn runs: steer the first queued message in (again: send it now).
   router.post("/threads/:id/steer", wrap((req) => host.steer(req.params.id)));
 
+  // Up on an empty composer: take the latest queued (or waiting steered) message back for editing.
+  router.post("/threads/:id/withdraw", wrap((req) => host.withdraw(req.params.id)));
+
   router.post(
     "/threads/:id/send-now",
     wrap(async (req) => {

@@ -511,7 +511,30 @@ class ClaudeSession implements ProviderSession {
   }
 
   dropSteer(steerId: string): void {
-    if (this.steers.get(steerId) === "pending") this.steers.set(steerId, "dropped");
+    if (this.steers.get(steerId) !== "pending") return;
+    this.steers.set(steerId, "dropped");
+    // Take it off Claude Code's queue when possible; otherwise it is interrupted when it starts.
+    void this.cancelQueued(steerId).then((cancelled) => {
+      if (cancelled) this.steers.delete(steerId);
+    });
+  }
+
+  async withdrawSteer(steerId: string): Promise<boolean> {
+    if (this.steers.get(steerId) !== "pending") return false;
+    const cancelled = await this.cancelQueued(steerId);
+    if (cancelled) this.steers.delete(steerId);
+    return cancelled;
+  }
+
+  /** Claude Code's cancel_async_message control request; the SDK has it at runtime but not in its types yet. */
+  private async cancelQueued(uuid: string): Promise<boolean> {
+    const q = this.query as unknown as { cancelAsyncMessage?: (uuid: string) => Promise<boolean> } | null;
+    if (typeof q?.cancelAsyncMessage !== "function") return false;
+    try {
+      return (await q.cancelAsyncMessage(uuid)) === true;
+    } catch {
+      return false;
+    }
   }
 
   private onLifecycle(m: Record<string, unknown>): void {

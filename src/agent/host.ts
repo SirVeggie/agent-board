@@ -599,6 +599,43 @@ export class AgentHost {
   }
 
   /**
+   * Take the latest queued message back, or the waiting steered one when nothing else is queued, and
+   * remove it from the transcript so it can be edited and sent again.
+   */
+  async withdraw(threadId: string): Promise<{ text: string; images: ChatImage[]; context: ContextChip[] }> {
+    const queue = this.queues.get(threadId);
+    const queued = this.queuedItems(threadId);
+    if (queue?.length) {
+      const msg = queue.pop()!;
+      if (!queue.length) this.queues.delete(threadId);
+      const item = queued[queued.length - 1];
+      if (item) this.removeItem(item);
+      this.emitThread(threadId);
+      return { text: msg.text, images: msg.images, context: msg.context };
+    }
+    const run = this.runs.get(threadId);
+    const steer = run?.steer;
+    if (!run || !steer) throw new Error("Nothing is queued");
+    const session = this.sessions.get(threadId);
+    if (!(await session?.withdrawSteer?.(steer.id)) || run.steer !== steer) throw new Error("The agent has already read that message");
+    run.steer = null;
+    const item = steer.itemId ? this.loadItems(threadId).find((it) => it.id === steer.itemId) : undefined;
+    if (item) this.removeItem(item);
+    this.emitThread(threadId);
+    return { text: steer.msg.text, images: steer.msg.images, context: steer.msg.context };
+  }
+
+  private removeItem(item: Item): void {
+    const items = this.loadItems(item.threadId);
+    const at = items.indexOf(item);
+    if (at >= 0) items.splice(at, 1);
+    this.dirty.delete(item.id);
+    this.deltaBuf.delete(item.id);
+    this.db.deleteItem(item.id);
+    this.emit({ type: "agent_item_deleted", threadId: item.threadId, id: item.id });
+  }
+
+  /**
    * Stop the running turn and run the waiting steered message, or else the first queued one, as the
    * next turn. Unlike cancel, the rest of the queue stays.
    */

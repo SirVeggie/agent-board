@@ -116,6 +116,10 @@ export class AgentDb {
     }
   }
 
+  deleteItem(id: string): void {
+    this.db.prepare("DELETE FROM items WHERE id = ?").run(id);
+  }
+
   maxItemSeq(threadId: string): number {
     const row = this.db.prepare("SELECT MAX(seq) AS m FROM items WHERE thread_id = ?").get(threadId) as { m: number | null };
     return row.m ?? 0;

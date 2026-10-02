@@ -236,6 +236,17 @@
         dock.onItem(msg.item);
         return;
       }
+      case "agent_item_deleted": {
+        const detail = S.details.get(msg.threadId);
+        const item = detail?.byId.get(msg.id);
+        if (!item) return;
+        detail.byId.delete(msg.id);
+        detail.items.splice(detail.items.indexOf(item), 1);
+        for (const view of views()) {
+          if (view.threadId === msg.threadId) view.onItem(item, false);
+        }
+        return;
+      }
       case "agent_delta": {
         const detail = S.details.get(msg.threadId);
         const item = detail?.byId.get(msg.itemId);
@@ -847,7 +858,7 @@
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
       acts.append(button(icon("plus"), "ag-icon-btn", (event) => newThreadMenu(event.currentTarget, this), "New thread"));
       if (this.variant === "side") {
-        acts.append(button(icon("expand"), "ag-icon-btn", () => full.open(this.threadId, this.draft), "Full window (Ctrl+Shift+L)"));
+        acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L, or Ctrl+Up from the chat)"));
         acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)"));
       } else if (this.variant === "full") {
         acts.append(button(icon("collapse"), "ag-icon-btn", () => full.close(), "Back to the board (Esc)"));
@@ -1893,6 +1904,10 @@
         this.send();
         return;
       }
+      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.images.length && this.withdrawQueued()) {
+        event.preventDefault();
+        return;
+      }
       if (event.key === "Escape") {
         const t = this.thread();
         if (t && t.status !== "idle") {
@@ -1966,6 +1981,28 @@
       if (!t.queued && !steering) return false;
       const action = steering || emptyEnter() === "send" ? "send-now" : "steer";
       api("POST", `/threads/${encodeURIComponent(t.id)}/${action}`).catch((err) => notice(err.message));
+      return true;
+    }
+
+    /** Up on an empty composer: take the latest queued or waiting steered message back into the input. */
+    withdrawQueued() {
+      const t = this.thread();
+      if (!t) return false;
+      const steering = (S.details.get(t.id)?.items || []).some((it) => it.kind === "user" && it.steer === "waiting");
+      if (!t.queued && !steering) return false;
+      api("POST", `/threads/${encodeURIComponent(t.id)}/withdraw`)
+        .then((msg) => {
+          if (this.input.value || this.threadId !== t.id) return;
+          this.input.value = msg.text || "";
+          this.images = (msg.images || []).slice();
+          const tab = activeTab();
+          if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
+          this.renderContext();
+          this.autosize();
+          this.focus();
+          this.input.setSelectionRange(this.input.value.length, this.input.value.length);
+        })
+        .catch((err) => notice(err.message));
       return true;
     }
 
@@ -2901,7 +2938,7 @@
     const hint = el(
       "p",
       "settings-hint",
-      "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window · Ctrl+' next starred model · Ctrl+Alt+' next reasoning level. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
+      "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window (Ctrl+Up / Ctrl+Down from a chat) · Ctrl+J threads · Ctrl+Shift+K new thread · Ctrl+' next starred model · Ctrl+Alt+' next reasoning level · Ctrl+Shift+' next mode · Up in an empty box edits the last queued message. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
     );
     section.append(status, buttonRow, styleRow, enterRow, actions, hint);
     panel.append(section);
@@ -2922,13 +2959,122 @@
       }
       dock.setShown(!S.dockShown);
     } else if (action === "full") {
-      if (S.fullOpen) full.close();
-      else full.open(sidebar.view.threadId, sidebar.view.draft);
+      if (S.fullOpen) leaveFull();
+      else enterFull(dockFocused() ? "dock" : "side");
     } else if (action === "model") {
       void cycleModel();
     } else if (action === "effort") {
       void cycleEffort();
+    } else if (action === "mode") {
+      void cycleMode();
+    } else if (action === "threads") {
+      openThreads();
+    } else if (action === "new") {
+      newThread();
+    } else if (action === "up") {
+      chatUp();
+    } else if (action === "down") {
+      chatDown();
     }
+  }
+
+  function dockFocused() {
+    return S.dockShown && Boolean(dock.root?.contains(document.activeElement));
+  }
+
+  function sideFocused() {
+    return S.sideOpen && Boolean(sidebar.pane?.contains(document.activeElement));
+  }
+
+  /** The chat a thread shortcut acts on: the full window, the focused (or only) floating chat, else the sidebar, opened if needed. */
+  function shortcutChat() {
+    if (S.fullOpen) return "full";
+    if (S.dockShown && (dockFocused() || !S.sideOpen)) return "dock";
+    if (!S.sideOpen) sidebar.setOpen(true);
+    return "side";
+  }
+
+  /** Where Ctrl+Down goes back to from the full window. */
+  let fullFrom = null;
+
+  function enterFull(from) {
+    fullFrom = from;
+    const view = from === "dock" ? dock.view : sidebar.view;
+    full.open(view.threadId, view.draft);
+  }
+
+  /** Close the full window into the chat it was opened from: the floating chat, else the sidebar. */
+  function leaveFull() {
+    const id = full.view.threadId;
+    const from = fullFrom;
+    fullFrom = null;
+    full.close();
+    if (from === "dock" && S.dockShown) {
+      if (id && id !== dock.view.threadId) dock.pick(id);
+      dock.view.focus();
+      return;
+    }
+    if (!S.sideOpen) sidebar.setOpen(true);
+    if (id) sidebar.view.setThread(id);
+    setTimeout(() => sidebar.view.focus(), 60);
+  }
+
+  /** Ctrl+Up: a collapsed floating chat expands; an expanded one, or the sidebar, goes full window. */
+  function chatUp() {
+    if (S.fullOpen) return;
+    if (dockFocused()) {
+      if (!S.dockExpanded) dock.setExpanded(true);
+      else enterFull("dock");
+    } else if (sideFocused()) {
+      enterFull("side");
+    }
+  }
+
+  /** Ctrl+Down: the full window goes back where it came from; an expanded floating chat collapses. */
+  function chatDown() {
+    if (S.fullOpen) leaveFull();
+    else if (dockFocused() && S.dockExpanded) dock.setExpanded(false);
+  }
+
+  function openThreads() {
+    const where = shortcutChat();
+    if (where === "full") {
+      full.list.querySelector("input[type=search]")?.focus();
+    } else if (where === "dock") {
+      // A second press closes the menu again (it toggles); give the focus back to the input.
+      const wasOpen = Boolean(openMenuEl);
+      dock.threadMenu(dock.titleBtn);
+      if (wasOpen && !openMenuEl) dock.view.focus();
+    } else {
+      if (!sidebar.listOpen) sidebar.toggleList();
+      setTimeout(() => sidebar.listEl.querySelector("input[type=search]")?.focus(), 0);
+    }
+  }
+
+  function newThread() {
+    const where = shortcutChat();
+    const scope = defaultScope();
+    if (where === "dock") {
+      if (scope.kind === "page") S.dockPicks.delete(scope.ref);
+      dock.view.startDraft(scope);
+      dock.renderTitle();
+    } else if (where === "full") {
+      full.view.startDraft(scope);
+      full.renderList();
+    } else {
+      if (sidebar.listOpen) sidebar.toggleList();
+      sidebar.view.startDraft(scope);
+    }
+    notice("New thread");
+  }
+
+  async function cycleMode() {
+    const view = targetView();
+    const s = view.settings();
+    const at = MODES.findIndex((m) => m.id === s.mode);
+    const next = MODES[(at + 1) % MODES.length];
+    await view.updateSettings({ mode: next.id });
+    notice(`Mode: ${next.label}`);
   }
 
   function escape() {
@@ -2955,23 +3101,31 @@
   window.addEventListener("keydown", (event) => {
     if (!(event.ctrlKey || event.metaKey)) return;
     // The apostrophe key by character, or by position on Nordic layouts (the '* key next to Enter).
-    const quote = event.key === "'" || (event.code === "Backslash" && event.key !== "\\" && event.key !== "|");
-    if (quote && !event.shiftKey) {
+    // With Shift the US key types ", the Nordic one *.
+    const quote = event.key === "'" || event.key === '"' || (event.code === "Backslash" && event.key !== "\\" && event.key !== "|");
+    if (quote) {
+      if (event.shiftKey && event.altKey) return;
       event.preventDefault();
-      shortcut(event.altKey ? "effort" : "model");
+      shortcut(event.shiftKey ? "mode" : event.altKey ? "effort" : "model");
       return;
     }
     if (event.altKey) return;
     const key = event.key.toLowerCase();
-    if (key === "k" && !event.shiftKey) {
+    if (key === "k") {
       event.preventDefault();
-      shortcut("dock");
+      shortcut(event.shiftKey ? "new" : "dock");
     } else if (key === "l") {
       event.preventDefault();
       shortcut(event.shiftKey ? "full" : "side");
-    } else if (event.key === "ArrowUp" && S.dockShown && dock.root?.contains(document.activeElement)) {
+    } else if (key === "j" && !event.shiftKey) {
       event.preventDefault();
-      dock.setExpanded(!S.dockExpanded);
+      shortcut("threads");
+    } else if (event.key === "ArrowUp" && !event.shiftKey && (dockFocused() || sideFocused())) {
+      event.preventDefault();
+      shortcut("up");
+    } else if (event.key === "ArrowDown" && !event.shiftKey && (S.fullOpen || (dockFocused() && S.dockExpanded))) {
+      event.preventDefault();
+      shortcut("down");
     }
   });
 

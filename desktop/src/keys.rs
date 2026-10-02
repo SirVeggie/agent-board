@@ -41,10 +41,16 @@ fn is_apostrophe(key: u32) -> bool {
 }
 
 fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
-    // Agent chat: Ctrl+' cycles favourite models, Ctrl+Alt+' cycles reasoning. Ctrl+Alt is also
-    // AltGr on Windows, which is fine here: AltGr+' types nothing on the layouts this is for.
-    if ctrl && !shift && is_apostrophe(key) {
-        return Some(Shortcut::Board(if alt { "agent-effort" } else { "agent-model" }));
+    // Agent chat: Ctrl+' cycles favourite models, Ctrl+Alt+' cycles reasoning, Ctrl+Shift+' cycles the
+    // mode. Ctrl+Alt is also AltGr on Windows, which is fine here: AltGr+' types nothing on the
+    // layouts this is for.
+    if ctrl && is_apostrophe(key) {
+        return match (shift, alt) {
+            (false, false) => Some(Shortcut::Board("agent-model")),
+            (false, true) => Some(Shortcut::Board("agent-effort")),
+            (true, false) => Some(Shortcut::Board("agent-mode")),
+            (true, true) => None,
+        };
     }
     if alt {
         return None;
@@ -66,6 +72,8 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
         (b'H', false) => Some(Shortcut::Board("help")),
         (b'W', false) => Some(Shortcut::Board("close-tab")),
         (b'K', false) => Some(Shortcut::Board("agent-dock")),
+        (b'K', true) => Some(Shortcut::Board("agent-new")),
+        (b'J', false) => Some(Shortcut::Board("agent-threads")),
         (b'L', false) => Some(Shortcut::Board("agent-side")),
         (b'L', true) => Some(Shortcut::Board("agent-full")),
         (b'R', false | true) => Some(Shortcut::Reload),
