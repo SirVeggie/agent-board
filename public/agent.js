@@ -1479,7 +1479,8 @@
       else if (turn.status === "cancelled") parts.append(el("span", "ag-muted", "Stopped"));
       if (turn.endedAt) parts.append(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
       const usage = turn.usage || {};
-      if (usage.costUsd) parts.append(el("span", null, `$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`));
+      if (usage.plan?.length) parts.append(el("span", null, usage.plan.map((w) => `${planPct(w.used)} of ${planWindowShort(w)}`).join(" · ")));
+      else if (usage.costUsd) parts.append(el("span", null, `$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`));
       if (usage.outputTokens) parts.append(el("span", null, `${fmtTokens((usage.inputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0))} in · ${fmtTokens(usage.outputTokens)} out`));
       parts.append(el("span", "ag-muted", modelLabel(S.threads.get(turn.threadId)?.provider, turn.model)));
       foot.append(parts);
@@ -2863,6 +2864,23 @@
 
   function percent(utilization) {
     return `${Math.round(utilization * 100)}%`;
+  }
+
+  function planPct(used) {
+    const p = used * 100;
+    if (p < 0.1) return "<0.1%";
+    if (p < 1) return `${p.toFixed(1)}%`;
+    return `${Math.round(p)}%`;
+  }
+
+  function planWindowShort(w) {
+    if (w.id === "five_hour") return "5h";
+    if (w.id === "seven_day") return "wk";
+    if (w.id === "seven_day_opus") return "wk Opus";
+    if (w.id === "seven_day_sonnet") return "wk Sonnet";
+    if (w.id === "seven_day_overage_included") return "wk extra";
+    if (w.id === "overage") return "extra";
+    return w.label;
   }
 
   /** "in 2 h 10 min" / "Sat 10:00" for a window's reset time. */

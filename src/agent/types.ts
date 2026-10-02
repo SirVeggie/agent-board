@@ -83,6 +83,8 @@ export type Usage = {
   costUsd?: number;
   contextTokens?: number;
   contextWindow?: number;
+  /** How much of each subscription window this turn used (0–1 of that window). Claude only. */
+  plan?: Array<{ id: string; label: string; used: number }>;
 };
 
 export type TurnStatus = "running" | "done" | "error" | "cancelled";

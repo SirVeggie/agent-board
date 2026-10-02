@@ -98,6 +98,21 @@ const LIMIT_LABELS: Record<string, string> = {
   overage: "Extra usage",
 };
 
+function snapshotWindows(limits?: PlanLimits): PlanLimits["windows"] {
+  return (limits?.windows ?? []).map((w) => ({ ...w }));
+}
+
+/** How much of each window this turn used, from the snapshot taken when it started. */
+function planUsed(before: PlanLimits["windows"], after: PlanLimits["windows"]): NonNullable<Usage["plan"]> {
+  return after
+    .map((w) => {
+      const prev = before.find((x) => x.id === w.id);
+      const used = prev ? Math.max(0, w.utilization - prev.utilization) : 0;
+      return { id: w.id, label: w.label, used };
+    })
+    .filter((w) => w.used >= 0.0005);
+}
+
 type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[]; from?: "page" };
 
 /** What the model reads for a message: where it came from, its context chips, then the text. */
@@ -141,6 +156,8 @@ export class AgentHost {
   private deltaTimer: NodeJS.Timeout | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
   private ctx: SessionContext;
+  /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
+  private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
 
   constructor(private emit: (event: AgentEvent) => void) {
     this.db = new AgentDb();
@@ -200,6 +217,25 @@ export class AgentHost {
     this.planLimits = { ...this.planLimits, [provider]: next };
     this.db.setSetting("limits", this.planLimits);
     this.emit({ type: "agent_limits", limits: this.planLimits });
+    this.applyPlanCost(provider, next);
+  }
+
+  /** Attach this report's window deltas to the turn that was running when it started. */
+  private applyPlanCost(provider: ProviderId, next: PlanLimits): void {
+    const slot = this.limitTurn;
+    if (!slot || slot.provider !== provider || !slot.before.length) return;
+    const plan = planUsed(slot.before, next.windows);
+    if (!plan.length) return;
+    const turn = this.loadTurns(slot.threadId).find((t) => t.id === slot.turnId);
+    if (!turn) return;
+    const usage = { ...(this.runs.get(slot.threadId)?.usage ?? turn.usage ?? {}), plan };
+    const run = this.runs.get(slot.threadId);
+    if (run && run.turn.id === slot.turnId) {
+      run.usage = usage;
+      run.turn.usage = usage;
+    }
+    turn.usage = usage;
+    this.saveTurn(turn);
   }
 
   dispose(): void {
@@ -780,6 +816,7 @@ export class AgentHost {
     const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
+    this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
     thread.activityAt = Date.now();
     if (!thread.titleLocked && thread.title === "New thread") {
       thread.title = titleFrom(msg.text);
