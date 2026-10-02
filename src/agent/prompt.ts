@@ -38,7 +38,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   if (thread.scope.kind === "page" && scope.page) {
     lines.push(
       "",
-      `This thread belongs to the board page "${scope.page.title}" (key: ${scope.page.key}${scope.page.folder ? `, folder: ${scope.page.folder}` : ""}). "This page" means that page; read it with page_read before changing it, and prefer page_patch for small edits.`
+      `This thread belongs to the Scribe page "${scope.page.title}" (key: ${scope.page.key}${scope.page.folder ? `, folder: ${scope.page.folder}` : ""}). "This page" means that page; read it with page_read before changing it, and prefer page_patch for small edits.`
     );
   } else if (thread.scope.kind === "folder" && scope.folder) {
     lines.push("", `This thread belongs to the Library folder "${scope.folder.path}". Pages in it can be listed with library_search({ folder: "${scope.folder.path}" }).`);
@@ -56,7 +56,7 @@ export function contextBlock(chips: ContextChip[] | undefined): string {
   for (const chip of chips) {
     switch (chip.kind) {
       case "page":
-        lines.push(`Current board page: "${chip.title}" (key: ${chip.key})`);
+        lines.push(`Current Scribe page: "${chip.title}" (key: ${chip.key})`);
         break;
       case "folder":
         lines.push(`Library folder: ${chip.path}`);

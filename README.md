@@ -1,16 +1,16 @@
 # Scribe
 
-A local tabbed HTML viewer the Cursor agent can drive over MCP.
+A local hub of HTML pages that you and your agents share over MCP.
 
-You keep **http://127.0.0.1:4747** open in the browser. The agent opens, updates, reads, and closes tabs there instead of writing throwaway `.html` files into a workspace.
+You keep **http://127.0.0.1:4747** open in the browser (or the desktop app). Agents open, update, read, and close pages there instead of writing throwaway `.html` files into a workspace, and work on interactive pages with you: forms, checklists, todo lists, kanban boards.
 
 ## How it works
 
-- A small **daemon** serves the board on `127.0.0.1:4747` and remembers tabs in `%LOCALAPPDATA%\scribe`.
+- A small **daemon** serves Scribe on `127.0.0.1:4747` and remembers tabs in `%LOCALAPPDATA%\scribe`.
 - Cursor talks to a **stdio MCP** process. That process starts the daemon if needed, then calls the local HTTP API.
 - The browser page stays connected over a WebSocket, so new pages appear as tabs immediately.
 
-The MCP process can come and go with Cursor. The daemon stays up so the board does not reset when a chat ends.
+The MCP process can come and go with Cursor. The daemon stays up so Scribe does not reset when a chat ends.
 
 ## Setup on a new PC
 
@@ -47,41 +47,42 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 `desktop/` is an optional Tauri window over the same daemon and UI, so the browser keeps working as before. It needs a Rust toolchain to build and Node at runtime (it runs this clone's `dist/index.js` to start the daemon; set `SCRIBE_DIR` to point elsewhere).
 
-- `npm run desktop` builds and runs a debug copy. `npm run desktop:build` builds `desktop\target\release\board.exe` and an installer under `desktop\target\release\bundle\nsis`. `npm run desktop:install -- <folder>` closes a running app, builds the release exe, copies it into `<folder>`, and restarts it from there if it was open. The exe runs on its own, so that copy is all you need.
+- `npm run desktop` builds and runs a debug copy. `npm run desktop:build` builds `desktop\target\release\scribe.exe` and an installer under `desktop\target\release\bundle\nsis`. `npm run desktop:install -- <folder>` closes a running app, builds the release exe, copies it into `<folder>`, and restarts it from there if it was open. The exe runs on its own, so that copy is all you need.
 - The tab strip is the title bar: drag empty space (or the spacing around panels) to move the window, double-click to maximize.
 - Settings → Desktop shows or hides each title bar button (compact, minimize, maximize, close). Right-click any button still shown for the hidden ones; with all four hidden, a ⋯ menu holds them.
-- Board shortcuts (Ctrl+D, Ctrl+S, Ctrl+H) are caught natively, so they also work while an embedded site has focus. Ctrl+Z stays with the page; Ctrl+Shift+T does the same and is caught natively.
+- Scribe shortcuts (Ctrl+D, Ctrl+S, Ctrl+H) are caught natively, so they also work while an embedded site has focus. Ctrl+Z stays with the page; Ctrl+Shift+T does the same and is caught natively.
 - Websites that refuse to be framed (`X-Frame-Options`, CSP `frame-ancestors`) load in tabs, peeks and splits anyway: the app drops those headers from embedded documents. Sites that sign in with `SameSite` cookies may still not stay logged in inside a frame.
 - Desktop-only tab keys: Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, Ctrl+W closes the current tab (it stays in the Library).
 - Ctrl+Shift+M, or the button beside the window controls, switches between the normal window and a compact one. Each remembers its own size and place; the compact one stays on top unless turned off in Settings.
 - Links that open a new window go to the default browser.
 - Settings → Desktop → "Close to tray" hides the window on close instead of quitting. Left-click the tray icon to bring it back; right-click for Open and Quit. With the setting off there is no tray icon. While hidden, agents open the window again as if it were closed.
 - Settings → Desktop → "Launch at startup" adds a sign-in entry (`HKCU\...\Run`). At sign-in the app starts hidden in the tray when "Close to tray" is on, otherwise as a normal window. Starting it yourself always shows the window, and starting it while it runs brings the running one forward.
-- If the daemon cannot be started, or stops while the app is open, the window shows a "daemon isn't running" page with a Start button and the last error. It returns to the board as soon as the daemon answers.
-- On launch the app writes `desktop.json` to the data folder. While Settings → Desktop → "Agents open the board in this app" is on, agents open the app instead of a browser tab when no board window is open.
+- If the daemon cannot be started, or stops while the app is open, the window shows a "daemon isn't running" page with a Start button and the last error. It returns to Scribe as soon as the daemon answers.
+- On launch the app writes `desktop.json` to the data folder. While Settings → Desktop → "Agents open Scribe in this app" is on, agents open the app instead of a browser tab when no Scribe window is open.
 
 ## Agent tools
 
 | Tool | Purpose |
 | --- | --- |
 | `page_show` | Create or replace a page (`key` + `title` + `html`, optional `state`, `assets`, and `folder` for new pages). Default focuses the tab (and opens it if it was closed). Pass `background: true` to update without focusing: unread blip on an open tab, or on Library if the page is closed. Returns `titleKept: true` when the user renamed the page in the last 24h and the new title was ignored. |
-| `page_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`), or replace the whole HTML from a checked-out file (`htmlPath`). Optional `expectedRevision` refuses the change if the page moved. Same background/focus rules as show. Does not create a tab or reset state or wait signals. |
+| `page_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`), or replace the whole HTML from a checked-out file (`htmlPath`). Optional `expectedRevision` refuses the change if the page moved. Same background/focus rules as show. Does not create a tab or change state or events. |
 | `page_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
 | `page_list` | List open tabs (`id`, `key`, `title`, `folder`, …) plus `closedCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
 | `library_search` | Page the whole Library in the user's order (default 20, max 50), or search every page with `query` over title, key, page text, and JSON state. `folder` limits it to one folder and its subfolders. |
 | `library_folders` | List Library folders as paths (`"CLIMS/Releases"`) in the user's order, each with its direct page count, so an agent can file a new page in a matching folder via `page_show`'s `folder`. |
 | `page_open` | Open a closed page on the strip |
 | `page_read` | Read a page's HTML so it can be revised (open or closed). `toFile: true` checks it out to a temp file for editing with file tools instead |
-| `page_state` | Read what the user has actually typed, added, or checked off on an interactive page. `path` / `where` return one part (e.g. one card) |
-| `page_wait` | Block until the page fires a named signal (`scribe.signal` / `data-scribe-signal`), then return that signal plus the live state. Default 2 hours, no maximum. Do not poll `page_state`. |
-| `page_update` | Write state without focusing. Unfocused open tabs and closed pages show an unread blip. `ops` edit single items by path (merge, insert, move, remove one card) without resending the array. Optional `assets` (local files) are stored as page assets; each state value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
+| `page_state` | Read what the user has actually typed, added, or checked off on an interactive page, plus `stateRevision` and `eventCursor`. `path` / `where` return one part (e.g. one card) |
+| `page_wait` | Block until the page logs a named event (`scribe.signal(name, data)` / `data-scribe-signal`), then return the events after the cursor (`{ events, cursor }`, no state). Default 2 hours, no maximum. Do not poll `page_state`. |
+| `page_update` | Change state with ops (`set`, `merge`, `remove`, `insert`, `move`, `test`) addressed by path, so one card or todo changes without resending the rest. All or nothing, applied to the latest state. Optional `assets` (local files) are stored as page assets; each op value `"asset:<name>"` becomes that file's `/blob/<id>` URL. |
+| `page_action` | Run an action of the page's template (built-in Kanban: `list`, `get`, `create`, `update`, `comment`, `move`, `claim`, `release`, `finish`; Todo: `list`, `get`, `add`, `update`, `remove`). Actions apply the page's own rules in one step. |
 | `page_pin` / `page_unpin` | Pin or unpin a tab (`id` or `key`) so Clear keeps or drops it |
 | `page_close` | Close one tab, all unpinned tabs, or everything; the pages stay in the Library. Pass `permanent: true` to delete instead |
 | `template_upsert` / `_list` / `_get` / `_delete` / `_open` | Reusable page templates (agent authors them only when asked; the user opens instances from the sidebar). A template can carry an agent `guide` (built-ins: `templates/builtin/<key>.guide.md`), which the MCP appends to the first tool result that touches one of its pages in a session. |
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). For a small change to an existing page, `page_patch` with exact `oldString`/`newString` edits instead of sending the whole document again. For a large page, `page_read` with `toFile: true`, edit the file, then `page_patch` with `htmlPath` and `expectedRevision`.
 
-`page_show`, `page_patch`, and `page_read` also return `viewUrl`: the tab page on its own (`http://127.0.0.2:4747/view/<id>`), outside the board's iframe, so a browser tool can click, drag, and run scripts in it.
+`page_show`, `page_patch`, and `page_read` also return `viewUrl`: the tab page on its own (`http://127.0.0.2:4747/view/<id>`), outside Scribe's iframe, so a browser tool can click, drag, and run scripts in it.
 
 ### Images
 
@@ -93,29 +94,32 @@ Reuse the same `key` when updating a topic. Pass a full HTML document, or a frag
 
 png, jpg, gif, webp, svg, ico, and avif. 8 MB per file, 16 files / 32 MB per tab. These do not count toward the 2 MB HTML cap. Re-showing a key without `assets` keeps files already attached. Workspace-relative `<img src>` and `file://` URLs do not work — tab pages are served from `http://127.0.0.2` and cannot see the disk.
 
-`page_screenshot` loads the tab's content page in a headless Chromium browser (Edge, Chrome, or Brave — not the board chrome) and returns an image. Pair it with `page_show(..., background: true)` so a design loop does not steal window focus. Default viewport is 1280×800; pass `selector` for one element or `fullPage` for a tall page.
+`page_screenshot` loads the tab's content page in a headless Chromium browser (Edge, Chrome, or Brave — not the Scribe UI) and returns an image. Pair it with `page_show(..., background: true)` so a design loop does not steal window focus. Default viewport is 1280×800; pass `selector` for one element or `fullPage` for a tall page.
 
 ## Interactive pages
 
-Every tab owns a JSON state object that lives in the daemon, not in the browser. The agent can read and write it whether or not the tab is focused, or the browser is even open. Pages get it as `window.scribe`, injected before any page script runs:
+Every page owns a JSON state object that lives in the daemon, not in the browser. The agent can read and write it whether or not the tab is focused, or the browser is even open. Pages get it as `window.scribe`, injected before any page script runs:
 
 ```js
-scribe.state                  // current state, readable synchronously on load
-scribe.set({ todos })         // merge top-level keys, saved on a short debounce
-scribe.signal("submitted")    // wake page_wait; flushes pending scribe.set first
-scribe.onChange(render)       // agent or another viewer changed something
+scribe.state                  // shared state, readable synchronously on load
+scribe.set({ todos })         // replace top-level keys; arrays of items with ids go out as item changes
+scribe.update(ops)            // change one item directly: [{ op: "merge", path: "todos/t_1", value: { done: true } }]
+scribe.onChange(render)       // an agent or another viewer changed something
 scribe.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
+scribe.local / scribe.setLocal({ filter })   // this viewer's own state: filters, open panels, drafts
+scribe.signal("submitted", { item: "t_1" })  // log an event agents can wait on
+scribe.action("move", { card: 12, to: "done" })  // run one of the template's actions
 ```
 
-A submit button can declare the same handshake without extra script: `data-scribe-signal="submitted"`. The agent then calls `page_wait` with that signal name. `page_show` clears the last signal on the tab so a new wait does not instantly see the previous submit.
+A submit button can log the same event without extra script: `data-scribe-signal="submitted"`. The agent then calls `page_wait` with that event name.
 
-Pages can also use the board's agent chat with `scribe.agent`: `start(prompt)` makes a thread for the page (inside a click or key press), `send(threadId, prompt)` continues it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. A page only reaches its own threads, and the threads it starts run in Board or Ask mode.
+Pages can also use Scribe's agent chat with `scribe.agent`: `start(prompt)` makes a thread for the page (inside a click or key press), `send(threadId, prompt)` continues it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. A page only reaches its own threads, and the threads it starts run in Pages or Ask mode.
 
 Interactive pages should use this instead of `localStorage` — all tab pages share one origin, so their `localStorage` collides, and the agent cannot see it.
 
 ### Page links
 
-Pages can open other board pages and websites as a tab, a **peek** (a fixed card over the page area), or a **split** (a second pane tied to the current tab):
+Pages can open other Scribe pages and websites as a tab, a **peek** (a fixed card over the page area), or a **split** (a second pane tied to the current tab):
 
 ```html
 <a data-scribe-open="release-notes">Release notes</a>                      <!-- Settings default (Navigate) -->
@@ -130,7 +134,7 @@ await scribe.resolve(["release-notes", "roadmap"])     // → { "release-notes":
 ```
 
 - A target is a page key or id, or an http(s) URL. Keys resolve to an open tab first, then the Library.
-- The mode comes from a held modifier (<kbd>Ctrl</kbd> navigate, <kbd>Shift</kbd> split, <kbd>Alt</kbd> peek), then `data-scribe-mode`, then Settings → Links for board pages. Websites default to the browser, and Ctrl+click always sends them there; they never become board tabs. The same modifiers work on Library rows and in the Ctrl+D palette.
+- The mode comes from a held modifier (<kbd>Ctrl</kbd> navigate, <kbd>Shift</kbd> split, <kbd>Alt</kbd> peek), then `data-scribe-mode`, then Settings → Links for Scribe pages. Websites default to the browser, and Ctrl+click always sends them there; they never become Scribe tabs. The same modifiers work on Library rows and in the Ctrl+D palette.
 - `scribe.open` only works during a click or key press, so a page can't take over the view on load.
 - Links to missing pages get the `scribe-link-missing` class, and an empty `data-scribe-open` link shows the target's title.
 - Peeks and splits reuse the page's iframe, so switching between them and a tab never reloads the page. A website that refuses framing (checked by the daemon at `/api/frame-check`) shows an Open in browser card instead, except in the desktop app, which frames it anyway.
@@ -145,23 +149,29 @@ scribe.set({ cards: [...cards, { image: asset.id }] });
 img.src = scribe.assetUrl(card.image);                            // "/blob/<id>"
 ```
 
-They are stored in `scribe.sqlite`, tied to the page by a foreign key, so permanently deleting the page (emptying it from the Trash, or its 7 days running out) deletes them in the same statement. An asset is kept as long as its id appears anywhere in the page's state or HTML. When nothing mentions it any more it is deleted 10 minutes later (so an undo in the page still finds it); the check runs after each save, and an hourly sweep plus one at startup catch anything the per-save check missed. Limits are 32 MB per asset and 2000 assets / 256 MB per page. From 80% of either limit, `saveAsset` results carry `usage.warning` and the board shows a notice. Page assets travel with exports and imports.
+They are stored in `scribe.sqlite`, tied to the page by a foreign key, so permanently deleting the page (emptying it from the Trash, or its 7 days running out) deletes them in the same statement. An asset is kept as long as its id appears anywhere in the page's state or HTML. When nothing mentions it any more it is deleted 10 minutes later (so an undo in the page still finds it); the check runs after each save, and an hourly sweep plus one at startup catch anything the per-save check missed. Limits are 32 MB per asset and 2000 assets / 256 MB per page. From 80% of either limit, `saveAsset` results carry `usage.warning` and Scribe shows a notice. Page assets travel with exports and imports.
 
 `scribe.bind` is what makes text fields safe. It saves as you type (250 ms idle, 1 s ceiling), and when a remote change arrives for a field you are currently in, it leaves your caret and half-typed text alone, marks the field `scribe-stale`, and reconciles once you move on.
 
-Writes merge at the top level, so the agent updating `todos` never disturbs the `notes` you are typing. To make in-progress form input completely off limits, keep it under a `draft` key — by convention the agent reads it but never writes it.
+### How changes sync
 
-### Conflicts
+Every write is a list of ops (see `src/stateOps.ts`; the daemon and the page bridge run the same code). A page applies its own writes at once, sends them as ops, and rebases anything not yet confirmed onto the deltas other writers produce, so an agent commenting on one card and you renaming another both keep their change. `scribe.set` diffs the keys you pass against the current state, turning a rewritten array of items with `id`s into item-level ops. The same field written twice at once: the later write wins. Viewers receive each change as the ops that made it (`tab_state` carries `fromRevision`, `stateRevision`, `ops`); one that missed a delta refetches the state.
 
-`page_state` returns a `stateRevision`. Passing it back as `expectedRevision` makes the write conditional: if the user changed the page in between, it is refused with `409` and the response carries their current state, so the agent can merge and retry. Agent writes without an `expectedRevision` are refused on a page that already has state, unless `force` is set. Writes from the page itself are never blocked — the person looking at the screen wins ties.
+Agent writes are strict: all or nothing, on the latest state. `expectedRevision` (or a `test` op) makes a write conditional when it depends on a value the agent read. Page writes are lenient: an op whose target someone else removed is skipped, and the rest apply. State is capped at 4 MB per page.
 
-Agent writes made only of `ops` may skip `expectedRevision`. Each op names its target by id or field, so it applies to the latest state, and a change elsewhere on the page doesn't refuse it. If a target is gone, the whole write fails and nothing changes.
+Per-viewer state (`scribe.local`) is stored per page and viewer (the desktop app, a browser), never broadcast, and never shown to agents.
 
-`page_wait` blocks until `scribe.signal("name")` (or `data-scribe-signal="name"`) fires on that tab. It returns the signal plus the current state. Waiting for any state change would wake on every keystroke; the named signal is the handshake. After a successful wait, pass `signal.revision` as `afterSignalRevision` to wait for the next one without re-showing the page.
+### Events
+
+`scribe.signal("name", data)` (or `data-scribe-signal="name"`) logs an event on the page: `{ seq, name, data, at, by }`. Each page keeps its last 500. `page_wait` returns the events after a cursor and the new cursor, so several events in a row are never merged and none is seen twice. Scribe logs events of its own too, like `claim_lost` when an agent holding a Kanban card stops.
+
+### Actions and claims
+
+Built-in templates ship actions (`src/actions`), which the agent runs with `page_action` and a page with `scribe.action`. They read the latest state and apply the template's rules in one step; the template's guide lists them. Kanban's `claim` records which MCP session and chat thread holds a card. When that thread's turn fails or is stopped (or the daemon restarts mid-turn), a sweep moves the card back to the agent column with a blocked note; a holder that goes quiet gets its card flagged instead.
 
 ## Agent chat
 
-The board has its own chat with coding agents, so Claude and Cursor run from one place. The daemon runs the agents; the browser only shows them.
+Scribe has its own chat with coding agents, so Claude and Cursor run from one place. The daemon runs the agents; the browser only shows them.
 
 | Provider | How it runs | Login |
 | --- | --- | --- |
@@ -176,7 +186,7 @@ Three ways to open it:
 
 **Threads** belong to a page, a Library folder, a workspace folder, or nothing (global). The list's **Here** filter shows threads for the current page, its folders, workspaces, and global ones; **All** and **Archived** show the rest. New page and folder threads start in Pages mode. A thread keeps its provider; picking a model from the other provider starts a new thread in the same place.
 
-**Modes** set what the agent may touch: **Code** (files and shell in the workspace), **Ask** (read-only), **Plan** (propose first; accepting the plan continues in Code), **Board** (board tools and web only, no files or shell). In Code mode the shield picks approvals: **Ask first**, **Auto-edit** (edits pass, commands ask), **Auto review** (Claude's classifier), **Full access**. Approval cards offer the provider's own "always allow", which it saves to its own allowlist. Board tools on this daemon's MCP server are approved automatically, like the MCP today. **Web** turns web search and fetch on or off. The model and reasoning pickers read the provider's model list: Claude effort levels, Cursor's effort, fast, and context options per model.
+**Modes** set what the agent may touch: **Code** (files and shell in the workspace), **Ask** (read-only), **Plan** (propose first; accepting the plan continues in Code), **Pages** (page tools and web only, no files or shell). In Code mode the shield picks approvals: **Ask first**, **Auto-edit** (edits pass, commands ask), **Auto review** (Claude's classifier), **Full access**. Approval cards offer the provider's own "always allow", which it saves to its own allowlist. Page tools on this daemon's MCP server are approved automatically, like the MCP today. **Web** turns web search and fetch on or off. The model and reasoning pickers read the provider's model list: Claude effort levels, Cursor's effort, fast, and context options per model.
 
 What shows in a thread:
 
@@ -184,7 +194,7 @@ What shows in a thread:
 - **Tool rows**: reads and searches fold into "Explored N files"; edits show file names and `+added −removed`; commands show the command and exit code. Expand a row for its output or inline diff.
 - **Changes**: every turn in a git workspace snapshots the working copy before and after (a temporary index, so your index and refs are untouched and new files count). The turn ends with the files it changed and line counts; **Review** opens the diff viewer with This turn, Thread, and Git working tree tabs, and **Revert turn** undoes the turn's changes if they still apply cleanly. Without git, the per-tool diffs are used.
 - **Page edits**: a turn on a page (a page thread, or with the page attached) keeps a checkpoint of the page's HTML. The footer's **Page edited** button puts it back.
-- Approvals, questions, plans, and todo lists as cards. Page links from the agent (`[[page-key]]` or `[label](board:page-key)`) open like page links do (Ctrl navigate, Shift split, Alt peek).
+- Approvals, questions, plans, and todo lists as cards. Page links from the agent (`[[scribe:page-key]]` or `[label](scribe:page-key)`) open like page links do (Ctrl navigate, Shift split, Alt peek).
 
 The composer takes pasted or dropped images, `/` opens the provider's slash commands and skills, and the page chip attaches the current page. Messages sent while a turn runs are queued; Stop drops the queue, and those messages stay marked "Not sent" with **Send again**. Esc twice in the composer stops a running turn.
 
@@ -194,24 +204,24 @@ Threads, transcripts, and page checkpoints are stored in `%LOCALAPPDATA%\scribe\
 
 ## Data
 
-Tabs persist in `%LOCALAPPDATA%\scribe\scribe.sqlite` across daemon and Cursor restarts, including each tab's state object (max 256 KB per tab). Image files live in `%LOCALAPPDATA%\scribe\assets\<tabId>\`. Every page lives in the **Library** until you delete it; closing a tab only takes it off the strip. **Ctrl+Z** undoes whichever is newer: the most recent close (reopens the tab), or the most recent delete. A folder delete or any other bulk delete is one undo step. Deleted pages and folders sit in the **Trash** (Library ⋯ menu → Trash) for 7 days: each row has a restore button that puts it back in the Library, and its context menu can delete it for good. After 7 days they are deleted automatically. A previous `state.json` is imported once and renamed to `state.json.bak`.
+Tabs persist in `%LOCALAPPDATA%\scribe\scribe.sqlite` across daemon and Cursor restarts, including each page's state object (max 4 MB per page), its event log, and per-viewer local state. Image files live in `%LOCALAPPDATA%\scribe\assets\<tabId>\`. Every page lives in the **Library** until you delete it; closing a tab only takes it off the strip. **Ctrl+Z** undoes whichever is newer: the most recent close (reopens the tab), or the most recent delete. A folder delete or any other bulk delete is one undo step. Deleted pages and folders sit in the **Trash** (Library ⋯ menu → Trash) for 7 days: each row has a restore button that puts it back in the Library, and its context menu can delete it for good. After 7 days they are deleted automatically. A previous `state.json` is imported once and renamed to `state.json.bak`.
 
 The browser **Clear** button closes unpinned tabs. Pinned tabs stay until you close or delete them. Shift+click a tab's × deletes the page (the notice has Undo). **Ctrl+S** downloads the current page as HTML (markup only). Settings and the tab/Library context menus export a `.scribe.json` pack that includes state, images, Library folder and position, and the templates behind any template pages (Export all includes every template; a folder's menu exports just that folder); Import (or a drop on Settings, the tab strip, or the Library) restores those files.
 
-The sidebar has **Library** and **Templates**. The Library is a tree of folders and pages in your own order: drag rows to reorder or file them, drag a page onto the strip to open it there, or drag a tab into the Library to file it and close it. Open pages have an accent bar, the current tab's row is filled, and pinned pages get a faint warm tint. Hovering a tab or Library row shows its full title, id, created and updated times, and folder. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. A few built-ins (Embed, Markdown note, Todo list) sit in a collapsible **Built-in** group under your own; opening one first adds a copy to your templates and the page uses that copy, and app updates only refresh that copy while you haven't edited it and the page data format is unchanged. Otherwise the copy gets a dim orange marker, and an agent can bring it up to date. Right-click a built-in to add it without opening a page. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, the board blocks the page until the agent fixes the data.
+The sidebar has **Library** and **Templates**. The Library is a tree of folders and pages in your own order: drag rows to reorder or file them, drag a page onto the strip to open it there, or drag a tab into the Library to file it and close it. Open pages have an accent bar, the current tab's row is filled, and pinned pages get a faint warm tint. Hovering a tab or Library row shows its full title, id, created and updated times, and folder. Templates are reusable pages with a form. The agent creates a template when you ask; you open copies from the list. A few built-ins (Embed, Markdown note, Todo list) sit in a collapsible **Built-in** group under your own; opening one first adds a copy to your templates and the page uses that copy, and app updates only refresh that copy while you haven't edited it and the page data format is unchanged. Otherwise the copy gets a dim orange marker, and an agent can bring it up to date. Right-click a built-in to add it without opening a page. Updating a template refreshes every page created from it. A linked page's HTML cannot be edited — only the template can. If a template change breaks that page's data, Scribe blocks the page until the agent fixes the data.
 
 ### Embedding a site
 
-A page whose `<head>` has `<meta name="scribe-embed" content="URL">` is shown by pointing the tab iframe straight at that URL, instead of nesting it inside the tab page. The Embed template does this. Only `http:` and `https:` URLs outside the board's own origin count; anything else falls back to rendering the page's HTML. The stored HTML stays a small wrapper, so `page_read` and search see the URL but not the site's content.
+A page whose `<head>` has `<meta name="scribe-embed" content="URL">` is shown by pointing the tab iframe straight at that URL, instead of nesting it inside the tab page. The Embed template does this. Only `http:` and `https:` URLs outside Scribe's own origin count; anything else falls back to rendering the page's HTML. The stored HTML stays a small wrapper, so `page_read` and search see the URL but not the site's content.
 
-A direct frame keeps the site on the same site as the board chrome (`127.0.0.1`), so logins that use `SameSite=Lax` cookies (ComfyUI-Login, for example) keep working. Use `127.0.0.1`, not `localhost`: the browser treats them as different sites. Board shortcuts (Ctrl+S, Ctrl+D, …) don't reach the board while focus is inside the embedded site.
+A direct frame keeps the site on the same site as Scribe chrome (`127.0.0.1`), so logins that use `SameSite=Lax` cookies (ComfyUI-Login, for example) keep working. Use `127.0.0.1`, not `localhost`: the browser treats them as different sites. Scribe shortcuts (Ctrl+S, Ctrl+D, …) don't reach Scribe while focus is inside the embedded site.
 
 ### Hiding a tab from the agent
 
-Right-click a tab or Library row and choose **Hide from agent**, or tick **Hide from agent** in a template's Open/Edit form. Hidden tabs show an eye icon. To the agent they don't exist: they're left out of `page_list`, `library_search`, search, `activeId`, bulk `page_close`, and template instance counts, and every per-tab tool returns "tab not found". A `page_wait` already running on the tab ends as if the tab had closed. `page_show` with a hidden tab's key creates a separate tab instead of overwriting it. Only the board UI can change the flag; the MCP marks its requests with an `x-scribe-client: agent` header and cannot flip it.
+Right-click a tab or Library row and choose **Hide from agent**, or tick **Hide from agent** in a template's Open/Edit form. Hidden tabs show an eye icon. To the agent they don't exist: they're left out of `page_list`, `library_search`, search, `activeId`, bulk `page_close`, and template instance counts, and every per-tab tool returns "tab not found". A `page_wait` already running on the tab ends as if the tab had closed. `page_show` with a hidden tab's key creates a separate tab instead of overwriting it. Only Scribe UI can change the flag; the MCP marks its requests with an `x-scribe-client: agent` header and cannot flip it.
 
-This is a guardrail on the board's tools, not a sandbox. An agent with a shell or browser could still call the HTTP API without the header, or open the embedded URL itself.
+This is a guardrail on Scribe's tools, not a sandbox. An agent with a shell or browser could still call the HTTP API without the header, or open the embedded URL itself.
 
 Port: `4747` (override with `SCRIBE_PORT`). Bound to localhost only.
 
-Tab pages load in an iframe from **http://127.0.0.2:4747** so they can use `localStorage` without accessing the board chrome or API. Refresh the board after upgrading so the new iframe sandbox takes effect.
+Tab pages load in an iframe from **http://127.0.0.2:4747** so they can use `localStorage` without accessing Scribe chrome or API. Refresh Scribe after upgrading so the new iframe sandbox takes effect.

@@ -1,5 +1,18 @@
 # Migrations
 
+## Scribe release: schema 3, data folder, page keys (breaking)
+
+- **What changed:** The app is renamed from Agent Board to Scribe, and page state moved to ops, an event log, and per-viewer local state.
+  - **Data folder:** `%LOCALAPPDATA%\agent-board` moves to `%LOCALAPPDATA%\scribe` the first time the new daemon starts (`migrateLegacyData` in `src/config.ts`), entry by entry, never overwriting what is already there. `board.sqlite` (and `-wal` / `-shm`) becomes `scribe.sqlite`. Claude Code's session folder for the scratch dir is copied to the new path's name so Pages-mode threads still resume. `SCRIBE_HOME` skips the folder move but still renames the database.
+  - **Schema 2 → 3** (`migrateV2ToV3` in `src/dbMigrate.ts`): `tabs.signal_revision` / `tabs.signal` are renamed to `event_seq` / `events`, and a page's last signal becomes the first entry of its event log. A new `page_local` table (`tab_id` → `tabs(id)` cascade, `viewer`, `state`) holds `scribe.local`. A schema 1 board migrates through 2 (using the frozen `TABS_TABLE_V2_SQL`) and then to 3.
+  - **Page keys** read `scribe:<slug>`. The store adds the prefix to any key without it when it loads (`store.load`) and writes those rows back; lookups take either form. Exports carry the prefixed keys; importing an older export prefixes its keys on the way in.
+  - **Browser settings:** the UI moves `agent-board.*` localStorage keys to `scribe.*` on load. The desktop app has a new identifier (`local.scribe.desktop`), so its WebView profile, and with it window-only settings, starts fresh once.
+  - **Desktop:** `scribe.exe` replaces `board.exe` (the installer removes the old exe), and the "Agent Board" startup entry moves to "Scribe".
+- **Protocol:** `VERSION` 2.5.0 → 3.0.0. State writes are ops only (`PUT /api/tabs/:id/state { ops }`), `tab_state` carries ops instead of the whole state, `POST /api/tabs/:id/signal` became `/events`, waits take a cursor and return events. MCP tools are renamed (`board_*` → `page_*` / `library_*` / `template_*`), the page API is `window.scribe` with `data-scribe-*` attributes, and the MCP server is named `scribe`. Pages written for the old API need updating; the built-in templates are updated and resync on startup.
+- **Outside the repo:** MCP configs must point a server named `scribe` at `dist/index.js` (Cursor: `~/.cursor/mcp.json`; Claude Code: `claude mcp`), and the skill folder is `.cursor/skills/scribe`.
+- **How to verify:** `a schema v1 board migrates archived tabs into the Library` runs v1 → 3; the event, local state and key tests in `src/store.test.ts`; manually, copy an old `%LOCALAPPDATA%\agent-board` aside, start the daemon, and check that the folder moved and pages, keys and threads are intact.
+- **When to remove:** the folder move, key prefixing and localStorage move can go once no Agent Board install is left to upgrade. Keep `migrateV2ToV3`.
+
 ## Templates tables (additive, schema still 1)
 
 - **What changed:** Templates and page-to-template links are stored in two new SQLite tables: `templates` and `template_bindings`.

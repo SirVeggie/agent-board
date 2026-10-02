@@ -1,6 +1,6 @@
 # Scribe templates
 
-Read this file only when the user asked you to create, edit, delete, or open a **board template**. Do not create templates unprompted.
+Read this file only when the user asked you to create, edit, delete, or open a **Scribe template**. Do not create templates unprompted.
 
 A template is reusable page HTML plus a form. The user opens instances from the Templates sidebar. Updating the template re-renders every linked page with that page's own form values.
 
@@ -28,10 +28,10 @@ If the user wants a changed version of a built-in, `template_get` it and upsert 
 
 1. Decide the form with the user, or pick a small set: e.g. Title, item name singular/plural, column count.
 2. Write HTML as you would for `page_show`. Use `{{fieldKey}}` where the value should appear in markup (HTML-escaped). In scripts, read `scribe.template.values.fieldKey`.
-3. Use `scribe.state` for live data (todos, notes). Put starting data in `initialState`. Items that point at other board pages can keep the page's key in state and render `<a data-scribe-open="key">` (see Linking pages in the skill).
+3. Use `scribe.state` for live data (todos, notes). Put starting data in `initialState`. Items that point at other Scribe pages can keep the page's key in state and render `<a data-scribe-open="scribe:key">` (see Linking pages in the skill).
 4. Set `titleTemplate` if the tab title should include a field, e.g. `{{title}}`.
 5. Field `type`: `text`, `textarea`, `number`, `select`, `checkbox`. Select needs `options`. Keys must be JS identifiers.
-6. If an agent will read or change the page's state, write a `guide`: markdown with the state shape, the signals the page fires and when, and the rules for editing (which keys to leave alone, how to add an item). Tool results hand it to any agent the first time it touches a page from the template, so nothing about the template needs to go in this skill. Keep it under a page; `templates/builtin/kanban.guide.md` is a good model. Upserting without `guide` keeps the current one.
+6. If an agent will read or change the page's state, write a `guide`: markdown with the state shape, the events the page logs and their data, and the rules for editing (which keys to leave alone, how to add an item). Give array items stable `id`s so agents can address them by path, and keep per-viewer things (filters, drafts, the open item) in `scribe.local`. Tool results hand it to any agent the first time it touches a page from the template, so nothing about the template needs to go in this skill. Keep it under a page; `templates/builtin/todo-list.guide.md` is a good model. (Actions, like the Kanban board's, ship only with built-in templates for now.) Upserting without `guide` keeps the current one.
 
 Do not pin the template itself. The user opens pages from the sidebar.
 
@@ -43,7 +43,7 @@ If the **page data shape** changed (new required `scribe.state` keys, different 
 
 1. Bump `stateVersion` (integer, start at 1).
 2. Linked pages show an overlay and cannot be used until you fix each page.
-3. `page_state` / `page_update` still work. After the data is valid, call `page_update` with `resolveIncompatibility: true` and `expectedRevision`.
+3. `page_state` / `page_update` still work. After the data is valid, call `page_update` with your ops and `resolveIncompatibility: true`.
 
 If you only change layout or copy and existing data still works, leave `stateVersion` alone.
 

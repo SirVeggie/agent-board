@@ -102,7 +102,7 @@ type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[]
 
 /** What the model reads for a message: where it came from, its context chips, then the text. */
 function promptText(msg: QueuedMessage): string {
-  const origin = msg.from === "page" ? "<context>\nSent by the code of the board page this thread belongs to (board.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
+  const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
   return origin + contextBlock(msg.context) + msg.text;
 }
 
