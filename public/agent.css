@@ -3214,8 +3214,16 @@ button.ag-ws-dir:hover {
   flex-shrink: 0;
 }
 
+.ag-diff-head .ag-modal-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ag-diff-head .ag-seg {
   width: auto;
+  flex-shrink: 0;
 }
 
 .ag-diff-actions {

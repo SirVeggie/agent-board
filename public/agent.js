@@ -561,7 +561,7 @@
     const title = el("h2", "ag-modal-title", "Changes");
     const tabs = el("div", "ag-seg");
     const actions = el("div", "ag-diff-actions");
-    head.append(title, tabs, el("span", "ag-grow"), actions, button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)"));
+    head.append(title, el("span", "ag-grow"), tabs, actions, button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)"));
     const body = el("div", "ag-diff-body");
     const side = el("div", "ag-diff-files");
     const main = el("div", "ag-diff-main");
