@@ -157,6 +157,8 @@ html.tight-small .agent-pane {
 /* ---------- chat view ---------- */
 
 .ag-view {
+  /* The step rail's resting dots, as in the floating chat. */
+  --dock-dot: color-mix(in srgb, var(--heading) 24%, var(--side-bg));
   flex: 1;
   min-height: 0;
   display: flex;
@@ -166,14 +168,19 @@ html.tight-small .agent-pane {
   line-height: 1.55;
 }
 
+/* No rule under the header: the conversation fades out beneath it instead. */
 .ag-thead {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 10px 10px 8px 12px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
   min-width: 0;
+}
+
+.ag-view > .ag-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14px);
+  mask-image: linear-gradient(to bottom, transparent, #000 14px);
 }
 
 .ag-thead-title {
@@ -1385,6 +1392,72 @@ button.ag-change-row .ag-fname {
   margin: 0 auto 18px;
 }
 
+/* Sidebar and full window: the floating chat's bar style. One raised card, the input and send
+   button on top, a strip with the run status and the settings below. */
+.ag-view .ag-composer {
+  padding: 0;
+  gap: 0;
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--ag-raised);
+}
+
+.ag-view .ag-composer:focus-within {
+  box-shadow: var(--ag-raised), 0 0 0 1.5px rgba(var(--accent-rgb), 0.16);
+}
+
+.ag-view .ag-ctx {
+  padding: 10px 12px 0;
+}
+
+.ag-compose-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  min-width: 0;
+}
+
+.ag-compose-row .ag-textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.ag-compose-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--ag-bar-bg);
+  border-radius: 0 0 16px 16px;
+}
+
+.ag-compose-bar .dock-status::after {
+  content: "";
+  width: 1px;
+  height: 14px;
+  margin-left: 4px;
+  background: var(--border);
+}
+
+.ag-compose-bar .ag-bar {
+  flex: 1;
+  gap: 2px;
+}
+
+.ag-compose-bar button.ag-pill {
+  background: transparent;
+  box-shadow: none;
+  padding: 0 6px;
+}
+
+.ag-compose-bar button.ag-pill:hover {
+  background: rgba(var(--lift-rgb), 0.06);
+}
+
 .ag-ctx {
   display: flex;
   flex-wrap: wrap;
@@ -2456,7 +2529,7 @@ button.dock-scope:hover {
   color: var(--text);
 }
 
-/* ----- the conversation inside the dock ----- */
+/* ----- the conversation: dock spacing here, the turn styling below is shared by every view ----- */
 
 .agent-dock .ag-transcript {
   padding: 12px 16px 18px;
@@ -2489,7 +2562,7 @@ button.dock-scope:hover {
 }
 
 /* A faint divider that fades out at both ends separates turns. */
-.agent-dock .ag-turn + .ag-turn::before {
+.ag-transcript .ag-turn + .ag-turn::before {
   content: "";
   display: block;
   width: 50%;
@@ -2499,7 +2572,7 @@ button.dock-scope:hover {
 }
 
 /* Your turn: a glowing arrow, no bubble. */
-.agent-dock .ag-user {
+.ag-transcript .ag-user {
   align-self: stretch;
   max-width: none;
   flex-direction: row;
@@ -2508,8 +2581,8 @@ button.dock-scope:hover {
   gap: 8px;
 }
 
-.agent-dock .ag-user-bubble,
-.agent-dock .ag-user.queued .ag-user-bubble {
+.ag-transcript .ag-user-bubble,
+.ag-transcript .ag-user.queued .ag-user-bubble {
   flex: 1;
   min-width: 0;
   padding: 0;
@@ -2519,13 +2592,13 @@ button.dock-scope:hover {
   box-shadow: none;
 }
 
-.agent-dock .ag-you {
+.ag-transcript .ag-you {
   margin-top: 3px;
   color: var(--ag-live);
   filter: drop-shadow(0 0 3px rgba(var(--ag-live-rgb), 0.75));
 }
 
-.agent-dock .ag-queued {
+.ag-transcript .ag-queued {
   flex-basis: 100%;
   padding-left: 20px;
 }
@@ -2569,12 +2642,12 @@ button.dock-scope:hover {
   background: var(--danger);
 }
 
-.agent-dock .ag-turn.latest .ag-step-last::before {
+.ag-transcript .ag-turn.latest .ag-step-last::before {
   background: var(--ag-ok);
   box-shadow: 0 0 8px color-mix(in srgb, var(--ag-ok) 70%, transparent);
 }
 
-.agent-dock .ag-turn.latest.running .ag-step-last::before {
+.ag-transcript .ag-turn.latest.running .ag-step-last::before {
   background: var(--ag-live);
   box-shadow: 0 0 9px var(--ag-live);
   animation: dock-glow 1.2s ease-in-out infinite;
@@ -2591,23 +2664,23 @@ button.dock-scope:hover {
   display: none;
 }
 
-.agent-dock .ag-tool.k-edit > .ag-tool-head,
-.agent-dock .ag-tool.k-delete > .ag-tool-head {
+.ag-transcript .ag-tool.k-edit > .ag-tool-head,
+.ag-transcript .ag-tool.k-delete > .ag-tool-head {
   background: transparent;
   box-shadow: none;
 }
 
-.agent-dock .ag-file {
+.ag-transcript .ag-file {
   padding: 0;
   background: none;
 }
 
 /* Earlier turns fold their steps into one summary line; clicking it shows them. */
-.agent-dock button.ag-sum {
+.ag-transcript button.ag-sum {
   display: none;
 }
 
-.agent-dock .ag-turn:not(.latest) button.ag-sum {
+.ag-transcript .ag-turn:not(.latest) button.ag-sum {
   display: inline-flex;
   align-self: flex-start;
   max-width: 100%;
@@ -2625,7 +2698,7 @@ button.dock-scope:hover {
   overflow: hidden;
 }
 
-.agent-dock .ag-turn:not(.latest) button.ag-sum:hover {
+.ag-transcript .ag-turn:not(.latest) button.ag-sum:hover {
   color: var(--text);
   background: rgba(var(--lift-rgb), 0.05);
 }
@@ -2650,10 +2723,10 @@ button.dock-scope:hover {
   transform: rotate(90deg);
 }
 
-.agent-dock .ag-turn:not(.latest):not(.open) .ag-rail,
-.agent-dock .ag-turn:not(.latest) .ag-turn-end,
-.agent-dock .ag-turn:not(.latest) .ag-turn-foot,
-.agent-dock .ag-turn-foot.s-running {
+.ag-transcript .ag-turn:not(.latest):not(.open) .ag-rail,
+.ag-transcript .ag-turn:not(.latest) .ag-turn-end,
+.ag-transcript .ag-turn:not(.latest) .ag-turn-foot,
+.ag-transcript .ag-turn-foot.s-running {
   display: none;
 }
 

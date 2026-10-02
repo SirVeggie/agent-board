@@ -1007,8 +1007,8 @@
           byParent.set(it.parentToolId, list);
         }
       }
-      // The dock strings consecutive steps (reasoning, tools) on a rail of dots.
-      const railed = this.variant === "dock";
+      // Consecutive steps (reasoning, tools) hang on a rail of dots.
+      const railed = true;
       let rail = null;
       const put = (node) => {
         const step = railed && (node.classList.contains("ag-reason") || node.classList.contains("ag-tool") || node.classList.contains("ag-group"));
@@ -1096,9 +1096,8 @@
       return out;
     }
 
-    /** The dock folds every turn but the latest; it marks that one after each render. */
+    /** Every turn but the latest folds its steps; this marks that one after each render. */
     markLatest() {
-      if (this.variant !== "dock") return;
       const turns = [...this.transcript.querySelectorAll(".ag-turn")].filter((n) => !n.dataset.turn.startsWith("pending") && !n.dataset.turn.startsWith("dropped"));
       const last = turns[turns.length - 1];
       for (const n of turns) n.classList.toggle("latest", n === last);
@@ -1123,8 +1122,8 @@
         bubble.append(chips);
       }
       bubble.append(el("div", "ag-user-text", item.text));
-      // The dock marks your turn with an arrow instead of a bubble.
-      if (this.variant === "dock") row.append(icon("you", "ag-ico ag-you"));
+      // Your turn is marked with an arrow instead of a bubble.
+      row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
       if (queued) row.append(el("div", "ag-queued", "Queued — sends when the current turn ends"));
       if (item.dropped) {
@@ -1498,6 +1497,8 @@
     onTurn(turn) {
       this.dirtyTurns.add(turn.id);
       this.schedule();
+      // The strip's run clock starts from the running turn, which can arrive after the thread's status.
+      if (this.status && turn.status === "running" && !this.status.querySelector(".ag-clock")) this.renderComposerBar();
     }
 
     onDelta(item) {
@@ -1595,10 +1596,20 @@
       this.bar = el("div", "ag-bar");
       this.slash = el("div", "ag-slash");
       this.slash.hidden = true;
-      // The dock places the settings bar and the send button itself.
+      // The send button sits beside the input. The dock places it and the settings bar itself;
+      // the sidebar and full window put a strip under the input with the run status and the settings.
       this.sendSlot = el("div", "ag-send-slot");
-      box.append(this.slash, this.ctxRow, this.input);
-      if (this.variant !== "dock") box.append(this.bar);
+      box.append(this.slash, this.ctxRow);
+      if (this.variant === "dock") {
+        box.append(this.input);
+      } else {
+        const row = el("div", "ag-compose-row");
+        row.append(this.input, this.sendSlot);
+        this.status = el("span", "dock-status");
+        const strip = el("div", "ag-compose-bar");
+        strip.append(this.status, this.bar);
+        box.append(row, strip);
+      }
       box.addEventListener("dragover", (event) => {
         if ([...(event.dataTransfer?.items || [])].some((i) => i.type.startsWith("image/"))) event.preventDefault();
       });
@@ -1724,12 +1735,15 @@
         ws.append(icon("box"), el("span", null, s.cwd ? R.basename(s.cwd) : "Workspace…"));
         bar.append(ws);
       }
-      let tail = bar;
-      if (this.variant === "dock") {
-        tail = this.sendSlot;
-        tail.replaceChildren();
-      } else {
-        bar.append(el("span", "ag-grow"));
+      const tail = this.sendSlot;
+      tail.replaceChildren();
+      if (this.status) {
+        // Status dot and run time at the start of the strip, as in the floating chat.
+        const status = t?.status || "idle";
+        const start = status !== "idle" ? [...(S.details.get(t.id)?.turns.values() || [])].find((x) => x.status === "running")?.startedAt : null;
+        this.status.className = `dock-status s-${status}`;
+        this.status.replaceChildren(el("span", "dock-dot"));
+        if (start) this.status.append(setClock(el("span", "ag-clock"), start));
       }
       if (t?.queued) tail.append(el("span", "ag-tag", `${t.queued} queued`));
       const running = t && t.status !== "idle";
