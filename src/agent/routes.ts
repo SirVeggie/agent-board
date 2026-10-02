@@ -34,6 +34,7 @@ export function agentRouter(host: AgentHost): express.Router {
       providers: await host.providerStatus(),
       prefs: host.prefs(),
       models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor") },
+      limits: host.limits(),
     }))
   );
 

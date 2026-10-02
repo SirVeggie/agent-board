@@ -237,6 +237,12 @@
         dock.onItem(msg.item);
         return;
       }
+      case "agent_limits": {
+        S.config.limits = msg.limits || {};
+        for (const view of views()) view.renderComposerBar();
+        agentSettings.renderUsage();
+        return;
+      }
       case "agent_item_deleted": {
         const detail = S.details.get(msg.threadId);
         const item = detail?.byId.get(msg.id);
@@ -1776,6 +1782,8 @@
         ws.append(icon("box"), el("span", null, s.cwd ? R.basename(s.cwd) : "Workspace…"));
         bar.append(ws);
       }
+      const meter = usageChip(s.provider);
+      if (meter) bar.append(meter);
       const tail = this.sendSlot;
       tail.replaceChildren();
       if (this.status) {
@@ -2845,6 +2853,75 @@
     if (btn) btn.hidden = localStorage.getItem(LS.button) === "0";
   }
 
+  /* ---------- plan usage ---------- */
+
+  function usageLevel(utilization) {
+    return utilization >= 0.9 ? "high" : utilization >= 0.75 ? "warn" : "ok";
+  }
+
+  function percent(utilization) {
+    return `${Math.round(utilization * 100)}%`;
+  }
+
+  /** "in 2 h 10 min" / "Sat 10:00" for a window's reset time. */
+  function resetText(at) {
+    if (!at) return "";
+    const ms = at - Date.now();
+    if (ms <= 0) return "resets now";
+    if (ms < 24 * 3600 * 1000) {
+      const h = Math.floor(ms / 3600000);
+      const m = Math.round((ms % 3600000) / 60000);
+      return `resets in ${h ? `${h} h ` : ""}${m} min`;
+    }
+    return `resets ${new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
+  }
+
+  function planLimits(provider) {
+    const limits = S.config.limits?.[provider];
+    return limits && limits.windows?.length ? limits : null;
+  }
+
+  /** Compact "5-hour 84% · Weekly 76%" for the chat's settings bar; nothing until the provider has reported. */
+  function usageChip(provider) {
+    const limits = planLimits(provider);
+    if (!limits) return null;
+    const top = Math.max(...limits.windows.map((w) => w.utilization));
+    const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => agentSettings.open(), "");
+    chip.title = `${PROVIDER_LABEL[provider] || provider} plan usage\n${limits.windows.map((w) => `${w.label}: ${percent(w.utilization)} · ${resetText(w.resetsAt)}`).join("\n")}${limits.overage ? "\nUsing extra usage" : ""}`;
+    for (const w of limits.windows) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${w.label === "5-hour" ? "5h" : w.label === "Weekly" ? "wk" : w.label} ${percent(w.utilization)}`));
+    return chip;
+  }
+
+  /** Full meters for the settings dialog. */
+  function usageMeters(provider) {
+    const box = el("div", "ag-meters");
+    const limits = planLimits(provider);
+    const head = el("div", "ag-meter-head");
+    head.append(el("strong", null, PROVIDER_LABEL[provider] || provider));
+    if (limits) head.append(el("span", "ag-muted", ` · updated ${R.timeAgo(limits.at)}${limits.overage ? " · using extra usage" : ""}`));
+    box.append(head);
+    if (!limits) {
+      box.append(
+        el(
+          "p",
+          "ag-muted ag-meter-none",
+          provider === "claude" ? "Shows after the next Claude turn: Claude Code reports the plan's usage as it runs." : "Cursor does not report plan usage to the board (its ACP server has no usage call)."
+        )
+      );
+      return box;
+    }
+    for (const w of limits.windows) {
+      const row = el("div", `ag-meter lvl-${usageLevel(w.utilization)}`);
+      const bar = el("div", "ag-meter-bar");
+      const fill = el("div", "ag-meter-fill");
+      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
+      bar.append(fill);
+      row.append(el("span", "ag-meter-label", w.label), bar, el("span", "ag-meter-pct", percent(w.utilization)), el("span", "ag-meter-reset", resetText(w.resetsAt)));
+      box.append(row);
+    }
+    return box;
+  }
+
   /* ---------- agent settings: their own dialog, opened from the chat header or the board's Settings ---------- */
 
   const KEYS = [
@@ -2940,6 +3017,10 @@
       );
       providers.append(el("h3", null, "Providers"), this.status, actions);
 
+      const usage = el("section", "settings-section");
+      this.usage = el("div", "ag-usage-list");
+      usage.append(el("h3", null, "Plan usage"), this.usage);
+
       const chat = el("section", "settings-section");
       chat.append(
         el("h3", null, "Chat"),
@@ -2996,7 +3077,7 @@
         "settings-hint",
         "Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
       );
-      panel.append(title, providers, chat, keys, about);
+      panel.append(title, providers, usage, chat, keys, about);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -3032,10 +3113,15 @@
     isOpen() {
       return Boolean(this.root && !this.root.hidden);
     },
+    renderUsage() {
+      if (!this.usage || !this.isOpen()) return;
+      this.usage.replaceChildren(...["claude", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
+    },
     open() {
       if (!this.root) return;
       this.renderStatus();
       this.root.hidden = false;
+      this.renderUsage();
       this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });
     },
     close() {

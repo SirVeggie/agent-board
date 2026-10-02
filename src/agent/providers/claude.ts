@@ -761,6 +761,10 @@ class ClaudeSession implements ProviderSession {
       this.onLifecycle(m);
       return;
     }
+    if (m.type === "rate_limit_event") {
+      this.ctx.limits?.("claude", m.rate_limit_info);
+      return;
+    }
     if (this.swallowing) {
       if (m.type === "result") this.swallowing = null;
       return;

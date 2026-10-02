@@ -2603,6 +2603,95 @@ button.dock-scope:hover {
   padding-left: 20px;
 }
 
+/* Plan usage: a compact chip in the chat's settings bar, meters in the settings dialog. */
+button.ag-usage {
+  margin-left: auto;
+  height: 22px;
+  padding: 0 6px;
+  gap: 8px;
+  font: 11px var(--ag-mono);
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+button.ag-usage:hover {
+  background: rgba(var(--lift-rgb), 0.06);
+}
+
+.ag-usage-w.lvl-warn,
+.ag-meter.lvl-warn .ag-meter-pct {
+  color: var(--ag-warn);
+}
+
+.ag-usage-w.lvl-high,
+.ag-meter.lvl-high .ag-meter-pct {
+  color: var(--danger);
+}
+
+.ag-usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ag-meter-head {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.ag-meter-none {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.ag-meter {
+  display: grid;
+  grid-template-columns: 110px 1fr 40px;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  font-size: 12.5px;
+  margin: 4px 0 8px;
+}
+
+.ag-meter-label {
+  color: var(--text);
+}
+
+.ag-meter-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(var(--lift-rgb), 0.08);
+  overflow: hidden;
+}
+
+.ag-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--ag-ok);
+}
+
+.ag-meter.lvl-warn .ag-meter-fill {
+  background: var(--ag-warn);
+}
+
+.ag-meter.lvl-high .ag-meter-fill {
+  background: var(--danger);
+}
+
+.ag-meter-pct {
+  font: 11.5px var(--ag-mono);
+  text-align: right;
+}
+
+.ag-meter-reset {
+  grid-column: 2 / 4;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* Agent settings: the key list. */
 .ag-keys {
   display: grid;

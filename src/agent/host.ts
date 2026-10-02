@@ -35,6 +35,7 @@ import type {
   Item,
   ItemBody,
   ModelOption,
+  PlanLimits,
   ProviderId,
   ProviderStatus,
   RunStatus,
@@ -46,6 +47,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
+import { isPlainRecord } from "./types.js";
 
 const FLUSH_MS = 700;
 const DELTA_MS = 50;
@@ -85,6 +87,15 @@ type Pending =
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
   | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
   | { kind: "plan"; threadId: string; itemId: string; resolve: (d: PlanDecision) => void; reject: (err: Error) => void };
+
+const LIMIT_LABELS: Record<string, string> = {
+  five_hour: "5-hour",
+  seven_day: "Weekly",
+  seven_day_opus: "Weekly (Opus)",
+  seven_day_sonnet: "Weekly (Sonnet)",
+  seven_day_overage_included: "Weekly (with extra usage)",
+  overage: "Extra usage",
+};
 
 type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[]; from?: "page" };
 
@@ -153,7 +164,41 @@ export class AgentHost {
     const entry = fileURLToPath(new URL("../index.js", import.meta.url));
     const env: Record<string, string> = { AGENT_BOARD_PORT: String(PORT) };
     if (process.env.AGENT_BOARD_HOME) env.AGENT_BOARD_HOME = process.env.AGENT_BOARD_HOME;
-    this.ctx = { boardMcp: { command: process.execPath, args: [entry], env }, scratchDir };
+    this.ctx = { boardMcp: { command: process.execPath, args: [entry], env }, scratchDir, limits: (provider, info) => this.recordLimits(provider, info) };
+    this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
+  }
+
+  private planLimits: Partial<Record<ProviderId, PlanLimits>> = {};
+
+  /** Last reported plan usage per provider. */
+  limits(): Partial<Record<ProviderId, PlanLimits>> {
+    return this.planLimits;
+  }
+
+  private recordLimits(provider: ProviderId, info: unknown): void {
+    if (!isPlainRecord(info)) return;
+    const windows: PlanLimits["windows"] = [];
+    const add = (id: string, raw: unknown) => {
+      if (!isPlainRecord(raw) || typeof raw.utilization !== "number") return;
+      const resetsAt = typeof raw.resetsAt === "number" ? raw.resetsAt * 1000 : undefined;
+      windows.push({ id, label: LIMIT_LABELS[id] ?? id.replaceAll("_", " "), utilization: Math.max(0, raw.utilization), ...(resetsAt ? { resetsAt } : {}) });
+    };
+    if (isPlainRecord(info.unifiedWindows)) {
+      for (const [id, raw] of Object.entries(info.unifiedWindows)) add(id, raw);
+    } else if (typeof info.rateLimitType === "string") {
+      add(info.rateLimitType, info);
+    }
+    const prev = this.planLimits[provider];
+    // A report without window figures keeps the last known ones.
+    const next: PlanLimits = {
+      at: Date.now(),
+      ...(typeof info.status === "string" ? { status: info.status } : {}),
+      windows: windows.length ? windows : prev?.windows ?? [],
+      ...(info.isUsingOverage === true ? { overage: true } : {}),
+    };
+    this.planLimits = { ...this.planLimits, [provider]: next };
+    this.db.setSetting("limits", this.planLimits);
+    this.emit({ type: "agent_limits", limits: this.planLimits });
   }
 
   dispose(): void {

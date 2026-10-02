@@ -46,6 +46,17 @@ export type Thread = {
 
 export type RunStatus = "idle" | "running" | "waiting";
 
+/** How much of a subscription's usage windows is used, as the provider last reported it. */
+export type PlanLimits = {
+  /** When the provider reported it. */
+  at: number;
+  /** "allowed", "allowed_warning" or "rejected" (Claude). */
+  status?: string;
+  windows: Array<{ id: string; label: string; utilization: number; resetsAt?: number }>;
+  /** Requests are being billed as extra usage beyond the plan. */
+  overage?: boolean;
+};
+
 /** Thread plus runtime fields the UI needs in lists. */
 export type ThreadView = Thread & {
   status: RunStatus;
@@ -204,6 +215,7 @@ export type AgentEvent =
   | { type: "agent_thread_deleted"; id: string }
   | { type: "agent_item"; item: Item }
   | { type: "agent_item_deleted"; threadId: string; id: string }
+  | { type: "agent_limits"; limits: Partial<Record<ProviderId, PlanLimits>> }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn };
 
