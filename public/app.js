@@ -2991,6 +2991,7 @@
     openLink: (target, event, { anchor = "" } = {}) => views.open(target, views.modeFromEvent(event), { anchor }),
     resolvePages: (targets) => views.resolve(targets),
     showNotice,
+    closeSettings,
     /** Tell a page's frame (when it has one) about something, e.g. one of its agent threads changing. */
     postToPage: (id, message) => {
       frames.get(id)?.el.contentWindow?.postMessage({ ...message, id }, contentOrigin());

@@ -857,6 +857,7 @@
         acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, cwd: s.cwd }), "Git working tree changes"));
       }
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
+      acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings"));
       acts.append(button(icon("plus"), "ag-icon-btn", (event) => newThreadMenu(event.currentTarget, this), "New thread"));
       if (this.variant === "side") {
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L, or Ctrl+Up from the chat)"));
@@ -2844,109 +2845,205 @@
     if (btn) btn.hidden = localStorage.getItem(LS.button) === "0";
   }
 
-  /* ---------- settings section ---------- */
+  /* ---------- agent settings: their own dialog, opened from the chat header or the board's Settings ---------- */
 
-  function mountSettings() {
-    const panel = document.getElementById("settings-panel");
-    if (!panel) return;
-    const section = el("section", "settings-section ag-settings");
-    section.append(el("h3", null, "Agent"));
-    const status = el("div", "ag-settings-status");
-    const refresh = () => {
-      status.replaceChildren();
+  const KEYS = [
+    ["Ctrl+L", "Sidebar chat"],
+    ["Ctrl+K", "Floating chat"],
+    ["Ctrl+Shift+L", "Full window"],
+    ["Ctrl+↑ / Ctrl+↓", "From a chat into the full window and back; expand or collapse the floating chat"],
+    ["Ctrl+J", "Threads"],
+    ["Ctrl+Shift+K", "New thread"],
+    ["Ctrl+'", "Next starred model"],
+    ["Ctrl+Alt+'", "Next reasoning level"],
+    ["Ctrl+Shift+'", "Next mode"],
+    ["Enter on an empty box", "Steer in, or send, the first queued message"],
+    ["↑ on an empty box", "Edit the last queued message"],
+    ["Esc Esc", "Stop the agent"],
+  ];
+
+  /** A labelled setting row with its control on the right. */
+  function settingRow(text, control, { id, title } = {}) {
+    const row = el("div", "setting-row");
+    const label = el("span", null, text);
+    if (title) label.title = title;
+    if (id) {
+      label.id = id;
+      control.setAttribute("aria-labelledby", id);
+    }
+    row.append(label, control);
+    return row;
+  }
+
+  function switchControl(isOn, toggle) {
+    const b = el("button", "pill-toggle");
+    b.type = "button";
+    b.setAttribute("role", "switch");
+    const sync = () => b.setAttribute("aria-checked", String(isOn()));
+    b.addEventListener("click", () => {
+      toggle();
+      sync();
+    });
+    sync();
+    return b;
+  }
+
+  function choiceTrack(options, current, pick) {
+    const track = el("div", "button-track text-track");
+    track.setAttribute("role", "group");
+    const sync = () => {
+      for (const b of track.children) b.setAttribute("aria-pressed", String(b.dataset.value === current()));
+    };
+    for (const option of options) {
+      const b = button(option.label, null, () => {
+        pick(option.id);
+        sync();
+      });
+      b.dataset.value = option.id;
+      track.append(b);
+    }
+    sync();
+    return track;
+  }
+
+  const agentSettings = {
+    root: null,
+    status: null,
+    mount() {
+      const root = el("div", "settings ag-settings-dialog");
+      root.hidden = true;
+      const backdrop = el("div", "settings-backdrop");
+      backdrop.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        this.close();
+      });
+      const panel = el("div", "settings-panel");
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-labelledby", "ag-settings-title");
+      const title = el("h2", "settings-title", "Agent settings");
+      title.id = "ag-settings-title";
+
+      const providers = el("section", "settings-section");
+      this.status = el("div", "ag-settings-status");
+      const actions = el("div", "settings-actions");
+      actions.append(
+        button("Refresh models", null, async () => {
+          for (const provider of ["cursor", "claude"]) {
+            if (!providerAvailable(provider)) continue;
+            const data = await api("GET", `/models?provider=${provider}&refresh=1`).catch(() => null);
+            if (data?.models?.length) S.config.models[provider] = data.models;
+          }
+          notice("Models refreshed");
+          renderAll();
+        })
+      );
+      providers.append(el("h3", null, "Providers"), this.status, actions);
+
+      const chat = el("section", "settings-section");
+      chat.append(
+        el("h3", null, "Chat"),
+        settingRow(
+          "Agent button in the top bar",
+          switchControl(
+            () => localStorage.getItem(LS.button) !== "0",
+            () => {
+              localStorage.setItem(LS.button, localStorage.getItem(LS.button) === "0" ? "1" : "0");
+              applyButton();
+            }
+          ),
+          { id: "ag-button-label" }
+        ),
+        settingRow(
+          "Floating chat style",
+          choiceTrack(DOCK_STYLES, dockStyle, (id) => {
+            localStorage.setItem(LS.dockStyle, id);
+            dock.apply();
+          }),
+          { id: "ag-dock-style-label" }
+        ),
+        settingRow(
+          "Show reasoning expanded",
+          switchControl(
+            () => localStorage.getItem(LS.reasoning) === "1",
+            () => {
+              localStorage.setItem(LS.reasoning, localStorage.getItem(LS.reasoning) === "1" ? "0" : "1");
+              renderAll();
+            }
+          ),
+          { id: "ag-reasoning-label" }
+        ),
+        settingRow(
+          "Enter on an empty box sends a queued message",
+          choiceTrack(EMPTY_ENTER, emptyEnter, (id) => {
+            localStorage.setItem(LS.emptyEnter, id);
+            for (const view of views()) view.renderTranscript();
+          }),
+          {
+            id: "ag-empty-enter-label",
+            title: "While the agent works. Steer hands it to the running turn, which reads it at its next step; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.",
+          }
+        )
+      );
+
+      const keys = el("section", "settings-section");
+      const list = el("div", "ag-keys");
+      for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
+      keys.append(el("h3", null, "Keys"), list);
+
+      const about = el(
+        "p",
+        "settings-hint",
+        "Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
+      );
+      panel.append(title, providers, chat, keys, about);
+      root.append(backdrop, panel);
+      document.body.append(root);
+      this.root = root;
+
+      // The board's Settings keep a short entry that opens this dialog.
+      const boardPanel = document.getElementById("settings-panel");
+      if (boardPanel) {
+        const section = el("section", "settings-section ag-settings");
+        section.append(
+          el("h3", null, "Agent"),
+          settingRow(
+            "Providers, chat and keys",
+            button("Agent settings…", null, () => {
+              app()?.closeSettings?.();
+              this.open();
+            }),
+            { id: "ag-open-settings-label" }
+          )
+        );
+        boardPanel.append(section);
+      }
+    },
+    renderStatus() {
+      this.status.replaceChildren();
       for (const p of S.config.providers) {
         const row = el("div", "setting-row");
         const label = el("span");
         label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${p.detail || ""}`));
         row.append(label, el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
-        status.append(row);
+        this.status.append(row);
       }
-    };
-    const actions = el("div", "settings-actions");
-    actions.append(
-      button("Refresh models", null, async () => {
-        for (const provider of ["cursor", "claude"]) {
-          if (!providerAvailable(provider)) continue;
-          const data = await api("GET", `/models?provider=${provider}&refresh=1`).catch(() => null);
-          if (data?.models?.length) S.config.models[provider] = data.models;
-        }
-        notice("Models refreshed");
-        renderAll();
-      }),
-      button("Reasoning: " + (localStorage.getItem(LS.reasoning) === "1" ? "expanded" : "collapsed"), null, (event) => {
-        const next = localStorage.getItem(LS.reasoning) === "1" ? "0" : "1";
-        localStorage.setItem(LS.reasoning, next);
-        event.currentTarget.textContent = "Reasoning: " + (next === "1" ? "expanded" : "collapsed");
-        renderAll();
-      })
-    );
-    const buttonRow = el("div", "setting-row");
-    const buttonLabel = el("span", null, "Agent button in the top bar");
-    buttonLabel.id = "ag-button-label";
-    const buttonToggle = el("button", "pill-toggle");
-    buttonToggle.type = "button";
-    buttonToggle.setAttribute("role", "switch");
-    buttonToggle.setAttribute("aria-labelledby", "ag-button-label");
-    const syncButton = () => buttonToggle.setAttribute("aria-checked", localStorage.getItem(LS.button) === "0" ? "false" : "true");
-    buttonToggle.addEventListener("click", () => {
-      localStorage.setItem(LS.button, localStorage.getItem(LS.button) === "0" ? "1" : "0");
-      syncButton();
-      applyButton();
-    });
-    syncButton();
-    buttonRow.append(buttonLabel, buttonToggle);
-    const styleRow = el("div", "setting-row");
-    const styleLabel = el("span", null, "Floating chat style");
-    styleLabel.id = "ag-dock-style-label";
-    const styleTrack = el("div", "button-track text-track");
-    styleTrack.setAttribute("role", "group");
-    styleTrack.setAttribute("aria-labelledby", styleLabel.id);
-    const syncStyle = () => {
-      for (const b of styleTrack.children) b.setAttribute("aria-pressed", String(b.dataset.style === dockStyle()));
-    };
-    for (const style of DOCK_STYLES) {
-      const b = button(style.label, null, () => {
-        localStorage.setItem(LS.dockStyle, style.id);
-        syncStyle();
-        dock.apply();
-      });
-      b.dataset.style = style.id;
-      styleTrack.append(b);
-    }
-    syncStyle();
-    styleRow.append(styleLabel, styleTrack);
-    const enterRow = el("div", "setting-row");
-    const enterLabel = el("span", null, "Enter on an empty box sends a queued message");
-    enterLabel.id = "ag-empty-enter-label";
-    enterLabel.title = "While the agent works. Steer hands it to the running turn, which reads it at its next step; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.";
-    const enterTrack = el("div", "button-track text-track");
-    enterTrack.setAttribute("role", "group");
-    enterTrack.setAttribute("aria-labelledby", enterLabel.id);
-    const syncEnter = () => {
-      for (const b of enterTrack.children) b.setAttribute("aria-pressed", String(b.dataset.mode === emptyEnter()));
-    };
-    for (const mode of EMPTY_ENTER) {
-      const b = button(mode.label, null, () => {
-        localStorage.setItem(LS.emptyEnter, mode.id);
-        syncEnter();
-        for (const view of views()) view.renderTranscript();
-      });
-      b.dataset.mode = mode.id;
-      enterTrack.append(b);
-    }
-    syncEnter();
-    enterRow.append(enterLabel, enterTrack);
-
-    const hint = el(
-      "p",
-      "settings-hint",
-      "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window (Ctrl+Up / Ctrl+Down from a chat) · Ctrl+J threads · Ctrl+Shift+K new thread · Ctrl+' next starred model · Ctrl+Alt+' next reasoning level · Ctrl+Shift+' next mode · Up in an empty box edits the last queued message. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
-    );
-    section.append(status, buttonRow, styleRow, enterRow, actions, hint);
-    panel.append(section);
-    document.getElementById("settings-toggle")?.addEventListener("click", () => setTimeout(refresh, 0));
-    refresh();
-  }
+    },
+    isOpen() {
+      return Boolean(this.root && !this.root.hidden);
+    },
+    open() {
+      if (!this.root) return;
+      this.renderStatus();
+      this.root.hidden = false;
+      this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });
+    },
+    close() {
+      if (!this.isOpen()) return false;
+      this.root.hidden = true;
+      return true;
+    },
+  };
 
   /* ---------- board.agent: pages that start and continue their own threads ---------- */
 
@@ -3226,6 +3323,7 @@
   }
 
   function escape() {
+    if (agentSettings.close()) return true;
     if (openMenuEl) {
       closeMenu();
       return true;
@@ -3285,7 +3383,7 @@
     sidebar.mount();
     full.mount();
     dock.mount();
-    mountSettings();
+    agentSettings.mount();
     applyButton();
     document.getElementById("agent-toggle")?.addEventListener("click", () => shortcut("side"));
     const origSetThread = sidebar.view.setThread.bind(sidebar.view);
