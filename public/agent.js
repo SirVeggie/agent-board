@@ -1251,7 +1251,7 @@
       row.append(bubble);
       if (item.steer === "waiting") {
         row.classList.add("steering");
-        row.append(el("div", "ag-queued", "Steering — the agent reads it at its next step · Enter again to send it now"));
+        row.append(el("div", "ag-queued", "Steering — waiting for a safe stop · Enter again to send it now"));
       } else if (item.steer === "folded") {
         row.classList.add("steered");
         row.append(el("div", "ag-queued", "Steered in"));
@@ -3400,7 +3400,7 @@
           }),
           {
             id: "ag-empty-enter-label",
-            title: "While the agent works. Steer hands it to the running turn, which reads it at its next step; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.",
+            title: "While the agent works. Steer hands it to the running turn, which reads it at the next safe stop; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.",
           }
         )
       );

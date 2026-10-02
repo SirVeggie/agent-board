@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,7 @@ import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ThreadMode, ToolKind, ToolStatus } from "../types.js";
 import { isPlainRecord } from "../types.js";
 import { AcpConnection, RpcError } from "./acp.js";
-import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type TurnInput, type TurnResult } from "./provider.js";
+import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
  * Cursor through its CLI's Agent Client Protocol server (`agent acp`). The SDK has no approval
@@ -13,6 +14,10 @@ import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type
  *
  * The CLI keeps one current model per process and applies it to every session in that process,
  * so each thread gets its own process.
+ *
+ * Cursor's interactive CLI can steer a running turn, but ACP does not: there is no inject method,
+ * and a second session/prompt cancels the first. Steer here holds the message until the current
+ * prompt returns, then the host adopts it as the next turn.
  */
 
 const IDLE_KILL_MS = 15 * 60 * 1000;
@@ -347,6 +352,9 @@ class CursorSession implements ProviderSession {
   private startedTools = new Set<string>();
   private sentInstructions = false;
   private warming: Promise<void> | null = null;
+  private steers = new Map<string, "pending" | "dropped">();
+  /** Steered message the last prompt did not take in; the host adopts it as the next turn. */
+  private carry: string | null = null;
 
   constructor(
     private provider: CursorProvider,
@@ -512,7 +520,28 @@ class CursorSession implements ProviderSession {
     }
   }
 
-  async run(input: TurnInput, sink: RunSink): Promise<TurnResult> {
+  /**
+   * Hold a message until the current session/prompt returns. A second prompt on this connection
+   * cancels the turn instead of injecting at a tool boundary.
+   */
+  steer(_input: SteerInput): string {
+    const id = randomUUID();
+    this.steers.set(id, "pending");
+    return id;
+  }
+
+  dropSteer(steerId: string): void {
+    if (this.steers.get(steerId) !== "pending") return;
+    this.steers.set(steerId, "dropped");
+  }
+
+  async withdrawSteer(steerId: string): Promise<boolean> {
+    if (this.steers.get(steerId) !== "pending") return false;
+    this.steers.delete(steerId);
+    return true;
+  }
+
+  async run(input: TurnInput, sink: RunSink, opts?: { adopt?: string }): Promise<TurnResult> {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
@@ -526,6 +555,10 @@ class CursorSession implements ProviderSession {
       const conn = await this.ensureConnection();
       if (this.sessionId) sink.nativeId(this.sessionId);
       await this.applyThread(conn);
+      if (opts?.adopt) {
+        if (this.carry !== opts.adopt) return { status: "error", error: "The steered message was lost." };
+        this.carry = null;
+      }
       const prompt: unknown[] = [];
       const text = !this.sentInstructions && input.instructions ? `<instructions>\n${input.instructions}\n</instructions>\n\n${input.text}` : input.text;
       prompt.push({ type: "text", text });
@@ -535,23 +568,34 @@ class CursorSession implements ProviderSession {
       const result = await conn.request<{ stopReason?: string }>("session/prompt", { sessionId: this.sessionId, prompt });
       this.sentInstructions = true;
       const stop = result?.stopReason;
-      if (stop === "cancelled") return { status: "cancelled" };
-      if (stop === "refusal") return { status: "error", error: "The model refused to continue." };
+      if (stop === "cancelled") return this.endTurn({ status: "cancelled" });
+      if (stop === "refusal") return this.endTurn({ status: "error", error: "The model refused to continue." });
       if (stop === "max_tokens" || stop === "max_turn_requests") {
         sink.notice("warn", stop === "max_tokens" ? "Stopped: output token limit reached." : "Stopped: turn request limit reached.");
       }
-      return { status: "done" };
+      return this.endTurn({ status: "done" });
     } catch (err) {
       if (this.abort?.signal.aborted) {
-        return { status: "cancelled" };
+        return this.endTurn({ status: "cancelled" });
       }
-      return { status: "error", error: (err as Error).message };
+      return this.endTurn({ status: "error", error: (err as Error).message });
     } finally {
       this.abort?.abort();
       this.abort = null;
       this.sink = null;
       this.armIdle();
     }
+  }
+
+  /** A pending steer the turn did not take in runs as its own turn next; the host adopts it. */
+  private endTurn(result: TurnResult): TurnResult {
+    const waiting = [...this.steers].find(([, state]) => state === "pending")?.[0];
+    if (waiting) {
+      this.steers.delete(waiting);
+      this.carry = waiting;
+      return { ...result, next: waiting };
+    }
+    return result;
   }
 
   async cancel(): Promise<void> {
@@ -573,6 +617,8 @@ class CursorSession implements ProviderSession {
 
   dispose(): void {
     void this.cancel();
+    this.steers.clear();
+    this.carry = null;
     this.stopProcess();
     this.onDispose();
   }
