@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind } from "../types.js";
 import { isPlainRecord } from "../types.js";
-import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type TurnInput, type TurnResult } from "./provider.js";
+import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
  * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
@@ -316,6 +317,19 @@ class ClaudeSession implements ProviderSession {
   /** Streamed tool_use blocks by content index for the current message. */
   private streamTools = new Map<number, string>();
   private streamedText = false;
+  /**
+   * Steering. Claude Code queues a message sent mid-turn and folds it into the running turn between
+   * tool rounds; one it could not fold runs as its own turn as soon as the current one ends. Its
+   * command_lifecycle frames say which: "started" while the turn is open means folded.
+   */
+  private steers = new Map<string, "pending" | "dropped">();
+  /** Between run() handing a message over and its result. */
+  private turnOpen = false;
+  /** A steered message running (or about to run) as its own turn; its frames wait in `buffer` until the host adopts it. */
+  private carry: string | null = null;
+  private buffer: SDKMessage[] = [];
+  /** A dropped steer that started anyway: interrupted, and its frames ignored until its result. */
+  private swallowing: string | null = null;
 
   constructor(
     private thread: Thread,
@@ -335,7 +349,7 @@ class ClaudeSession implements ProviderSession {
     const q = this.query;
     if (!q || !this.live) return;
     if (this.live.key !== this.restartKey(thread)) {
-      if (!this.sink) this.close();
+      if (!this.sink && !this.carry) this.close();
       return;
     }
     if (thread.model !== this.live.model) {
@@ -456,17 +470,65 @@ class ClaudeSession implements ProviderSession {
     } catch (err) {
       if (this.query === q) {
         const message = (err as Error).message || String(err);
-        this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `${message} ${this.stderrTail.slice(-600)}`.trim() });
         this.query = null;
         this.live = null;
+        this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `${message} ${this.stderrTail.slice(-600)}`.trim() });
       }
     }
   }
 
   private endTurn(result: TurnResult): void {
+    this.turnOpen = false;
+    // A steered message the turn did not take in runs as its own turn next; the host adopts it.
+    const waiting = this.query ? [...this.steers].find(([, state]) => state === "pending")?.[0] : undefined;
+    if (waiting) {
+      this.steers.delete(waiting);
+      this.carry = waiting;
+      this.buffer = [];
+      result = { ...result, next: waiting };
+    }
     const finish = this.finish;
     this.finish = null;
     finish?.(result);
+  }
+
+  steer(input: SteerInput): string {
+    const id = randomUUID();
+    this.steers.set(id, "pending");
+    const content: unknown[] = [{ type: "text", text: input.text }];
+    for (const image of input.images) {
+      content.push({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } });
+    }
+    this.input?.push({
+      type: "user",
+      message: { role: "user", content: content as never },
+      parent_tool_use_id: null,
+      origin: { kind: "human" },
+      uuid: id,
+      priority: "next",
+    } as SDKUserMessage);
+    return id;
+  }
+
+  dropSteer(steerId: string): void {
+    if (this.steers.get(steerId) === "pending") this.steers.set(steerId, "dropped");
+  }
+
+  private onLifecycle(m: Record<string, unknown>): void {
+    const id = typeof m.command_uuid === "string" ? m.command_uuid : "";
+    const state = this.steers.get(id);
+    if (!state) return;
+    if (m.state === "started") {
+      this.steers.delete(id);
+      if (this.turnOpen) {
+        if (state === "pending") this.sink?.steered?.(id);
+      } else if (state === "dropped") {
+        this.swallowing = id;
+        void this.query?.interrupt().catch(() => undefined);
+      }
+    } else if (m.state === "completed" || m.state === "cancelled") {
+      this.steers.delete(id);
+    }
   }
 
   /** Start Claude Code ahead of the first message; it waits for input without calling the API. */
@@ -482,7 +544,7 @@ class ClaudeSession implements ProviderSession {
     this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
   }
 
-  async run(input: TurnInput, sink: RunSink): Promise<TurnResult> {
+  async run(input: TurnInput, sink: RunSink, opts?: { adopt?: string }): Promise<TurnResult> {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
@@ -490,6 +552,9 @@ class ClaudeSession implements ProviderSession {
     this.instructions = input.instructions;
     this.cancelled = false;
     this.sink = sink;
+    if (opts?.adopt) return this.adopt(opts.adopt);
+    this.carry = null;
+    this.buffer = [];
     try {
       await this.ensureQuery();
       // The init message may have arrived during a warm-up, before there was a sink to tell.
@@ -501,6 +566,7 @@ class ClaudeSession implements ProviderSession {
       const done = new Promise<TurnResult>((resolve) => {
         this.finish = resolve;
       });
+      this.turnOpen = true;
       this.input!.push({
         type: "user",
         message: { role: "user", content: content as never },
@@ -510,6 +576,26 @@ class ClaudeSession implements ProviderSession {
       return await done;
     } catch (err) {
       return { status: "error", error: (err as Error).message };
+    } finally {
+      this.sink = null;
+      this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
+    }
+  }
+
+  /** Follow the turn Claude Code started for a steered message, replaying what it sent before the host got here. */
+  private async adopt(steerId: string): Promise<TurnResult> {
+    try {
+      if (this.carry !== steerId || !this.query) return { status: "error", error: "The steered message was lost." };
+      if (this.sessionId) this.sink?.nativeId(this.sessionId);
+      const done = new Promise<TurnResult>((resolve) => {
+        this.finish = resolve;
+      });
+      this.turnOpen = true;
+      this.carry = null;
+      const buffered = this.buffer;
+      this.buffer = [];
+      for (const msg of buffered) this.onMessage(msg);
+      return await done;
     } finally {
       this.sink = null;
       this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
@@ -538,6 +624,11 @@ class ClaudeSession implements ProviderSession {
     this.live = null;
     this.input?.close();
     this.input = null;
+    this.steers.clear();
+    this.carry = null;
+    this.buffer = [];
+    this.swallowing = null;
+    this.turnOpen = false;
     if (q) {
       try {
         q.close();
@@ -643,6 +734,18 @@ class ClaudeSession implements ProviderSession {
   private onMessage(msg: SDKMessage): void {
     const sink = this.sink;
     const m = msg as Record<string, unknown> & { type: string; subtype?: string };
+    if (m.type === "command_lifecycle") {
+      this.onLifecycle(m);
+      return;
+    }
+    if (this.swallowing) {
+      if (m.type === "result") this.swallowing = null;
+      return;
+    }
+    if (!this.turnOpen && this.carry) {
+      this.buffer.push(msg);
+      return;
+    }
     if (m.type === "system" && m.subtype === "init") {
       if (typeof m.session_id === "string") {
         this.sessionId = m.session_id;
@@ -679,6 +782,13 @@ class ClaudeSession implements ProviderSession {
           { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, contextWindow: 0 }
         );
         sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined });
+        // A steer this turn took in, in case its lifecycle frame went missing.
+        for (const id of Array.isArray(m.user_message_uuids) ? (m.user_message_uuids as string[]) : []) {
+          if (this.steers.get(id) === "pending") {
+            this.steers.delete(id);
+            sink.steered?.(id);
+          }
+        }
         if (m.subtype === "success") {
           this.endTurn({ status: this.cancelled ? "cancelled" : m.is_error ? "error" : "done", error: m.is_error ? String(m.result ?? "Claude reported an error") : undefined });
         } else {

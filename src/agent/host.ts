@@ -23,6 +23,7 @@ import type {
   SessionContext,
   ToolPatch,
   ToolStart,
+  TurnResult,
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
 import type {
@@ -97,6 +98,8 @@ type RunState = {
   repo: string | null;
   cancelled: boolean;
   usage: Usage;
+  /** A queued message handed to this turn with steer, until the agent takes it in. */
+  steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
 };
 
 export type SendInput = { text: string; images?: ChatImage[]; context?: ContextChip[] };
@@ -563,12 +566,65 @@ export class AgentHost {
     return { queued: false, item };
   }
 
-  async cancel(threadId: string): Promise<void> {
+  /** Queued messages that have not run yet, oldest first, in the same order as the queue. */
+  private queuedItems(threadId: string): Item[] {
+    return this.loadItems(threadId).filter((item) => item.kind === "user" && item.turnId === null && !item.dropped && !item.steer);
+  }
+
+  /**
+   * Hand the first queued message to the running turn, which takes it in at its next step. When a
+   * steered message is already waiting, or the provider cannot steer, send it now instead.
+   */
+  async steer(threadId: string): Promise<{ steered: boolean }> {
     const run = this.runs.get(threadId);
-    if (this.queues.delete(threadId)) {
+    const queue = this.queues.get(threadId);
+    const session = this.sessions.get(threadId);
+    if (!run) throw new Error("No turn is running");
+    if (run.steer || !session?.steer) {
+      await this.sendNow(threadId);
+      return { steered: false };
+    }
+    if (!queue?.length) throw new Error("Nothing is queued");
+    const msg = queue.shift()!;
+    if (!queue.length) this.queues.delete(threadId);
+    const item = this.queuedItems(threadId)[0];
+    const id = session.steer({ text: contextBlock(msg.context) + msg.text, images: msg.images });
+    run.steer = { id, msg, itemId: item?.id };
+    if (item && item.kind === "user") {
+      item.steer = "waiting";
+      this.touch(item);
+    }
+    this.emitThread(threadId);
+    return { steered: true };
+  }
+
+  /**
+   * Stop the running turn and run the waiting steered message, or else the first queued one, as the
+   * next turn. Unlike cancel, the rest of the queue stays.
+   */
+  async sendNow(threadId: string): Promise<void> {
+    const run = this.runs.get(threadId);
+    if (!run || (!run.steer && !this.queues.get(threadId)?.length)) return;
+    await this.cancel(threadId, { keepQueue: true });
+  }
+
+  async cancel(threadId: string, { keepQueue = false }: { keepQueue?: boolean } = {}): Promise<void> {
+    const run = this.runs.get(threadId);
+    if (!keepQueue && run?.steer) {
+      this.sessions.get(threadId)?.dropSteer?.(run.steer.id);
+      const item = run.steer.itemId ? this.loadItems(threadId).find((it) => it.id === run.steer!.itemId) : undefined;
+      if (item && item.kind === "user") {
+        delete item.steer;
+        item.dropped = true;
+        this.touch(item);
+      }
+      run.steer = null;
+      this.emitThread(threadId);
+    }
+    if (!keepQueue && this.queues.delete(threadId)) {
       // Stop drops queued messages; they stay in the transcript as not sent.
-      for (const item of this.loadItems(threadId)) {
-        if (item.kind === "user" && item.turnId === null && !item.dropped) {
+      for (const item of this.queuedItems(threadId)) {
+        if (item.kind === "user") {
           item.dropped = true;
           this.touch(item);
         }
@@ -596,7 +652,7 @@ export class AgentHost {
     return session;
   }
 
-  private async runTurn(threadId: string, msg: QueuedMessage, userItem: Item): Promise<void> {
+  private async runTurn(threadId: string, msg: QueuedMessage, userItem: Item, opts?: { adopt?: string }): Promise<void> {
     const thread = this.requireThread(threadId);
     const turns = this.loadTurns(threadId);
     const turn: Turn = {
@@ -611,8 +667,9 @@ export class AgentHost {
     };
     turns.push(turn);
     userItem.turnId = turn.id;
+    if (userItem.kind === "user") delete userItem.steer;
     this.touch(userItem);
-    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {} };
+    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     thread.activityAt = Date.now();
@@ -640,7 +697,7 @@ export class AgentHost {
     }
 
     const sink = this.makeSink(threadId, run);
-    let result: { status: "done" | "error" | "cancelled"; error?: string } = { status: "cancelled" };
+    let result: TurnResult = { status: "cancelled" };
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
     if (!run.cancelled) {
       try {
@@ -652,13 +709,27 @@ export class AgentHost {
             images: msg.images,
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
           },
-          sink
+          sink,
+          opts
         );
       } catch (err) {
         result = { status: "error", error: (err as Error).message };
       }
     }
-    if (run.cancelled && result.status !== "error") result = { status: "cancelled" };
+    if (run.cancelled && result.status !== "error") result = { status: "cancelled", next: result.next };
+    // A steered message the turn did not take in: the provider runs it next (adopted below), or it lost it and it goes back to the front of the queue.
+    const carried = run.steer && result.next === run.steer.id ? run.steer : null;
+    if (run.steer && !carried) {
+      const queue = this.queues.get(threadId) ?? [];
+      queue.unshift(run.steer.msg);
+      this.queues.set(threadId, queue);
+      const item = run.steer.itemId ? this.loadItems(threadId).find((it) => it.id === run.steer!.itemId) : undefined;
+      if (item && item.kind === "user") {
+        delete item.steer;
+        this.touch(item);
+      }
+    }
+    run.steer = null;
 
     this.closeBlocks(run);
     for (const item of run.tools.values()) {
@@ -713,11 +784,16 @@ export class AgentHost {
     }
     this.emitThread(threadId);
 
+    if (carried && latest) {
+      const item = carried.itemId ? this.loadItems(threadId).find((it) => it.id === carried.itemId) : undefined;
+      void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id });
+      return;
+    }
     const queue = this.queues.get(threadId);
     const next = queue?.shift();
     if (queue && !queue.length) this.queues.delete(threadId);
     if (next && latest) {
-      const pendingUser = this.loadItems(threadId).find((item) => item.kind === "user" && item.turnId === null && !item.dropped);
+      const pendingUser = this.queuedItems(threadId)[0];
       void this.runTurn(threadId, next, pendingUser ?? this.addItem(threadId, null, { kind: "user", text: next.text }));
     }
   }
@@ -950,6 +1026,26 @@ export class AgentHost {
           host.db.saveThread(t);
           host.emitThread(threadId);
         }
+      },
+      steered(steerId) {
+        if (run.steer?.id !== steerId) return;
+        const itemId = run.steer.itemId;
+        run.steer = null;
+        const item = itemId ? host.loadItems(threadId).find((it) => it.id === itemId) : undefined;
+        if (item && item.kind === "user") {
+          // It now belongs to this turn, at the point the agent read it.
+          host.closeBlocks(run);
+          const seq = (host.seq.get(threadId) ?? 0) + 1;
+          host.seq.set(threadId, seq);
+          item.seq = seq;
+          const items = host.loadItems(threadId);
+          items.splice(items.indexOf(item), 1);
+          items.push(item);
+          item.turnId = turnId;
+          item.steer = "folded";
+          host.touch(item);
+        }
+        host.emitThread(threadId);
       },
     };
   }

@@ -102,7 +102,7 @@ export class AgentDb {
     }
     const stmt = this.db.prepare(
       `INSERT INTO items (id, thread_id, seq, data) VALUES (?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET data = excluded.data`
+       ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, data = excluded.data`
     );
     this.db.exec("BEGIN");
     try {

@@ -133,7 +133,16 @@ type ItemBase = {
 };
 
 export type ItemBody =
-  | { kind: "user"; text: string; images?: Array<{ name: string; mimeType: string }>; context?: ContextChip[]; /** Queued, then dropped by Stop. */ dropped?: boolean }
+  | {
+      kind: "user";
+      text: string;
+      images?: Array<{ name: string; mimeType: string }>;
+      context?: ContextChip[];
+      /** Queued, then dropped by Stop. */
+      dropped?: boolean;
+      /** Sent into a running turn: "waiting" until the agent takes it in, then "folded" (it belongs to that turn). */
+      steer?: "waiting" | "folded";
+    }
   | { kind: "text"; text: string; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }
   | {

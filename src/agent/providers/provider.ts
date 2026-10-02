@@ -86,9 +86,19 @@ export type RunSink = {
   title(title: string): void;
   /** The provider switched its own mode (plan accepted, etc.). */
   modeChanged?(mode: Thread["mode"]): void;
+  /** A message handed to `steer` reached the model inside this turn. */
+  steered?(steerId: string): void;
 };
 
-export type TurnResult = { status: "done" | "error" | "cancelled"; error?: string };
+export type TurnResult = {
+  status: "done" | "error" | "cancelled";
+  error?: string;
+  /** A steered message the turn ended without taking in; the provider runs it as its own turn next, which the host adopts. */
+  next?: string;
+};
+
+/** A message for a turn that is already running. */
+export type SteerInput = { text: string; images: ChatImage[] };
 
 /** One live conversation with a provider, bound to a thread. */
 export interface ProviderSession {
@@ -97,7 +107,19 @@ export interface ProviderSession {
    * fast. Safe to call repeatedly; errors are logged, not thrown.
    */
   warm(instructions: string): Promise<void>;
-  run(input: TurnInput, sink: RunSink): Promise<TurnResult>;
+  /**
+   * Run one turn. With `adopt`, the turn is the steered message the previous turn reported as
+   * `next`: the provider already has it, so nothing is sent; the run just follows that turn.
+   */
+  run(input: TurnInput, sink: RunSink, opts?: { adopt?: string }): Promise<TurnResult>;
+  /**
+   * Hand a message to the running turn, which takes it in at its next step (between tool calls).
+   * Returns an id that `RunSink.steered` or `TurnResult.next` reports back. Providers that cannot
+   * steer leave this out.
+   */
+  steer?(input: SteerInput): string;
+  /** Withdraw a steered message that has not reached the model yet, so it never runs. */
+  dropSteer?(steerId: string): void;
   cancel(): Promise<void>;
   /** The thread's settings changed; apply them live or restart before the next turn. */
   update(thread: Thread): void;

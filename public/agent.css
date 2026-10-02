@@ -2603,6 +2603,24 @@ button.dock-scope:hover {
   padding-left: 20px;
 }
 
+/* Steering: handed to the running turn, waiting for the agent's next step. */
+.ag-user.steering .ag-user-bubble {
+  opacity: 0.8;
+}
+
+.ag-user.steering .ag-you {
+  animation: ag-pulse 1.2s ease-in-out infinite;
+}
+
+.ag-user.steering .ag-queued {
+  color: var(--ag-live);
+}
+
+/* Steered in: your message among the turn's steps, where the agent read it. */
+.ag-turn-body > .ag-user.steered {
+  margin: 4px 0;
+}
+
 /* Steps on a rail: dim dots joined by short lines, the newest one lit. */
 .ag-rail {
   position: relative;

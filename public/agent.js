@@ -13,6 +13,7 @@
     reasoning: "agent-board.agent.reasoningOpen",
     button: "agent-board.agent.showButton",
     dockStyle: "agent-board.agent.dockStyle",
+    emptyEnter: "agent-board.agent.emptyEnter",
   };
   const DOCK_STYLES = [
     { id: "bar", label: "Bar" },
@@ -22,6 +23,16 @@
   function dockStyle() {
     const v = localStorage.getItem(LS.dockStyle);
     return DOCK_STYLES.some((s) => s.id === v) ? v : "bar";
+  }
+
+  /** What Enter on an empty composer does with a queued message while a turn runs. */
+  const EMPTY_ENTER = [
+    { id: "steer", label: "Steer, then send" },
+    { id: "send", label: "Send now" },
+  ];
+
+  function emptyEnter() {
+    return localStorage.getItem(LS.emptyEnter) === "send" ? "send" : "steer";
   }
 
   const MODES = [
@@ -207,10 +218,13 @@
         if (!detail) return;
         const prev = detail.byId.get(msg.item.id);
         if (prev) {
+          const moved = prev.seq !== msg.item.seq;
           Object.assign(prev, msg.item);
           for (const key of Object.keys(prev)) {
             if (!(key in msg.item)) delete prev[key];
           }
+          // A steered message moves to the point in the turn where the agent read it.
+          if (moved) detail.items.sort((a, b) => a.seq - b.seq);
         } else {
           detail.items.push(msg.item);
           detail.byId.set(msg.item.id, msg.item);
@@ -995,10 +1009,12 @@
     renderGroup(group) {
       const wrap = el("div", "ag-turn");
       wrap.dataset.turn = group.key;
-      const users = group.items.filter((it) => it.kind === "user");
+      // A message steered into the turn stays where the agent read it, among the steps.
+      const opens = (it) => it.kind === "user" && it.steer !== "folded";
+      const users = group.items.filter(opens);
       for (const user of users) wrap.append(this.renderUser(user, !group.turn && !user.dropped));
       const body = el("div", "ag-turn-body");
-      const rest = group.items.filter((it) => it.kind !== "user");
+      const rest = group.items.filter((it) => !opens(it));
       const byParent = new Map();
       for (const it of rest) {
         if (it.parentToolId) {
@@ -1125,7 +1141,15 @@
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
-      if (queued) row.append(el("div", "ag-queued", "Queued — sends when the current turn ends"));
+      if (item.steer === "waiting") {
+        row.classList.add("steering");
+        row.append(el("div", "ag-queued", "Steering — the agent reads it at its next step · Enter again to send it now"));
+      } else if (item.steer === "folded") {
+        row.classList.add("steered");
+        row.append(el("div", "ag-queued", "Steered in"));
+      } else if (queued) {
+        row.append(el("div", "ag-queued", `Queued — sends when the current turn ends · Enter on an empty box ${emptyEnter() === "send" ? "sends it now" : "steers it in"}`));
+      }
       if (item.dropped) {
         row.classList.add("dropped");
         const again = el("div", "ag-queued");
@@ -1141,6 +1165,8 @@
 
     renderItem(it, byParent, turn) {
       switch (it.kind) {
+        case "user":
+          return this.renderUser(it, false);
         case "text": {
           const node = el("div", "ag-md");
           node.dataset.itemId = it.id;
@@ -1490,7 +1516,8 @@
     onItem(item, isNew) {
       if (isNew && item.kind === "user" && item.turnId === null) this.stick = true;
       this.dirtyTurns.add(item.turnId || "pending");
-      if (isNew && item.turnId) this.dirtyTurns.add("pending");
+      // A queued message that starts a turn or is steered into one leaves the queued group.
+      if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
       this.schedule();
     }
 
@@ -1862,6 +1889,7 @@
       }
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
+        if (!this.input.value.trim() && !this.images.length && this.pushQueued()) return;
         this.send();
         return;
       }
@@ -1925,6 +1953,20 @@
       const t = this.thread();
       if (!t) return;
       await api("POST", `/threads/${encodeURIComponent(t.id)}/cancel`).catch((err) => notice(err.message));
+    }
+
+    /**
+     * Enter on an empty composer while a turn runs: steer the first queued message into the turn,
+     * or, when one is already steering (or Settings say so), stop the turn and send it now.
+     */
+    pushQueued() {
+      const t = this.thread();
+      if (!t || t.status === "idle") return false;
+      const steering = (S.details.get(t.id)?.items || []).some((it) => it.kind === "user" && it.steer === "waiting");
+      if (!t.queued && !steering) return false;
+      const action = steering || emptyEnter() === "send" ? "send-now" : "steer";
+      api("POST", `/threads/${encodeURIComponent(t.id)}/${action}`).catch((err) => notice(err.message));
+      return true;
     }
 
     async send() {
@@ -2834,12 +2876,34 @@
     }
     syncStyle();
     styleRow.append(styleLabel, styleTrack);
+    const enterRow = el("div", "setting-row");
+    const enterLabel = el("span", null, "Enter on an empty box sends a queued message");
+    enterLabel.id = "ag-empty-enter-label";
+    enterLabel.title = "While the agent works. Steer hands it to the running turn, which reads it at its next step; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.";
+    const enterTrack = el("div", "button-track text-track");
+    enterTrack.setAttribute("role", "group");
+    enterTrack.setAttribute("aria-labelledby", enterLabel.id);
+    const syncEnter = () => {
+      for (const b of enterTrack.children) b.setAttribute("aria-pressed", String(b.dataset.mode === emptyEnter()));
+    };
+    for (const mode of EMPTY_ENTER) {
+      const b = button(mode.label, null, () => {
+        localStorage.setItem(LS.emptyEnter, mode.id);
+        syncEnter();
+        for (const view of views()) view.renderTranscript();
+      });
+      b.dataset.mode = mode.id;
+      enterTrack.append(b);
+    }
+    syncEnter();
+    enterRow.append(enterLabel, enterTrack);
+
     const hint = el(
       "p",
       "settings-hint",
       "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window · Ctrl+' next starred model · Ctrl+Alt+' next reasoning level. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
     );
-    section.append(status, buttonRow, styleRow, actions, hint);
+    section.append(status, buttonRow, styleRow, enterRow, actions, hint);
     panel.append(section);
     document.getElementById("settings-toggle")?.addEventListener("click", () => setTimeout(refresh, 0));
     refresh();
