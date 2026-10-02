@@ -97,7 +97,7 @@ test("Ctrl+Z keeps strip_seq so the tab returns to its hole", () => {
   store.closeDb();
 });
 
-test("closing the active tab focuses its left neighbor, or the right one when leftmost", () => {
+test("closing the active tab focuses its right neighbor, or the left one when rightmost", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
@@ -105,9 +105,9 @@ test("closing the active tab focuses its left neighbor, or the right one when le
   store.focus("b");
   const activeTitle = () => store.snapshot().tabs.find((tab) => tab.id === store.snapshot().activeId)?.title;
   store.closeTab("b");
-  assert.equal(activeTitle(), "A");
-  store.closeTab("a");
   assert.equal(activeTitle(), "C");
+  store.closeTab("c");
+  assert.equal(activeTitle(), "A");
   store.closeDb();
 });
 

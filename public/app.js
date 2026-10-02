@@ -545,7 +545,7 @@
     }, 150);
   }
 
-  /** The tab to focus when `id` leaves the strip: its left neighbor, or its right one when it is leftmost. */
+  /** The tab to focus when `id` leaves the strip: its right neighbor, or its left one when it is rightmost. */
   function neighborTabId(id) {
     const back = views.returnTarget(id);
     if (back) {
@@ -555,7 +555,7 @@
     if (idx === -1) {
       return state.tabs.length ? state.tabs[state.tabs.length - 1].id : null;
     }
-    return (state.tabs[idx - 1] ?? state.tabs[idx + 1])?.id ?? null;
+    return (state.tabs[idx + 1] ?? state.tabs[idx - 1])?.id ?? null;
   }
 
   /** A page whose tab is closed. Blips the Library only when its content or state changed, not on moves or pins. */

@@ -2244,18 +2244,18 @@ export class BoardStore extends EventEmitter {
     this.emit("folders", this.listFolders());
   }
 
-  /** The nearest still-open tab left of `id` in `prevOrder`, else the nearest to its right. */
+  /** The nearest still-open tab right of `id` in `prevOrder`, else the nearest to its left. */
   private neighborOf(prevOrder: string[], id: string): string | null {
     const idx = prevOrder.indexOf(id);
     if (idx === -1) {
       return this.order[this.order.length - 1] ?? null;
     }
-    for (let i = idx - 1; i >= 0; i--) {
+    for (let i = idx + 1; i < prevOrder.length; i++) {
       if (this.tabs.has(prevOrder[i])) {
         return prevOrder[i];
       }
     }
-    for (let i = idx + 1; i < prevOrder.length; i++) {
+    for (let i = idx - 1; i >= 0; i--) {
       if (this.tabs.has(prevOrder[i])) {
         return prevOrder[i];
       }
