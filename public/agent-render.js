@@ -125,9 +125,11 @@
 
   function prepareMarkdown(text) {
     // [[key]] and [[key|label]] become links the renderer can find after sanitizing.
+    // ?auto (not |auto) marks “fill in the page title”: a pipe in the hash is %-encoded and
+    // then looked up as part of the key (No page called “foo|auto”).
     let out = String(text || "").replace(BOARD_LINK, (_m, target, label) => {
       const t = target.trim();
-      return `[${(label || t).replace(/[\[\]]/g, "")}](#board:${encodeURIComponent(t)}${label ? "" : "|auto"})`;
+      return `[${(label || t).replace(/[\[\]]/g, "")}](#board:${encodeURIComponent(t)}${label ? "" : "?auto"})`;
     });
     // [label](scribe:key): a page key is its own link target. board: is the old form, still in older transcripts.
     out = out.replace(/\]\((scribe:[^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
@@ -162,10 +164,11 @@
     for (const a of root.querySelectorAll("a[href]")) {
       const href = a.getAttribute("href") || "";
       if (href.startsWith("#board:")) {
-        let target = href.slice(7);
-        const auto = target.endsWith("|auto");
-        if (auto) target = target.slice(0, -5);
-        target = decodeURIComponent(target);
+        let rest = href.slice(7);
+        const auto = /(?:\?|&|\||%7C)auto$/i.test(rest);
+        rest = rest.replace(/(?:\?|&|\||%7C)auto$/i, "");
+        let target = decodeURIComponent(rest);
+        if (target.endsWith("|auto")) target = target.slice(0, -5);
         a.removeAttribute("href");
         a.className = "ag-board-link";
         a.dataset.boardTarget = target;

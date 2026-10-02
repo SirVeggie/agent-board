@@ -182,8 +182,16 @@ window.createViews = function createViews(host) {
    * A page by id or key. Keys can repeat (an agent can't see hidden pages and may reuse the key),
    * so prefer an open tab, then a page the agent can see, then the most recently updated.
    */
+  function pageKeyOf(value) {
+    const slug = String(value || "")
+      .trim()
+      .replace(/\|auto$/i, "")
+      .replace(/^(scribe:)+/i, "");
+    return slug ? `scribe:${slug}` : "";
+  }
+
   function findPage(raw) {
-    const text = String(raw || "").trim();
+    const text = String(raw || "").trim().replace(/\|auto$/i, "");
     if (!text) {
       return null;
     }
@@ -191,8 +199,12 @@ window.createViews = function createViews(host) {
     if (byId) {
       return byId;
     }
+    const want = pageKeyOf(text);
+    if (!want) {
+      return null;
+    }
     const matches = [...host.tabs().map((tab) => ({ tab, open: true })), ...host.closed().map((tab) => ({ tab, open: false }))].filter(
-      (item) => item.tab.key === text
+      (item) => item.tab.key === text || pageKeyOf(item.tab.key) === want
     );
     matches.sort((a, b) => Number(b.open) - Number(a.open) || Number(!b.tab.agentHidden) - Number(!a.tab.agentHidden) || (b.tab.updatedAt || 0) - (a.tab.updatedAt || 0));
     return matches[0]?.tab || null;
@@ -633,7 +645,7 @@ window.createViews = function createViews(host) {
         return { ok: true, mode: "browser", url: href };
       }
     } else {
-      const page = findPage(raw);
+      const page = findPage(String(raw || "").replace(/\|auto$/, "").trim());
       if (!page) {
         const trashed = await inTrash(String(raw || "").trim());
         if (trashed) {
