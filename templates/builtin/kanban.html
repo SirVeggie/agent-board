@@ -1522,8 +1522,11 @@
     if (c.images.length > 1) badges.appendChild(el("span", "badge", "🖼 " + c.images.length));
     var blockers = openBlockers(c);
     if (blockers.length) {
-      var bl = el("span", "badge blocked", "⛔ blocked");
-      bl.title = "Blocked by " + blockers.map(function (b) { return "#" + b.num; }).join(", ");
+      var nums = blockers.map(function (b) { return "#" + b.num; });
+      // The first three blockers on the card; the tooltip lists them all.
+      var shown = nums.slice(0, 3).join(", ") + (nums.length > 3 ? " +" + (nums.length - 3) : "");
+      var bl = el("span", "badge blocked", "⛔ blocked by " + shown);
+      bl.title = "Blocked by " + nums.join(", ");
       badges.appendChild(bl);
     }
     if (str(c.assignee).trim()) {
