@@ -292,7 +292,6 @@
   .card.p4 { border-left-color: var(--danger); }
   .card.is-done .card-title { color: var(--muted); }
   .card.is-done { opacity: .72; }
-  .card.dim { opacity: .28; }
   .card.src { visibility: hidden; }
   .card.ghost-card {
     position: fixed;
@@ -1345,8 +1344,11 @@
     var archived = allCards().length - liveCards().length;
     archiveBtn.textContent = archived ? "Archive (" + archived + ")" : "Archive";
     var live = liveCards();
-    var done = live.filter(isDone).length;
-    metaEl.textContent = live.length + (live.length === 1 ? " card" : " cards") + (done ? " · " + done + " done" : "");
+    var shown = filterActive() ? live.filter(matches) : live;
+    var done = shown.filter(isDone).length;
+    var count = shown.length + (shown.length === 1 ? " card" : " cards");
+    if (filterActive() && shown.length !== live.length) count = shown.length + " of " + live.length + " cards";
+    metaEl.textContent = count + (done ? " · " + done + " done" : "");
   }
 
   // ---------- board rendering ----------
@@ -1402,7 +1404,8 @@
         }
       }
       var list = cardsIn(col.id);
-      var count = el("span", "col-count", col.wip ? list.length + " / " + col.wip : String(list.length));
+      var visible = filtering ? list.filter(matches) : list;
+      var count = el("span", "col-count", col.wip ? list.length + " / " + col.wip : String(visible.length));
       if (col.wip && list.length === col.wip) count.classList.add("at");
       if (col.wip && list.length > col.wip) count.classList.add("over");
       if (col.wip) count.title = "Work-in-progress limit " + col.wip;
@@ -1420,10 +1423,8 @@
 
       var ul = el("ul", "cards");
       ul.dataset.col = col.id;
-      list.forEach(function (c) {
-        var cardEl = renderCard(c, col);
-        if (filtering && !matches(c)) cardEl.classList.add("dim");
-        ul.appendChild(cardEl);
+      visible.forEach(function (c) {
+        ul.appendChild(renderCard(c, col));
       });
       colEl.appendChild(ul);
 
