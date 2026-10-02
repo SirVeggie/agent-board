@@ -40,6 +40,7 @@ import {
 import { normalizeSignalName } from "./signal.js";
 import { applyOps } from "./stateOps.js";
 import { normalizeEvents } from "./events.js";
+import { upgradeLegacyHtml } from "./legacyPages.js";
 import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionSet, type SweepContext } from "./actions/index.js";
 import {
   TRASH_TTL_MS,
@@ -138,6 +139,17 @@ export class BoardStore extends EventEmitter {
     this.db = BoardDb.open(dbPath(), statePath());
     const snapshot = this.db.load();
     for (const template of snapshot.templates) {
+      // Templates written for Agent Board's page API get the Scribe names. An unedited copy of a
+      // built-in stays unedited, so the built-in's update still reaches it.
+      const html = upgradeLegacyHtml(template.html);
+      if (html !== template.html) {
+        const unedited = template.source && templateFingerprint(template) === template.source.fingerprint;
+        template.html = html;
+        if (unedited && template.source) {
+          template.source = { ...template.source, fingerprint: templateFingerprint(template) };
+        }
+        this.templatesDirty = true;
+      }
       this.templates.set(template.id, template);
     }
     this.builtins = loadBuiltinTemplates();
@@ -156,9 +168,14 @@ export class BoardStore extends EventEmitter {
     for (const row of snapshot.rows) {
       const tab = withStateDefaults(row.tab);
       applyBinding(tab, bindings.get(tab.id));
-      // Keys from before the Scribe rename have no prefix.
+      // Keys from before the Scribe rename have no prefix, and old pages use Agent Board's page API.
       if (!tab.key.startsWith(PAGE_KEY_PREFIX)) {
         tab.key = pageKey(tab.key) || `${PAGE_KEY_PREFIX}${tab.id}`;
+        this.markDirty(tab.id);
+      }
+      const upgraded = upgradeLegacyHtml(tab.html);
+      if (upgraded !== tab.html) {
+        tab.html = upgraded;
         this.markDirty(tab.id);
       }
       this.lastSeq = Math.max(this.lastSeq, tab.stripSeq);
@@ -705,11 +722,13 @@ export class BoardStore extends EventEmitter {
     templatesCreated: number;
     templatesReused: number;
   } {
-    const { pages } = input;
-    if (!pages.length && !input.templates.length) {
+    // Exports from Agent Board carry pages and templates written for its page API.
+    const pages = input.pages.map((page) => ({ ...page, html: upgradeLegacyHtml(page.html) }));
+    const templates = input.templates.map((template) => ({ ...template, html: upgradeLegacyHtml(template.html) }));
+    if (!pages.length && !templates.length) {
       throw new Error("nothing to import");
     }
-    const plan = this.planTemplateImport(input.templates);
+    const plan = this.planTemplateImport(templates);
     const drafts: Tab[] = [];
     const reserved = new Set<string>();
     const pendingAssets = new Map<string, PageAssetDraft[]>();
