@@ -114,6 +114,15 @@
   .select-list button.active { background: rgba(255, 255, 255, .08); }
   .select-list button[aria-selected="true"] { font-weight: 600; }
   .select-list button.placeholder { color: var(--muted); }
+  .select-list.has-search {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    max-height: min(360px, calc(100vh - 24px));
+  }
+  .select-list .menu-search { width: 100%; margin: 0 0 4px; flex: 0 0 auto; }
+  .select-list .select-opts { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+  .select-list .empty-row { color: var(--muted); padding: 7px 9px; font-size: 12.5px; }
   .search { width: 220px; }
   .tool {
     background: var(--panel);
@@ -799,7 +808,7 @@
           <div>
             <div class="section-label" style="margin-top:4px">Blocked by</div>
             <div class="links" id="mLinks"></div>
-            <select class="field" id="mLinkAdd" style="width:100%;margin-top:6px"></select>
+            <select class="field" id="mLinkAdd" data-search="Filter cards" style="width:100%;margin-top:6px"></select>
           </div>
           <div class="review-row hidden" id="mReview">
             <button class="approve" id="mApprove" type="button">Approve</button>
@@ -1198,18 +1207,33 @@
     sel.tabIndex = -1;
     var list = null;
     var active = 0;
+    var query = "";
+    var visible = [];
+    var searchable = sel.hasAttribute("data-search");
+    var typeBuf = "";
+    var typeTimer = 0;
 
     function sync() {
       var opt = sel.selectedOptions[0];
       text.textContent = opt ? opt.textContent : "";
       text.classList.toggle("muted", !opt || opt.value === "");
     }
+    function rowsEl() {
+      return (list && list.querySelector(".select-opts")) || list;
+    }
+    function optionButtons() {
+      return rowsEl() ? rowsEl().querySelectorAll("button[role='option']") : [];
+    }
     function highlight() {
-      Array.prototype.forEach.call(list.children, function (b, i) { b.classList.toggle("active", i === active); });
-      var item = list.children[active];
-      if (!item) return;
-      if (item.offsetTop < list.scrollTop) list.scrollTop = item.offsetTop;
-      else if (item.offsetTop + item.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = item.offsetTop + item.offsetHeight - list.clientHeight;
+      var items = optionButtons();
+      Array.prototype.forEach.call(items, function (b, i) { b.classList.toggle("active", i === active); });
+      var item = items[active];
+      var box = rowsEl();
+      if (!item || !box) return;
+      if (item.offsetTop < box.scrollTop) box.scrollTop = item.offsetTop;
+      else if (item.offsetTop + item.offsetHeight > box.scrollTop + box.clientHeight) {
+        box.scrollTop = item.offsetTop + item.offsetHeight - box.clientHeight;
+      }
     }
     function choose(i) {
       var changed = sel.selectedIndex !== i;
@@ -1217,6 +1241,34 @@
       sync();
       close(true);
       if (changed) sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    function pickActive() {
+      if (visible[active] == null) return;
+      choose(visible[active]);
+    }
+    function fillRows() {
+      var q = query.trim().toLowerCase();
+      visible = [];
+      var rows = rowsEl();
+      rows.replaceChildren();
+      Array.prototype.forEach.call(sel.options, function (opt, i) {
+        if (q && !opt.value) return;
+        if (q && opt.textContent.toLowerCase().indexOf(q) === -1) return;
+        visible.push(i);
+        var b = el("button", opt.value === "" ? "placeholder" : "");
+        b.type = "button";
+        b.tabIndex = -1;
+        b.setAttribute("role", "option");
+        b.setAttribute("aria-selected", i === sel.selectedIndex ? "true" : "false");
+        b.appendChild(el("span", "tick-mark", i === sel.selectedIndex ? "✓" : ""));
+        b.appendChild(document.createTextNode(opt.textContent));
+        b.addEventListener("mouseenter", function () { active = visible.indexOf(i); highlight(); });
+        b.addEventListener("click", function () { choose(i); });
+        rows.appendChild(b);
+      });
+      if (!visible.length) rows.appendChild(el("div", "empty-row", "No matches."));
+      if (active >= visible.length) active = Math.max(0, visible.length - 1);
+      highlight();
     }
     function place() {
       var r = btn.getBoundingClientRect();
@@ -1226,62 +1278,103 @@
       list.style.top = (below ? r.bottom + 4 : r.top - 4 - h) + "px";
       list.style.left = clamp(r.left, 8, window.innerWidth - w - 8) + "px";
     }
-    function open() {
+    function jumpTo(prefix) {
+      var needle = prefix.toLowerCase();
+      if (!needle || !visible.length) return;
+      var start = (active + 1) % visible.length;
+      for (var n = 0; n < visible.length; n++) {
+        var i = visible[(start + n) % visible.length];
+        if (sel.options[i].textContent.toLowerCase().indexOf(needle) === 0) {
+          active = (start + n) % visible.length;
+          highlight();
+          return;
+        }
+      }
+    }
+    function open(seed) {
       if (openSelect) openSelect.close();
       closeMenu();
+      query = seed || "";
+      visible = [];
+      active = 0;
       list = el("div", "select-list");
       list.setAttribute("role", "listbox");
-      Array.prototype.forEach.call(sel.options, function (opt, i) {
-        var b = el("button", opt.value === "" ? "placeholder" : "");
-        b.type = "button";
-        b.tabIndex = -1;
-        b.setAttribute("role", "option");
-        b.setAttribute("aria-selected", i === sel.selectedIndex ? "true" : "false");
-        b.appendChild(el("span", "tick-mark", i === sel.selectedIndex ? "✓" : ""));
-        b.appendChild(document.createTextNode(opt.textContent));
-        b.addEventListener("mouseenter", function () { active = i; highlight(); });
-        b.addEventListener("click", function () { choose(i); });
-        list.appendChild(b);
-      });
+      if (searchable) {
+        list.classList.add("has-search");
+        var input = el("input", "field menu-search");
+        input.placeholder = sel.getAttribute("data-search") || "Filter";
+        input.setAttribute("aria-label", input.placeholder);
+        input.value = query;
+        input.addEventListener("input", function () { query = input.value; active = 0; fillRows(); place(); });
+        input.addEventListener("keydown", key);
+        list.appendChild(input);
+        list.appendChild(el("div", "select-opts"));
+      }
       document.body.appendChild(list);
-      active = Math.max(0, sel.selectedIndex);
+      fillRows();
+      if (!searchable) active = Math.max(0, visible.indexOf(sel.selectedIndex));
+      else if (visible.length > 1 && sel.options[visible[0]] && !sel.options[visible[0]].value) active = 1;
+      highlight();
       btn.classList.add("open");
       btn.setAttribute("aria-expanded", "true");
       place();
-      highlight();
       openSelect = api;
+      if (searchable) setTimeout(function () {
+        var inp = list && list.querySelector("input");
+        if (inp) {
+          inp.focus();
+          if (query) inp.setSelectionRange(query.length, query.length);
+        }
+      }, 0);
     }
     function close(focus) {
       if (!list) return;
       list.remove();
       list = null;
+      query = "";
+      visible = [];
       btn.classList.remove("open");
       btn.setAttribute("aria-expanded", "false");
       if (openSelect === api) openSelect = null;
       if (focus) btn.focus();
     }
     function key(e) {
-      var n = sel.options.length;
+      var fromSearch = e.target && e.target.tagName === "INPUT";
       if (!list) {
         if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           open();
+        } else if (searchable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          open(e.key);
         }
         return;
       }
+      var n = visible.length;
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
+        if (!n) return;
         active = (active + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
         highlight();
       } else if (e.key === "Home" || e.key === "End") {
         e.preventDefault();
+        if (!n) return;
         active = e.key === "Home" ? 0 : n - 1;
         highlight();
-      } else if (e.key === "Enter" || e.key === " ") {
+      } else if (e.key === "Enter") {
         e.preventDefault();
-        choose(active);
+        pickActive();
+      } else if (e.key === " " && !fromSearch) {
+        e.preventDefault();
+        pickActive();
       } else if (e.key === "Tab") {
         close(false);
+      } else if (!fromSearch && !searchable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        typeBuf += e.key;
+        clearTimeout(typeTimer);
+        typeTimer = setTimeout(function () { typeBuf = ""; }, 700);
+        jumpTo(typeBuf);
       }
     }
     /** Follows the button when something scrolls; closes once the button is out of sight. */
