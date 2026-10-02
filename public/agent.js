@@ -12,7 +12,17 @@
     filter: "agent-board.agent.filter",
     reasoning: "agent-board.agent.reasoningOpen",
     button: "agent-board.agent.showButton",
+    dockStyle: "agent-board.agent.dockStyle",
   };
+  const DOCK_STYLES = [
+    { id: "bar", label: "Bar" },
+    { id: "island", label: "Island" },
+  ];
+
+  function dockStyle() {
+    const v = localStorage.getItem(LS.dockStyle);
+    return DOCK_STYLES.some((s) => s.id === v) ? v : "bar";
+  }
 
   const MODES = [
     { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
@@ -27,6 +37,7 @@
     { id: "full", label: "Full access", detail: "Approve everything automatically" },
   ];
   const EXPLORE = new Set(["read", "search", "think"]);
+  const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor" };
 
   /* ---------- state ---------- */
@@ -924,9 +935,17 @@
         this.transcript.append(this.emptyState());
         return;
       }
+      if (this.variant === "dock") {
+        const sc = scopeLabel(t.scope);
+        const mark = el("div", "ag-scope-mark");
+        mark.append(icon(sc.icon), el("span", null, `${SCOPE_KIND[t.scope.kind] || "Global"} thread · `), el("b", null, sc.text));
+        if (t.scope.kind === "global") mark.replaceChildren(icon(sc.icon), el("span", null, "Global thread"));
+        this.transcript.append(mark);
+      }
       for (const group of this.groups(detail)) {
         this.transcript.append(this.renderGroup(group));
       }
+      this.markLatest();
       this.scrollToEnd();
     }
 
@@ -972,10 +991,26 @@
           byParent.set(it.parentToolId, list);
         }
       }
+      // The dock strings consecutive steps (reasoning, tools) on a rail of dots.
+      const railed = this.variant === "dock";
+      let rail = null;
+      const put = (node) => {
+        const step = railed && (node.classList.contains("ag-reason") || node.classList.contains("ag-tool") || node.classList.contains("ag-group"));
+        if (!step) {
+          rail = null;
+          body.append(node);
+          return;
+        }
+        if (!rail) {
+          rail = el("div", "ag-rail");
+          body.append(rail);
+        }
+        rail.append(node);
+      };
       let explore = [];
       const flush = () => {
         if (!explore.length) return;
-        body.append(explore.length === 1 ? this.renderTool(explore[0], byParent) : this.renderExplore(explore, byParent));
+        put(explore.length === 1 ? this.renderTool(explore[0], byParent) : this.renderExplore(explore, byParent));
         explore = [];
       };
       for (const it of rest) {
@@ -988,12 +1023,69 @@
         }
         flush();
         const node = this.renderItem(it, byParent, group.turn);
-        if (node) body.append(node);
+        if (node) put(node);
       }
       flush();
+      if (railed) {
+        const rails = body.querySelectorAll(":scope > .ag-rail");
+        rails[rails.length - 1]?.lastElementChild?.classList.add("ag-step-last");
+        if (group.turn?.status === "running") wrap.classList.add("running");
+        // Earlier turns fold their steps into one summary line, which expands them again.
+        if (rails.length && group.turn) {
+          const key = `s:${group.key}`;
+          wrap.classList.toggle("open", this.expanded.has(key));
+          const sum = button("", "ag-sum", () => this.toggle(key, wrap), "Show the steps");
+          sum.append(...this.stepSummary(group), icon("chevron", "ag-ico ag-chev"));
+          body.prepend(sum);
+        }
+      }
       if (body.childElementCount) wrap.append(body);
       if (group.turn) wrap.append(this.renderTurnFooter(group.turn, group.items));
       return wrap;
+    }
+
+    /** "Read 2 files · edited agent.css +8 −6 · 6s" for a turn whose steps are folded away. */
+    stepSummary(group) {
+      const tools = group.items.filter((it) => it.kind === "tool" && !it.parentToolId);
+      const count = (tool) => tools.filter((it) => it.tool === tool).length;
+      const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+      const parts = [];
+      const reads = count("read");
+      const searches = count("search");
+      const commands = count("execute");
+      const thoughts = group.items.filter((it) => it.kind === "reasoning").length;
+      if (reads) parts.push(`read ${plural(reads, "file", "files")}`);
+      if (searches) parts.push(plural(searches, "search", "searches"));
+      if (commands) parts.push(`ran ${plural(commands, "command", "commands")}`);
+      const files = group.turn?.files || [];
+      const out = [];
+      const push = (node) => {
+        if (out.length) out.push(el("span", "ag-sum-sep", "·"));
+        out.push(node);
+      };
+      for (const p of parts) push(el("span", null, p));
+      if (files.length) {
+        const edit = el("span", "ag-sum-edit");
+        edit.append(el("span", null, "edited "), el("span", "ag-fname", files.length === 1 ? R.basename(files[0].path) : `${files.length} files`));
+        edit.append(R.counts(files.reduce((a, f) => a + (f.added || 0), 0), files.reduce((a, f) => a + (f.removed || 0), 0)));
+        push(edit);
+      } else if (!parts.length) {
+        push(el("span", null, thoughts ? "thought it through" : plural(tools.length, "step", "steps")));
+      }
+      const turn = group.turn;
+      if (turn?.endedAt) push(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
+      const first = out[0];
+      if (first?.firstChild?.nodeType === Node.TEXT_NODE) first.textContent = first.textContent.charAt(0).toUpperCase() + first.textContent.slice(1);
+      else if (first?.firstElementChild) first.firstElementChild.textContent = "Edited ";
+      return out;
+    }
+
+    /** The dock folds every turn but the latest; it marks that one after each render. */
+    markLatest() {
+      if (this.variant !== "dock") return;
+      const turns = [...this.transcript.querySelectorAll(".ag-turn")].filter((n) => !n.dataset.turn.startsWith("pending") && !n.dataset.turn.startsWith("dropped"));
+      const last = turns[turns.length - 1];
+      for (const n of turns) n.classList.toggle("latest", n === last);
     }
 
     renderUser(item, queued) {
@@ -1015,6 +1107,8 @@
         bubble.append(chips);
       }
       bubble.append(el("div", "ag-user-text", item.text));
+      // The dock marks your turn with an arrow instead of a bubble.
+      if (this.variant === "dock") row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
       if (queued) row.append(el("div", "ag-queued", "Queued — sends when the current turn ends"));
       if (item.dropped) {
@@ -1452,6 +1546,7 @@
           else this.transcript.append(fresh);
         }
       }
+      this.markLatest();
       if (stick) this.scrollToEnd();
     }
 
@@ -1484,7 +1579,10 @@
       this.bar = el("div", "ag-bar");
       this.slash = el("div", "ag-slash");
       this.slash.hidden = true;
-      box.append(this.slash, this.ctxRow, this.input, this.bar);
+      // The dock places the settings bar and the send button itself.
+      this.sendSlot = el("div", "ag-send-slot");
+      box.append(this.slash, this.ctxRow, this.input);
+      if (this.variant !== "dock") box.append(this.bar);
       box.addEventListener("dragover", (event) => {
         if ([...(event.dataTransfer?.items || [])].some((i) => i.type.startsWith("image/"))) event.preventDefault();
       });
@@ -1610,13 +1708,19 @@
         ws.append(icon("box"), el("span", null, s.cwd ? R.basename(s.cwd) : "Workspace…"));
         bar.append(ws);
       }
-      bar.append(el("span", "ag-grow"));
-      if (t?.queued) bar.append(el("span", "ag-tag", `${t.queued} queued`));
+      let tail = bar;
+      if (this.variant === "dock") {
+        tail = this.sendSlot;
+        tail.replaceChildren();
+      } else {
+        bar.append(el("span", "ag-grow"));
+      }
+      if (t?.queued) tail.append(el("span", "ag-tag", `${t.queued} queued`));
       const running = t && t.status !== "idle";
       if (running) {
-        bar.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
+        tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
       }
-      bar.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : "Send (Enter)"));
+      tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : "Send (Enter)"));
     }
 
     async chooseWorkspace() {
@@ -1891,9 +1995,33 @@
     return span;
   }
 
+  /** Points a stopwatch span at a start time, or clears it. Returns the span. */
+  function setClock(span, start) {
+    if (start) {
+      span.dataset.start = String(start);
+      span.textContent = clockText(Date.now() - start);
+    } else {
+      delete span.dataset.start;
+      span.textContent = "";
+    }
+    return span;
+  }
+
+  /** Elapsed time as a stopwatch, "0:42" or "1:05:09". */
+  function clockText(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  }
+
   setInterval(() => {
     for (const span of document.querySelectorAll(".ag-elapsed[data-start]")) {
       span.textContent = R.duration(Date.now() - Number(span.dataset.start));
+    }
+    for (const span of document.querySelectorAll(".ag-clock[data-start]")) {
+      span.textContent = clockText(Date.now() - Number(span.dataset.start));
     }
   }, 1000);
 
@@ -2195,30 +2323,50 @@
     feed: el("div", "dock-feed"),
     handle: null,
     feedLines: new Map(),
+    /** When each thread's current run started, for threads whose turn list is not loaded. */
+    starts: new Map(),
     mount() {
       const main = document.querySelector(".workspace main");
       if (!main) return;
+      const view = this.view;
       const root = el("div", "agent-dock");
       const panel = el("div", "dock-panel");
+      // Output: the conversation when expanded, the live step feed when collapsed.
+      const out = el("div", "dock-out");
       const history = el("div", "dock-history");
-      history.append(this.view.scroll);
-      const top = el("div", "dock-top");
+      history.append(view.scroll);
+      out.append(history, this.feed, el("span", "dock-sweep"));
+      // Input: composer and send. The island style also shows the model orb and the conversation toggle here.
+      const toggle = () => button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)");
+      this.orb = button("", "dock-orb", (event) => view.modelMenu(event.currentTarget), "Model");
+      const input = el("div", "dock-input");
+      input.append(this.orb, view.composer, toggle(), view.sendSlot);
+      // Bar: status, thread and scope on the left; settings and window tools on the right.
+      this.status = el("span", "dock-status");
       this.titleBtn = button("", "dock-title", (event) => this.threadMenu(event.currentTarget), "Switch thread");
-      top.append(
-        this.titleBtn,
+      this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), "Where this thread belongs");
+      const left = el("div", "dock-bar-left");
+      left.append(this.status, this.titleBtn, this.scopeBtn);
+      const right = el("div", "dock-bar-right");
+      right.append(
+        view.bar,
         el("span", "ag-grow"),
-        button(icon("list"), "ag-icon-btn small", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)"),
+        toggle(),
         button(icon("expand"), "ag-icon-btn small", () => {
           const id = this.view.threadId;
           if (id) setCurrent(id);
           sidebar.setOpen(true);
           if (id) sidebar.view.setThread(id);
         }, "Open in the sidebar"),
-        button(icon("close"), "ag-icon-btn small", () => this.setShown(false), "Hide (Esc)")
+        button(icon("close"), "ag-icon-btn small dock-close", () => this.setShown(false), "Hide (Esc)")
       );
-      panel.append(history, this.feed, top, this.view.composer);
+      const bar = el("div", "dock-bar");
+      bar.append(left, right);
+      panel.append(out, input, bar);
       const handle = button("", "dock-handle", () => this.setShown(true), "Agent (Ctrl+K)");
-      handle.append(icon("sparkle"), el("span", "dock-handle-text", "Ask the agent"), el("kbd", null, "Ctrl K"));
+      this.handleClock = el("span", "ag-clock dock-handle-clock");
+      this.handleText = el("span", "dock-handle-text");
+      handle.append(icon("sparkle", "ag-ico dock-handle-ico"), el("span", "dock-dot"), this.handleClock, el("span", "dock-handle-sep"), this.handleText, el("kbd", null, "Ctrl K"));
       this.handle = handle;
       root.append(panel, handle);
       main.append(root);
@@ -2231,9 +2379,13 @@
     },
     apply() {
       if (!this.root) return;
+      const style = dockStyle();
+      for (const s of DOCK_STYLES) this.root.classList.toggle(`style-${s.id}`, s.id === style);
       this.root.classList.toggle("shown", S.dockShown);
       this.root.classList.toggle("expanded", S.dockShown && S.dockExpanded);
       this.renderHandle();
+      // The input sizes itself to its text; measure again once the layout for this style is in place.
+      requestAnimationFrame(() => this.view.autosize());
     },
     setShown(shown) {
       S.dockShown = shown;
@@ -2284,16 +2436,63 @@
     renderTitle() {
       if (!this.titleBtn) return;
       const t = this.view.thread();
+      const s = this.view.settings();
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread for this page"), icon("chevron", "ag-ico ag-chev-down"));
+      const sc = scopeLabel(s.scope);
+      this.scopeBtn.replaceChildren(icon(sc.icon), el("span", null, sc.text));
+      this.orb.textContent = s.provider === "claude" ? "C" : "⌘";
+      this.orb.title = `Model: ${modelLabel(s.provider, s.model)}`;
       this.renderHandle();
+    },
+    /** When the thread's current run started: its running turn, else when the dock first saw it running. */
+    runStart(t) {
+      const turn = [...(S.details.get(t.id)?.turns.values() || [])].find((x) => x.status === "running");
+      if (turn) return turn.startedAt;
+      if (!this.starts.has(t.id)) this.starts.set(t.id, Date.now());
+      return this.starts.get(t.id);
     },
     renderHandle() {
       if (!this.handle) return;
       const t = this.view.thread();
-      const text = this.handle.querySelector(".dock-handle-text");
-      this.handle.classList.toggle("busy", Boolean(t && t.status !== "idle"));
-      this.handle.classList.toggle("waiting", Boolean(t && t.status === "waiting"));
-      text.textContent = t && t.status === "running" ? "Working…" : t && t.status === "waiting" ? "Needs your answer" : t?.unread ? "Reply ready" : "Ask the agent";
+      const status = t?.status || "idle";
+      if (status === "idle" && t) this.starts.delete(t.id);
+      const start = t && status !== "idle" ? this.runStart(t) : null;
+      for (const node of [this.handle, this.root]) {
+        node?.classList.toggle("busy", status === "running");
+        node?.classList.toggle("waiting", status === "waiting");
+      }
+      setClock(this.handleClock, status === "running" ? start : null);
+      // Status dot and run time at the start of the bar.
+      this.status.className = `dock-status s-${status}`;
+      this.status.replaceChildren(el("span", "dock-dot"));
+      if (start) this.status.append(setClock(el("span", "ag-clock"), start));
+      if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
+      else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread ? "Reply ready" : "Ask the agent", status);
+    },
+    /** The hidden handle shows one line at a time; a new step slides the previous one up and out. */
+    setHandleText(text, key) {
+      const box = this.handleText;
+      const cur = box.lastElementChild;
+      if (cur && box.dataset.key === key) {
+        cur.textContent = text;
+        return;
+      }
+      box.dataset.key = key;
+      // Only the line on its way out may stay; anything older is gone already.
+      for (const old of [...box.children]) if (old !== cur) old.remove();
+      const next = el("span", "dock-handle-line", text);
+      box.append(next);
+      const animate = cur && !S.dockShown && this.handle.classList.contains("busy") && Date.now() - (this.handleAt || 0) > 600;
+      this.handleAt = Date.now();
+      if (!animate) {
+        for (const old of [...box.children]) if (old !== next) old.remove();
+        return;
+      }
+      const ease = { duration: 340, easing: "cubic-bezier(.2,.8,.2,1)" };
+      next.animate([{ transform: "translateY(100%)", opacity: 0 }, { transform: "none", opacity: 1 }], ease);
+      cur.animate([{ transform: "none", opacity: 1 }, { transform: "translateY(-100%)", opacity: 0 }], { ...ease, fill: "forwards" });
+      // A timer rather than onfinish: animations stall in a hidden window, and the old line must still go.
+      setTimeout(() => cur.remove(), ease.duration + 20);
     },
     threadMenu(anchor) {
       const tab = activeTab();
@@ -2315,21 +2514,31 @@
       this.feedLines.clear();
       this.renderTitle();
     },
-    /* Transient progress lines while the conversation is collapsed. */
-    line(key, iconName, text, { sticky = false, cls = "" } = {}) {
-      if (!this.root || S.dockExpanded || !S.dockShown) return;
+    /* Transient progress lines while the conversation is collapsed; the newest also shows in the hidden handle. */
+    line(key, _icon, text, { sticky = false, cls = "" } = {}) {
+      if (!this.root) return;
+      if (!/\b(done|files|error)\b/.test(cls)) {
+        this.live = { key, text };
+        if (this.view.thread()?.status === "running") this.renderHandle();
+      }
+      if (S.dockExpanded || !S.dockShown) return;
       let line = this.feedLines.get(key);
       if (!line) {
         line = el("div", `dock-line ${cls}`);
-        line.append(icon(iconName), el("span", "dock-line-text"));
+        line.append(el("span", "dock-dot"), el("span", "dock-line-text"));
+        const before = [...this.feed.children];
         this.feed.append(line);
         this.feedLines.set(key, line);
-        while (this.feed.childElementCount > 4) {
+        while (this.feed.childElementCount > 5) {
           const first = this.feed.firstElementChild;
           for (const [k, v] of this.feedLines) if (v === first) this.feedLines.delete(k);
           first.remove();
         }
+        // Older lines glide up to make room instead of jumping.
+        const lift = line.offsetHeight + 2;
+        for (const node of before) if (node.isConnected) node.animate([{ transform: `translateY(${lift}px)` }, { transform: "none" }], { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" });
       }
+      this.feed.classList.toggle("deep", this.feed.childElementCount > 2);
       line.querySelector(".dock-line-text").textContent = text;
       clearTimeout(line._fade);
       line.classList.remove("fading");
@@ -2338,6 +2547,7 @@
         line._fade = setTimeout(() => {
           line.remove();
           for (const [k, v] of this.feedLines) if (v === line) this.feedLines.delete(k);
+          this.feed.classList.toggle("deep", this.feed.childElementCount > 2);
         }, 900);
       }, sticky ? 14000 : 5000);
     },
@@ -2363,6 +2573,7 @@
     },
     onTurn(turn) {
       if (turn.threadId !== this.view.threadId) return;
+      if (turn.status !== "running") this.live = null;
       this.renderHandle();
       if (turn.status === "running") return;
       const detail = S.details.get(turn.threadId);
@@ -2573,12 +2784,32 @@
     });
     syncButton();
     buttonRow.append(buttonLabel, buttonToggle);
+    const styleRow = el("div", "setting-row");
+    const styleLabel = el("span", null, "Floating chat style");
+    styleLabel.id = "ag-dock-style-label";
+    const styleTrack = el("div", "button-track text-track");
+    styleTrack.setAttribute("role", "group");
+    styleTrack.setAttribute("aria-labelledby", styleLabel.id);
+    const syncStyle = () => {
+      for (const b of styleTrack.children) b.setAttribute("aria-pressed", String(b.dataset.style === dockStyle()));
+    };
+    for (const style of DOCK_STYLES) {
+      const b = button(style.label, null, () => {
+        localStorage.setItem(LS.dockStyle, style.id);
+        syncStyle();
+        dock.apply();
+      });
+      b.dataset.style = style.id;
+      styleTrack.append(b);
+    }
+    syncStyle();
+    styleRow.append(styleLabel, styleTrack);
     const hint = el(
       "p",
       "settings-hint",
       "Ctrl+L sidebar chat · Ctrl+K floating chat · Ctrl+Shift+L full window · Ctrl+' next starred model · Ctrl+Alt+' next reasoning level. Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
     );
-    section.append(status, buttonRow, actions, hint);
+    section.append(status, buttonRow, styleRow, actions, hint);
     panel.append(section);
     document.getElementById("settings-toggle")?.addEventListener("click", () => setTimeout(refresh, 0));
     refresh();

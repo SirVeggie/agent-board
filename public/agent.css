@@ -15,6 +15,10 @@
   --ag-raised: 0 14px 40px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
   /* Sunken inputs: shade at the top edge, faint light at the bottom. */
   --ag-well: inset 0 1px 3px rgba(0, 0, 0, 0.32), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+  /* Live work (the agent is running): the floating chat's dots, sweep and your-turn arrow. */
+  --ag-live: #d0a578;
+  --ag-live-rgb: 208, 165, 120;
+  --ag-bar-bg: rgba(0, 0, 0, 0.14);
 }
 
 html[data-theme="cream"] {
@@ -27,6 +31,9 @@ html[data-theme="cream"] {
   --ag-sunken: rgba(60, 40, 10, 0.06);
   --ag-raised: 0 12px 34px rgba(70, 50, 20, 0.22), 0 2px 8px rgba(70, 50, 20, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.7), inset 0 -1px 0 rgba(70, 50, 20, 0.12);
   --ag-well: inset 0 1px 3px rgba(70, 50, 20, 0.14), inset 0 -1px 0 rgba(255, 255, 255, 0.6);
+  --ag-live: #b0662c;
+  --ag-live-rgb: 176, 102, 44;
+  --ag-bar-bg: rgba(70, 50, 20, 0.04);
 }
 
 /* ---------- chrome toggle ---------- */
@@ -1423,10 +1430,10 @@ button.ag-pill.ap-full {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   border-radius: 4px;
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -1437,8 +1444,8 @@ button.ag-pill.ap-full {
 }
 
 .ag-prov.p-cursor {
-  background: rgba(var(--lift-rgb), 0.85);
-  color: var(--bg);
+  background: rgba(var(--lift-rgb), 0.12);
+  color: var(--heading);
 }
 
 button.ag-send {
@@ -1851,7 +1858,13 @@ html.tight-small .agent-full {
 
 /* ---------- floating dock ---------- */
 
+/* Two styles share one structure: output (conversation or step feed), input, and bar.
+   "bar" is a single card; "island" is a round capsule with the output and bars sliding out from behind it. */
+
 .agent-dock {
+  --dock-surface: var(--panel);
+  --dock-surface-2: color-mix(in srgb, var(--panel) 90%, var(--bg));
+  --dock-dot: color-mix(in srgb, var(--heading) 24%, var(--panel));
   position: absolute;
   left: 50%;
   bottom: 16px;
@@ -1865,10 +1878,6 @@ html.tight-small .agent-full {
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  backdrop-filter: blur(16px) saturate(1.2);
-  border-radius: 16px;
-  box-shadow: var(--ag-raised);
   transform: translateY(calc(100% + 40px));
   opacity: 0;
   /* Hidden: not focusable, and its slid-out box must not scroll the page area (see main below). */
@@ -1896,51 +1905,18 @@ html.tight-small .agent-full {
   overflow: clip;
 }
 
-.dock-panel .ag-composer {
-  margin: 0 8px 8px;
-  background: var(--ag-sunken);
-}
+/* output */
 
-.dock-top {
+.dock-out {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 8px 4px 10px;
-}
-
-button.dock-title {
-  height: 24px;
-  padding: 0 8px;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-  background: transparent;
-  box-shadow: none;
-  max-width: 70%;
-  min-width: 0;
-}
-
-button.dock-title span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-button.dock-title:hover {
-  color: var(--text);
-  background: rgba(var(--lift-rgb), 0.06);
-}
-
-.ag-chev-down {
-  transform: rotate(90deg);
-  opacity: 0.6;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .dock-history {
   display: none;
   min-height: 0;
-  max-height: 55vh;
-  border-bottom: 1px solid var(--border);
 }
 
 .agent-dock.expanded .dock-history {
@@ -1952,36 +1928,65 @@ button.dock-title:hover {
   max-height: 55vh;
 }
 
+.dock-sweep {
+  display: none;
+}
+
+/* live step feed: new steps arrive at the bottom, older ones glide up and fade out at the top */
+
 .dock-feed {
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
   gap: 2px;
-  padding: 0 14px;
+  max-height: 84px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
   cursor: pointer;
 }
 
-.dock-feed:not(:empty) {
-  padding-top: 8px;
-}
-
+.dock-feed:empty,
 .agent-dock.expanded .dock-feed {
   display: none;
+}
+
+.dock-feed.deep {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.35) 30%, #000 75%);
+  mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.35) 30%, #000 75%);
 }
 
 .dock-line {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--muted);
+  gap: 8px;
+  min-height: 18px;
   min-width: 0;
+  flex-shrink: 0;
   animation: ag-line-in 0.25s var(--ease);
-  transition: opacity 0.9s ease, transform 0.9s ease;
+  transition: opacity 0.9s ease;
 }
 
 .dock-line.fading {
   opacity: 0;
-  transform: translateY(-4px);
+}
+
+.dock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dock-dot);
+}
+
+.agent-dock.busy .dock-line:last-child {
+  color: var(--text);
+}
+
+.agent-dock.busy .dock-line:last-child .dock-dot {
+  background: var(--ag-live);
+  box-shadow: 0 0 8px var(--ag-live);
+  animation: dock-glow 1.2s ease-in-out infinite;
 }
 
 .dock-line-text {
@@ -2000,12 +2005,20 @@ button.dock-title:hover {
   color: var(--text);
 }
 
+.dock-line.done .dock-dot {
+  background: var(--ag-ok);
+}
+
 .dock-line.files {
   color: var(--heading);
 }
 
 .dock-line.error {
   color: var(--danger);
+}
+
+.dock-line.error .dock-dot {
+  background: var(--danger);
 }
 
 .dock-line.k-edit .dock-line-text {
@@ -2019,6 +2032,590 @@ button.dock-title:hover {
     transform: translateY(6px);
   }
 }
+
+@keyframes dock-glow {
+  50% {
+    box-shadow: 0 0 3px rgba(var(--ag-live-rgb), 0.5);
+  }
+}
+
+/* input */
+
+.dock-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dock-input .ag-composer,
+.dock-input .ag-composer:focus-within {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.dock-input .ag-textarea {
+  padding: 4px 0;
+  max-height: 220px;
+}
+
+.ag-send-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+button.dock-orb,
+.dock-input .dock-toggle {
+  display: none;
+}
+
+.agent-dock.expanded .dock-toggle {
+  color: var(--heading);
+  background: transparent;
+}
+
+.agent-dock.expanded .dock-toggle:hover {
+  background: rgba(var(--lift-rgb), 0.08);
+}
+
+/* bar */
+
+.dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dock-bar-left,
+.dock-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dock-bar-right {
+  flex: 1;
+}
+
+.dock-bar .ag-bar {
+  flex-wrap: nowrap;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dock-bar button.ag-pill {
+  background: transparent;
+  box-shadow: none;
+  padding: 0 6px;
+}
+
+.dock-bar button.ag-pill:hover {
+  background: rgba(var(--lift-rgb), 0.06);
+}
+
+.dock-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 6px;
+  flex-shrink: 0;
+  font: 11px var(--ag-mono);
+  color: var(--text);
+}
+
+.dock-status.s-idle .dock-dot {
+  background: var(--ag-ok);
+  opacity: 0.75;
+}
+
+.dock-status.s-running .dock-dot {
+  background: var(--ag-live);
+  box-shadow: 0 0 8px var(--ag-live);
+  animation: ag-pulse 1.2s ease-in-out infinite;
+}
+
+.dock-status.s-waiting .dock-dot {
+  background: var(--ag-warn);
+  box-shadow: 0 0 8px var(--ag-warn);
+  animation: ag-pulse 1.6s ease-in-out infinite;
+}
+
+button.dock-title,
+button.dock-scope {
+  height: 24px;
+  padding: 0 8px;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+button.dock-title {
+  min-width: 64px;
+}
+
+button.dock-title span,
+button.dock-scope span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.dock-title:hover,
+button.dock-scope:hover {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.06);
+}
+
+.ag-chev-down {
+  transform: rotate(90deg);
+  opacity: 0.6;
+}
+
+/* ----- bar style: one card, input on top, settings bar below ----- */
+
+.agent-dock.style-bar .dock-panel {
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+  border-radius: 16px;
+  box-shadow: var(--ag-raised);
+}
+
+.style-bar .dock-history .ag-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14px);
+  mask-image: linear-gradient(to bottom, transparent, #000 14px);
+}
+
+.style-bar .dock-feed {
+  margin: 12px 16px 0;
+}
+
+.style-bar .dock-input {
+  padding: 10px 10px 10px 16px;
+}
+
+/* With the conversation open, a faint shadow (not a line) separates it from the input. */
+.style-bar.expanded .dock-input {
+  position: relative;
+  box-shadow: 0 -6px 8px -8px rgba(0, 0, 0, 0.45);
+}
+
+.style-bar .dock-bar {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--ag-bar-bg);
+  border-radius: 0 0 16px 16px;
+}
+
+.style-bar .dock-bar-left::after {
+  content: "";
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.style-bar button.dock-scope {
+  display: none;
+}
+
+/* ----- island style: capsule with the output above and two bars below, sliding out from behind ----- */
+
+.agent-dock.style-island {
+  width: min(680px, calc(100% - 40px));
+}
+
+.style-island .dock-out {
+  margin: 0 18px;
+  z-index: 1;
+}
+
+.style-island.expanded .dock-out,
+.style-island .dock-out:has(> .dock-feed:not(:empty)) {
+  margin-bottom: -14px;
+  padding-bottom: 14px;
+}
+
+/* The surface fades out sooner than the text and blurs what is behind it, so lines stay readable over busy pages. */
+.style-island .dock-out::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px 14px 0 0;
+  background: var(--dock-surface-2);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  -webkit-mask-image: linear-gradient(to top, #000 0, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0, #000 55%, transparent 100%);
+  pointer-events: none;
+}
+
+.style-island.expanded .dock-out::before {
+  -webkit-mask-image: linear-gradient(to top, #000 0, #000 72%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0, #000 72%, transparent 100%);
+}
+
+.style-island .dock-history,
+.style-island .dock-feed {
+  position: relative;
+}
+
+.style-island .dock-history .ag-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.4) 50px, #000 120px);
+  mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.4) 50px, #000 120px);
+}
+
+.style-island .dock-history .ag-transcript {
+  padding-top: 56px;
+}
+
+.style-island .dock-feed {
+  padding: 10px 16px 8px;
+  max-height: 96px;
+}
+
+/* A long, slow ember sweep along the output's visible bottom edge while the agent works. */
+.style-island .dock-sweep {
+  display: block;
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 14px;
+  height: 1.5px;
+  overflow: hidden;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.style-island.busy.expanded .dock-sweep,
+.style-island.busy .dock-out:has(> .dock-feed:not(:empty)) .dock-sweep {
+  opacity: 1;
+}
+
+.style-island .dock-sweep::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 60%;
+  background: linear-gradient(90deg, transparent, var(--ag-live) 50%, transparent);
+  opacity: 0.8;
+  animation: dock-sweep 4.6s ease-in-out infinite;
+}
+
+@keyframes dock-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.style-island .dock-input {
+  position: relative;
+  z-index: 2;
+  min-height: 46px;
+  padding: 8px;
+  border-radius: 23px;
+  background: var(--dock-surface);
+  box-shadow: var(--ag-raised);
+}
+
+.style-island .dock-input .ag-textarea {
+  padding: 3px 4px;
+}
+
+.style-island button.dock-orb {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #151518;
+  background: conic-gradient(from 200deg, #d0a578, #9db8a4, #8fb3d9, #d0a578);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25), 0 0 12px rgba(208, 165, 120, 0.25);
+}
+
+.style-island.busy button.dock-orb {
+  animation: ag-pulse 1.6s ease-in-out infinite;
+}
+
+.style-island .dock-input .dock-toggle {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.style-island .ag-send-slot button.ag-send {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.style-island .dock-bar {
+  margin: 0 18px;
+  justify-content: space-between;
+  gap: 20px;
+  position: relative;
+  z-index: 1;
+}
+
+.style-island .dock-bar-left,
+.style-island .dock-bar-right {
+  flex: 0 1 auto;
+  height: 42px;
+  margin-top: -13px;
+  padding: 13px 6px 0;
+  border-radius: 0 0 12px 12px;
+  background: var(--dock-surface-2);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.style-island .dock-bar-right {
+  flex-shrink: 0;
+}
+
+.style-island .dock-bar-right > .ag-grow,
+.style-island .dock-bar .dock-toggle,
+.style-island .dock-bar .dock-close {
+  display: none;
+}
+
+.style-island .dock-bar button.dock-title,
+.style-island .dock-bar button.dock-scope,
+.style-island .dock-bar button.ag-pill,
+.style-island .dock-bar button.ag-icon-btn {
+  height: 22px;
+  font-size: 11.5px;
+}
+
+.style-island button.dock-title {
+  color: var(--text);
+}
+
+/* ----- the conversation inside the dock ----- */
+
+.agent-dock .ag-transcript {
+  padding: 12px 16px 18px;
+  gap: 12px;
+}
+
+.ag-scope-mark {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ag-scope-mark b {
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-scope-mark > span {
+  white-space: pre;
+}
+
+.style-island .ag-scope-mark {
+  display: none;
+}
+
+/* A faint divider that fades out at both ends separates turns. */
+.agent-dock .ag-turn + .ag-turn::before {
+  content: "";
+  display: block;
+  width: 50%;
+  height: 1px;
+  margin: 0 auto 4px;
+  background: linear-gradient(90deg, transparent, rgba(var(--lift-rgb), 0.12), transparent);
+}
+
+/* Your turn: a glowing arrow, no bubble. */
+.agent-dock .ag-user {
+  align-self: stretch;
+  max-width: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.agent-dock .ag-user-bubble,
+.agent-dock .ag-user.queued .ag-user-bubble {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.agent-dock .ag-you {
+  margin-top: 3px;
+  color: var(--ag-live);
+  filter: drop-shadow(0 0 3px rgba(var(--ag-live-rgb), 0.75));
+}
+
+.agent-dock .ag-queued {
+  flex-basis: 100%;
+  padding-left: 20px;
+}
+
+/* Steps on a rail: dim dots joined by short lines, the newest one lit. */
+.ag-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+}
+
+.ag-rail > * {
+  position: relative;
+}
+
+.ag-rail > *::before {
+  content: "";
+  position: absolute;
+  left: -11px;
+  top: 10px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dock-dot);
+  z-index: 1;
+}
+
+.ag-rail > :not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 21px;
+  bottom: -7px;
+  width: 1px;
+  background: rgba(var(--lift-rgb), 0.1);
+}
+
+.ag-rail > .s-error::before {
+  background: var(--danger);
+}
+
+.agent-dock .ag-turn.latest .ag-step-last::before {
+  background: var(--ag-ok);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ag-ok) 70%, transparent);
+}
+
+.agent-dock .ag-turn.latest.running .ag-step-last::before {
+  background: var(--ag-live);
+  box-shadow: 0 0 9px var(--ag-live);
+  animation: dock-glow 1.2s ease-in-out infinite;
+}
+
+.ag-rail > * > button.ag-reason-head,
+.ag-rail > * > button.ag-group-head,
+.ag-rail > * > button.ag-tool-head {
+  padding-left: 4px;
+}
+
+/* The dots stand in for the step icons. */
+.ag-rail > * > button > :first-child:is(.ag-ico, .ag-spin) {
+  display: none;
+}
+
+.agent-dock .ag-tool.k-edit > .ag-tool-head,
+.agent-dock .ag-tool.k-delete > .ag-tool-head {
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-dock .ag-file {
+  padding: 0;
+  background: none;
+}
+
+/* Earlier turns fold their steps into one summary line; clicking it shows them. */
+.agent-dock button.ag-sum {
+  display: none;
+}
+
+.agent-dock .ag-turn:not(.latest) button.ag-sum {
+  display: inline-flex;
+  align-self: flex-start;
+  max-width: 100%;
+  height: auto;
+  min-height: 20px;
+  padding: 1px 6px;
+  margin: -1px -6px;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.agent-dock .ag-turn:not(.latest) button.ag-sum:hover {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.05);
+}
+
+.ag-sum .ag-fname {
+  font-family: var(--ag-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.ag-sum-sep {
+  opacity: 0.6;
+}
+
+.ag-sum-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ag-turn.open .ag-sum .ag-chev {
+  transform: rotate(90deg);
+}
+
+.agent-dock .ag-turn:not(.latest):not(.open) .ag-rail,
+.agent-dock .ag-turn:not(.latest) .ag-turn-end,
+.agent-dock .ag-turn:not(.latest) .ag-turn-foot,
+.agent-dock .ag-turn-foot.s-running {
+  display: none;
+}
+
+/* ----- hidden: the handle ----- */
 
 button.dock-handle {
   pointer-events: auto;
@@ -2047,16 +2644,74 @@ button.dock-handle.waiting {
   opacity: 1;
 }
 
-button.dock-handle.busy .ag-ico {
-  color: var(--accent);
-  animation: ag-pulse 1.2s infinite;
+button.dock-handle .dock-dot,
+button.dock-handle .dock-handle-clock,
+button.dock-handle .dock-handle-sep {
+  display: none;
 }
 
+button.dock-handle.busy,
 button.dock-handle.waiting {
+  color: var(--text);
+}
+
+button.dock-handle.busy .dock-handle-ico,
+button.dock-handle.waiting .dock-handle-ico {
+  display: none;
+}
+
+button.dock-handle.busy .dock-dot {
+  display: block;
+  background: var(--ag-live);
+  box-shadow: 0 0 8px var(--ag-live);
+  animation: ag-pulse 1.2s ease-in-out infinite;
+}
+
+button.dock-handle.waiting .dock-dot {
+  display: block;
+  background: var(--ag-warn);
+  box-shadow: 0 0 8px var(--ag-warn);
+  animation: ag-pulse 1.6s ease-in-out infinite;
+}
+
+button.dock-handle.waiting .dock-handle-text {
   color: var(--ag-warn);
 }
 
+button.dock-handle.busy .dock-handle-clock {
+  display: inline;
+  font: 11px var(--ag-mono);
+}
+
+button.dock-handle.busy .dock-handle-sep {
+  display: block;
+  width: 1px;
+  height: 12px;
+  background: var(--border);
+}
+
+/* One line at a time; lines stack in one cell so a new step can slide the old one out. */
+.dock-handle-text {
+  display: grid;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.dock-handle-line {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.dock-handle.busy .dock-handle-text {
+  width: 220px;
+  text-align: left;
+}
+
 button.dock-handle kbd {
+  flex-shrink: 0;
+  white-space: nowrap;
   font: inherit;
   font-size: 10px;
   padding: 1px 5px;
