@@ -2901,14 +2901,63 @@
     return limits && limits.windows?.length ? limits : null;
   }
 
-  /** Compact "5-hour 84% · Weekly 76%" for the chat's settings bar; nothing until the provider has reported. */
+  let usageTipEl = null;
+  let usageTipTimer = 0;
+
+  function hideUsageTip() {
+    clearTimeout(usageTipTimer);
+    usageTipEl?.remove();
+    usageTipEl = null;
+  }
+
+  function showUsageTip(anchor, provider) {
+    hideUsageTip();
+    const limits = planLimits(provider);
+    if (!limits) return;
+    const tip = el("div", "ag-usage-tip");
+    tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
+    for (const w of limits.windows) {
+      const row = el("div", `ag-usage-tip-row lvl-${usageLevel(w.utilization)}`);
+      const bar = el("div", "ag-meter-bar");
+      const fill = el("div", "ag-meter-fill");
+      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
+      bar.append(fill);
+      row.append(el("span", "ag-usage-tip-label", w.label), bar, el("span", "ag-usage-tip-pct", percent(w.utilization)));
+      if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", resetText(w.resetsAt)));
+      tip.append(row);
+    }
+    if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
+    document.body.append(tip);
+    const rect = anchor.getBoundingClientRect();
+    const tw = Math.min(280, window.innerWidth - 16);
+    tip.style.width = `${tw}px`;
+    let top = rect.top - tip.offsetHeight - 8;
+    if (top < 8) top = rect.bottom + 8;
+    const left = Math.min(Math.max(8, rect.right - tw), window.innerWidth - tw - 8);
+    tip.style.top = `${Math.max(8, top)}px`;
+    tip.style.left = `${left}px`;
+    usageTipEl = tip;
+  }
+
+  /** Compact "5h 84% · wk 76%" for the chat's settings bar; nothing until the provider has reported. */
   function usageChip(provider) {
     const limits = planLimits(provider);
     if (!limits) return null;
     const top = Math.max(...limits.windows.map((w) => w.utilization));
-    const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => agentSettings.open(), "");
-    chip.title = `${PROVIDER_LABEL[provider] || provider} plan usage\n${limits.windows.map((w) => `${w.label}: ${percent(w.utilization)} · ${resetText(w.resetsAt)}`).join("\n")}${limits.overage ? "\nUsing extra usage" : ""}`;
+    const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => {
+      hideUsageTip();
+      agentSettings.open();
+    }, "");
+    chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
     for (const w of limits.windows) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${w.label === "5-hour" ? "5h" : w.label === "Weekly" ? "wk" : w.label} ${percent(w.utilization)}`));
+    chip.addEventListener("pointerenter", () => {
+      clearTimeout(usageTipTimer);
+      usageTipTimer = setTimeout(() => showUsageTip(chip, provider), 160);
+    });
+    chip.addEventListener("pointerleave", () => {
+      clearTimeout(usageTipTimer);
+      usageTipTimer = setTimeout(hideUsageTip, 120);
+    });
     return chip;
   }
 
