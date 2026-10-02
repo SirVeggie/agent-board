@@ -131,12 +131,15 @@
       if (!S.threads.has(id)) S.details.delete(id);
     }
     // A reconnect may have missed events: refresh the details we show.
-    for (const view of views()) {
-      if (view.threadId) {
-        S.details.delete(view.threadId);
-      }
-    }
+    const shown = new Set(views().map((view) => view.threadId).filter(Boolean));
+    for (const id of shown) S.details.delete(id);
     renderAll();
+    for (const id of shown) {
+      if (!S.threads.has(id)) continue;
+      ensureDetail(id).then(() => {
+        for (const view of views()) if (view.threadId === id) view.renderAll();
+      });
+    }
   }
 
   async function ensureDetail(id) {
