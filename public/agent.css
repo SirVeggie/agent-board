@@ -38,15 +38,57 @@ html[data-theme="cream"] {
 
 /* ---------- chrome toggle ---------- */
 
+/* While an agent works: the sparkle glows in the live ember and a soft light travels the button's
+   outline. The outline stays put and only the light moves, so nothing wobbles. */
+@property --ag-orbit {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.agent-toggle.busy {
+  color: var(--ag-live);
+}
+
+.agent-toggle.busy svg {
+  animation: ag-toggle-breathe 2.4s ease-in-out infinite;
+}
+
 .agent-toggle.busy::after {
   content: "";
   position: absolute;
-  inset: 3px;
-  border-radius: 7px;
-  border: 1.5px solid transparent;
-  border-top-color: var(--accent);
-  animation: ag-spin 0.9s linear infinite;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--ag-orbit), transparent 0 55%, rgba(var(--ag-live-rgb), 0.35) 75%, var(--ag-live) 92%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: ag-toggle-orbit 2.2s linear infinite;
   pointer-events: none;
+}
+
+@keyframes ag-toggle-orbit {
+  to {
+    --ag-orbit: 360deg;
+  }
+}
+
+@keyframes ag-toggle-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 1px rgba(var(--ag-live-rgb), 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 0 4px rgba(var(--ag-live-rgb), 0.9));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-toggle.busy svg,
+  .agent-toggle.busy::after {
+    animation: none;
+  }
 }
 
 .agent-toggle.waiting {
