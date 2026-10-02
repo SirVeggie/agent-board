@@ -593,17 +593,58 @@
     return [...state.tabs, ...state.closed].filter((tab) => tab.key !== "welcome");
   }
 
+  /** Position of the current history entry among the board's own entries; see onHistoryStep. */
+  let historyIndex = typeof history.state?.boardIndex === "number" ? history.state.boardIndex : 0;
+
   function syncHash() {
     if (!state.activeId) {
       if (location.hash) {
-        history.replaceState(null, "", location.pathname + location.search);
+        history.replaceState({ boardIndex: historyIndex }, "", location.pathname + location.search);
       }
       return;
     }
     const wanted = "#" + state.activeId;
-    if (location.hash !== wanted) {
-      history.replaceState(null, "", wanted);
+    if (location.hash === wanted) {
+      return;
     }
+    // Focus moving between open tabs adds a history entry, so the browser's Back and Forward step
+    // through the tabs you were on. On first load, or when the previous tab has left the strip,
+    // the entry is replaced instead.
+    const prev = location.hash.replace(/^#/, "");
+    if (prev && state.tabs.some((tab) => tab.id === prev)) {
+      historyIndex += 1;
+      history.pushState({ boardIndex: historyIndex }, "", wanted);
+    } else {
+      history.replaceState({ boardIndex: historyIndex }, "", wanted);
+    }
+  }
+
+  /**
+   * Back or Forward onto one of the board's entries: focus that tab. An entry for the tab already in
+   * front, or for a page that is closed or gone, is skipped in the same direction, so every press
+   * lands on a different open tab. Entries the board did not make (a hash typed into the address
+   * bar) are left to hashchange.
+   */
+  function onHistoryStep(event) {
+    const index = event.state?.boardIndex;
+    if (typeof index !== "number") {
+      return;
+    }
+    const step = index < historyIndex ? -1 : 1;
+    historyIndex = index;
+    const id = location.hash.replace(/^#/, "");
+    const open = state.tabs.find((tab) => tab.id === id);
+    if (open && open.id !== state.activeId) {
+      selectTab(open.id, { fromUser: true });
+      return;
+    }
+    history.go(step);
+    // At either end of the history there is nothing to skip to: point the URL back at the tab in front.
+    setTimeout(() => {
+      if (historyIndex === index) {
+        syncHash();
+      }
+    }, 150);
   }
 
   function activeTab() {
@@ -2022,11 +2063,26 @@
     }
   }
 
-  /** `allow` only applies to the next navigation, so it has to be set before src. */
+  /**
+   * `allow` only applies to the next navigation, so it has to be set before src. A frame that has
+   * loaded already reloads in place: changing src would add a history entry, and Back would then
+   * step the frame through old revisions instead of going to the previous tab.
+   */
   function loadFrame(el, tab) {
     delete el.dataset.loaded;
     el.allow = tab.embedUrl ? EMBED_ALLOW : "";
-    el.src = viewUrl(tab);
+    const url = viewUrl(tab);
+    if (el.dataset.src && el.contentWindow) {
+      try {
+        el.contentWindow.location.replace(url);
+        el.dataset.src = url;
+        return;
+      } catch {
+        // Fall back to src below.
+      }
+    }
+    el.dataset.src = url;
+    el.src = url;
   }
 
   function discardFrame(id) {
@@ -3071,7 +3127,13 @@
     sideResizer.addEventListener("pointercancel", onUp);
   });
 
+  window.addEventListener("popstate", onHistoryStep);
+
   window.addEventListener("hashchange", () => {
+    // Steps onto the board's own entries were handled by popstate.
+    if (typeof history.state?.boardIndex === "number") {
+      return;
+    }
     const id = location.hash.replace(/^#/, "");
     if (!id) {
       return;
