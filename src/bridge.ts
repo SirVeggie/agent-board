@@ -433,7 +433,7 @@ export const BOARD_BRIDGE_JS = `
     window.open(href, "_blank", "noopener,noreferrer");
   }
 
-  function askBoard(message) {
+  function askBoard(message, timeoutMs) {
     return new Promise(function (resolve) {
       if (!embedded) {
         resolve({ ok: false, error: "no_board" });
@@ -456,7 +456,7 @@ export const BOARD_BRIDGE_JS = `
           delete linkRequests[reqId];
           resolve({ ok: false, error: "timeout" });
         }
-      }, 5000);
+      }, timeoutMs || 5000);
     });
   }
 
@@ -678,6 +678,14 @@ export const BOARD_BRIDGE_JS = `
       scrollToAnchor(data.anchor);
     } else if (data.type === "agent-board-pages-changed") {
       recheckLinks();
+    } else if (data.type === "agent-board-agent-event") {
+      agentListeners.slice().forEach(function (fn) {
+        try {
+          fn(data.thread);
+        } catch (err) {
+          console.error(err);
+        }
+      });
     }
   });
 
@@ -766,6 +774,63 @@ export const BOARD_BRIDGE_JS = `
     return value.indexOf("/blob/") === 0 ? value : "/blob/" + value;
   }
 
+  // ---------- agent ----------
+  // A page can start agent chat threads of its own and continue them. Starting or sending needs a
+  // click or key press, like board.open (the board checks again on its side); reading does not.
+  var agentListeners = [];
+
+  function agentText(value) {
+    return value == null ? null : String(value);
+  }
+
+  function agentCall(message, timeoutMs) {
+    message.type = "agent-board-agent";
+    return askBoard(message, timeoutMs || 30000);
+  }
+
+  function agentWrite(message) {
+    if (!hasGesture()) {
+      console.warn("[board] board.agent." + message.op + " needs a click or key press; ignored");
+      return Promise.resolve({ ok: false, error: "no_gesture" });
+    }
+    return agentCall(message);
+  }
+
+  var agent = {
+    /** New thread for this page: { ok, threadId, queued }. opts: { title, mode: "board" | "ask", show: "dock" | "sidebar" }. */
+    start: function (prompt, opts) {
+      opts = opts || {};
+      return agentWrite({ op: "start", prompt: agentText(prompt), title: agentText(opts.title), mode: agentText(opts.mode), show: agentText(opts.show) });
+    },
+    /** Send to one of this page's threads; queued when it is still working: { ok, queued }. */
+    send: function (threadId, prompt, opts) {
+      opts = opts || {};
+      return agentWrite({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) });
+    },
+    /** This page's threads, newest first: { ok, threads: [{ id, title, status, queued, activityAt }] }. */
+    threads: function () {
+      return agentCall({ op: "threads" });
+    },
+    /** One thread and its latest reply: { ok, thread, reply }. */
+    get: function (threadId) {
+      return agentCall({ op: "get", threadId: agentText(threadId) });
+    },
+    /** Resolves once the thread is idle (queue included): { ok, thread, reply }, or { ok: false, error: "timeout" }. */
+    wait: function (threadId, opts) {
+      var ms = opts && typeof opts.timeoutMs === "number" ? Math.max(1000, opts.timeoutMs) : 600000;
+      return agentCall({ op: "wait", threadId: agentText(threadId), timeoutMs: ms }, ms + 5000);
+    },
+    /** fn({ id, title, status, queued, reply? }) whenever one of this page's threads changes status. */
+    onChange: function (fn) {
+      agentListeners.push(fn);
+      return function () {
+        agentListeners = agentListeners.filter(function (item) {
+          return item !== fn;
+        });
+      };
+    }
+  };
+
   window.board = {
     id: tabId,
     template: template,
@@ -785,6 +850,7 @@ export const BOARD_BRIDGE_JS = `
     signal: signal,
     open: open,
     resolve: resolve,
+    agent: agent,
     reportIncompatible: reportIncompatible,
     onChange: function (fn) {
       listeners.push(fn);

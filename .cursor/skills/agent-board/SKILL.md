@@ -251,6 +251,7 @@ board.bind(el, "notes")         // two-way bind an input, textarea, or checkbox
 board.revision                  // current stateRevision
 board.saveAsset(file)           // store an image/file for this page; see Page assets
 board.open("key", { mode })     // open a page or URL as "tab", "peek", or "split"; see Linking pages
+board.agent.start(prompt)       // start an agent chat thread for this page; see Pages that use the agent
 ```
 
 Declarative wake-ups (do **not** also call `board.signal` in the same click):
@@ -321,6 +322,26 @@ function toggle(id, done) {
 board.onChange(render);
 render();
 ```
+
+### Pages that use the agent
+
+A page can start the board's own agent chat and read its replies with `board.agent`. Use it for buttons like "Summarise", "Break this card down" or "Draft a reply", where the page builds the prompt from its state and shows the answer itself.
+
+```js
+const { ok, threadId, error } = await board.agent.start(prompt, { title: "Card #12", mode: "board", show: "dock" });
+await board.agent.send(threadId, "Shorter, please.");     // queued if the thread is still working
+const { reply } = await board.agent.wait(threadId);       // resolves when the thread is idle (default 10 min)
+const { threads } = await board.agent.threads();          // this page's threads, newest first
+const { thread, reply: last } = await board.agent.get(threadId);
+board.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
+```
+
+- `start` and `send` only work inside a click or key press, like `board.open`; otherwise they resolve `{ ok: false, error: "no_gesture" }`. Call them first in the handler, before other `await`s.
+- A page only sees and drives **its own** threads (scoped to that page). It cannot reach other threads.
+- Threads a page starts are Board mode (`mode: "ask"` for read-only Q&A), so they get board tools and the web, not files or shell. The model and provider follow the user's defaults.
+- `show: "dock"` or `"sidebar"` opens the thread in that chat; omit it to run quietly. The tab still shows its working dot.
+- Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
+- Keep the thread id in `board.set` state if the page should continue the same conversation later.
 
 ## Waiting for user input
 

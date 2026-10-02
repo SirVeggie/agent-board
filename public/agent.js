@@ -200,6 +200,7 @@
         if (!prev && dock.draftMatches(msg.thread)) dock.syncThread();
         renderLists();
         renderBadge();
+        pageThreadChanged(msg.thread, prev);
         return;
       }
       case "agent_thread_deleted": {
@@ -1149,6 +1150,7 @@
         bubble.append(chips);
       }
       bubble.append(el("div", "ag-user-text", item.text));
+      if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
@@ -2946,6 +2948,152 @@
     refresh();
   }
 
+  /* ---------- board.agent: pages that start and continue their own threads ---------- */
+
+  const PAGE_PROMPT_MAX = 20000;
+  /** board.agent.wait calls by thread id. */
+  const pageWaiters = new Map();
+  /** When a page last sent to each thread: until the thread has been active since, it is not done with it. */
+  const pageSentAt = new Map();
+
+  function ownedBy(tab, t) {
+    return Boolean(t && t.scope.kind === "page" && t.scope.ref === tab.id);
+  }
+
+  function pageBrief(t) {
+    return { id: t.id, title: t.title, status: t.status, queued: t.queued || 0, activityAt: t.activityAt };
+  }
+
+  /** The text of the latest turn's replies. */
+  async function lastReply(id) {
+    const detail = await ensureDetail(id);
+    if (!detail) return "";
+    const turns = [...detail.turns.values()].sort((a, b) => b.seq - a.seq);
+    const turn = turns.find((x) => x.status !== "running") || turns[0];
+    if (!turn) return "";
+    return detail.items
+      .filter((it) => it.kind === "text" && it.turnId === turn.id && !it.parentToolId)
+      .map((it) => it.text)
+      .join("\n\n")
+      .trim();
+  }
+
+  function showPageThread(id, where) {
+    if (where === "sidebar") {
+      if (!S.sideOpen) sidebar.setOpen(true);
+      sidebar.view.setThread(id);
+    } else if (where === "dock") {
+      if (id !== dock.view.threadId) dock.pick(id);
+      if (!S.dockShown) dock.setShown(true);
+    }
+  }
+
+  /** Tell the page about its thread's status changes, and settle board.agent.wait calls once it is idle. */
+  function pageThreadChanged(t, prev) {
+    if (t.scope.kind !== "page" || !t.scope.ref) return;
+    if (prev && prev.status === t.status && prev.title === t.title && prev.queued === t.queued) return;
+    const settle = t.status === "idle" && !t.queued;
+    const send = (reply) => app()?.postToPage?.(t.scope.ref, { type: "agent-board-agent-event", thread: { ...pageBrief(t), ...(reply !== undefined ? { reply } : {}) } });
+    if (!settle) {
+      send();
+      return;
+    }
+    void lastReply(t.id).then((reply) => {
+      send(reply);
+      for (const waiter of pageWaiters.get(t.id) || []) waiter(reply);
+      pageWaiters.delete(t.id);
+    });
+  }
+
+  function waitIdle(id, timeoutMs) {
+    return new Promise((resolve) => {
+      const list = pageWaiters.get(id) || [];
+      const done = (reply) => {
+        clearTimeout(timer);
+        resolve({ ok: true, reply });
+      };
+      const timer = setTimeout(() => {
+        const rest = (pageWaiters.get(id) || []).filter((w) => w !== done);
+        if (rest.length) pageWaiters.set(id, rest);
+        else pageWaiters.delete(id);
+        resolve({ ok: false, error: "timeout" });
+      }, Math.min(Math.max(Number(timeoutMs) || 600000, 1000), 6 * 3600 * 1000));
+      list.push(done);
+      pageWaiters.set(id, list);
+    });
+  }
+
+  /**
+   * One board.agent call from `tab` (app.js found it from the asking frame and checked the gesture).
+   * Pages only see and drive threads that belong to them, and only start Board or Ask threads: no
+   * file or shell access unless you gave the thread that yourself.
+   */
+  async function pageRequest(tab, data) {
+    const prompt = typeof data.prompt === "string" ? data.prompt.trim() : "";
+    const thread = data.threadId ? S.threads.get(data.threadId) : null;
+    switch (data.op) {
+      case "threads":
+        return {
+          ok: true,
+          threads: [...S.threads.values()]
+            .filter((t) => ownedBy(tab, t) && !t.archived)
+            .sort((a, b) => b.activityAt - a.activityAt)
+            .map(pageBrief),
+        };
+      case "get":
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        return { ok: true, thread: pageBrief(thread), reply: await lastReply(thread.id) };
+      case "wait": {
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        await ensureDetail(thread.id);
+        const now = S.threads.get(thread.id);
+        const caughtUp = (now.activityAt || 0) >= (pageSentAt.get(now.id) || 0);
+        if (now.status === "idle" && !now.queued && caughtUp) return { ok: true, thread: pageBrief(now), reply: await lastReply(now.id) };
+        const result = await waitIdle(now.id, data.timeoutMs);
+        const after = S.threads.get(now.id);
+        return after ? { ...result, thread: pageBrief(after) } : { ok: false, error: "not_found" };
+      }
+      case "start": {
+        if (!prompt) return { ok: false, error: "empty_prompt" };
+        if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
+        const p = prefs();
+        const provider = providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id;
+        if (!provider) return { ok: false, error: "no_provider" };
+        const title = typeof data.title === "string" && data.title.trim() ? data.title.trim().slice(0, 120) : undefined;
+        const { thread: created } = await api("POST", "/threads", {
+          provider,
+          model: p.models?.[provider] || "default",
+          effort: p.efforts?.[provider] ?? null,
+          modelParams: p.modelParams?.[provider] || {},
+          mode: data.mode === "ask" ? "ask" : "board",
+          approval: p.approval || "ask",
+          web: p.web !== false,
+          cwd: null,
+          scope: { kind: "page", ref: tab.id },
+          ...(title ? { title } : {}),
+        });
+        S.threads.set(created.id, created);
+        S.details.set(created.id, { items: [], byId: new Map(), turns: new Map() });
+        pageSentAt.set(created.id, Date.now());
+        const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page" });
+        showPageThread(created.id, data.show);
+        return { ok: true, threadId: created.id, queued: Boolean(sent.queued) };
+      }
+      case "send": {
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        if (!prompt) return { ok: false, error: "empty_prompt" };
+        if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
+        await ensureDetail(thread.id);
+        pageSentAt.set(thread.id, Date.now());
+        const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page" });
+        showPageThread(thread.id, data.show);
+        return { ok: true, queued: Boolean(sent.queued) };
+      }
+      default:
+        return { ok: false, error: "unknown_op" };
+    }
+  }
+
   /* ---------- keys ---------- */
 
   function shortcut(action) {
@@ -3129,7 +3277,7 @@
     }
   });
 
-  window.agentBoardChat = { shortcut, escape, pageStatus };
+  window.agentBoardChat = { shortcut, escape, pageStatus, pageRequest };
 
   /* ---------- boot ---------- */
 

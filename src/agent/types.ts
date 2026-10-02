@@ -142,6 +142,8 @@ export type ItemBody =
       dropped?: boolean;
       /** Sent into a running turn: "waiting" until the agent takes it in, then "folded" (it belongs to that turn). */
       steer?: "waiting" | "folded";
+      /** Sent by the code of the thread's page (board.agent), not typed by the user. */
+      from?: "page";
     }
   | { kind: "text"; text: string; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }

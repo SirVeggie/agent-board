@@ -125,7 +125,8 @@ export function agentRouter(host: AgentHost): express.Router {
             .filter((img) => img.data && /^image\//.test(img.mimeType))
         : [];
       const context = Array.isArray(body.context) ? (body.context.filter(isPlainRecord) as ContextChip[]) : [];
-      return host.send(req.params.id, { text: String(body.text ?? ""), images, context });
+      // The board sends from: "page" for messages a page's own code sent through board.agent.
+      return host.send(req.params.id, { text: String(body.text ?? ""), images, context, ...(body.from === "page" ? { from: "page" as const } : {}) });
     })
   );
 

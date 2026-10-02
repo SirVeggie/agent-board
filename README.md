@@ -109,6 +109,8 @@ board.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
 
 A submit button can declare the same handshake without extra script: `data-board-signal="submitted"`. The agent then calls `board_wait` with that signal name. `board_show` clears the last signal on the tab so a new wait does not instantly see the previous submit.
 
+Pages can also use the board's agent chat with `board.agent`: `start(prompt)` makes a thread for the page (inside a click or key press), `send(threadId, prompt)` continues it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. A page only reaches its own threads, and the threads it starts run in Board or Ask mode.
+
 Interactive pages should use this instead of `localStorage` — all tab pages share one origin, so their `localStorage` collides, and the agent cannot see it.
 
 ### Page links

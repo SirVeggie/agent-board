@@ -2603,6 +2603,13 @@ button.dock-scope:hover {
   padding-left: 20px;
 }
 
+/* A message a page's own code sent (board.agent). */
+.ag-from-page {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
 /* Steering: handed to the running turn, waiting for the agent's next step. */
 .ag-user.steering .ag-user-bubble {
   opacity: 0.8;

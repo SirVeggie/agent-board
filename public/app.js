@@ -2725,6 +2725,34 @@
     return null;
   }
 
+  /**
+   * board.agent from a page: threads of that page only, as found from the frame that asked (not from
+   * anything the page says). Starting or sending needs the click or key press to have reached the
+   * board too: a page's own activation also activates the board, so a script cannot fake it.
+   */
+  function onPageAgent(event) {
+    const data = event.data;
+    const reply = (result) => {
+      event.source?.postMessage({ type: "agent-board-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    const frameId = frameIdByWindow(event.source);
+    const tab = frameId ? findAnyTab(frameId) : null;
+    if (!tab || tab.embedUrl) {
+      reply({ ok: false, error: "not_a_page" });
+      return;
+    }
+    const chat = window.agentBoardChat;
+    if (!chat?.pageRequest) {
+      reply({ ok: false, error: "no_agent" });
+      return;
+    }
+    if ((data.op === "start" || data.op === "send") && navigator.userActivation && !navigator.userActivation.isActive) {
+      reply({ ok: false, error: "no_gesture" });
+      return;
+    }
+    chat.pageRequest(tab, data).then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
+  }
+
   /** A link clicked inside a page: open it and tell the page how it went. */
   function onPageLink(event) {
     const data = event.data;
@@ -2963,6 +2991,10 @@
     openLink: (target, event, { anchor = "" } = {}) => views.open(target, views.modeFromEvent(event), { anchor }),
     resolvePages: (targets) => views.resolve(targets),
     showNotice,
+    /** Tell a page's frame (when it has one) about something, e.g. one of its agent threads changing. */
+    postToPage: (id, message) => {
+      frames.get(id)?.el.contentWindow?.postMessage({ ...message, id }, contentOrigin());
+    },
   };
   window.addEventListener("message", (event) => {
     if (event.origin !== contentOrigin() || !frameByWindow(event.source)) {
@@ -2984,6 +3016,8 @@
       if (!window.agentBoardChat?.escape()) {
         views.escape();
       }
+    } else if (event.data?.type === "agent-board-agent") {
+      onPageAgent(event);
     } else if (event.data?.type === "agent-board-chat-key") {
       window.agentBoardChat?.shortcut(String(event.data.action || ""));
     }

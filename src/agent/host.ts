@@ -86,7 +86,13 @@ type Pending =
   | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
   | { kind: "plan"; threadId: string; itemId: string; resolve: (d: PlanDecision) => void; reject: (err: Error) => void };
 
-type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[] };
+type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[]; from?: "page" };
+
+/** What the model reads for a message: where it came from, its context chips, then the text. */
+function promptText(msg: QueuedMessage): string {
+  const origin = msg.from === "page" ? "<context>\nSent by the code of the board page this thread belongs to (board.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
+  return origin + contextBlock(msg.context) + msg.text;
+}
 
 type RunState = {
   turn: Turn;
@@ -102,7 +108,7 @@ type RunState = {
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
 };
 
-export type SendInput = { text: string; images?: ChatImage[]; context?: ContextChip[] };
+export type SendInput = { text: string; images?: ChatImage[]; context?: ContextChip[]; from?: "page" };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -538,7 +544,7 @@ export class AgentHost {
     const thread = this.requireThread(threadId);
     const text = input.text.trim();
     if (!text && !input.images?.length) throw new Error("Empty message");
-    const msg: QueuedMessage = { text, images: input.images ?? [], context: input.context ?? [] };
+    const msg: QueuedMessage = { text, images: input.images ?? [], context: input.context ?? [], ...(input.from === "page" ? { from: "page" as const } : {}) };
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Board mode.");
@@ -552,6 +558,7 @@ export class AgentHost {
         text,
         ...(msg.images.length ? { images: msg.images.map((img) => ({ name: img.name, mimeType: img.mimeType })) } : {}),
         ...(msg.context.length ? { context: msg.context } : {}),
+        ...(msg.from ? { from: msg.from } : {}),
       });
       this.emitThread(threadId);
       return { queued: true, item };
@@ -561,6 +568,7 @@ export class AgentHost {
       text,
       ...(msg.images.length ? { images: msg.images.map((img) => ({ name: img.name, mimeType: img.mimeType })) } : {}),
       ...(msg.context.length ? { context: msg.context } : {}),
+      ...(msg.from ? { from: msg.from } : {}),
     });
     void this.runTurn(threadId, msg, item);
     return { queued: false, item };
@@ -588,7 +596,7 @@ export class AgentHost {
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
     const item = this.queuedItems(threadId)[0];
-    const id = session.steer({ text: contextBlock(msg.context) + msg.text, images: msg.images });
+    const id = session.steer({ text: promptText(msg), images: msg.images });
     run.steer = { id, msg, itemId: item?.id };
     if (item && item.kind === "user") {
       item.steer = "waiting";
@@ -742,7 +750,7 @@ export class AgentHost {
         session.update(thread);
         result = await session.run(
           {
-            text: contextBlock(msg.context) + msg.text,
+            text: promptText(msg),
             images: msg.images,
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
           },
