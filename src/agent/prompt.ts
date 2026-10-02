@@ -49,6 +49,36 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   return lines.join("\n");
 }
 
+/** Stable identity for a chip that should only be sent once per thread. Selections have none. */
+export function contextChipKey(chip: ContextChip): string | null {
+  if (chip.kind === "page") return `page:${chip.id}`;
+  if (chip.kind === "folder") return `folder:${chip.id}`;
+  if (chip.kind === "file") return `file:${chip.path}`;
+  return null;
+}
+
+/** Chips this thread has not already been given. Selections always pass through. */
+export function freshContext(chips: ContextChip[] | undefined, already: ContextChip[]): ContextChip[] {
+  if (!chips?.length) return [];
+  const seen = new Set<string>();
+  for (const chip of already) {
+    const key = contextChipKey(chip);
+    if (key) seen.add(key);
+  }
+  const out: ContextChip[] = [];
+  for (const chip of chips) {
+    const key = contextChipKey(chip);
+    if (!key) {
+      out.push(chip);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(chip);
+  }
+  return out;
+}
+
 /** Context chips become a short block ahead of the user's message. */
 export function contextBlock(chips: ContextChip[] | undefined): string {
   if (!chips || !chips.length) return "";

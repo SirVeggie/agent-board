@@ -8,7 +8,7 @@ import { log } from "../log.js";
 import { store } from "../store.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
-import { contextBlock, threadInstructions, type ScopeInfo } from "./prompt.js";
+import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "./prompt.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
 import type {
@@ -639,11 +639,24 @@ export class AgentHost {
 
   // ---------- running ----------
 
+  /** Pages, folders and files this thread has already been told about. */
+  private knownContext(threadId: string, thread: Thread): ContextChip[] {
+    const already: ContextChip[] = [];
+    if (thread.scope.kind === "page" && thread.scope.ref) {
+      already.push({ kind: "page", id: thread.scope.ref, key: "", title: "" });
+    }
+    for (const item of this.loadItems(threadId)) {
+      if (item.kind === "user" && !item.dropped && item.context?.length) already.push(...item.context);
+    }
+    return already;
+  }
+
   send(threadId: string, input: SendInput): { queued: boolean; item: Item } {
     const thread = this.requireThread(threadId);
     const text = input.text.trim();
     if (!text && !input.images?.length) throw new Error("Empty message");
-    const msg: QueuedMessage = { text, images: input.images ?? [], context: input.context ?? [], ...(input.from === "page" ? { from: "page" as const } : {}) };
+    const context = freshContext(input.context, this.knownContext(threadId, thread));
+    const msg: QueuedMessage = { text, images: input.images ?? [], context, ...(input.from === "page" ? { from: "page" as const } : {}) };
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");

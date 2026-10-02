@@ -1621,6 +1621,7 @@
       // A queued message that starts a turn or is steered into one leaves the queued group.
       if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
       this.schedule();
+      if (item.kind === "user") this.renderContext();
     }
 
     onTurn(turn) {
@@ -1786,7 +1787,8 @@
       const s = this.settings();
       const tab = activeTab();
       const pageScoped = s.scope?.kind === "page" && s.scope.ref === tab?.id;
-      if (tab && !pageScoped) {
+      const already = this.pageInThread(tab);
+      if (tab && !pageScoped && !already) {
         const chip = button("", `ag-chip small toggle${this.contextOn ? " on" : ""}`, () => {
           this.contextOn = !this.contextOn;
           this.renderContext();
@@ -1805,6 +1807,15 @@
         row.append(chip);
       });
       row.hidden = !row.childElementCount;
+    }
+
+    /** True when this page is already the thread's scope or was attached on an earlier message. */
+    pageInThread(tab) {
+      if (!tab) return false;
+      const s = this.settings();
+      if (s.scope?.kind === "page" && s.scope.ref === tab.id) return true;
+      const items = S.details.get(this.threadId)?.items || [];
+      return items.some((it) => it.kind === "user" && !it.dropped && (it.context || []).some((c) => c.kind === "page" && c.id === tab.id));
     }
 
     onPaste(event) {
@@ -2102,7 +2113,7 @@
       }
       const tab = activeTab();
       const context = [];
-      if (this.contextOn && tab && !(s.scope?.kind === "page" && s.scope.ref === tab.id)) {
+      if (this.contextOn && tab && !this.pageInThread(tab)) {
         context.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
       }
       const images = this.images.slice();
@@ -2138,6 +2149,7 @@
         }
         this.stick = true;
         await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, context });
+        this.renderContext();
       } catch (err) {
         notice(err.message);
         if (!this.input.value) {
