@@ -192,6 +192,10 @@ export class CursorProvider implements AgentProvider {
     return session;
   }
 
+  spareThreadId(thread: Thread, ctx: SessionContext): string | null {
+    return this.spares.get(spareKey(thread, ctx))?.scribeThreadId() ?? null;
+  }
+
   prewarm(draft: Thread, instructions: string, ctx: SessionContext): void {
     const key = spareKey(draft, ctx);
     let spare = this.spares.get(key);
@@ -353,11 +357,17 @@ class CursorSession implements ProviderSession {
     this.sessionId = thread.nativeId;
   }
 
+  scribeThreadId(): string {
+    return this.thread.id;
+  }
+
   update(thread: Thread): void {
+    const idChanged = thread.id !== this.thread.id;
     const cwdChanged = (thread.cwd ?? null) !== (this.thread.cwd ?? null) || (thread.mode === "board") !== (this.thread.mode === "board");
     this.thread = thread;
-    if (cwdChanged && !this.sink) {
+    if ((cwdChanged || idChanged) && !this.sink) {
       // The session is tied to its cwd; a new cwd needs a fresh process and session load.
+      // MCP is started with SCRIBE_THREAD from this.thread.id, so a new id needs a new process too.
       this.stopProcess();
     }
   }

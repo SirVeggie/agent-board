@@ -155,6 +155,10 @@ export class ClaudeProvider implements AgentProvider {
     return session;
   }
 
+  spareThreadId(thread: Thread): string | null {
+    return this.spares.get(claudeSpareKey(thread))?.scribeThreadId() ?? null;
+  }
+
   prewarm(draft: Thread, instructions: string, ctx: SessionContext): void {
     const key = claudeSpareKey(draft);
     let spare = this.spares.get(key);
@@ -339,9 +343,13 @@ class ClaudeSession implements ProviderSession {
     this.sessionId = thread.nativeId;
   }
 
+  scribeThreadId(): string {
+    return this.thread.id;
+  }
+
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.mode, thread.web, thread.cwd, this.instructions]);
+    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, this.instructions]);
   }
 
   update(thread: Thread): void {

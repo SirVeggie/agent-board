@@ -106,3 +106,25 @@ test("the sweep releases a card whose thread failed and flags one whose thread w
   assert.deepEqual(later.events?.map((e) => e.name), ["claim_stale"]);
   assert.equal(kanbanActions.sweep!(state, ctx(2000 + 40 * 60 * 1000)), null);
 });
+
+test("the sweep keeps a claim whose thread id is unknown while its MCP session is still live", () => {
+  const state = run(board(), "claim", { card: 1 }, agent({ session: "s1", thread: "th_draft" })).state;
+  const live: SweepContext = {
+    now: 10_000,
+    thread: () => ({ exists: false }),
+    sessionSeenAt: (session) => (session === "s1" ? 9000 : undefined),
+  };
+  assert.equal(kanbanActions.sweep!(state, live), null);
+  const gone: SweepContext = {
+    now: 10_000 + 61 * 60 * 1000,
+    thread: () => ({ exists: false }),
+    sessionSeenAt: (session) => (session === "s1" ? 9000 : undefined),
+  };
+  const lost = kanbanActions.sweep!(state, gone)!;
+  assert.equal(card(state, 1).col, "work");
+  const next = applyStateOps(state, lost.ops);
+  assert.equal(card(next, 1).col, "ready");
+  assert.equal(card(next, 1).claim, undefined);
+  assert.match((card(next, 1).status as { text: string }).text, /was deleted/);
+  assert.deepEqual(lost.events?.map((e) => e.name), ["claim_lost"]);
+});

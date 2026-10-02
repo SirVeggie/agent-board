@@ -146,6 +146,8 @@ export interface AgentProvider {
   createSession(thread: Thread, ctx: SessionContext): ProviderSession;
   /** Warm a spare session for a thread that does not exist yet; createSession adopts it when the settings match. */
   prewarm(draft: Thread, instructions: string, ctx: SessionContext): void;
+  /** Thread id a matching spare's MCP was started with, so createThread can keep claims pointing at a real thread. */
+  spareThreadId?(thread: Thread, ctx: SessionContext): string | null;
   dispose(): void;
 }
 

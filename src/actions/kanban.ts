@@ -380,7 +380,15 @@ export const kanbanActions: ActionSet = {
       if (claim.thread) {
         const info = ctx.thread(claim.thread);
         if (!info.exists) {
-          release = "The chat thread working on this card was deleted.";
+          // Prewarm starts MCP with a throwaway draft id; the real thread is created later.
+          // That draft is not in AgentHost, so "missing thread" is not "agent gone" while the
+          // MCP session is still calling.
+          const seen = claim.session ? Math.max(ctx.sessionSeenAt(claim.session) ?? 0, claim.seenAt ?? claim.at) : 0;
+          if (claim.session && seen >= ctx.now - SESSION_STALE_MS) {
+            /* still live */
+          } else {
+            release = "The chat thread working on this card was deleted.";
+          }
         } else if (!info.running && info.lastTurn && (info.lastTurn.status === "error" || info.lastTurn.status === "cancelled")) {
           const how = info.lastTurn.status === "error" ? `failed${info.lastTurn.error ? `: ${info.lastTurn.error}` : ""}` : "was stopped";
           release = `The agent's turn ${how} before it finished this card.`;
