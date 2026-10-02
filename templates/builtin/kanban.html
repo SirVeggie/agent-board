@@ -618,7 +618,8 @@
   .comment { padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, .04); }
   .comment.agent { background: rgba(224, 179, 74, .07); box-shadow: inset 2px 0 0 var(--agent); }
   .comment .who { font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
-  .comment .body { white-space: pre-wrap; word-break: break-word; }
+  .comment .body { word-break: break-word; }
+  .comment .body.md-preview { min-height: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; cursor: auto; }
   .comment-box { width: 100%; min-height: 58px; resize: vertical; }
   .m-status { padding: 8px 10px; border-radius: 10px; background: rgba(224, 179, 74, .08); color: var(--agent); display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .m-status.blocked { background: rgba(255, 107, 122, .1); color: var(--danger); }
@@ -2115,8 +2116,9 @@
     c.comments.forEach(function (cm) {
       var box = el("div", "comment" + (cm.by === "agent" ? " agent" : ""));
       box.appendChild(el("div", "who", (cm.by === "agent" ? "🤖 Agent" : "You") + " · " + ago(cm.at)));
-      var body = el("div", "body");
-      body.innerHTML = linkText(cm.text);
+      // Markdown, like the description: #12 card links, [[page]] links and the card's images work too.
+      var body = el("div", "body md-preview");
+      body.innerHTML = renderMarkdown(cm.text, c.images);
       box.appendChild(body);
       commentsEl.appendChild(box);
     });
@@ -2901,6 +2903,11 @@
     var a = e.target.closest && e.target.closest("a[data-card]");
     if (a) { e.preventDefault(); e.stopPropagation(); openCard(a.getAttribute("data-card")); }
   }, true);
+  commentsEl.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a[data-card]");
+    if (a) { e.preventDefault(); openCard(a.getAttribute("data-card")); return; }
+    if (e.target.tagName === "IMG") showLightbox(e.target.src);
+  });
 
   // ---------- labels popover ----------
   labelsBtn.addEventListener("click", function (e) {
