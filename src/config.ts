@@ -85,9 +85,18 @@ export function migrateLegacyData(log: (line: string) => void): void {
   if (legacy && fs.existsSync(legacy) && !fs.existsSync(dbPath())) {
     fs.mkdirSync(dir, { recursive: true });
     for (const name of fs.readdirSync(legacy)) {
+      const from = path.join(legacy, name);
       const to = path.join(dir, name);
-      if (!fs.existsSync(to)) {
-        fs.renameSync(path.join(legacy, name), to);
+      if (fs.existsSync(to)) {
+        continue;
+      }
+      try {
+        fs.renameSync(from, to);
+      } catch (err) {
+        // Something still holds it open (a leftover process in the scratch folder): copy instead,
+        // so Scribe starts with the data and the old copy stays behind.
+        log(`Could not move ${from} (${(err as Error).message}); copying it instead`);
+        fs.cpSync(from, to, { recursive: true });
       }
     }
     if (!fs.readdirSync(legacy).length) {
