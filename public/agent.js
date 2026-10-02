@@ -2637,9 +2637,11 @@
       this.feedLines.clear();
       this.renderTitle();
     },
-    /* Transient progress lines while the conversation is collapsed; the newest also shows in the hidden handle. */
-    line(key, _icon, text, { sticky = false, cls = "" } = {}) {
+    /* Transient progress lines while the conversation is collapsed. The latest agent
+       message stays; tool steps cap at 4 while the agent works, then fade once it stops. */
+    line(key, _icon, text, { cls = "", keep = false } = {}) {
       if (!this.root) return;
+      const hold = keep || /\btext\b/.test(cls);
       if (!/\b(done|files|error)\b/.test(cls)) {
         this.live = { key, text };
         if (this.view.thread()?.status === "running") this.renderHandle();
@@ -2652,27 +2654,41 @@
         const before = [...this.feed.children];
         this.feed.append(line);
         this.feedLines.set(key, line);
-        while (this.feed.childElementCount > 5) {
-          const first = this.feed.firstElementChild;
-          for (const [k, v] of this.feedLines) if (v === first) this.feedLines.delete(k);
-          first.remove();
-        }
-        // Older lines glide up to make room instead of jumping.
         const lift = line.offsetHeight + 2;
         for (const node of before) if (node.isConnected) node.animate([{ transform: `translateY(${lift}px)` }, { transform: "none" }], { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" });
       }
-      this.feed.classList.toggle("deep", this.feed.childElementCount > 2);
+      line.className = `dock-line ${cls}${hold ? " keep" : ""}`;
       line.querySelector(".dock-line-text").textContent = text;
       clearTimeout(line._fade);
       line.classList.remove("fading");
-      line._fade = setTimeout(() => {
-        line.classList.add("fading");
-        line._fade = setTimeout(() => {
-          line.remove();
-          for (const [k, v] of this.feedLines) if (v === line) this.feedLines.delete(k);
-          this.feed.classList.toggle("deep", this.feed.childElementCount > 2);
-        }, 900);
-      }, sticky ? 14000 : 5000);
+      if (hold) {
+        for (const node of [...this.feed.children]) {
+          if (node === line || !node.classList.contains("keep")) continue;
+          node.remove();
+          for (const [k, v] of this.feedLines) if (v === node) this.feedLines.delete(k);
+        }
+      }
+      while (this.feed.childElementCount > 4) {
+        const drop = [...this.feed.children].find((n) => n !== line && !n.classList.contains("keep")) || [...this.feed.children].find((n) => n !== line);
+        if (!drop) break;
+        drop.remove();
+        for (const [k, v] of this.feedLines) if (v === drop) this.feedLines.delete(k);
+      }
+      this.feed.classList.remove("deep");
+    },
+    settleFeed() {
+      clearTimeout(this._settle);
+      this._settle = setTimeout(() => {
+        for (const node of [...this.feed.children]) {
+          if (node.classList.contains("keep")) continue;
+          node.classList.add("fading");
+          clearTimeout(node._fade);
+          node._fade = setTimeout(() => {
+            node.remove();
+            for (const [k, v] of this.feedLines) if (v === node) this.feedLines.delete(k);
+          }, 900);
+        }
+      }, 1400);
     },
     onItem(item) {
       if (item.threadId !== this.view.threadId) return;
@@ -2685,7 +2701,7 @@
         const label = item.tool === "edit" && item.files?.length ? `Edited ${item.files.map((f) => `${R.basename(f.path)} +${f.added} −${f.removed}`).join(", ")}` : item.detail && item.tool === "execute" ? `$ ${item.detail}` : item.title;
         this.line(item.id, item.tool, label, { cls: `k-${item.tool}` });
       } else if (item.kind === "notice") {
-        this.line(item.id, "other", item.text, { sticky: item.level === "error", cls: item.level });
+        this.line(item.id, "other", item.text, { cls: item.level });
       }
       this.renderHandle();
     },
@@ -2698,21 +2714,24 @@
       if (turn.threadId !== this.view.threadId) return;
       if (turn.status !== "running") this.live = null;
       this.renderHandle();
-      if (turn.status === "running") return;
+      if (turn.status === "running") {
+        clearTimeout(this._settle);
+        return;
+      }
       const detail = S.details.get(turn.threadId);
       const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text") : null;
       const files = turn.files || [];
       if (files.length) {
         const added = files.reduce((a, f) => a + f.added, 0);
         const removed = files.reduce((a, f) => a + f.removed, 0);
-        this.line(`${turn.id}:files`, "diff", `${files.length} file${files.length === 1 ? "" : "s"} changed  +${added} −${removed}`, { sticky: true, cls: "files" });
+        this.line(`${turn.id}:files`, "diff", `${files.length} file${files.length === 1 ? "" : "s"} changed  +${added} −${removed}`, { cls: "files", keep: !lastText });
       }
       if (lastText) {
         this.feedLines.get(lastText.id)?.remove();
         this.feedLines.delete(lastText.id);
-        this.line(`${turn.id}:done`, "check", plain(lastText.text).slice(0, 220), { sticky: true, cls: "text done" });
-      }
-      else if (turn.status === "error") this.line(`${turn.id}:err`, "cross", turn.error || "The turn failed", { sticky: true, cls: "error" });
+        this.line(`${turn.id}:done`, "check", plain(lastText.text).slice(0, 220), { cls: "text done" });
+      } else if (turn.status === "error") this.line(`${turn.id}:err`, "cross", turn.error || "The turn failed", { cls: "error", keep: true });
+      this.settleFeed();
     },
   };
 
