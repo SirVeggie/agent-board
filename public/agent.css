@@ -2325,8 +2325,8 @@ button.dock-scope:hover {
 }
 
 .style-bar .dock-history .ag-scroll {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14px);
-  mask-image: linear-gradient(to bottom, transparent, #000 14px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px);
+  mask-image: linear-gradient(to bottom, transparent, #000 8px);
 }
 
 .style-bar .dock-feed {
@@ -2395,8 +2395,8 @@ button.dock-scope:hover {
 }
 
 .style-island.expanded .dock-out::before {
-  -webkit-mask-image: linear-gradient(to top, #000 0, #000 72%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0, #000 72%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to top, #000 0, #000 88%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0, #000 88%, transparent 100%);
 }
 
 .style-island .dock-history,
@@ -2405,12 +2405,12 @@ button.dock-scope:hover {
 }
 
 .style-island .dock-history .ag-scroll {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.4) 50px, #000 120px);
-  mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.4) 50px, #000 120px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
 }
 
 .style-island .dock-history .ag-transcript {
-  padding-top: 56px;
+  padding-top: 16px;
 }
 
 .style-island .dock-feed {
