@@ -2619,9 +2619,12 @@ button.dock-scope:hover {
   padding-left: 20px;
 }
 
-/* Plan usage: a compact chip in the chat's settings bar, meters in the settings dialog. */
-button.ag-usage {
+/* Plan usage: a compact chip in the chat header (sidebar/full) or the floating chat's settings bar. */
+.ag-bar button.ag-usage {
   margin-left: auto;
+}
+
+button.ag-usage {
   height: 22px;
   padding: 0 6px;
   gap: 8px;

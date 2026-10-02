@@ -240,7 +240,10 @@
       }
       case "agent_limits": {
         S.config.limits = msg.limits || {};
-        for (const view of views()) view.renderComposerBar();
+        for (const view of views()) {
+          view.renderComposerBar();
+          view.renderHeader();
+        }
         agentSettings.renderUsage();
         return;
       }
@@ -859,6 +862,8 @@
         titleWrap.append(ch);
       }
       this.header.append(titleWrap);
+      const meter = usageChip(s.provider);
+      if (meter) this.header.append(meter);
       const acts = el("div", "ag-thead-actions");
       if (s.cwd && s.mode !== "board") {
         acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, cwd: s.cwd }), "Git working tree changes"));
@@ -1785,8 +1790,10 @@
         ws.append(icon("box"), el("span", null, s.cwd ? R.basename(s.cwd) : "Workspace…"));
         bar.append(ws);
       }
-      const meter = usageChip(s.provider);
-      if (meter) bar.append(meter);
+      if (this.variant === "dock") {
+        const meter = usageChip(s.provider);
+        if (meter) bar.append(meter);
+      }
       const tail = this.sendSlot;
       tail.replaceChildren();
       if (this.status) {
