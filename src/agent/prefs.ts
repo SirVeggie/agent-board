@@ -85,7 +85,7 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
   if (patch.approval) {
     next.approval = thread.approval;
     const seeded: Prefs["approvals"] = { ...prefs.approvals };
-    for (const id of ["claude", "cursor"] as const) {
+    for (const id of ["claude", "cursor", "openai"] as const) {
       if (seeded[id] === undefined) seeded[id] = prefs.approval;
     }
     seeded[thread.provider] = thread.approval;

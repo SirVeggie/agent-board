@@ -51,8 +51,9 @@ function fileFor(provider: ProviderId, scope: PermissionScope, cwd: string | nul
   return null;
 }
 
-const SCOPES: Record<ProviderId, PermissionScope[]> = { claude: ["user", "project", "local"], cursor: ["user", "project"] };
-const KINDS: Record<ProviderId, RuleKind[]> = { claude: ["allow", "ask", "deny"], cursor: ["allow", "deny"] };
+// OpenAI-compatible models only get Scribe's page tools, so they have no rule files.
+const SCOPES: Record<ProviderId, PermissionScope[]> = { claude: ["user", "project", "local"], cursor: ["user", "project"], openai: [] };
+const KINDS: Record<ProviderId, RuleKind[]> = { claude: ["allow", "ask", "deny"], cursor: ["allow", "deny"], openai: [] };
 
 function readJson(file: string): { data: Record<string, unknown>; exists: boolean; error?: string } {
   if (!fs.existsSync(file)) return { data: {}, exists: false };

@@ -36,7 +36,7 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap(async () => ({
       providers: await host.providerStatus(),
       prefs: host.prefs(),
-      models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor") },
+      models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor"), openai: host.cachedModels("openai") },
       limits: host.limits(),
     }))
   );
@@ -79,6 +79,18 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap(async (req) => {
       const provider = parseProvider(req.query.provider);
       return { provider, models: await host.models(provider, req.query.refresh === "1") };
+    })
+  );
+
+  // OpenAI-compatible endpoints. API keys go in, never out: the list only says whether one is set.
+  router.get("/openai/sources", wrap(() => ({ sources: host.openaiSourceViews() })));
+  router.post("/openai/sources", wrap((req) => ({ source: host.saveOpenaiSource(null, req.body) })));
+  router.put("/openai/sources/:id", wrap((req) => ({ source: host.saveOpenaiSource(req.params.id, req.body) })));
+  router.delete(
+    "/openai/sources/:id",
+    wrap((req) => {
+      host.deleteOpenaiSource(req.params.id);
+      return { ok: true };
     })
   );
 
@@ -399,8 +411,8 @@ async function listDir(dir: string): Promise<{ path: string; parent: string | nu
 }
 
 function parseProvider(value: unknown): ProviderId {
-  if (value === "claude" || value === "cursor") return value;
-  throw new Error("provider must be claude or cursor");
+  if (value === "claude" || value === "cursor" || value === "openai") return value;
+  throw new Error("provider must be claude, cursor, or openai");
 }
 
 function parseScope(value: unknown): ThreadScope {
@@ -417,7 +429,7 @@ function parseScope(value: unknown): ThreadScope {
 function threadPatch(body: Record<string, unknown>): Partial<Thread> {
   const patch: Partial<Thread> = {};
   if (typeof body.title === "string") patch.title = body.title;
-  if (body.provider === "claude" || body.provider === "cursor") patch.provider = body.provider;
+  if (body.provider === "claude" || body.provider === "cursor" || body.provider === "openai") patch.provider = body.provider;
   if (typeof body.model === "string" && body.model) patch.model = body.model;
   if (body.effort === null || typeof body.effort === "string") patch.effort = (body.effort as string | null) || null;
   if (isPlainRecord(body.modelParams)) {

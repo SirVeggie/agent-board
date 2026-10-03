@@ -1,6 +1,6 @@
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
-export type ProviderId = "claude" | "cursor";
+export type ProviderId = "claude" | "cursor" | "openai";
 
 /** What the agent may touch. Chosen per thread; the provider maps it onto its own tools and modes. */
 export type ThreadMode = "code" | "ask" | "plan" | "board";

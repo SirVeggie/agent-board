@@ -1771,6 +1771,11 @@ button.ag-pill.ap-full {
   color: var(--heading);
 }
 
+.ag-prov.p-openai {
+  background: #10a37f;
+  color: #fff;
+}
+
 button.ag-send {
   width: 28px;
   height: 28px;
@@ -3894,6 +3899,40 @@ button.ag-menu-item:hover .ag-star {
   gap: 8px;
   font-size: 13px;
   cursor: pointer;
+}
+
+/* OpenAI-compatible source editor (Chat settings → Model sources). */
+.ag-source .ag-modal-panel {
+  width: min(520px, calc(100vw - 40px));
+}
+
+.ag-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ag-field-label {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ag-field-hint {
+  font-size: 12px;
+}
+
+.ag-source-models {
+  min-height: 84px;
+  padding-top: 7px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+.ag-source-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
 }
 
 /* ---------- context meter ---------- */

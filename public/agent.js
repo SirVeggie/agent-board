@@ -60,12 +60,18 @@
     { name: "workspace", description: "Set the workspace folder" },
     { name: "global", description: "Not tied to a page or folder" },
   ];
-  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor" };
+  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", openai: "OpenAI-compatible" };
+  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", openai: "◎" };
+  const PROVIDERS = ["cursor", "claude", "openai"];
+  /** Modes a provider can run. OpenAI-compatible models only get Scribe's page tools. */
+  function modeAllowed(provider, mode) {
+    return provider !== "openai" || mode === "board" || mode === "ask";
+  }
 
   /* ---------- state ---------- */
 
   const S = {
-    config: { providers: [], prefs: null, models: { claude: [], cursor: [] } },
+    config: { providers: [], prefs: null, models: { claude: [], cursor: [], openai: [] } },
     threads: new Map(),
     details: new Map(),
     loading: new Map(),
@@ -178,7 +184,7 @@
     } catch {
       return;
     }
-    for (const provider of ["cursor", "claude"]) {
+    for (const provider of PROVIDERS) {
       if (!providerAvailable(provider)) continue;
       api("GET", `/models?provider=${provider}`)
         .then((data) => {
@@ -758,6 +764,94 @@
     });
   }
 
+  /* ---------- OpenAI-compatible sources ---------- */
+
+  /** Add (source null) or edit an endpoint. The API key field only sends a new key; it never shows the old one. */
+  function editSource(source) {
+    const { panel, close } = modal("ag-source");
+    const field = (label, input, hint) => {
+      const wrap = el("label", "ag-field");
+      wrap.append(el("span", "ag-field-label", label), input);
+      if (hint) wrap.append(el("span", "ag-muted ag-field-hint", hint));
+      return wrap;
+    };
+    const input = (value, placeholder, type = "text") => {
+      const node = el("input", "ag-input");
+      node.type = type;
+      node.value = value || "";
+      node.placeholder = placeholder;
+      node.spellcheck = false;
+      return node;
+    };
+    const name = input(source?.name, "e.g. OpenRouter");
+    const baseUrl = input(source?.baseUrl, "https://api.openai.com/v1");
+    const key = input("", source?.hasKey ? "Saved (type to replace)" : "sk-…", "password");
+    key.autocomplete = "off";
+    const models = el("textarea", "ag-input ag-source-models");
+    models.value = (source?.models || []).join("\n");
+    models.placeholder = "One model id per line. Leave empty to list the endpoint's models.";
+    const reasoningBox = el("input");
+    reasoningBox.type = "checkbox";
+    reasoningBox.checked = Boolean(source?.reasoning);
+    const reasoning = el("label", "ag-check");
+    reasoning.append(reasoningBox, el("span", null, "Offer reasoning levels (sent as reasoning_effort)"));
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const save = async () => {
+      const body = { name: name.value, baseUrl: baseUrl.value, models: models.value, reasoning: reasoningBox.checked };
+      if (key.value.trim()) body.apiKey = key.value.trim();
+      try {
+        if (source) await api("PUT", `/openai/sources/${encodeURIComponent(source.id)}`, body);
+        else await api("POST", "/openai/sources", body);
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        return;
+      }
+      close();
+      await sourcesChanged();
+    };
+    const actions = el("div", "ag-modal-actions");
+    if (source) {
+      actions.append(
+        button("Remove", "ag-btn ghost danger", async () => {
+          if (!(await app()?.confirm?.(`Remove “${source.name}”? Threads that use its models can't continue until you add it again.`, "Remove"))) return;
+          await api("DELETE", `/openai/sources/${encodeURIComponent(source.id)}`).catch((err) => notice(err.message));
+          close();
+          await sourcesChanged();
+        })
+      );
+      if (source.hasKey) actions.append(button("Clear key", "ag-btn ghost", async () => {
+        await api("PUT", `/openai/sources/${encodeURIComponent(source.id)}`, { apiKey: "" }).catch((err) => notice(err.message));
+        close();
+        await sourcesChanged();
+      }));
+    }
+    actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), button(source ? "Save" : "Add", "ag-btn primary", save));
+    panel.append(
+      el("h2", "ag-modal-title", source ? `Edit ${source.name}` : "Add a model source"),
+      el("p", "ag-modal-hint", "Any endpoint that speaks the OpenAI Chat Completions API. The key is stored on this PC and never shown again."),
+      field("Name", name),
+      field("Base URL", baseUrl, "Up to the version, e.g. …/v1. Scribe calls /chat/completions and /models under it."),
+      field("API key", key, source?.hasKey ? "Leave empty to keep the saved key." : "Leave empty for local servers that need none."),
+      field("Models", models),
+      reasoning,
+      error,
+      actions
+    );
+    setTimeout(() => (source ? baseUrl : name).focus(), 0);
+  }
+
+  /** Sources changed: the provider's status and model list follow them. */
+  async function sourcesChanged() {
+    await loadConfig();
+    const data = await api("GET", "/models?provider=openai&refresh=1").catch(() => null);
+    S.config.models.openai = data?.models || [];
+    agentSettings.renderStatus();
+    void agentSettings.renderSources();
+    renderAll();
+  }
+
   /* ---------- diff viewer ---------- */
 
   /** source: { kind: "turn"|"thread"|"git", threadId?, turnId?, cwd?, path? } */
@@ -958,6 +1052,9 @@
 
     async updateSettings(patch) {
       const t = this.thread();
+      // Switching to a provider that can't run the current mode drops back to Pages.
+      const provider = patch.provider || this.settings().provider;
+      if (!modeAllowed(provider, patch.mode || this.settings().mode)) patch = { ...patch, mode: "board" };
       if (!t) {
         this.draft = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
         Object.assign(this.draft.settings, patch);
@@ -2317,7 +2414,7 @@
       bar.replaceChildren();
       const info = modelInfo(s.provider, s.model);
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model");
-      model.append(el("span", `ag-prov p-${s.provider}`, s.provider === "claude" ? "C" : "⌘"), el("span", null, info?.label || s.model));
+      model.append(el("span", `ag-prov p-${s.provider}`, PROVIDER_GLYPH[s.provider] || "?"), el("span", null, info?.label || s.model));
       bar.append(model);
       const hasEffort = info?.efforts?.length || info?.params?.some((p) => p.id !== CONTEXT_PARAM);
       if (hasEffort) {
@@ -2387,7 +2484,7 @@
       const favs = new Set(favoriteModels());
       const showAll = all || !favs.size;
       const items = [];
-      for (const provider of ["cursor", "claude"]) {
+      for (const provider of PROVIDERS) {
         const status = S.config.providers.find((p) => p.id === provider);
         const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (s.provider === provider && s.model === m.id));
         if (!showAll && !models.length) continue;
@@ -2439,7 +2536,10 @@
       const s = this.settings();
       openMenu(
         anchor,
-        MODES.map((m) => ({ label: m.label, detail: m.detail, checked: s.mode === m.id, run: () => this.updateSettings({ mode: m.id }) })),
+        MODES.map((m) => {
+          const ok = modeAllowed(s.provider, m.id);
+          return { label: m.label, detail: ok ? m.detail : "Not for OpenAI-compatible models: they only get page tools", checked: s.mode === m.id, disabled: !ok, run: () => this.updateSettings({ mode: m.id }) };
+        }),
         { width: 290 }
       );
     }
@@ -2878,7 +2978,7 @@
     const main = el("span", "ag-row-main");
     const title = el("span", "ag-row-title", t.title);
     const meta = el("span", "ag-row-meta");
-    meta.append(el("span", `ag-prov p-${t.provider}`, t.provider === "claude" ? "C" : "⌘"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), el("span", null, R.timeAgo(t.activityAt)));
+    meta.append(el("span", `ag-prov p-${t.provider}`, PROVIDER_GLYPH[t.provider] || "?"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), el("span", null, R.timeAgo(t.activityAt)));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
     const wt = openWorktree(t);
     if (wt) {
@@ -3190,7 +3290,7 @@
       this.scopeBtn.replaceChildren(icon(sc.icon), el("span", null, sc.text));
       this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
       this.scopeBtn.title = "Page, folder, or workspace this thread belongs to";
-      this.orb.textContent = s.provider === "claude" ? "C" : "⌘";
+      this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
       this.orb.title = `Model: ${modelLabel(s.provider, s.model)}`;
       this.renderHandle();
     },
@@ -4006,7 +4106,7 @@
       const actions = el("div", "settings-actions");
       actions.append(
         button("Refresh models", null, async () => {
-          for (const provider of ["cursor", "claude"]) {
+          for (const provider of PROVIDERS) {
             if (!providerAvailable(provider)) continue;
             const data = await api("GET", `/models?provider=${provider}&refresh=1`).catch(() => null);
             if (data?.models?.length) S.config.models[provider] = data.models;
@@ -4022,6 +4122,17 @@
         })
       );
       providers.append(el("h3", null, "Providers"), this.status, actions);
+
+      const sources = el("section", "settings-section");
+      this.sources = el("div", "ag-sources");
+      const sourceActions = el("div", "settings-actions");
+      sourceActions.append(button("Add source…", null, () => editSource(null)));
+      sources.append(
+        el("h3", null, "Model sources"),
+        el("p", "settings-hint", "OpenAI-compatible endpoints (OpenAI, OpenRouter, LM Studio, Ollama, vLLM…). Their models chat with Scribe's page tools: no files or shell."),
+        this.sources,
+        sourceActions
+      );
 
       const usage = el("section", "settings-section");
       this.usage = el("div", "ag-usage-list");
@@ -4094,7 +4205,7 @@
         "settings-hint",
         "Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
       );
-      panel.append(title, providers, usage, chat, keys, about);
+      panel.append(title, providers, sources, usage, chat, keys, about);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -4127,6 +4238,26 @@
         this.status.append(row);
       }
     },
+    async renderSources() {
+      if (!this.sources) return;
+      let list = [];
+      try {
+        list = (await api("GET", "/openai/sources")).sources || [];
+      } catch (err) {
+        this.sources.replaceChildren(el("div", "ag-muted", err.message));
+        return;
+      }
+      this.sources.replaceChildren();
+      if (!list.length) this.sources.append(el("div", "ag-muted", "None yet."));
+      for (const source of list) {
+        const row = el("div", "setting-row");
+        const label = el("span");
+        const models = source.models.length ? `${source.models.length} model${source.models.length === 1 ? "" : "s"}` : "models from the endpoint";
+        label.append(el("strong", null, source.name), el("span", "ag-muted", ` · ${source.baseUrl} · ${models}${source.hasKey ? "" : " · no key"}`));
+        row.append(label, button("Edit", "ag-btn small", () => editSource(source)));
+        this.sources.append(row);
+      }
+    },
     isOpen() {
       return Boolean(this.root && !this.root.hidden);
     },
@@ -4137,6 +4268,7 @@
     open() {
       if (!this.root) return;
       this.renderStatus();
+      void this.renderSources();
       this.root.hidden = false;
       this.renderUsage();
       this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });
@@ -4540,8 +4672,9 @@
   async function cycleMode() {
     const view = targetView();
     const s = view.settings();
-    const at = MODES.findIndex((m) => m.id === s.mode);
-    const next = MODES[(at + 1) % MODES.length];
+    const modes = MODES.filter((m) => modeAllowed(s.provider, m.id));
+    const at = modes.findIndex((m) => m.id === s.mode);
+    const next = modes[(at + 1) % modes.length];
     await view.updateSettings({ mode: next.id });
     notice(`Mode: ${next.label}`);
   }

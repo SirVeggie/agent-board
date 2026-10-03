@@ -13,6 +13,8 @@ import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
+import { OpenAIProvider } from "./providers/openai.js";
+import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
 import type {
   AgentProvider,
   ApprovalDecision,
@@ -124,8 +126,8 @@ type QueuedMessage = {
 
 /** What the model reads for a message: where it came from, its context chips, its files, then the text. */
 function promptText(msg: QueuedMessage, thread: Thread): string {
-  const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
-  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
+  const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n" : "";
+  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" && thread.provider !== "openai" });
   const recap = thread.rewind?.recap
     ? `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
     : "";
@@ -217,7 +219,7 @@ export class AgentHost {
 
   constructor(private emit: (event: AgentEvent) => void) {
     this.db = new AgentDb();
-    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider() };
+    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), openai: new OpenAIProvider(() => this.openaiSources()) };
     const claudeModels = this.db.getSetting<ModelOption[]>("models.claude", []);
     (this.providers.claude as ClaudeProvider).setModelCache(claudeModels);
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
@@ -319,6 +321,36 @@ export class AgentHost {
     const next = { ...this.prefs(), ...patch };
     this.db.setSetting("prefs", next);
     return next;
+  }
+
+  // ---------- OpenAI-compatible sources ----------
+
+  private openaiSources(): OpenAISource[] {
+    return this.db.getSetting<OpenAISource[]>("openai.sources", []);
+  }
+
+  /** The sources as the board sees them: never the API keys. */
+  openaiSourceViews(): OpenAISourceView[] {
+    return this.openaiSources().map(sourceView);
+  }
+
+  /** Add a source (no id) or change one. The key stays unless the form sends a new one. */
+  saveOpenaiSource(id: string | null, body: unknown): OpenAISourceView {
+    const sources = this.openaiSources();
+    const previous = id ? sources.find((s) => s.id === id) : undefined;
+    if (id && !previous) throw new Error(`source not found: ${id}`);
+    const source = normalizeSource(body, previous, new Set(sources.map((s) => s.id)));
+    const next = previous ? sources.map((s) => (s.id === id ? source : s)) : [...sources, source];
+    this.db.setSetting("openai.sources", next);
+    (this.providers.openai as OpenAIProvider).invalidate();
+    return sourceView(source);
+  }
+
+  deleteOpenaiSource(id: string): void {
+    const sources = this.openaiSources();
+    if (!sources.some((s) => s.id === id)) throw new Error(`source not found: ${id}`);
+    this.db.setSetting("openai.sources", sources.filter((s) => s.id !== id));
+    (this.providers.openai as OpenAIProvider).invalidate();
   }
 
   async providerStatus(): Promise<ProviderStatus[]> {
@@ -745,7 +777,7 @@ export class AgentHost {
     const text = input.text.trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
     const context = freshContext(input.context, this.knownContext(threadId, thread));
-    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
+    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd && thread.provider !== "openai") {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
     }
