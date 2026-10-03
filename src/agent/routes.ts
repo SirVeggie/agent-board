@@ -61,6 +61,19 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap((req) => host.setPrefs(isPlainRecord(req.body) ? (req.body as never) : {}))
   );
 
+  router.post(
+    "/prefs/remember",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return {
+        prefs: host.rememberDraft({
+          ...threadPatch(body),
+          ...(body.scope ? { scope: parseScope(body.scope) } : {}),
+        }),
+      };
+    })
+  );
+
   router.get(
     "/models",
     wrap(async (req) => {

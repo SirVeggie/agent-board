@@ -968,6 +968,7 @@
           this.draft.settings.modelParams = p.modelParams?.[patch.provider] || {};
           if (patch.approval === undefined) this.draft.settings.approval = approvalFor(patch.provider, p);
         }
+        await this.rememberDraftPrefs();
         this.renderComposerBar();
         this.renderHeader();
         return;
@@ -986,6 +987,28 @@
         loadConfig();
       } catch (err) {
         notice(err.message);
+      }
+    }
+
+    /** Write this draft's visible settings so the next new thread starts with them. */
+    async rememberDraftPrefs() {
+      const cur = this.settings();
+      try {
+        const data = await api("POST", "/prefs/remember", {
+          provider: cur.provider,
+          model: cur.model,
+          effort: cur.effort,
+          modelParams: cur.modelParams,
+          mode: cur.mode,
+          approval: cur.approval,
+          web: cur.web,
+          cwd: cur.cwd,
+          useWorktree: Boolean(cur.useWorktree),
+          scope: cur.scope,
+        });
+        if (data.prefs) S.config.prefs = data.prefs;
+      } catch {
+        /* the composer still shows the draft's settings */
       }
     }
 
@@ -1194,6 +1217,7 @@
       if (!t) {
         this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir } };
         this.renderAll();
+        await this.rememberDraftPrefs();
         return;
       }
       await this.updateSettings({ scope, cwd: dir });

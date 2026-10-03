@@ -29,6 +29,7 @@ import type {
   TurnResult,
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
+import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import type {
   AgentEvent,
   ApprovalPolicy,
@@ -56,6 +57,9 @@ import type {
 } from "./types.js";
 import { isPlainRecord } from "./types.js";
 
+export type { Prefs } from "./prefs.js";
+export { workspaceKey } from "./prefs.js";
+
 const FLUSH_MS = 700;
 /** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
 const MAX_RECAP = 24_000;
@@ -63,45 +67,6 @@ const DELTA_MS = 50;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_TOOL_DIFF = 200_000;
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
-
-export type Prefs = {
-  provider: ProviderId;
-  models: Partial<Record<ProviderId, string>>;
-  efforts: Partial<Record<ProviderId, string | null>>;
-  modelParams: Partial<Record<ProviderId, Record<string, string>>>;
-  mode: ThreadMode;
-  approval: ApprovalPolicy;
-  /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
-  approvals: Partial<Record<ProviderId, ApprovalPolicy>>;
-  web: boolean;
-  recentWorkspaces: string[];
-  /** Last workspace used for a scope ("page:<id>", "folder:<id>"), so new threads there start in it. */
-  scopeWorkspaces: Record<string, string>;
-  /** Starred models as "provider:modelId", in the order they were starred. Ctrl+' cycles them. */
-  favoriteModels: string[];
-  /** Last worktree choice per workspace (see workspaceKey), the default for new threads there. */
-  worktrees: Record<string, boolean>;
-};
-
-const DEFAULT_PREFS: Prefs = {
-  provider: "cursor",
-  models: { cursor: "composer-2.5", claude: "default" },
-  efforts: {},
-  modelParams: { cursor: { fast: "false" } },
-  mode: "code",
-  approval: "ask",
-  approvals: {},
-  web: true,
-  recentWorkspaces: [],
-  scopeWorkspaces: {},
-  favoriteModels: [],
-  worktrees: {},
-};
-
-/** Same as dirKey in public/agent.js, which looks up these keys for new threads. */
-export function workspaceKey(dir: string): string {
-  return dir.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
-}
 
 /** The thread's worktree while it is open. */
 export function openWorktree(thread: Thread): ThreadWorktree | null {
@@ -430,10 +395,17 @@ export class AgentHost {
     this.turns.set(thread.id, []);
     this.seq.set(thread.id, 0);
     this.db.saveThread(thread);
-    this.rememberChoices(thread, { approval: thread.approval });
+    this.rememberChoices(thread, settingPatch(thread));
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
     return view;
+  }
+
+  /** Persist a draft's visible settings as the defaults for the next new thread. */
+  rememberDraft(input: Partial<Thread> & { scope?: ThreadScope }): Prefs {
+    const thread = this.draftThread(input);
+    this.rememberChoices(thread, settingPatch(thread));
+    return this.prefs();
   }
 
   /** A thread with defaults filled in, not stored. createThread and warmDraft agree on it, so a warmed spare matches. */
@@ -526,34 +498,7 @@ export class AgentHost {
 
   /** Model, effort, mode, and workspace picks become the defaults for new threads. */
   private rememberChoices(thread: Thread, patch: Partial<Thread>): void {
-    const prefs = this.prefs();
-    const next: Partial<Prefs> = {};
-    if (patch.model || patch.provider) {
-      next.provider = thread.provider;
-      next.models = { ...prefs.models, [thread.provider]: thread.model };
-    }
-    if (patch.effort !== undefined) next.efforts = { ...prefs.efforts, [thread.provider]: thread.effort };
-    if (patch.modelParams) next.modelParams = { ...prefs.modelParams, [thread.provider]: thread.modelParams };
-    if (patch.mode && thread.scope.kind !== "page" && thread.scope.kind !== "folder") next.mode = thread.mode;
-    if (patch.approval) {
-      next.approval = thread.approval;
-      const seeded: Prefs["approvals"] = { ...prefs.approvals };
-      for (const id of ["claude", "cursor"] as const) {
-        if (seeded[id] === undefined) seeded[id] = prefs.approval;
-      }
-      seeded[thread.provider] = thread.approval;
-      next.approvals = seeded;
-    }
-    if (typeof patch.web === "boolean") next.web = thread.web;
-    if (patch.cwd && thread.cwd) {
-      next.recentWorkspaces = [thread.cwd, ...prefs.recentWorkspaces.filter((dir) => path.normalize(dir) !== path.normalize(thread.cwd!))].slice(0, 12);
-      if (thread.scope.kind !== "global") {
-        next.scopeWorkspaces = { ...prefs.scopeWorkspaces, [`${thread.scope.kind}:${thread.scope.ref}`]: thread.cwd };
-      }
-    }
-    if (typeof patch.useWorktree === "boolean" && thread.cwd) {
-      next.worktrees = { ...prefs.worktrees, [workspaceKey(thread.cwd)]: patch.useWorktree };
-    }
+    const next = prefsPatchFromChoices(this.prefs(), thread, patch);
     if (Object.keys(next).length) this.setPrefs(next);
   }
 
