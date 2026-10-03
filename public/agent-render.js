@@ -95,6 +95,24 @@
     return new Date(ms).toLocaleDateString();
   }
 
+  /** Wall-clock when a turn or thread last finished. Today is just the time. */
+  function finishTime(ms) {
+    if (!ms) return "";
+    const d = new Date(ms);
+    const now = new Date();
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (d.toDateString() === now.toDateString()) return time;
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+    const date = d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+    });
+    return `${date}, ${time}`;
+  }
+
   function duration(ms) {
     if (!(ms >= 0)) return "";
     if (ms < 1000) return "<1s";
@@ -302,6 +320,7 @@
     icon,
     button,
     timeAgo,
+    finishTime,
     duration,
     basename,
     dirname,

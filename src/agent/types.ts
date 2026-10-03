@@ -114,6 +114,8 @@ export type ThreadView = Thread & {
   /** Subagents and commands still working in the background, after or beside the current turn. */
   background: number;
   stats: { turns: number; files: number; added: number; removed: number };
+  /** When the last finished turn ended. Missing until a turn has completed. */
+  finishedAt?: number;
   /** A fork that has not run yet: how its first turn gets the earlier conversation, and which model summarizes it. */
   carry?: { how: "native" | "summary"; summarizer?: string };
 };

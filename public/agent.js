@@ -1633,7 +1633,10 @@
         push(el("span", null, thoughts ? "thought it through" : plural(tools.length, "step", "steps")));
       }
       const turn = group.turn;
-      if (turn?.endedAt) push(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
+      if (turn?.endedAt) {
+        push(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
+        push(finishStamp(turn.endedAt));
+      }
       const first = out[0];
       if (first?.firstChild?.nodeType === Node.TEXT_NODE) first.textContent = first.textContent.charAt(0).toUpperCase() + first.textContent.slice(1);
       else if (first?.firstElementChild) first.firstElementChild.textContent = "Edited ";
@@ -2112,7 +2115,10 @@
       const parts = el("span", "ag-foot-meta");
       if (turn.status === "error") parts.append(el("span", "ag-st-err", "Failed"));
       else if (turn.status === "cancelled") parts.append(el("span", "ag-muted", "Stopped"));
-      if (turn.endedAt) parts.append(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
+      if (turn.endedAt) {
+        parts.append(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
+        parts.append(finishStamp(turn.endedAt));
+      }
       const usage = turn.usage || {};
       if (usage.plan?.length) parts.append(el("span", null, usage.plan.map((w) => `${planPct(w.used)} of ${planWindowShort(w)}`).join(" · ")));
       else if (usage.costUsd) parts.append(el("span", null, `$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`));
@@ -2911,6 +2917,30 @@
     return span;
   }
 
+  /** Clock time of a finished turn; tooltip has the full datetime. */
+  function finishStamp(ms) {
+    const span = el("span", "ag-muted", R.finishTime(ms));
+    span.title = new Date(ms).toLocaleString();
+    return span;
+  }
+
+  /** Idle threads show when the last turn finished; running ones stay relative. */
+  function threadWhenMs(t) {
+    return t.status === "idle" && t.finishedAt ? t.finishedAt : t.activityAt;
+  }
+
+  function threadWhenText(t) {
+    const ms = threadWhenMs(t);
+    return t.status === "idle" && t.finishedAt ? R.finishTime(ms) : R.timeAgo(ms);
+  }
+
+  function threadWhen(t) {
+    const ms = threadWhenMs(t);
+    const span = el("span", null, threadWhenText(t));
+    span.title = new Date(ms).toLocaleString();
+    return span;
+  }
+
   /** Points a stopwatch span at a start time, or clears it. Returns the span. */
   function setClock(span, start) {
     if (start) {
@@ -3065,7 +3095,7 @@
     const main = el("span", "ag-row-main");
     const title = el("span", "ag-row-title", t.title);
     const meta = el("span", "ag-row-meta");
-    meta.append(el("span", `ag-prov p-${t.provider}`, PROVIDER_GLYPH[t.provider] || "?"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), el("span", null, R.timeAgo(t.activityAt)));
+    meta.append(el("span", `ag-prov p-${t.provider}`, PROVIDER_GLYPH[t.provider] || "?"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
     const wt = openWorktree(t);
     if (wt) {
@@ -3440,9 +3470,9 @@
       const items = [];
       items.push({ label: "New thread for this page", icon: "plus", run: () => { if (tab) S.dockPicks.delete(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
-      for (const t of pageThreads) items.push({ label: t.title, detail: R.timeAgo(t.activityAt), checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
+      for (const t of pageThreads) items.push({ label: t.title, detail: threadWhenText(t), checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
       if (others.length) items.push({ header: "Recent" });
-      for (const t of others) items.push({ label: t.title, detail: `${scopeLabel(t.scope).text} · ${R.timeAgo(t.activityAt)}`, checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
+      for (const t of others) items.push({ label: t.title, detail: `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`, checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
       openMenu(anchor, items, { search: true, width: 320, placeholder: "Search threads" });
     },
     pick(id) {
@@ -4461,6 +4491,7 @@
       status: t.status,
       queued: t.queued || 0,
       activityAt: t.activityAt,
+      ...(t.finishedAt ? { finishedAt: t.finishedAt } : {}),
       mode: t.mode,
       provider: t.provider,
       model: t.model,

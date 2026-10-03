@@ -676,7 +676,9 @@ export class AgentHost {
     const files = new Set<string>();
     let added = 0;
     let removed = 0;
+    let finishedAt: number | undefined;
     for (const turn of turns) {
+      if (turn.endedAt) finishedAt = turn.endedAt;
       if (turn.reverted) continue;
       for (const file of turn.files ?? []) {
         files.add(file.path);
@@ -691,6 +693,7 @@ export class AgentHost {
       queued: this.queues.get(thread.id)?.length ?? 0,
       background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
+      ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
     };
   }
