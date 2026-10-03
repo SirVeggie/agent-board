@@ -42,7 +42,6 @@
   const choiceDlg = document.getElementById("choice");
   const choiceMessage = document.getElementById("choice-message");
   const choiceActions = document.getElementById("choice-actions");
-  const cleanupDlg = document.getElementById("cleanup");
   const paletteEl = document.getElementById("palette");
   const paletteBackdrop = document.getElementById("palette-backdrop");
   const paletteInput = document.getElementById("palette-input");
@@ -203,6 +202,7 @@
     closeTab: (id) => closeTab(id),
     setPinned,
     setAgentHidden,
+    managePermissions: (id) => window.scribePermissions?.manage(id),
     copyTabKey,
     downloadExport,
     downloadFolderExport: (id) => downloadHref(`/api/export/folder/${encodeURIComponent(id)}`),
@@ -2590,7 +2590,7 @@
 
   /** Shortcuts the desktop app catches natively, so they also work while an embedded site has focus. */
   function runShortcut(action) {
-    if (confirmDlg.open || choiceDlg.open || cleanupDlg.open) {
+    if (document.querySelector("dialog[open]")) {
       return;
     }
     if (action === "palette") {
@@ -2627,7 +2627,7 @@
   }
 
   function onBoardShortcut(event) {
-    if (confirmDlg.open || choiceDlg.open || cleanupDlg.open) {
+    if (document.querySelector("dialog[open]")) {
       return;
     }
     if (event.key === "Escape") {
@@ -2742,9 +2742,20 @@
   }
 
   /**
-   * board.agent from a page: threads of that page only, as found from the frame that asked (not from
-   * anything the page says). Starting or sending needs the click or key press to have reached the
-   * board too: a page's own activation also activates the board, so a script cannot fake it.
+   * Whether a click or key press just went to this page's frame. A page's activation also activates
+   * the board, so a script cannot fake it; and the frame must have focus, so a click in one page does
+   * not count for another page that asks at the same moment.
+   */
+  function frameActivated(frameId) {
+    const active = !navigator.userActivation || navigator.userActivation.isActive;
+    return active && Boolean(frameId) && document.activeElement === frames.get(frameId)?.el;
+  }
+
+  /**
+   * scribe.agent from a page: threads of that page only, as found from the frame that asked (not from
+   * anything the page says). Whether the click or key press reached the board is checked here: a
+   * page's own activation also activates the board, so a script cannot fake it. agent.js decides
+   * what the page may do with or without one (scribePermissions).
    */
   function onPageAgent(event) {
     const data = event.data;
@@ -2762,11 +2773,42 @@
       reply({ ok: false, error: "no_agent" });
       return;
     }
-    if ((data.op === "start" || data.op === "send") && navigator.userActivation && !navigator.userActivation.isActive) {
+    const activated = frameActivated(frameId);
+    chat.pageRequest(tab, data, { activated }).then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
+  }
+
+  /** scribe.permissions from a page: read its own, or ask the user for one (after a click). */
+  function onPagePermissions(event) {
+    const data = event.data;
+    const reply = (result) => {
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    const frameId = frameIdByWindow(event.source);
+    const tab = frameId ? findAnyTab(frameId) : null;
+    const perms = window.scribePermissions;
+    if (!tab || tab.embedUrl || !perms) {
+      reply({ ok: false, error: "not_a_page" });
+      return;
+    }
+    if (data.op === "query") {
+      perms.query(tab).then(reply);
+      return;
+    }
+    if (data.op !== "request") {
+      reply({ ok: false, error: "unknown_op" });
+      return;
+    }
+    if (!frameActivated(frameId)) {
       reply({ ok: false, error: "no_gesture" });
       return;
     }
-    chat.pageRequest(tab, data).then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
+    const need = { perm: String(data.perm || "") };
+    if (typeof data.folder === "string" && data.folder) need.folder = data.folder;
+    if (typeof data.approval === "string" && data.approval) need.approval = data.approval;
+    perms.ensure(tab, need, { explicit: true }).then(
+      (result) => reply(result.ok ? { ok: true, granted: true } : { ok: true, granted: false }),
+      (err) => reply({ ok: false, error: String(err?.message || err) })
+    );
   }
 
   /**
@@ -3064,6 +3106,8 @@
       }
     } else if (event.data?.type === "scribe-agent") {
       onPageAgent(event);
+    } else if (event.data?.type === "scribe-permissions") {
+      onPagePermissions(event);
     } else if (event.data?.type === "scribe-preview") {
       onPagePreview(event);
     } else if (event.data?.type === "scribe-chat-key") {

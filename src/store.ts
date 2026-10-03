@@ -37,6 +37,7 @@ import {
   type PageAssetMeta,
   type PageAssetUsage,
 } from "./pageAssets.js";
+import { normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionValue } from "./pagePermissions.js";
 import { normalizeSignalName } from "./signal.js";
 import { applyOps } from "./stateOps.js";
 import { normalizeEvents } from "./events.js";
@@ -1306,6 +1307,91 @@ export class BoardStore extends EventEmitter {
       this.persist();
     }
     this.requireDb().writeLocal(tab.id, viewer, Object.keys(state).length ? text : null);
+  }
+
+  /** The permissions the user granted a page; missing ones are at their default. */
+  pagePermissions(idOrKey: string): Map<string, PermissionGrant> {
+    const tab = this.locate(idOrKey)?.tab;
+    if (!tab) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const grants = new Map<string, PermissionGrant>();
+    if (!this.db) {
+      return grants;
+    }
+    for (const row of this.db.readPermissions(tab.id)) {
+      if (!permissionDef(row.perm) || !isPermissionValue(row.value)) {
+        continue;
+      }
+      let folders: FolderGrant[] | undefined;
+      try {
+        folders = row.data ? normalizeFolders((JSON.parse(row.data) as { folders?: unknown }).folders) : undefined;
+      } catch {
+        folders = undefined;
+      }
+      grants.set(row.perm, { value: row.value, ...(folders ? { folders } : {}), updatedAt: row.updatedAt });
+    }
+    return grants;
+  }
+
+  /**
+   * Set one permission for a page. folders replaces the approved folders of a per-folder
+   * permission; those have no blanket allow, so allow is stored as ask. Back at the default with no
+   * folders, the grant is removed.
+   */
+  setPagePermission(idOrKey: string, perm: string, value: PermissionValue, folders?: unknown): Map<string, PermissionGrant> {
+    const tab = this.locate(idOrKey)?.tab;
+    if (!tab) {
+      throw new Error(`tab not found: ${idOrKey}`);
+    }
+    const def = permissionDef(perm);
+    if (!def) {
+      throw new Error(`unknown permission: ${perm}`);
+    }
+    const stored = def.perFolder && value === "allow" ? "ask" : value;
+    const list = def.perFolder ? (folders === undefined ? this.pagePermissions(tab.id).get(perm)?.folders ?? [] : normalizeFolders(folders)) : [];
+    if (this.dirty.has(tab.id)) {
+      this.persist();
+    }
+    const db = this.requireDb();
+    if (stored === def.default && !list.length) {
+      db.writePermission(tab.id, perm, null, null, Date.now());
+    } else {
+      db.writePermission(tab.id, perm, stored, list.length ? JSON.stringify({ folders: list }) : null, Date.now());
+    }
+    return this.pagePermissions(tab.id);
+  }
+
+  /** An agent rewrote the page's code: what it was trusted with no longer holds. Returns whether anything was reset. */
+  resetRiskyPermissions(idOrKey: string): boolean {
+    const tab = this.locate(idOrKey)?.tab;
+    return tab ? this.resetRiskyGrants(tab) : false;
+  }
+
+  /** resetRiskyPermissions for every page made from a template an agent changed, in the Trash too. */
+  resetTemplatePermissions(templateId: string): void {
+    for (const tab of this.allTabs()) {
+      if (tab.templateId === templateId) {
+        this.resetRiskyGrants(tab);
+      }
+    }
+  }
+
+  private resetRiskyGrants(tab: Tab): boolean {
+    if (!this.db) {
+      return false;
+    }
+    let reset = false;
+    for (const row of this.db.readPermissions(tab.id)) {
+      if (permissionDef(row.perm)?.risky !== false) {
+        this.db.writePermission(tab.id, row.perm, null, null, Date.now());
+        reset = true;
+      }
+    }
+    if (reset) {
+      log(`Reset page permissions of ${tab.key} after an agent changed its code`);
+    }
+    return reset;
   }
 
   /** Log an event on a page, after applying any ops that came with it. Waits wake on it. */

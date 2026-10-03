@@ -113,7 +113,17 @@ scribe.action("move", { card: 12, to: "done" })  // run one of the template's ac
 
 A submit button can log the same event without extra script: `data-scribe-signal="submitted"`. The agent then calls `page_wait` with that event name.
 
-Pages can also use Scribe's agent chat with `scribe.agent`: `start(prompt)` makes a thread for the page (inside a click or key press), `send(threadId, prompt)` continues it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. A page only reaches its own threads, and the threads it starts run in Pages or Ask mode.
+Pages can also use Scribe's agent chat with `scribe.agent`: `start(prompt, opts)` makes a thread for the page, `send(threadId, prompt)` continues it, `stop(threadId)` stops it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. `options()` lists the providers, models, modes, and approval policies `start` can pick, and `pickFolder()` lets the user choose a folder. A page only reaches its own threads.
+
+What else a page may do is up to the user, per page (tab menu → **Permissions…**):
+
+| Permission | Default | Lets the page |
+| --- | --- | --- |
+| Agent chats when you click (`agent.chat`) | Allow | start, send, and stop Pages or Ask threads after a click or key press on the page |
+| Agent chats without a click (`agent.unattended`) | Ask | do the same from its own code, e.g. when a card moves, while the page is loaded |
+| Agents with file and shell access (`agent.workspace`) | Ask | start Code or Plan threads in folders the user approved, up to the approval policy approved there |
+
+When a page needs one it doesn't have, Scribe asks (Allow, Deny, or Not now) and the call waits for the answer; `scribe.permissions.request(perm)` asks up front and `scribe.permissions.query()` reads them. Grants stay on this PC: they are not in the page's state or exports, and the risky ones go back to Ask when an agent changes the page's code or its template.
 
 Interactive pages should use this instead of `localStorage` — all tab pages share one origin, so their `localStorage` collides, and the agent cannot see it.
 

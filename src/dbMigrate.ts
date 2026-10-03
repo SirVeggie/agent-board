@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { FOLDERS_TABLE_SQL, PAGE_ASSETS_TABLE_SQL, PAGE_LOCAL_TABLE_SQL, TABS_TABLE_V2_SQL } from "./schema.js";
+import { FOLDERS_TABLE_SQL, PAGE_ASSETS_TABLE_SQL, PAGE_LOCAL_TABLE_SQL, PAGE_PERMISSIONS_TABLE_SQL, TABS_TABLE_V2_SQL } from "./schema.js";
 
 /**
  * Additive template tables; CREATE IF NOT EXISTS only. See docs/migrations.md.
@@ -158,4 +158,8 @@ export function migrateV2ToV3(db: DatabaseSync): void {
 
 export function ensurePageLocalSchema(db: DatabaseSync): void {
   db.exec(PAGE_LOCAL_TABLE_SQL);
+}
+
+export function ensurePagePermissionSchema(db: DatabaseSync): void {
+  db.exec(PAGE_PERMISSIONS_TABLE_SQL);
 }

@@ -983,9 +983,12 @@ export const BOARD_BRIDGE_JS = `
   }
 
   // ---------- agent ----------
-  // A page can start agent chat threads of its own and continue them. Starting or sending needs a
-  // click or key press, like scribe.open (Scribe checks again on its side); reading does not.
+  // A page can run agent chat threads of its own. Starting, sending, and stopping need a click or
+  // key press, unless the user lets the page run agents without one; Code and Plan threads need the
+  // user's approval for their folder. Scribe checks both on its side and asks the user when needed,
+  // so those calls may take as long as the user does.
   var agentListeners = [];
+  var AGENT_ASK_MS = 10 * 60 * 1000;
 
   function agentText(value) {
     return value == null ? null : String(value);
@@ -993,29 +996,55 @@ export const BOARD_BRIDGE_JS = `
 
   function agentCall(message, timeoutMs) {
     message.type = "scribe-agent";
-    return askBoard(message, timeoutMs || 30000);
+    return askBoard(message, timeoutMs || 30000).then(function (result) {
+      if (result && result.ok === false && (result.error === "no_gesture" || result.error === "denied")) {
+        console.warn(
+          "[scribe] scribe.agent." + message.op + ": " +
+            (result.error === "no_gesture" ? "needs a click or key press" : "not allowed (" + (result.permission || "permission") + ")")
+        );
+      }
+      return result;
+    });
   }
 
-  function agentWrite(message) {
-    if (!hasGesture()) {
-      console.warn("[scribe] scribe.agent." + message.op + " needs a click or key press; ignored");
-      return Promise.resolve({ ok: false, error: "no_gesture" });
-    }
-    return agentCall(message);
+  /** The thread settings a page may pass to start(); Scribe checks them against the page's permissions. */
+  function agentSettings(opts) {
+    var out = {};
+    ["title", "mode", "show", "provider", "model", "effort", "approval", "cwd"].forEach(function (name) {
+      if (opts[name] != null && opts[name] !== "") {
+        out[name] = String(opts[name]);
+      }
+    });
+    ["worktree", "web"].forEach(function (name) {
+      if (typeof opts[name] === "boolean") {
+        out[name] = opts[name];
+      }
+    });
+    return out;
   }
 
   var agent = {
-    /** New thread for this page: { ok, threadId, queued }. opts: { title, mode: "board" | "ask", show: "dock" | "sidebar" }. */
+    /**
+     * New thread for this page: { ok, threadId, queued }. opts: { title, show: "dock" | "sidebar",
+     * mode: "board" | "ask" | "code" | "plan", provider, model, effort, and for Code and Plan:
+     * cwd (folder), approval: "ask" | "edits" | "auto" | "full", worktree, web }.
+     */
     start: function (prompt, opts) {
-      opts = opts || {};
-      return agentWrite({ op: "start", prompt: agentText(prompt), title: agentText(opts.title), mode: agentText(opts.mode), show: agentText(opts.show) });
+      var message = agentSettings(opts || {});
+      message.op = "start";
+      message.prompt = agentText(prompt);
+      return agentCall(message, AGENT_ASK_MS);
     },
     /** Send to one of this page's threads; queued when it is still working: { ok, queued }. */
     send: function (threadId, prompt, opts) {
       opts = opts || {};
-      return agentWrite({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) });
+      return agentCall({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) }, AGENT_ASK_MS);
     },
-    /** This page's threads, newest first: { ok, threads: [{ id, title, status, queued, activityAt }] }. */
+    /** Stop the thread's current turn and drop its queued messages: { ok }. */
+    stop: function (threadId) {
+      return agentCall({ op: "stop", threadId: agentText(threadId) }, AGENT_ASK_MS);
+    },
+    /** This page's threads, newest first: { ok, threads: [{ id, title, status, queued, activityAt, mode, model, cwd }] }. */
     threads: function () {
       return agentCall({ op: "threads" });
     },
@@ -1028,6 +1057,18 @@ export const BOARD_BRIDGE_JS = `
       var ms = opts && typeof opts.timeoutMs === "number" ? Math.max(1000, opts.timeoutMs) : 600000;
       return agentCall({ op: "wait", threadId: agentText(threadId), timeoutMs: ms }, ms + 5000);
     },
+    /** What start() can pick from: { ok, providers, models, modes, approvals, defaults }. */
+    options: function () {
+      return agentCall({ op: "options" });
+    },
+    /** Let the user pick a folder for Code and Plan threads (needs a click): { ok, path } or { ok: false, error: "cancelled" }. */
+    pickFolder: function (opts) {
+      if (!hasGesture()) {
+        console.warn("[scribe] scribe.agent.pickFolder needs a click or key press; ignored");
+        return Promise.resolve({ ok: false, error: "no_gesture" });
+      }
+      return agentCall({ op: "pickFolder", initial: agentText(opts && opts.initial) }, AGENT_ASK_MS);
+    },
     /** fn({ id, title, status, queued, reply? }) whenever one of this page's threads changes status. */
     onChange: function (fn) {
       agentListeners.push(fn);
@@ -1036,6 +1077,30 @@ export const BOARD_BRIDGE_JS = `
           return item !== fn;
         });
       };
+    }
+  };
+
+  // ---------- permissions ----------
+  // What the user lets this page do (tab menu → Permissions…). Only Scribe can change them.
+  var permissions = {
+    /** { ok, permissions: [{ id, label, value: "allow" | "deny" | "ask", folders? }] } */
+    query: function () {
+      return askBoard({ type: "scribe-permissions", op: "query" }, 30000);
+    },
+    /**
+     * Ask the user up front, e.g. from a settings dialog (needs a click): { ok, granted }.
+     * opts for agent.workspace: { folder, approval }.
+     */
+    request: function (perm, opts) {
+      if (!hasGesture()) {
+        console.warn("[scribe] scribe.permissions.request needs a click or key press; ignored");
+        return Promise.resolve({ ok: false, error: "no_gesture" });
+      }
+      opts = opts || {};
+      return askBoard(
+        { type: "scribe-permissions", op: "request", perm: agentText(perm), folder: agentText(opts.folder), approval: agentText(opts.approval) },
+        AGENT_ASK_MS
+      );
     }
   };
 
@@ -1066,6 +1131,7 @@ export const BOARD_BRIDGE_JS = `
     resolve: resolve,
     preview: preview,
     agent: agent,
+    permissions: permissions,
     /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
     ops: {
       get: engine.getAt,

@@ -998,6 +998,7 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
       { label: tab.agentHidden ? "Show to agent" : "Hide from agent", action: () => host.setAgentHidden(id, !tab.agentHidden) },
+      !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
       "sep",
       { label: "Delete", danger: true, action: () => deletePage(id) },

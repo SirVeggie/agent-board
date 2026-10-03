@@ -355,12 +355,21 @@ const { reply } = await scribe.agent.wait(threadId);       // resolves when the 
 const { threads } = await scribe.agent.threads();          // this page's threads, newest first
 const { thread, reply: last } = await scribe.agent.get(threadId);
 scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
+await scribe.agent.stop(threadId);                         // stop the turn and drop queued messages
+const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts }] }, modes, approvals, defaults }
+const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)
+await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
 ```
 
-- `start` and `send` only work inside a click or key press, like `scribe.open`; otherwise they resolve `{ ok: false, error: "no_gesture" }`. Call them first in the handler, before other `await`s.
+- Threads default to Pages mode (`mode: "ask"` for read-only Q&A): page tools and the web, no files or shell. Unset `provider` / `model` / `effort` / `approval` / `web` follow the user's defaults; take ids from `options()`.
 - A page only sees and drives **its own** threads (scoped to that page). It cannot reach other threads.
-- Threads a page starts are Pages mode (`mode: "ask"` for read-only Q&A), so they get the page tools and the web, not files or shell. The model and provider follow the user's defaults.
 - `show: "dock"` or `"sidebar"` opens the thread in that chat; omit it to run quietly. The tab still shows its working dot.
+- What else a page may do is the user's call, per page (tab menu → Permissions…). Scribe asks the user when a call needs a permission the page doesn't have yet, so `start`, `send`, and `stop` may take as long as the user does. A refusal is `{ ok: false, error: "denied", permission }`; show it on the page instead of retrying in a loop.
+  - `agent.chat` (allowed by default): `start` / `send` / `stop` right after a click or key press on the page. Call them first in the handler, before other `await`s.
+  - `agent.unattended` (asks): the same from the page's own code, e.g. in `scribe.onChange` when a card moves. Only while the page is loaded in a Scribe window, and every open window runs the page's code: claim the work in state first (an `update` with a `test` op) so two windows don't both start it.
+  - `agent.workspace` (asks): `mode: "code"` or `"plan"` with a `cwd`, approved per folder and approval policy. `pickFolder()` only picks; Scribe still asks before the first thread there.
+  - `scribe.permissions.request("agent.unattended")` (inside a click) asks up front, e.g. from a settings dialog; `scribe.permissions.query()` reads `[{ id, label, value, folders? }]`.
+- Agents can't read or change these grants, and an agent changing a page's HTML (or its template) resets the risky ones to Ask: tell the user to re-approve after you edit such a page.
 - Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
 - Keep the thread id in state if the page should continue the same conversation later.
 

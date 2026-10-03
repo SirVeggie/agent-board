@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensurePageAssetSchema, ensurePageLocalSchema, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
@@ -269,6 +269,7 @@ export class BoardDb {
       ensureTemplateSchema(db);
       ensurePageAssetSchema(db);
       ensurePageLocalSchema(db);
+      ensurePagePermissionSchema(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -388,6 +389,29 @@ export class BoardDb {
         "INSERT INTO page_local (tab_id, viewer, state, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(tab_id, viewer) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at"
       )
       .run(tabId, viewer, state, Date.now());
+  }
+
+  readPermissions(tabId: string): Array<{ perm: string; value: string; data: string | null; updatedAt: number }> {
+    const rows = this.db.prepare("SELECT perm, value, data, updated_at FROM page_permissions WHERE tab_id = ?").all(tabId) as Array<{
+      perm: string;
+      value: string;
+      data: string | null;
+      updated_at: number;
+    }>;
+    return rows.map((row) => ({ perm: row.perm, value: row.value, data: row.data, updatedAt: row.updated_at }));
+  }
+
+  /** null value removes the grant, so the permission is back at its default. */
+  writePermission(tabId: string, perm: string, value: string | null, data: string | null, updatedAt: number): void {
+    if (value === null) {
+      this.db.prepare("DELETE FROM page_permissions WHERE tab_id = ? AND perm = ?").run(tabId, perm);
+      return;
+    }
+    this.db
+      .prepare(
+        "INSERT INTO page_permissions (tab_id, perm, value, data, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(tab_id, perm) DO UPDATE SET value = excluded.value, data = excluded.data, updated_at = excluded.updated_at"
+      )
+      .run(tabId, perm, value, data, updatedAt);
   }
 
   insertPageAssets(tabId: string, assets: PageAssetDraft[]): void {
@@ -560,6 +584,7 @@ export class BoardDb {
       ensureTemplateSchema(db);
       ensurePageAssetSchema(db);
       ensurePageLocalSchema(db);
+      ensurePagePermissionSchema(db);
       return new BoardDb(db);
     } catch (err) {
       try {

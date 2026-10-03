@@ -13,7 +13,7 @@
     "desktop": "cargo run --manifest-path desktop/Cargo.toml",
     "desktop:build": "tauri build",
     "desktop:install": "node desktop/install.mjs",
-    "test": "tsx --test src/htmlEdit.test.ts src/stateOps.test.ts src/store.test.ts src/pageSearch.test.ts src/boardExport.test.ts src/templates.test.ts src/embed.test.ts src/frameCheck.test.ts src/agent/textDiff.test.ts src/agent/prompt.test.ts src/actions/kanban.test.ts src/legacyPages.test.ts src/agent/worktree.test.ts src/agent/attachments.test.ts src/wait.test.ts src/mcpImages.test.ts src/agent/prefs.test.ts"
+    "test": "tsx --test src/htmlEdit.test.ts src/stateOps.test.ts src/store.test.ts src/pageSearch.test.ts src/boardExport.test.ts src/templates.test.ts src/embed.test.ts src/frameCheck.test.ts src/agent/textDiff.test.ts src/agent/prompt.test.ts src/actions/kanban.test.ts src/legacyPages.test.ts src/agent/worktree.test.ts src/agent/attachments.test.ts src/wait.test.ts src/mcpImages.test.ts src/agent/prefs.test.ts src/pagePermissions.test.ts"
   },
   "engines": {
     "node": ">=22.13"

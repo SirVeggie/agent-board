@@ -1,5 +1,15 @@
 # Migrations
 
+## `page_permissions` table (additive, schema still 3)
+
+- **What changed:** What the user lets a page's own code do (`agent.chat`, `agent.unattended`, `agent.workspace`; plugins will add `plugin.<id>` ids) is stored in a new `page_permissions` table: `tab_id REFERENCES tabs(id) ON DELETE CASCADE`, `perm`, `value` (`allow` / `deny` / `ask`), `data` (JSON, `{ folders: [{ path, approval }] }` for per-folder permissions), `updated_at`. No row means the permission's default (`src/pagePermissions.ts`).
+- **Why no version bump:** Nothing existing changes. `ensurePagePermissionSchema` runs `CREATE TABLE IF NOT EXISTS` on every open. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged on purpose: grants stay on the PC that gave them and never travel with a page. `EXPORT_VERSION` stays `1`.
+- **Protocol:** additive routes only (`GET`/`PUT /api/tabs/:id/permissions`, `POST /api/tabs/:id/permissions/check`), refused for agents and tab pages, so `VERSION` stays `3.0.0`. The shell falls back to the old behavior (clicks only) against a daemon without them. New bridge calls (`scribe.permissions`, `scribe.agent.stop` / `options` / `pickFolder`, start settings) need the daemon restarted.
+- **Where:** `src/schema.ts` (`PAGE_PERMISSIONS_TABLE_SQL`), `src/dbMigrate.ts` (`ensurePagePermissionSchema`), `src/store.ts` (`pagePermissions`, `setPagePermission`, `resetRiskyPermissions`).
+- **How to verify:** `page permissions are kept per page, reset by an agent rewrite, and not exported` in `src/store.test.ts`, and `src/pagePermissions.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## Scribe release: schema 3, data folder, page keys (breaking)
 
 - **What changed:** The app is renamed from Agent Board to Scribe, and page state moved to ops, an event log, and per-viewer local state.

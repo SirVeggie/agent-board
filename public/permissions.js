@@ -1,0 +1,274 @@
+/**
+ * Page permissions: what a page's own code may do beyond its state (run agents without a click,
+ * with file and shell access, …). The daemon stores the user's choices per page and checks them;
+ * this asks the user when a page needs one it doesn't have yet, and holds the tab menu's
+ * Permissions… dialog. Pages never reach the routes behind it.
+ */
+(() => {
+  const APPROVALS = [
+    { id: "ask", label: "Ask first" },
+    { id: "edits", label: "Auto-edit" },
+    { id: "auto", label: "Auto review" },
+    { id: "full", label: "Full access" },
+  ];
+  const VALUES = [
+    { id: "ask", label: "Ask" },
+    { id: "allow", label: "Allow" },
+    { id: "deny", label: "Deny" },
+  ];
+  const app = () => window.scribeApp;
+
+  async function request(method, id, suffix = "", body) {
+    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/permissions${suffix}`, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    }).catch(() => null);
+    if (!res) throw new Error("Scribe is not reachable");
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const err = new Error(data?.error || `Permissions request failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  async function list(id) {
+    return (await request("GET", id)).permissions || [];
+  }
+
+  function approvalLabel(id) {
+    return APPROVALS.find((a) => a.id === id)?.label || id;
+  }
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  /* ---------- asking ---------- */
+
+  /** One prompt at a time; the same question from the same page shares its answer. */
+  let chain = Promise.resolve();
+  const asking = new Map();
+  /** "Not now" holds off the same question for a while, so a page can't ask in a loop; scribe.permissions.request still asks. */
+  const LATER_MS = 10 * 60 * 1000;
+  const later = new Map();
+
+  function askKey(tab, need) {
+    return [tab.id, need.perm, need.folder || "", need.approval || ""].join("\n");
+  }
+
+  /** Resolves "allow", "deny", or null (not now). */
+  function prompt(tab, def, need, explicit) {
+    const key = askKey(tab, need);
+    if (asking.has(key)) return asking.get(key);
+    if (!explicit && (later.get(key) || 0) > Date.now()) return Promise.resolve(null);
+    const answer = chain.then(() => showPrompt(tab, def, need));
+    chain = answer.catch(() => null);
+    asking.set(key, answer);
+    answer.then(
+      (value) => {
+        asking.delete(key);
+        if (value) later.delete(key);
+        else later.set(key, Date.now() + LATER_MS);
+      },
+      () => asking.delete(key)
+    );
+    return answer;
+  }
+
+  function showPrompt(tab, def, need) {
+    const current = app()?.findAnyTab(tab.id) || tab;
+    const dlg = el("dialog", "confirm permission-ask");
+    const form = el("form");
+    form.method = "dialog";
+    const body = el("div", "permission-ask-body");
+    const head = el("h2", "", `“${current.title || "This page"}” wants to:`);
+    const what = el("p", "permission-ask-what", def.label);
+    const detail = el("p", "permission-ask-detail", def.detail);
+    body.append(head, what, detail);
+    if (def.perFolder) {
+      const where = el("dl", "permission-ask-where");
+      where.append(el("dt", "", "Folder"), el("dd", "permission-path", need.folder || "?"));
+      where.append(el("dt", "", "Approval"), el("dd", "", approvalLabel(need.approval || "ask")));
+      body.append(where);
+    }
+    body.append(el("p", "permission-ask-note", "You can change this later from the tab menu: Permissions…"));
+    const actions = el("div", "confirm-actions");
+    const later = el("button", "", "Not now");
+    later.type = "submit";
+    later.value = "later";
+    const deny = el("button", "danger", "Deny");
+    deny.type = "submit";
+    deny.value = "deny";
+    const allow = el("button", "primary", "Allow");
+    allow.type = "submit";
+    allow.value = "allow";
+    actions.append(later, deny, allow);
+    form.append(body, actions);
+    dlg.append(form);
+    document.body.append(dlg);
+    dlg.returnValue = "later";
+    dlg.showModal();
+    later.focus();
+    return new Promise((resolve) => {
+      dlg.addEventListener(
+        "close",
+        () => {
+          const value = dlg.returnValue;
+          dlg.remove();
+          resolve(value === "allow" || value === "deny" ? value : null);
+        },
+        { once: true }
+      );
+    });
+  }
+
+  /** Store the user's answer: a per-folder permission gains the folder, the rest are set as a whole. */
+  async function remember(tab, def, need, answer) {
+    if (answer === "allow" && def.perFolder) {
+      const folders = (def.folders || []).filter((f) => f.path.toLowerCase() !== String(need.folder).toLowerCase());
+      folders.push({ path: need.folder, approval: need.approval || "ask" });
+      await request("PUT", tab.id, "", { perm: def.id, value: def.value === "deny" ? "ask" : def.value, folders });
+      return;
+    }
+    await request("PUT", tab.id, "", { perm: def.id, value: answer });
+  }
+
+  /**
+   * Whether `tab` may do what `need` ({ perm, folder?, approval? }) describes, asking the user when
+   * it hasn't decided yet. Resolves { ok: true } or { ok: false, error: "denied", permission }.
+   * explicit: the page asked for it with scribe.permissions.request, after a click.
+   */
+  async function ensure(tab, need, { explicit = false } = {}) {
+    const denied = { ok: false, error: "denied", permission: need.perm };
+    let result;
+    try {
+      result = (await request("POST", tab.id, "/check", need)).result;
+    } catch (err) {
+      // A daemon from before page permissions: only what pages could always do.
+      return err.status === 404 && need.perm === "agent.chat" ? { ok: true } : denied;
+    }
+    if (result === "allow") return { ok: true };
+    if (result !== "ask") return denied;
+    const def = (await list(tab.id).catch(() => [])).find((p) => p.id === need.perm);
+    if (!def) return denied;
+    const answer = await prompt(tab, def, need, explicit);
+    if (!answer) return denied;
+    try {
+      await remember(tab, def, need, answer);
+    } catch (err) {
+      app()?.showNotice?.(err.message);
+      return denied;
+    }
+    return answer === "allow" ? { ok: true } : denied;
+  }
+
+  /** The page's permissions as it may see them: ids, labels, values, and approved folders. */
+  async function query(tab) {
+    try {
+      const perms = await list(tab.id);
+      return {
+        ok: true,
+        permissions: perms.map((p) => ({ id: p.id, label: p.label, value: p.value, ...(p.perFolder ? { folders: p.folders || [] } : {}) })),
+      };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /* ---------- the Permissions… dialog ---------- */
+
+  function selectOf(options, value, label, onChange) {
+    const select = el("select");
+    select.setAttribute("aria-label", label);
+    for (const option of options) {
+      const opt = el("option", "", option.label);
+      opt.value = option.id;
+      select.append(opt);
+    }
+    select.value = value;
+    select.addEventListener("change", () => onChange(select.value));
+    return window.createSelect ? window.createSelect(select) : select;
+  }
+
+  async function manage(id) {
+    const tab = app()?.findAnyTab(id);
+    if (!tab) return;
+    let perms;
+    try {
+      perms = await list(id);
+    } catch (err) {
+      app()?.showNotice?.(err.status === 404 ? "Restart Scribe to manage page permissions" : err.message);
+      return;
+    }
+    const dlg = el("dialog", "confirm permissions");
+    const form = el("form");
+    form.method = "dialog";
+    const head = el("h2", "", "Permissions");
+    const sub = el("p", "permissions-sub", `What “${tab.title}” may do. Kept on this PC, not exported; an agent changing the page's code resets the risky ones.`);
+    const rows = el("div", "permissions-rows");
+    const actions = el("div", "confirm-actions");
+    const done = el("button", "", "Done");
+    done.type = "submit";
+    done.value = "done";
+    actions.append(done);
+    form.append(head, sub, rows, actions);
+    dlg.append(form);
+
+    const save = async (body) => {
+      try {
+        perms = (await request("PUT", id, "", body)).permissions || perms;
+      } catch (err) {
+        app()?.showNotice?.(err.message);
+      }
+      render();
+    };
+
+    const render = () => {
+      rows.replaceChildren();
+      for (const p of perms) {
+        const row = el("div", "permission-row");
+        const text = el("div", "permission-text");
+        text.append(el("div", "permission-label", p.label), el("div", "permission-detail", p.detail));
+        const values = p.perFolder ? VALUES.filter((v) => v.id !== "allow") : VALUES;
+        const value = p.perFolder && p.value === "allow" ? "ask" : p.value;
+        row.append(text, selectOf(values, value, p.label, (next) => save({ perm: p.id, value: next })));
+        rows.append(row);
+        if (!p.perFolder) continue;
+        const folders = el("div", "permission-folders");
+        if (!p.folders?.length) {
+          folders.append(el("div", "permission-empty", "No folders approved yet. The page asks when it needs one."));
+        }
+        for (const folder of p.folders || []) {
+          const line = el("div", "permission-folder");
+          const others = () => (p.folders || []).filter((f) => f !== folder);
+          const remove = el("button", "permission-remove", "Remove");
+          remove.type = "button";
+          remove.addEventListener("click", () => save({ perm: p.id, value: value, folders: others() }));
+          line.append(
+            el("span", "permission-path", folder.path),
+            selectOf(APPROVALS, folder.approval, `Approval in ${folder.path}`, (approval) =>
+              save({ perm: p.id, value: value, folders: (p.folders || []).map((f) => (f === folder ? { ...f, approval } : f)) })
+            ),
+            remove
+          );
+          folders.append(line);
+        }
+        rows.append(folders);
+      }
+    };
+
+    render();
+    document.body.append(dlg);
+    dlg.addEventListener("close", () => dlg.remove(), { once: true });
+    dlg.showModal();
+    done.focus();
+  }
+
+  window.scribePermissions = { ensure, query, manage };
+})();

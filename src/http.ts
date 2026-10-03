@@ -12,6 +12,7 @@ import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
+import { checkPermission, isPermissionValue, permissionViews } from "./pagePermissions.js";
 import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
@@ -198,6 +199,9 @@ export async function startHttp(): Promise<http.Server> {
         folder: optionalString(req.body?.folder),
         viewer: viewerOf(req),
       });
+      if (!created) {
+        agentRewrote(req, tab.id);
+      }
       res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(tab) });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
@@ -213,6 +217,9 @@ export async function startHttp(): Promise<http.Server> {
         activate: req.body?.activate,
         viewer: viewerOf(req),
       });
+      if (optionalString(req.body?.html) !== undefined) {
+        agentRewrote(req, tab.id);
+      }
       res.json({ titleKept, tab: libraryMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
@@ -271,6 +278,7 @@ export async function startHttp(): Promise<http.Server> {
         expectedRevision,
         viewer: viewerOf(req),
       });
+      agentRewrote(req, tab.id);
       res.json({ applied, closed, titleKept, tab: libraryMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
@@ -731,6 +739,53 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  // Page permissions are the user's: agents can neither read nor change them, and tab pages
+  // can't reach these routes (contentOriginGate). The board UI asks and checks for the page.
+  app.get("/api/tabs/:id/permissions", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the Scribe UI can read page permissions" });
+      return;
+    }
+    try {
+      res.json({ permissions: permissionViews(store.pagePermissions(req.params.id)) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/tabs/:id/permissions/check", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the Scribe UI can check page permissions" });
+      return;
+    }
+    try {
+      const grants = store.pagePermissions(req.params.id);
+      const need = { perm: String(req.body?.perm ?? ""), folder: optionalString(req.body?.folder), approval: optionalString(req.body?.approval) };
+      res.json({ result: checkPermission(grants, need) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/tabs/:id/permissions", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the Scribe UI can change page permissions" });
+      return;
+    }
+    const value = req.body?.value;
+    if (!isPermissionValue(value)) {
+      res.status(400).json({ error: "value must be allow, deny, or ask" });
+      return;
+    }
+    try {
+      const grants = store.setPagePermission(req.params.id, String(req.body?.perm ?? ""), value, req.body?.folders);
+      res.json({ permissions: permissionViews(grants) });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.get("/api/templates", (req, res) => {
     res.json({ templates: store.listTemplates(viewerOf(req)), builtins: store.listBuiltinTemplates() });
   });
@@ -780,6 +835,9 @@ export async function startHttp(): Promise<http.Server> {
         guide: typeof req.body?.guide === "string" ? req.body.guide : undefined,
         syncedWithBuiltin: req.body?.syncedWithBuiltin === true,
       });
+      if (!created && viewerOf(req) === "agent") {
+        store.resetTemplatePermissions(template.id);
+      }
       res.status(created ? 201 : 200).json({
         created,
         template: {
@@ -1411,6 +1469,13 @@ function parseImportDestination(value: unknown): ImportDestination {
 
 function instanceCount(template: Template, viewer: Viewer): number {
   return store.listTemplates(viewer).find((item) => item.id === template.id)?.instanceCount ?? 0;
+}
+
+/** A page's risky permissions were granted to the code the user saw; an agent rewriting it resets them. */
+function agentRewrote(req: express.Request, tabId: string): void {
+  if (viewerOf(req) === "agent") {
+    store.resetRiskyPermissions(tabId);
+  }
 }
 
 function viewerOf(req: express.Request): Viewer {

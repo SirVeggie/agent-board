@@ -1197,6 +1197,37 @@ test("local state is kept per viewer and goes with the page", () => {
   store.closeDb();
 });
 
+test("page permissions are kept per page, reset by an agent rewrite, and not exported", () => {
+  const store = loaded();
+  const { tab } = store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  const folder = path.join(dir, "work");
+  assert.equal(store.pagePermissions("page").size, 0);
+  store.setPagePermission("page", "agent.unattended", "allow");
+  store.setPagePermission("page", "agent.chat", "deny");
+  // A per-folder permission has no blanket allow: it is stored as ask, with its folders.
+  store.setPagePermission("page", "agent.workspace", "allow", [{ path: folder, approval: "edits" }, { path: "relative", approval: "full" }]);
+  const grants = store.pagePermissions("scribe:page");
+  assert.equal(grants.get("agent.unattended")?.value, "allow");
+  assert.deepEqual(grants.get("agent.workspace")?.folders, [{ path: folder, approval: "edits" }]);
+  assert.equal(grants.get("agent.workspace")?.value, "ask");
+  assert.throws(() => store.setPagePermission("page", "agent.nope", "allow"), /unknown permission/);
+
+  // Back at the default with no folders: the row goes.
+  store.setPagePermission("page", "agent.chat", "allow");
+  assert.equal(store.pagePermissions("page").has("agent.chat"), false);
+
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.pagePermissions("page").get("agent.unattended")?.value, "allow");
+  assert.equal(JSON.stringify(again.exportFile()).includes("agent.unattended"), false);
+
+  assert.equal(again.resetRiskyPermissions("page"), true);
+  assert.equal(again.pagePermissions("page").size, 0);
+  assert.equal(again.resetRiskyPermissions("page"), false);
+  again.deletePermanent(tab.id);
+  again.closeDb();
+});
+
 test("page keys get the scribe: prefix, and lookups take either form", () => {
   const store = loaded();
   const { tab } = store.upsert({ key: "Sprint Notes", title: "Sprint", html: "<p>a</p>" });

@@ -4151,6 +4151,9 @@
   /* ---------- board.agent: pages that start and continue their own threads ---------- */
 
   const PAGE_PROMPT_MAX = 20000;
+  const PAGE_MODES = new Set(["board", "ask", "code", "plan"]);
+  /** Modes with file and shell access: the page needs the folder approved (agent.workspace). */
+  const FOLDER_MODES = new Set(["code", "plan"]);
   /** board.agent.wait calls by thread id. */
   const pageWaiters = new Map();
   /** When a page last sent to each thread: until the thread has been active since, it is not done with it. */
@@ -4161,7 +4164,23 @@
   }
 
   function pageBrief(t) {
-    return { id: t.id, title: t.title, status: t.status, queued: t.queued || 0, activityAt: t.activityAt };
+    return {
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      queued: t.queued || 0,
+      activityAt: t.activityAt,
+      mode: t.mode,
+      provider: t.provider,
+      model: t.model,
+      effort: t.effort,
+      ...(FOLDER_MODES.has(t.mode) ? { cwd: pageFolder(t), approval: t.approval } : {}),
+    };
+  }
+
+  /** The folder a page's Code or Plan thread was approved for: the picked folder, not its worktree. */
+  function pageFolder(t) {
+    return t.worktree?.home || t.cwd || null;
   }
 
   /** The text of the latest turn's replies. */
@@ -4224,11 +4243,94 @@
   }
 
   /**
-   * One board.agent call from `tab` (app.js found it from the asking frame and checked the gesture).
-   * Pages only see and drive threads that belong to them, and only start Board or Ask threads: no
-   * file or shell access unless you gave the thread that yourself.
+   * Whether `tab` may start, send, or stop now: agent.chat always, and agent.unattended when the
+   * click or key press did not reach the board. scribePermissions asks the user when undecided.
    */
-  async function pageRequest(tab, data) {
+  async function pageMayWrite(tab, activated) {
+    const perms = window.scribePermissions;
+    if (!perms) return activated ? { ok: true } : { ok: false, error: "no_gesture" };
+    const chat = await perms.ensure(tab, { perm: "agent.chat" });
+    if (!chat.ok || activated) return chat;
+    return perms.ensure(tab, { perm: "agent.unattended" });
+  }
+
+  /** Code and Plan threads need their folder approved for the page, at this approval or a looser one. */
+  function pageMayUseFolder(tab, folder, approval) {
+    const perms = window.scribePermissions;
+    if (!perms) return { ok: false, error: "denied", permission: "agent.workspace" };
+    return perms.ensure(tab, { perm: "agent.workspace", folder, approval });
+  }
+
+  /** What scribe.agent.start can pick from. */
+  async function pageOptions() {
+    const p = prefs();
+    const available = S.config.providers.filter((x) => x.available);
+    await Promise.all(
+      available
+        .filter((x) => !modelsOf(x.id).length)
+        .map((x) =>
+          api("GET", `/models?provider=${x.id}`)
+            .then((data) => {
+              if (data.models?.length) S.config.models[x.id] = data.models;
+            })
+            .catch(() => undefined)
+        )
+    );
+    const provider = providerAvailable(p.provider) ? p.provider : available[0]?.id || null;
+    return {
+      ok: true,
+      providers: S.config.providers.map((x) => ({ id: x.id, label: x.label, available: Boolean(x.available) })),
+      models: Object.fromEntries(
+        available.map((x) => [x.id, modelsOf(x.id).map((m) => ({ id: m.id, label: m.label, efforts: m.efforts || [], defaultEffort: m.defaultEffort ?? null }))])
+      ),
+      modes: MODES.map((m) => ({ id: m.id, label: m.label, detail: m.detail, needsFolder: FOLDER_MODES.has(m.id) })),
+      approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail })),
+      defaults: provider
+        ? { provider, model: p.models?.[provider] || "default", effort: p.efforts?.[provider] ?? null, approval: approvalFor(provider, p), web: p.web !== false }
+        : null,
+    };
+  }
+
+  /** The new thread's settings from scribe.agent.start options, or { error }. Unset ones follow the user's defaults. */
+  function pageThreadSettings(data) {
+    const p = prefs();
+    let provider = providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id;
+    if (data.provider) {
+      if (!providerAvailable(data.provider)) return { error: "unknown_provider" };
+      provider = data.provider;
+    }
+    if (!provider) return { error: "no_provider" };
+    const mode = data.mode || "board";
+    if (!PAGE_MODES.has(mode)) return { error: "unknown_mode" };
+    // The user's model settings only carry over when the page keeps their provider and model.
+    const own = Boolean((data.model && data.model !== "default") || data.provider);
+    if (data.model && data.model !== "default" && modelsOf(provider).length && !modelInfo(provider, data.model)) return { error: "unknown_model" };
+    const model = data.model || (own ? "default" : p.models?.[provider] || "default");
+    const efforts = modelInfo(provider, model)?.efforts || [];
+    if (data.effort && efforts.length && !efforts.some((e) => e.id === data.effort)) return { error: "unknown_effort" };
+    if (data.approval && !APPROVALS.some((a) => a.id === data.approval)) return { error: "unknown_approval" };
+    const folderMode = FOLDER_MODES.has(mode);
+    const cwd = folderMode && typeof data.cwd === "string" ? data.cwd.trim() : "";
+    if (folderMode && !cwd) return { error: "needs_folder" };
+    return {
+      provider,
+      model,
+      effort: data.effort || (own ? null : p.efforts?.[provider] ?? null),
+      modelParams: own ? {} : p.modelParams?.[provider] || {},
+      mode,
+      approval: data.approval || approvalFor(provider, p),
+      web: typeof data.web === "boolean" ? data.web : p.web !== false,
+      cwd: cwd || null,
+      useWorktree: folderMode && data.worktree === true,
+    };
+  }
+
+  /**
+   * One scribe.agent call from `tab` (app.js found it from the asking frame, and whether the click
+   * or key press reached the board). Pages only see and drive threads that belong to them; the
+   * permissions the user gave the page decide what else they may do.
+   */
+  async function pageRequest(tab, data, { activated = true } = {}) {
     const prompt = typeof data.prompt === "string" ? data.prompt.trim() : "";
     const thread = data.threadId ? S.threads.get(data.threadId) : null;
     switch (data.op) {
@@ -4253,22 +4355,27 @@
         const after = S.threads.get(now.id);
         return after ? { ...result, thread: pageBrief(after) } : { ok: false, error: "not_found" };
       }
+      case "options":
+        return pageOptions();
+      case "pickFolder": {
+        if (!activated) return { ok: false, error: "no_gesture" };
+        const picked = await pickWorkspace(typeof data.initial === "string" ? data.initial : "");
+        return picked ? { ok: true, path: picked } : { ok: false, error: "cancelled" };
+      }
       case "start": {
         if (!prompt) return { ok: false, error: "empty_prompt" };
         if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
-        const p = prefs();
-        const provider = providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id;
-        if (!provider) return { ok: false, error: "no_provider" };
+        const settings = pageThreadSettings(data);
+        if (settings.error) return { ok: false, error: settings.error };
+        const may = await pageMayWrite(tab, activated);
+        if (!may.ok) return may;
+        if (settings.cwd) {
+          const folder = await pageMayUseFolder(tab, settings.cwd, settings.approval);
+          if (!folder.ok) return folder;
+        }
         const title = typeof data.title === "string" && data.title.trim() ? data.title.trim().slice(0, 120) : undefined;
         const { thread: created } = await api("POST", "/threads", {
-          provider,
-          model: p.models?.[provider] || "default",
-          effort: p.efforts?.[provider] ?? null,
-          modelParams: p.modelParams?.[provider] || {},
-          mode: data.mode === "ask" ? "ask" : "board",
-          approval: approvalFor(provider),
-          web: p.web !== false,
-          cwd: null,
+          ...settings,
           scope: { kind: "page", ref: tab.id },
           ...(title ? { title } : {}),
         });
@@ -4283,11 +4390,24 @@
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
         if (!prompt) return { ok: false, error: "empty_prompt" };
         if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
+        const may = await pageMayWrite(tab, activated);
+        if (!may.ok) return may;
+        if (FOLDER_MODES.has(thread.mode)) {
+          const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
+          if (!folder.ok) return folder;
+        }
         await ensureDetail(thread.id);
         pageSentAt.set(thread.id, Date.now());
         const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page" });
         showPageThread(thread.id, data.show);
         return { ok: true, queued: Boolean(sent.queued) };
+      }
+      case "stop": {
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        const may = await pageMayWrite(tab, activated);
+        if (!may.ok) return may;
+        await api("POST", `/threads/${encodeURIComponent(thread.id)}/cancel`);
+        return { ok: true };
       }
       default:
         return { ok: false, error: "unknown_op" };

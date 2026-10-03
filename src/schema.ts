@@ -101,3 +101,15 @@ CREATE TABLE IF NOT EXISTS page_local (
   PRIMARY KEY (tab_id, viewer)
 );
 `;
+
+/** Page permissions the user granted (tab menu → Permissions…). Kept on this PC: never exported. */
+export const PAGE_PERMISSIONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS page_permissions (
+  tab_id TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+  perm TEXT NOT NULL,
+  value TEXT NOT NULL,
+  data TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (tab_id, perm)
+);
+`;
