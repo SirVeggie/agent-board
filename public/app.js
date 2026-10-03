@@ -209,7 +209,7 @@
     downloadAll: () => downloadExport(),
     showNotice,
     choose,
-    confirm: (message) => confirmDelete(message),
+    confirm: (message, confirmLabel) => confirmDelete(message, confirmLabel),
     openTrash,
     setPaneOpen: (open) => {
       if (state.sidebarTab !== "library" || state.trashOpen) {
@@ -255,7 +255,7 @@
   });
   const trash = window.createTrash({
     showNotice,
-    confirm: (message) => confirmDelete(message),
+    confirm: (message, confirmLabel) => confirmDelete(message, confirmLabel),
     openMenu: library.openMenu,
     closeMenu: library.closeMenu,
     icons: { file: FILE_SVG, ...library.icons },
@@ -2191,8 +2191,10 @@
     reportViewer();
   }
 
-  async function confirmDelete(message) {
+  async function confirmDelete(message, confirmLabel = "Delete") {
     confirmMessage.textContent = message;
+    const okBtn = confirmDlg.querySelector('button[value="ok"]');
+    if (okBtn) okBtn.textContent = confirmLabel || "Delete";
     confirmDlg.returnValue = "cancel";
     confirmDlg.showModal();
     const cancelBtn = confirmDlg.querySelector('button[value="cancel"]');

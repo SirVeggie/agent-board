@@ -704,7 +704,7 @@
             if (turn?.beforeTree && !turn.reverted) {
               actions.append(
                 button("Revert turn", "ag-btn small danger", async () => {
-                  if (!confirm("Undo this turn's file changes in the working copy?")) return;
+                  if (!(await app().confirm("Undo this turn's file changes in the working copy?", "Revert"))) return;
                   try {
                     const res = await api("POST", `/threads/${encodeURIComponent(source.threadId)}/turns/${encodeURIComponent(source.turnId)}/revert`);
                     if (res.ok) {
@@ -1113,7 +1113,7 @@
             ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
             : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
           : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
-      if (!confirm(`${question}\n\nThe thread then continues in the main checkout, in a fresh agent session.`)) return;
+      if (!(await app().confirm(`${question}\n\nThe thread then continues in the main checkout, in a fresh agent session.`, how === "merge" ? "Merge" : "Leave"))) return;
       try {
         const res = await api("POST", `/threads/${encodeURIComponent(t.id)}/worktree`, { action: how });
         notice(res.message);
@@ -1698,7 +1698,7 @@
           `ag-page-chip${turn.page.reverted ? " reverted" : ""}`,
           async () => {
             if (turn.page.reverted) return;
-            if (!confirm(`Put “${turn.page.title}” back to how it was before this turn?`)) return;
+            if (!(await app().confirm(`Put “${turn.page.title}” back to how it was before this turn?`, "Revert"))) return;
             const res = await api("POST", `/threads/${encodeURIComponent(turn.threadId)}/turns/${encodeURIComponent(turn.id)}/revert-page`).catch((err) => ({ ok: false, error: err.message }));
             if (!res.ok) notice(res.error || "Could not revert the page");
           },
