@@ -191,6 +191,15 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // Back to just before a message of the user's; the reply carries the message for editing or sending again.
+  router.post(
+    "/threads/:id/rewind",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return host.rewind(req.params.id, String(body.itemId ?? ""), { keepChanges: body.keepChanges === true });
+    })
+  );
+
   // A subagent or background command, by the id of the tool item that started it.
   router.post(
     "/threads/:id/tasks/:itemId/stop",

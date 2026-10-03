@@ -39,6 +39,12 @@ export type Thread = {
   worktree?: ThreadWorktree | null;
   /** Provider session id used to resume. */
   nativeId: string | null;
+  /**
+   * Set by a rewind until the next turn ends. at: the provider transcript entry the next turn
+   * continues from (Claude forks its session there); null starts a fresh session. recap: the kept
+   * conversation, sent ahead of the next message when the provider cannot fork.
+   */
+  rewind?: { at: string | null; recap?: string };
   pinned: boolean;
   archived: boolean;
   createdAt: number;
@@ -136,6 +142,8 @@ export type Turn = {
   usage?: Usage;
   error?: string;
   reverted?: boolean;
+  /** This turn's last entry in the provider's own transcript (Claude's chain uuid): where a rewind to after this turn forks. */
+  nativeEnd?: string;
   /** The board page this turn could edit, by HTML revision before and after. The old HTML is kept as a checkpoint. */
   page?: { id: string; title: string; before: number; after?: number; reverted?: boolean };
 };
@@ -273,7 +281,8 @@ export type AgentEvent =
   | { type: "agent_item_deleted"; threadId: string; id: string }
   | { type: "agent_limits"; limits: Partial<Record<ProviderId, PlanLimits>> }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
-  | { type: "agent_turn"; turn: Turn };
+  | { type: "agent_turn"; turn: Turn }
+  | { type: "agent_turn_deleted"; threadId: string; id: string };
 
 export type ModelOption = {
   id: string;

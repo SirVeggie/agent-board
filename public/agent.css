@@ -3771,3 +3771,47 @@ button.ag-menu-item:hover .ag-star {
   color: rgb(var(--pin-rgb));
   opacity: 1;
 }
+
+/* ---------- retry / edit on your messages ---------- */
+
+.ag-transcript .ag-user {
+  position: relative;
+}
+
+.ag-user-actions {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--border);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.ag-user:hover > .ag-user-actions,
+.ag-user-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ag-user-actions button.ag-icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.ag-confirm .ag-modal-panel {
+  width: min(440px, calc(100vw - 40px));
+}
+
+.ag-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}

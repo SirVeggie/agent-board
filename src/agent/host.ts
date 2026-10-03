@@ -10,7 +10,7 @@ import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "./prompt.js";
-import { filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
+import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
 import type {
@@ -57,6 +57,8 @@ import type {
 import { isPlainRecord } from "./types.js";
 
 const FLUSH_MS = 700;
+/** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
+const MAX_RECAP = 24_000;
 const DELTA_MS = 50;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_TOOL_DIFF = 200_000;
@@ -152,7 +154,10 @@ type QueuedMessage = {
 function promptText(msg: QueuedMessage, thread: Thread): string {
   const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
-  return origin + contextBlock(msg.context) + files + msg.text;
+  const recap = thread.rewind?.recap
+    ? `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
+    : "";
+  return recap + origin + contextBlock(msg.context) + files + msg.text;
 }
 
 /**
@@ -1150,6 +1155,11 @@ export class AgentHost {
     }
     turn.status = result.status;
     turn.endedAt = Date.now();
+    const rewound = this.threads.get(threadId);
+    if (rewound?.rewind && result.status !== "cancelled") {
+      delete rewound.rewind;
+      this.db.saveThread(rewound);
+    }
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
     this.saveTurn(turn);
@@ -1288,6 +1298,9 @@ export class AgentHost {
       },
       breakBlock() {
         host.closeBlocks(run);
+      },
+      checkpoint(id) {
+        run.turn.nativeEnd = id;
       },
       toolStart(tool: ToolStart) {
         if (run.tools.has(tool.toolId)) return;
@@ -1655,6 +1668,96 @@ export class AgentHost {
     this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: `Reverted “${turn.page.title}” to how it was before turn ${turn.seq}.` });
     this.flushNow();
     return { ok: true };
+  }
+
+  /**
+   * Take the thread back to just before a message of the user's: later turns leave the transcript,
+   * their file and page changes are undone (unless keepChanges), and the provider continues from
+   * the turn before it. Returns the message, so the chat can edit it or send it again.
+   */
+  async rewind(threadId: string, itemId: string, opts: { keepChanges?: boolean } = {}): Promise<{ text: string; images: ChatImage[]; files: ChatFile[]; context: ContextChip[] }> {
+    const thread = this.requireThread(threadId);
+    if (this.runs.has(threadId) || this.queues.get(threadId)?.length) throw new Error("Stop the running turn first.");
+    if (this.backgroundTasks(threadId)) throw new Error("Background tasks are still running in this thread. Stop them first.");
+    const items = this.loadItems(threadId);
+    const user = items.find((it) => it.id === itemId);
+    if (!user || user.kind !== "user") throw new Error("Message not found");
+    const turns = this.loadTurns(threadId);
+    const from = turns.find((t) => t.id === user.turnId);
+    if (!from) throw new Error("This message has not run yet.");
+    const dropped = turns.filter((t) => t.seq >= from.seq);
+    const kept = turns.filter((t) => t.seq < from.seq);
+
+    if (!opts.keepChanges) {
+      // Newest first, so each revert applies on top of the state the next one left.
+      for (const turn of [...dropped].reverse()) {
+        if (turn.reverted || !turn.files?.length || !turn.beforeTree) continue;
+        const result = await this.revertTurn(threadId, turn.id);
+        if (!result.ok) throw new Error(`Could not undo the file changes of turn ${turn.seq}: ${result.error ?? "unknown error"}. Turns after it were undone; nothing was removed from the chat.`);
+      }
+      const page = dropped.find((t) => t.page?.after && !t.page.reverted);
+      if (page) {
+        const result = this.revertPage(threadId, page.id);
+        if (!result.ok) throw new Error(`Could not restore the page: ${result.error ?? "unknown error"}`);
+      }
+    }
+
+    // What the message carried, read back before its files go.
+    const savedFiles = (refs: Array<{ id?: string; name: string; mimeType: string }> | undefined): ChatFile[] =>
+      (refs ?? []).flatMap((ref) => {
+        const full = ref.id ? filePath(threadId, ref.id) : null;
+        if (!full) return [];
+        try {
+          return [{ name: ref.name, mimeType: ref.mimeType, data: fs.readFileSync(full).toString("base64") }];
+        } catch {
+          return [];
+        }
+      });
+    const message = { text: user.text, images: savedFiles(user.images), files: savedFiles(user.files), context: user.context ?? [] };
+
+    // Where the provider continues from: its transcript at the end of the last kept turn.
+    const last = kept.at(-1);
+    const forks = this.providers[thread.provider].forks === true;
+    const at = forks && last?.nativeEnd ? last.nativeEnd : null;
+    const recap = kept.length && !at ? this.recap(items, kept) : "";
+    this.sessions.get(threadId)?.dispose();
+    this.sessions.delete(threadId);
+    thread.rewind = { at, ...(recap ? { recap } : {}) };
+    if (!at) thread.nativeId = null;
+
+    const droppedIds = new Set(dropped.map((t) => t.id));
+    const gone = items.filter((it) => it.turnId && droppedIds.has(it.turnId));
+    for (const item of gone) {
+      if (item.kind === "user") removeFiles(threadId, [...(item.images ?? []), ...(item.files ?? [])].flatMap((f) => (f.id ? [f.id] : [])));
+      this.removeItem(item);
+    }
+    for (const turn of dropped) {
+      turns.splice(turns.indexOf(turn), 1);
+      this.db.deleteTurn(turn.id);
+      this.db.deleteSetting(`checkpoint:${turn.id}`);
+      this.emit({ type: "agent_turn_deleted", threadId, id: turn.id });
+    }
+    thread.activityAt = Date.now();
+    this.db.saveThread(thread);
+    this.flushNow();
+    this.emitThread(threadId);
+    return message;
+  }
+
+  /** The kept conversation in short, for a provider that starts over after a rewind: each message and the reply to it. */
+  private recap(items: Item[], kept: Turn[]): string {
+    const parts: string[] = [];
+    for (const turn of kept) {
+      const ofTurn = items.filter((it) => it.turnId === turn.id && !("parentToolId" in it && it.parentToolId));
+      const asked = ofTurn.filter((it) => it.kind === "user").map((it) => (it.kind === "user" ? it.text : "")).join("\n\n");
+      const texts = ofTurn.filter((it) => it.kind === "text");
+      const reply = texts.at(-1)?.kind === "text" ? (texts.at(-1) as { text: string }).text : "";
+      if (asked) parts.push(`User: ${asked}`);
+      if (reply) parts.push(`You: ${reply}`);
+    }
+    const text = parts.join("\n\n");
+    // The latest part matters most; keep the prompt a sensible size.
+    return text.length > MAX_RECAP ? `…${text.slice(-MAX_RECAP)}` : text;
   }
 
   async revertTurn(threadId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {

@@ -319,6 +319,15 @@
         dock.onDelta(item);
         return;
       }
+      case "agent_turn_deleted": {
+        const detail = S.details.get(msg.threadId);
+        if (!detail) return;
+        detail.turns.delete(msg.id);
+        for (const view of views()) {
+          if (view.threadId === msg.threadId) view.onTurn({ id: msg.id, threadId: msg.threadId, status: "deleted" });
+        }
+        return;
+      }
       case "agent_turn": {
         const detail = S.details.get(msg.turn.threadId);
         if (!detail) return;
@@ -592,6 +601,46 @@
     return { root, panel, close };
   }
   const modalStack = [];
+
+  /* ---------- rewind confirmation ---------- */
+
+  /** Resolves { keepChanges } to go ahead, or null. Only asked when the rewind would drop more than the one turn. */
+  function confirmRewind({ turns, files, page, resend }) {
+    return new Promise((resolve) => {
+      const { panel, close } = modal("ag-confirm");
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        close();
+        resolve(value);
+      };
+      modalStack[modalStack.length - 1] = () => finish(null);
+      const later = turns - 1;
+      panel.append(
+        el("h2", "ag-modal-title", resend ? "Retry this message?" : "Edit this message?"),
+        el("p", "ag-modal-hint", `The chat goes back to just before it${later ? `: this turn and the ${later} after it are removed` : ": its reply is removed"}.`)
+      );
+      let undo = null;
+      if (files || page) {
+        const what = [files ? `${files} file${files === 1 ? "" : "s"}` : "", page ? "the page" : ""].filter(Boolean).join(" and ");
+        const label = el("label", "ag-check");
+        undo = el("input");
+        undo.type = "checkbox";
+        undo.checked = true;
+        label.append(undo, el("span", null, `Also undo their changes to ${what}`));
+        panel.append(label);
+      }
+      const actions = el("div", "ag-modal-actions");
+      actions.append(
+        el("span", "ag-grow"),
+        button("Cancel", "ag-btn small", () => finish(null)),
+        button(resend ? "Retry" : "Edit", "ag-btn small primary", () => finish({ keepChanges: undo ? !undo.checked : false }))
+      );
+      panel.append(actions);
+      actions.lastElementChild.focus();
+    });
+  }
 
   /* ---------- workspace picker ---------- */
 
@@ -1405,6 +1454,14 @@
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
+      if (item.turnId && !queued && !item.dropped && !item.steer) {
+        const actions = el("div", "ag-user-actions");
+        actions.append(
+          button(icon("revert"), "ag-icon-btn", () => this.rewindTo(item, true), "Retry: go back to before this message and send it again"),
+          button(icon("edit"), "ag-icon-btn", () => this.rewindTo(item, false), "Edit: go back to before this message and change it")
+        );
+        row.append(actions);
+      }
       if (item.steer === "waiting") {
         row.classList.add("steering");
         row.append(el("div", "ag-queued", "Steering — waiting for a safe stop · Enter again to send it now"));
@@ -1463,6 +1520,49 @@
       if (this.expanded.has(key)) this.expanded.delete(key);
       else this.expanded.add(key);
       node.classList.toggle(cls, this.expanded.has(key));
+    }
+
+    /**
+     * Back to just before a message: later turns leave the chat and their changes are undone. Then
+     * the message is sent again (retry) or put back in the composer (edit).
+     */
+    async rewindTo(item, resend) {
+      const t = this.thread();
+      if (!t) return;
+      if (t.status !== "idle" || t.queued) return notice("Stop the running turn first");
+      const detail = S.details.get(t.id);
+      const from = detail?.turns.get(item.turnId);
+      if (!from) return;
+      const later = [...detail.turns.values()].filter((x) => x.seq >= from.seq);
+      const files = new Set(later.filter((x) => !x.reverted).flatMap((x) => (x.files || []).map((f) => f.path)));
+      const page = later.some((x) => x.page?.after && !x.page.reverted);
+      let keepChanges = false;
+      if (later.length > 1 || files.size || page) {
+        const choice = await confirmRewind({ turns: later.length, files: files.size, page, resend });
+        if (!choice) return;
+        keepChanges = choice.keepChanges;
+      }
+      let msg;
+      try {
+        msg = await api("POST", `/threads/${encodeURIComponent(t.id)}/rewind`, { itemId: item.id, keepChanges });
+      } catch (err) {
+        notice(err.message);
+        return;
+      }
+      if (resend) {
+        this.stick = true;
+        await api("POST", `/threads/${encodeURIComponent(t.id)}/messages`, { text: msg.text, images: msg.images, files: msg.files, context: msg.context }).catch((err) => notice(err.message));
+        return;
+      }
+      this.input.value = msg.text || "";
+      this.clearAttachments();
+      this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
+      const tab = activeTab();
+      if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
+      this.renderContext();
+      this.autosize();
+      this.focus();
+      this.input.setSelectionRange(this.input.value.length, this.input.value.length);
     }
 
     renderReasoning(it) {

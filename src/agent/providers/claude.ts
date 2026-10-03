@@ -78,6 +78,7 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
 export class ClaudeProvider implements AgentProvider {
   readonly id = "claude" as const;
   readonly label = "Claude";
+  readonly forks = true;
   private modelCache: { at: number; models: ModelOption[] } | null = null;
   private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<ClaudeSession>();
@@ -449,6 +450,8 @@ class ClaudeSession implements ProviderSession {
         this.stderrTail = (this.stderrTail + data).slice(-4000);
       },
       ...(this.sessionId ? { resume: this.sessionId } : {}),
+      // After a rewind: a new session that holds the conversation only up to the kept turn.
+      ...(this.sessionId && thread.rewind?.at ? { resumeSessionAt: thread.rewind.at, forkSession: true } : {}),
     };
     if (board) {
       options.tools = [...webTools, "Skill", "TodoWrite"];
@@ -915,6 +918,7 @@ class ClaudeSession implements ProviderSession {
     if (!sink) return;
     const parent = typeof m.parent_tool_use_id === "string" ? m.parent_tool_use_id : null;
     if (parent && !this.turnTools.has(parent)) return;
+    if (!parent && (m.type === "assistant" || m.type === "user") && typeof m.uuid === "string") sink.checkpoint?.(m.uuid);
     switch (m.type) {
       case "stream_event":
         this.onStream(m as never);

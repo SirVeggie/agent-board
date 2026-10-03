@@ -91,6 +91,8 @@ export type RunSink = {
   modeChanged?(mode: Thread["mode"]): void;
   /** A message handed to `steer` reached the model inside this turn. */
   steered?(steerId: string): void;
+  /** The provider's latest transcript entry in this turn (Claude's chain uuid), where a later rewind can fork. */
+  checkpoint?(id: string): void;
 };
 
 export type TurnResult = {
@@ -161,6 +163,8 @@ export type SessionContext = {
 export interface AgentProvider {
   readonly id: ProviderId;
   readonly label: string;
+  /** Can continue a conversation from an earlier point (Thread.rewind.at); others get a fresh session and a recap. */
+  readonly forks?: boolean;
   status(): Promise<ProviderStatus>;
   models(refresh?: boolean): Promise<ModelOption[]>;
   createSession(thread: Thread, ctx: SessionContext): ProviderSession;
