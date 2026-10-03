@@ -83,7 +83,7 @@
     dockExpanded: false,
     /** Thread the dock uses per page id, when the user picked one. */
     dockPicks: new Map(),
-    filter: ["here", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
+    filter: ["here", "workspaces", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
     search: "",
     lastActiveId: null,
     ready: false,
@@ -450,12 +450,17 @@
     return out.slice(0, 3);
   }
 
+  /** Disk folder a thread belongs to: workspace scope, else its working directory. */
+  function workspaceDir(t) {
+    return t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : homeDir(t);
+  }
+
   /** Unique disk folders that existing (non-archived) threads are attached to. */
   function threadWorkspaces() {
     const byKey = new Map();
     for (const t of S.threads.values()) {
       if (t.archived) continue;
-      const dir = t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : homeDir(t);
+      const dir = workspaceDir(t);
       if (!dir) continue;
       const key = dirKey(dir);
       const cur = byKey.get(key);
@@ -3011,12 +3016,20 @@
   }
 
   function groupKey(thread) {
+    if (S.filter === "workspaces") {
+      const dir = workspaceDir(thread);
+      return dir ? `ws:${dirKey(dir)}` : "ws";
+    }
     const s = thread.scope;
     if (s.kind === "global") return "global";
     return `${s.kind}:${s.ref}`;
   }
 
   function groupTitle(thread) {
+    if (S.filter === "workspaces") {
+      const dir = workspaceDir(thread);
+      return { icon: "box", text: dir ? R.basename(dir) || dir : "", kind: "Workspace" };
+    }
     const s = thread.scope;
     const label = scopeLabel(s);
     const kind = s.kind === "page" ? "Page" : s.kind === "folder" ? "Folder" : s.kind === "workspace" ? "Workspace" : "Global";
@@ -3065,6 +3078,7 @@
     const seg = el("div", "ag-seg small");
     for (const [id, label] of [
       ["here", "Here"],
+      ["workspaces", "Workspaces"],
       ["all", "All"],
       ["archived", "Archived"],
     ]) {
@@ -3086,10 +3100,21 @@
       const q = S.search.trim().toLowerCase();
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
-      if (q) threads = threads.filter((t) => `${t.title} ${groupTitle(t).text}`.toLowerCase().includes(q));
+      if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t));
+      if (q) threads = threads.filter((t) => `${t.title} ${groupTitle(t).text} ${workspaceDir(t) || ""}`.toLowerCase().includes(q));
       threads.sort((a, b) => threadRank(b) - threadRank(a));
       if (!threads.length) {
-        list.append(el("div", "ag-list-empty", S.filter === "here" ? "No threads for this page yet. Threads for its folder and global threads show here too." : "No threads"));
+        list.append(
+          el(
+            "div",
+            "ag-list-empty",
+            S.filter === "here"
+              ? "No threads for this page yet. Threads for its folder and global threads show here too."
+              : S.filter === "workspaces"
+                ? "No threads belonging to a workspace yet."
+                : "No threads"
+          )
+        );
         return;
       }
       const order = [];
@@ -3108,7 +3133,12 @@
         const first = groups.get(key)[0];
         const gt = groupTitle(first);
         const head = el("div", "ag-list-group");
-        head.append(icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", first.scope.kind === "global" ? "" : gt.text));
+        const name = gt.kind === "Global" ? "" : gt.text;
+        head.append(icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
+        if (S.filter === "workspaces") {
+          const dir = workspaceDir(first);
+          if (dir) head.title = dir;
+        }
         list.append(head);
         for (const t of groups.get(key)) list.append(threadRow(t, t.id === currentId, onPick));
       }

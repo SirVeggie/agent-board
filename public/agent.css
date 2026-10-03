@@ -2056,6 +2056,14 @@ button.ag-seg-btn {
   box-shadow: none;
 }
 
+.ag-seg.small button.ag-seg-btn {
+  padding: 0 4px;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 button.ag-seg-btn.on {
   color: var(--heading);
   background: var(--accent-soft);
