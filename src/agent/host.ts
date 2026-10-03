@@ -1737,8 +1737,18 @@ export class AgentHost {
 
   /** Files changed by one turn, or by the whole thread when turnId is omitted. */
   async changes(threadId: string, turnId?: string): Promise<{ repo: string | null; from?: string; to?: string; files: FileChange[] }> {
-    const turns = this.loadTurns(threadId).filter((turn) => !turnId || turn.id === turnId);
+    let turns = this.loadTurns(threadId).filter((turn) => !turnId || turn.id === turnId);
     if (!turns.length) return { repo: null, files: [] };
+    // The running turn has no after snapshot yet: take one now, so its changes so far show.
+    const running = this.runs.get(threadId)?.turn;
+    const live = running && turns.find((turn) => turn.id === running.id && turn.repo && turn.beforeTree && !turn.afterTree);
+    if (live) {
+      const afterTree = await snapshotTree(live.repo!);
+      if (afterTree) {
+        const files = await diffTrees(live.repo!, live.beforeTree!, afterTree).catch(() => []);
+        turns = turns.map((turn) => (turn === live ? { ...turn, afterTree, files } : turn));
+      }
+    }
     const withTrees = turns.filter((turn) => turn.repo && turn.beforeTree && turn.afterTree);
     if (withTrees.length && withTrees.every((turn) => turn.repo === withTrees[0].repo)) {
       const first = withTrees[0];
