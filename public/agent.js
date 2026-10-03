@@ -1123,7 +1123,7 @@
           label: "Delete thread",
           danger: true,
           run: async () => {
-            if (!confirm(deletePrompt(t))) return;
+            if (!(await app().confirm(deletePrompt(t)))) return;
             await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
           },
         },
@@ -2511,7 +2511,7 @@
           label: "Delete thread",
           danger: true,
           run: async () => {
-            if (!confirm(deletePrompt(t))) return;
+            if (!(await app().confirm(deletePrompt(t)))) return;
             await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
           },
         },
