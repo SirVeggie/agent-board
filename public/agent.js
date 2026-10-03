@@ -3927,7 +3927,7 @@
     ["Ctrl+Shift+L", "Full window"],
     ["Ctrl+↑ / Ctrl+↓", "From a chat into the full window and back; expand, collapse, or hide the floating chat"],
     ["Ctrl+J", "Threads"],
-    ["Ctrl+Shift+K", "New thread"],
+    ["Ctrl+Shift+K", "New thread with this chat's agent settings"],
     ["Ctrl+'", "Next starred model"],
     ["Ctrl+Alt+'", "Next reasoning level"],
     ["Ctrl+Shift+'", "Next mode"],
@@ -4700,19 +4700,37 @@
     }
   }
 
+  /** Provider, model, mode, approval, workspace — whatever the current chat is using. */
+  function inheritSettings(view) {
+    const s = view.settings();
+    return {
+      provider: s.provider,
+      model: s.model,
+      effort: s.effort ?? null,
+      modelParams: { ...(s.modelParams || {}) },
+      mode: s.mode,
+      approval: s.approval,
+      web: s.web !== false,
+      cwd: homeDir(s),
+      useWorktree: Boolean(s.useWorktree),
+    };
+  }
+
   function newThread() {
     const where = shortcutChat();
+    const view = where === "dock" ? dock.view : where === "full" ? full.view : sidebar.view;
     const scope = defaultScope();
+    const settings = inheritSettings(view);
     if (where === "dock") {
       if (scope.kind === "page") S.dockPicks.delete(scope.ref);
-      dock.view.startDraft(scope);
+      view.startDraft(scope, settings);
       dock.renderTitle();
     } else if (where === "full") {
-      full.view.startDraft(scope);
+      view.startDraft(scope, settings);
       full.renderList();
     } else {
       if (sidebar.listOpen) sidebar.toggleList();
-      sidebar.view.startDraft(scope);
+      view.startDraft(scope, settings);
     }
     notice("New thread");
   }
