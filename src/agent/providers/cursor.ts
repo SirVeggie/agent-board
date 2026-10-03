@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { log } from "../../log.js";
-import type { ModelOption, ProviderStatus, SlashCommand, Thread, ThreadMode, ToolKind, ToolStatus } from "../types.js";
+import type { ModelOption, ProviderStatus, SlashCommand, Thread, ThreadMode, ToolKind, ToolStatus, Usage } from "../types.js";
 import { isPlainRecord } from "../types.js";
 import { AcpConnection, RpcError } from "./acp.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
@@ -323,6 +323,19 @@ function outputText(raw: unknown): { output?: string; exitCode?: number } {
   }
 }
 
+function asNum(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
 function pathsFrom(update: Record<string, unknown>): string[] | undefined {
   const paths = new Set<string>();
   if (Array.isArray(update.locations)) {
@@ -355,6 +368,8 @@ class CursorSession implements ProviderSession {
   private steers = new Map<string, "pending" | "dropped">();
   /** Steered message the last prompt did not take in; the host adopts it as the next turn. */
   private carry: string | null = null;
+  /** Latest context usage, including updates that arrive with no turn running. */
+  private lastUsage: Usage | null = null;
 
   constructor(
     private provider: CursorProvider,
@@ -549,6 +564,7 @@ class CursorSession implements ProviderSession {
     this.sink = sink;
     this.abort = new AbortController();
     this.startedTools.clear();
+    if (this.lastUsage) sink.usage(this.lastUsage);
     try {
       // A warm-up still in flight already holds the process start; join it instead of racing it.
       if (this.warming) await this.warming;
@@ -626,9 +642,11 @@ class CursorSession implements ProviderSession {
   private onNotification(method: string, params: unknown): void {
     if (!isPlainRecord(params)) return;
     if (method === "session/update") {
-      if (this.loading) return;
       const update = params.update;
-      if (isPlainRecord(update)) this.onUpdate(update);
+      if (!isPlainRecord(update)) return;
+      // usage_update is session-level: keep it even while loading or between turns.
+      if (this.loading && update.sessionUpdate !== "usage_update") return;
+      this.onUpdate(update);
       return;
     }
     const sink = this.sink;
@@ -659,6 +677,10 @@ class CursorSession implements ProviderSession {
         hint: isPlainRecord(cmd.input) && typeof cmd.input.hint === "string" ? cmd.input.hint : undefined,
       }));
       this.sink?.commands(this.knownCommands);
+      return;
+    }
+    if (kind === "usage_update") {
+      this.takeUsage(update);
       return;
     }
     const sink = this.sink;
@@ -700,15 +722,21 @@ class CursorSession implements ProviderSession {
         }
         return;
       }
-      case "usage_update": {
-        const used = typeof update.used === "number" ? update.used : undefined;
-        const size = typeof update.size === "number" ? update.size : undefined;
-        if (used !== undefined || size !== undefined) sink.usage({ contextTokens: used, contextWindow: size });
-        return;
-      }
       default:
         return;
     }
+  }
+
+  private takeUsage(update: Record<string, unknown>): void {
+    const used = asNum(update.used);
+    const size = asNum(update.size);
+    if (used === undefined && size === undefined) return;
+    this.lastUsage = {
+      ...(this.lastUsage ?? {}),
+      ...(used !== undefined ? { contextTokens: used } : {}),
+      ...(size !== undefined ? { contextWindow: size } : {}),
+    };
+    this.sink?.usage(this.lastUsage);
   }
 
   private onTool(update: Record<string, unknown>, sink: RunSink): void {

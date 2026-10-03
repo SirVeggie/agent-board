@@ -2149,7 +2149,8 @@
     onTurn(turn) {
       this.dirtyTurns.add(turn.id);
       this.schedule();
-      if (turn.usage?.contextWindow && this.ctxMeter?.isConnected) {
+      const u = turn.usage;
+      if (this.ctxMeter?.isConnected && u && (u.contextTokens != null || u.contextWindow != null)) {
         const next = contextMeter(this);
         this.ctxMeter.replaceWith(next);
         this.ctxMeter = next;
@@ -3837,22 +3838,14 @@
     const r = 6;
     const length = 2 * Math.PI * r;
     meter.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="${r}" class="ag-ctx-track"/>${ctx.fraction > 0 ? `<circle cx="8" cy="8" r="${r}" class="ag-ctx-fill" stroke-dasharray="${(ctx.fraction * length).toFixed(2)} ${length.toFixed(2)}" transform="rotate(-90 8 8)"/>` : ""}</svg>`;
-    meter.addEventListener("pointerenter", () => {
-      clearTimeout(usageTipTimer);
-      usageTipTimer = setTimeout(() => showContextTip(meter, contextInfo(view)), 160);
-    });
-    meter.addEventListener("pointerleave", () => {
-      clearTimeout(usageTipTimer);
-      usageTipTimer = setTimeout(hideUsageTip, 120);
-    });
+    bindHoverTip(meter, () => contextTip(contextInfo(view)));
     return meter;
   }
 
-  function showContextTip(anchor, ctx) {
-    hideUsageTip();
+  function contextTip(ctx) {
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", "Context"));
-    if (ctx.window && ctx.used) {
+    if (ctx.window && (ctx.used > 0 || ctx.usage?.contextTokens != null)) {
       const row = el("div", `ag-usage-tip-row lvl-${usageLevel(ctx.fraction)}`);
       const bar = el("div", "ag-meter-bar");
       const fill = el("div", "ag-meter-fill");
@@ -3861,7 +3854,12 @@
       row.append(el("span", "ag-usage-tip-label", `${tokenCount(ctx.used)} of ${tokenCount(ctx.window)}`), bar, el("span", "ag-usage-tip-pct", percent(ctx.fraction)));
       tip.append(row);
     } else {
-      tip.append(el("div", "ag-usage-tip-note", ctx.window ? `Window: ${tokenCount(ctx.window)}. Shows how full it is after the first reply.` : "Shows how full the context is after the first reply."));
+      const note = !ctx.window
+        ? "Shows how full the context is after the first reply."
+        : ctx.s.provider === "cursor" && !ctx.usage
+          ? `Window: ${tokenCount(ctx.window)}. Cursor does not report how full it is.`
+          : `Window: ${tokenCount(ctx.window)}. Shows how full it is after the first reply.`;
+      tip.append(el("div", "ag-usage-tip-note", note));
     }
     const u = ctx.usage;
     if (u && (u.inputTokens || u.outputTokens)) {
@@ -3869,15 +3867,7 @@
       tip.append(el("div", "ag-usage-tip-note", `Last turn: ${parts.join(" · ")}`));
     }
     if (ctx.param) tip.append(el("div", "ag-usage-tip-note", "Click to change the window size. A bigger window costs more credits per message."));
-    document.body.append(tip);
-    const rect = anchor.getBoundingClientRect();
-    const tw = Math.min(260, window.innerWidth - 16);
-    tip.style.width = `${tw}px`;
-    let top = rect.top - tip.offsetHeight - 8;
-    if (top < 8) top = rect.bottom + 8;
-    tip.style.top = `${Math.max(8, top)}px`;
-    tip.style.left = `${Math.min(Math.max(8, rect.left + rect.width / 2 - tw / 2), window.innerWidth - tw - 8)}px`;
-    usageTipEl = tip;
+    return tip;
   }
 
   /** Compact "5h 84% · wk 76%" for the chat's settings bar; nothing until the provider has reported. */
