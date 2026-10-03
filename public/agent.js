@@ -36,6 +36,10 @@
     return localStorage.getItem(LS.emptyEnter) === "send" ? "send" : "steer";
   }
 
+  function approvalFor(provider, p = prefs()) {
+    return p.approvals?.[provider] || p.approval || "ask";
+  }
+
   const MODES = [
     { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
     { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits" },
@@ -97,7 +101,7 @@
   }
 
   function prefs() {
-    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", web: true, recentWorkspaces: [], scopeWorkspaces: {} };
+    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", approvals: {}, web: true, recentWorkspaces: [], scopeWorkspaces: {} };
   }
 
   function providerAvailable(id) {
@@ -802,7 +806,7 @@
         effort: d.settings.effort !== undefined ? d.settings.effort : p.efforts?.[provider] ?? null,
         modelParams: d.settings.modelParams || p.modelParams?.[provider] || {},
         mode: d.settings.mode || (d.scope.kind === "page" || d.scope.kind === "folder" ? "board" : p.mode || "code"),
-        approval: d.settings.approval || p.approval || "ask",
+        approval: d.settings.approval || approvalFor(provider),
         web: d.settings.web !== undefined ? d.settings.web : p.web !== false,
         cwd,
         // Last choice made in this workspace.
@@ -824,6 +828,7 @@
           this.draft.settings.model = patch.model || p.models?.[patch.provider] || modelsOf(patch.provider)[0]?.id || "default";
           this.draft.settings.effort = p.efforts?.[patch.provider] ?? null;
           this.draft.settings.modelParams = p.modelParams?.[patch.provider] || {};
+          if (patch.approval === undefined) this.draft.settings.approval = approvalFor(patch.provider, p);
         }
         this.renderComposerBar();
         this.renderHeader();
@@ -831,7 +836,7 @@
       }
       if (patch.provider && patch.provider !== t.provider && t.stats.turns > 0) {
         // A thread keeps its provider; continue in a new thread in the same scope.
-        this.startDraft(t.scope, { provider: patch.provider, model: patch.model, mode: t.mode, cwd: homeDir(t), approval: t.approval, web: t.web });
+        this.startDraft(t.scope, { provider: patch.provider, model: patch.model, mode: t.mode, cwd: homeDir(t), approval: approvalFor(patch.provider), web: t.web });
         notice(`New ${PROVIDER_LABEL[patch.provider]} thread`);
         return;
       }
@@ -3716,7 +3721,7 @@
           effort: p.efforts?.[provider] ?? null,
           modelParams: p.modelParams?.[provider] || {},
           mode: data.mode === "ask" ? "ask" : "board",
-          approval: p.approval || "ask",
+          approval: approvalFor(provider),
           web: p.web !== false,
           cwd: null,
           scope: { kind: "page", ref: tab.id },

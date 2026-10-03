@@ -65,6 +65,8 @@ export type Prefs = {
   modelParams: Partial<Record<ProviderId, Record<string, string>>>;
   mode: ThreadMode;
   approval: ApprovalPolicy;
+  /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
+  approvals: Partial<Record<ProviderId, ApprovalPolicy>>;
   web: boolean;
   recentWorkspaces: string[];
   /** Last workspace used for a scope ("page:<id>", "folder:<id>"), so new threads there start in it. */
@@ -82,6 +84,7 @@ const DEFAULT_PREFS: Prefs = {
   modelParams: { cursor: { fast: "false" } },
   mode: "code",
   approval: "ask",
+  approvals: {},
   web: true,
   recentWorkspaces: [],
   scopeWorkspaces: {},
@@ -117,6 +120,10 @@ const LIMIT_LABELS: Record<string, string> = {
   seven_day_overage_included: "Weekly (with extra usage)",
   overage: "Extra usage",
 };
+
+function approvalFor(prefs: Prefs, provider: ProviderId): ApprovalPolicy {
+  return prefs.approvals[provider] ?? prefs.approval;
+}
 
 function snapshotWindows(limits?: PlanLimits): PlanLimits["windows"] {
   return (limits?.windows ?? []).map((w) => ({ ...w }));
@@ -269,7 +276,7 @@ export class AgentHost {
 
   prefs(): Prefs {
     const saved = this.db.getSetting<Partial<Prefs>>("prefs", {});
-    return { ...DEFAULT_PREFS, ...saved, models: { ...DEFAULT_PREFS.models, ...saved.models }, modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams } };
+    return { ...DEFAULT_PREFS, ...saved, models: { ...DEFAULT_PREFS.models, ...saved.models }, modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams }, approvals: { ...DEFAULT_PREFS.approvals, ...saved.approvals } };
   }
 
   setPrefs(patch: Partial<Prefs>): Prefs {
@@ -352,6 +359,7 @@ export class AgentHost {
     this.turns.set(thread.id, []);
     this.seq.set(thread.id, 0);
     this.db.saveThread(thread);
+    this.rememberChoices(thread, { approval: thread.approval });
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
     return view;
@@ -379,7 +387,7 @@ export class AgentHost {
       effort: input.effort !== undefined ? input.effort : prefs.efforts[provider] ?? null,
       modelParams: input.modelParams ?? prefs.modelParams[provider] ?? {},
       mode: input.mode ?? (scope.kind === "page" || scope.kind === "folder" ? "board" : prefs.mode),
-      approval: input.approval ?? prefs.approval,
+      approval: input.approval ?? approvalFor(prefs, provider),
       web: input.web ?? prefs.web,
       scope,
       cwd: cwd ?? null,
@@ -410,6 +418,7 @@ export class AgentHost {
       next.model = patch.model ?? prefs.models[patch.provider] ?? "default";
       next.effort = prefs.efforts[patch.provider] ?? null;
       next.modelParams = prefs.modelParams[patch.provider] ?? {};
+      next.approval = patch.approval ?? approvalFor(prefs, patch.provider);
       next.nativeId = null;
       this.sessions.get(id)?.dispose();
       this.sessions.delete(id);
@@ -455,7 +464,15 @@ export class AgentHost {
     if (patch.effort !== undefined) next.efforts = { ...prefs.efforts, [thread.provider]: thread.effort };
     if (patch.modelParams) next.modelParams = { ...prefs.modelParams, [thread.provider]: thread.modelParams };
     if (patch.mode && thread.scope.kind !== "page" && thread.scope.kind !== "folder") next.mode = thread.mode;
-    if (patch.approval) next.approval = thread.approval;
+    if (patch.approval) {
+      next.approval = thread.approval;
+      const seeded: Prefs["approvals"] = { ...prefs.approvals };
+      for (const id of ["claude", "cursor"] as const) {
+        if (seeded[id] === undefined) seeded[id] = prefs.approval;
+      }
+      seeded[thread.provider] = thread.approval;
+      next.approvals = seeded;
+    }
     if (typeof patch.web === "boolean") next.web = thread.web;
     if (patch.cwd && thread.cwd) {
       next.recentWorkspaces = [thread.cwd, ...prefs.recentWorkspaces.filter((dir) => path.normalize(dir) !== path.normalize(thread.cwd!))].slice(0, 12);
