@@ -491,7 +491,39 @@ button.ag-chip.toggle.on {
   border-radius: 3px;
 }
 
+.ag-chip.file {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ag-chip.file:hover,
+.ag-chip.file:focus-visible {
+  color: var(--text);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.ag-chip.file .ag-chip-name {
+  flex: 0 1 auto;
+}
+
+.ag-chip.file .ag-chip-size {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.ag-chip.file .ag-ico {
+  flex-shrink: 0;
+}
+
+/* An outline, not a shadow: each chat view styles the composer's shadow its own way. */
+.ag-composer.drop-target {
+  outline: 2px dashed var(--accent-ring);
+  outline-offset: -2px;
+}
+
 button.ag-chip-x {
+  flex-shrink: 0;
   width: 16px;
   height: 16px;
   padding: 0;
@@ -933,6 +965,89 @@ button.ag-tool-head:hover {
 .ag-subtools {
   display: flex;
   flex-direction: column;
+}
+
+.ag-subtools > .ag-md {
+  margin: 3px 0 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* subagents and background commands */
+
+.ag-task-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--ag-sunken);
+}
+
+.ag-task-badge.ts-running {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ag-task-badge.ts-done {
+  color: var(--ag-ok);
+}
+
+.ag-task-badge.ts-error {
+  color: var(--danger);
+}
+
+.ag-task-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px 22px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ag-task-line[hidden] {
+  display: none;
+}
+
+.ag-task-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-tool.ts-running .ag-task-summary {
+  color: var(--text);
+}
+
+.ag-task-usage {
+  flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ag-task-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ag-task-brief-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.ag-task-brief .ag-md {
+  font-size: 12.5px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--ag-sunken);
+  border-radius: 7px;
+  padding: 7px 9px;
 }
 
 .ag-inline-diff-head {
@@ -2734,26 +2849,6 @@ button.dock-scope.warn {
   padding-left: 20px;
 }
 
-button.ag-user-copy {
-  opacity: 0;
-  flex-shrink: 0;
-  align-self: flex-start;
-  margin-top: -2px;
-}
-
-.ag-user:hover > button.ag-user-copy,
-.ag-user:focus-within > button.ag-user-copy,
-button.ag-user-copy:focus-visible,
-button.ag-user-copy.done {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  button.ag-user-copy {
-    opacity: 1;
-  }
-}
-
 button.ag-user-copy.done {
   color: var(--ag-ok);
 }
@@ -3746,4 +3841,99 @@ button.ag-menu-item:hover .ag-star {
 .ag-star.on {
   color: rgb(var(--pin-rgb));
   opacity: 1;
+}
+
+/* ---------- retry / edit on your messages ---------- */
+
+.ag-transcript .ag-user {
+  position: relative;
+}
+
+.ag-user-actions {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--border);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.ag-user:hover > .ag-user-actions,
+.ag-user-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ag-user-actions button.ag-icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.ag-confirm .ag-modal-panel {
+  width: min(440px, calc(100vw - 40px));
+}
+
+.ag-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ---------- context meter ---------- */
+
+button.ag-ctx-meter {
+  height: 24px;
+  min-width: 24px;
+  padding: 0 5px;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border-radius: 6px;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+button.ag-ctx-meter:hover {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.1);
+}
+
+button.ag-ctx-meter.fixed {
+  cursor: default;
+}
+
+button.ag-ctx-meter.fixed:hover {
+  background: transparent;
+}
+
+.ag-ctx-meter svg circle {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.ag-ctx-track {
+  stroke: rgba(var(--lift-rgb), 0.14);
+}
+
+.ag-ctx-fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.3s var(--ease);
+}
+
+.ag-ctx-meter.lvl-warn .ag-ctx-fill {
+  stroke: var(--ag-warn);
+}
+
+.ag-ctx-meter.lvl-high .ag-ctx-fill {
+  stroke: var(--danger);
 }

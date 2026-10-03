@@ -6,6 +6,7 @@ import type {
   ProviderStatus,
   QuestionSpec,
   SlashCommand,
+  TaskInfo,
   Thread,
   ToolKind,
   ToolStatus,
@@ -17,6 +18,8 @@ export type TurnInput = {
   /** Text sent to the model, with context blocks already prepended. */
   text: string;
   images: ChatImage[];
+  /** PDFs, for providers that read them natively (the prompt text already names them). */
+  documents: ChatImage[];
   /** Extra system instructions for this thread (board context, link syntax). */
   instructions: string;
 };
@@ -88,6 +91,8 @@ export type RunSink = {
   modeChanged?(mode: Thread["mode"]): void;
   /** A message handed to `steer` reached the model inside this turn. */
   steered?(steerId: string): void;
+  /** The provider's latest transcript entry in this turn (Claude's chain uuid), where a later rewind can fork. */
+  checkpoint?(id: string): void;
 };
 
 export type TurnResult = {
@@ -98,7 +103,7 @@ export type TurnResult = {
 };
 
 /** A message for a turn that is already running. */
-export type SteerInput = { text: string; images: ChatImage[] };
+export type SteerInput = { text: string; images: ChatImage[]; documents: ChatImage[] };
 
 /** One live conversation with a provider, bound to a thread. */
 export interface ProviderSession {
@@ -123,6 +128,10 @@ export interface ProviderSession {
   /** Take a steered message back for editing. Resolves false when it already reached the model. */
   withdrawSteer?(steerId: string): Promise<boolean>;
   cancel(): Promise<void>;
+  /** Stop one subagent or background command, by the id in its tool item's task. */
+  stopTask?(taskId: string): Promise<void>;
+  /** Move a running foreground subagent or command (by the tool call that started it) to the background, so the turn goes on. */
+  backgroundTask?(toolId: string): Promise<boolean>;
   /** The thread's settings changed; apply them live or restart before the next turn. */
   update(thread: Thread): void;
   commands(): Promise<SlashCommand[]>;
@@ -136,11 +145,26 @@ export type SessionContext = {
   scratchDir: string;
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
+  /**
+   * A task started by a tool call changed: a subagent or background command. It can arrive between
+   * turns (a background agent still working), so it names the thread instead of going through a run.
+   */
+  task?(threadId: string, toolId: string, patch: Partial<TaskInfo>): void;
+  /**
+   * The agent started a turn on its own, between the user's turns (a background agent finished and
+   * the agent reacts to it). The host runs it like a steered message: run() with { adopt: id }.
+   * Returns false when the host cannot take it now; the provider then drops what it buffered.
+   */
+  followUp?(threadId: string, id: string): boolean;
+  /** A tool approval with no turn running (a background agent at work): the thread's own rules, or a refusal. */
+  approval?(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision>;
 };
 
 export interface AgentProvider {
   readonly id: ProviderId;
   readonly label: string;
+  /** Can continue a conversation from an earlier point (Thread.rewind.at); others get a fresh session and a recap. */
+  readonly forks?: boolean;
   status(): Promise<ProviderStatus>;
   models(refresh?: boolean): Promise<ModelOption[]>;
   createSession(thread: Thread, ctx: SessionContext): ProviderSession;

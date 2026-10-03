@@ -2769,6 +2769,31 @@
     chat.pageRequest(tab, data).then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
   }
 
+  /**
+   * scribe.preview from a page: the page sends the files' bytes, shown here in the shared viewer.
+   * Like scribe.agent, it needs the click or key press to have reached the board.
+   */
+  function onPagePreview(event) {
+    const data = event.data;
+    const reply = (result) => {
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      reply({ ok: false, error: "no_gesture" });
+      return;
+    }
+    const files = (Array.isArray(data.files) ? data.files : [])
+      .filter((f) => f && f.blob instanceof Blob)
+      .map((f) => ({ name: String(f.name || "file"), mimeType: String(f.mimeType || f.blob.type || ""), size: f.blob.size, url: URL.createObjectURL(f.blob) }));
+    const revoke = () => files.forEach((f) => URL.revokeObjectURL(f.url));
+    if (!files.length || !window.scribePreview?.open(files, Number(data.index) || 0, { onClose: revoke })) {
+      revoke();
+      reply({ ok: false, error: "nothing_to_preview" });
+      return;
+    }
+    reply({ ok: true });
+  }
+
   /** A link clicked inside a page: open it and tell the page how it went. */
   function onPageLink(event) {
     const data = event.data;
@@ -3031,11 +3056,16 @@
     } else if (event.data?.type === "scribe-open" || event.data?.type === "scribe-resolve") {
       onPageLink(event);
     } else if (event.data?.type === "scribe-escape") {
+      if (window.scribePreview?.close()) {
+        return;
+      }
       if (!window.scribeChat?.escape()) {
         views.escape();
       }
     } else if (event.data?.type === "scribe-agent") {
       onPageAgent(event);
+    } else if (event.data?.type === "scribe-preview") {
+      onPagePreview(event);
     } else if (event.data?.type === "scribe-chat-key") {
       window.scribeChat?.shortcut(String(event.data.action || ""));
     }

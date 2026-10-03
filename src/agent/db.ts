@@ -91,6 +91,10 @@ export class AgentDb {
       .run(turn.id, turn.threadId, turn.seq, JSON.stringify(turn));
   }
 
+  deleteTurn(id: string): void {
+    this.db.prepare("DELETE FROM turns WHERE id = ?").run(id);
+  }
+
   listItems(threadId: string): Item[] {
     const rows = this.db.prepare("SELECT data FROM items WHERE thread_id = ? ORDER BY seq").all(threadId) as Array<{ data: string }>;
     return rows.map((row) => JSON.parse(row.data) as Item);

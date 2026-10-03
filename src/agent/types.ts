@@ -39,6 +39,12 @@ export type Thread = {
   worktree?: ThreadWorktree | null;
   /** Provider session id used to resume. */
   nativeId: string | null;
+  /**
+   * Set by a rewind until the next turn ends. at: the provider transcript entry the next turn
+   * continues from (Claude forks its session there); null starts a fresh session. recap: the kept
+   * conversation, sent ahead of the next message when the provider cannot fork.
+   */
+  rewind?: { at: string | null; recap?: string };
   pinned: boolean;
   archived: boolean;
   createdAt: number;
@@ -86,6 +92,8 @@ export type ThreadView = Thread & {
   status: RunStatus;
   unread: boolean;
   queued: number;
+  /** Subagents and commands still working in the background, after or beside the current turn. */
+  background: number;
   stats: { turns: number; files: number; added: number; removed: number };
 };
 
@@ -134,6 +142,8 @@ export type Turn = {
   usage?: Usage;
   error?: string;
   reverted?: boolean;
+  /** This turn's last entry in the provider's own transcript (Claude's chain uuid): where a rewind to after this turn forks. */
+  nativeEnd?: string;
   /** The board page this turn could edit, by HTML revision before and after. The old HTML is kept as a checkpoint. */
   page?: { id: string; title: string; before: number; after?: number; reverted?: boolean };
 };
@@ -156,13 +166,34 @@ export type QuestionSpec = {
   options: Array<{ id: string; label: string; description?: string }>;
 };
 
-export type ChatImage = { name: string; mimeType: string; data: string };
+/** A file sent with a message, as base64. Images go to the model as images; other files see attachments.ts. */
+export type ChatFile = { name: string; mimeType: string; data: string };
+export type ChatImage = ChatFile;
+/** A sent file as the transcript keeps it: saved under the data folder, served by id. */
+export type FileRef = { id: string; name: string; mimeType: string; size: number; path?: string };
 
 export type ContextChip =
   | { kind: "page"; id: string; key: string; title: string }
   | { kind: "folder"; id: string; path: string }
   | { kind: "file"; path: string }
   | { kind: "selection"; text: string; source?: string };
+
+/** A provider task (Claude's subagents and background commands), as the tool that started it shows it. */
+export type TaskInfo = {
+  id: string;
+  /** "agent" for subagents, "command" for background shell commands, or the provider's own type. */
+  type: string;
+  status: "running" | "done" | "error" | "stopped";
+  /** Runs without blocking the turn; it may still be working after the turn ends. */
+  background?: boolean;
+  /** One line on what it is doing now, or how it ended. */
+  summary?: string;
+  lastTool?: string;
+  tokens?: number;
+  toolUses?: number;
+  durationMs?: number;
+  endedAt?: number;
+};
 
 type ItemBase = {
   id: string;
@@ -176,7 +207,9 @@ export type ItemBody =
   | {
       kind: "user";
       text: string;
-      images?: Array<{ name: string; mimeType: string }>;
+      /** id and size are missing on messages from before files were saved. */
+      images?: Array<{ name: string; mimeType: string; id?: string; size?: number }>;
+      files?: FileRef[];
       context?: ContextChip[];
       /** Queued, then dropped by Stop. */
       dropped?: boolean;
@@ -202,6 +235,8 @@ export type ItemBody =
       diff?: string;
       exitCode?: number;
       parentToolId?: string;
+      /** A subagent or background command this tool started; it can outlive the tool call and the turn. */
+      task?: TaskInfo;
       startedAt: number;
       endedAt?: number;
     }
@@ -246,7 +281,8 @@ export type AgentEvent =
   | { type: "agent_item_deleted"; threadId: string; id: string }
   | { type: "agent_limits"; limits: Partial<Record<ProviderId, PlanLimits>> }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
-  | { type: "agent_turn"; turn: Turn };
+  | { type: "agent_turn"; turn: Turn }
+  | { type: "agent_turn_deleted"; threadId: string; id: string };
 
 export type ModelOption = {
   id: string;

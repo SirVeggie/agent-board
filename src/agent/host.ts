@@ -10,6 +10,7 @@ import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "./prompt.js";
+import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
 import type {
@@ -31,9 +32,11 @@ import { unifiedDiff } from "./textDiff.js";
 import type {
   AgentEvent,
   ApprovalPolicy,
+  ChatFile,
   ChatImage,
   ContextChip,
   FileChange,
+  FileRef,
   Item,
   ItemBody,
   ModelOption,
@@ -47,12 +50,15 @@ import type {
   ThreadScope,
   ThreadView,
   ThreadWorktree,
+  TaskInfo,
   Turn,
   Usage,
 } from "./types.js";
 import { isPlainRecord } from "./types.js";
 
 const FLUSH_MS = 700;
+/** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
+const MAX_RECAP = 24_000;
 const DELTA_MS = 50;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_TOOL_DIFF = 200_000;
@@ -140,12 +146,70 @@ function planUsed(before: PlanLimits["windows"], after: PlanLimits["windows"]): 
     .filter((w) => w.used >= 0.0005);
 }
 
-type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[]; from?: "page" };
+type QueuedMessage = {
+  text: string;
+  images: ChatImage[];
+  /** Attached files other than images. */
+  files: ChatFile[];
+  /** Where the images and files were saved, in the same order. */
+  saved: { images: FileRef[]; files: FileRef[] };
+  context: ContextChip[];
+  from?: "page";
+};
 
-/** What the model reads for a message: where it came from, its context chips, then the text. */
-function promptText(msg: QueuedMessage): string {
+/** What the model reads for a message: where it came from, its context chips, its files, then the text. */
+function promptText(msg: QueuedMessage, thread: Thread): string {
   const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
-  return origin + contextBlock(msg.context) + msg.text;
+  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
+  const recap = thread.rewind?.recap
+    ? `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
+    : "";
+  return recap + origin + contextBlock(msg.context) + files + msg.text;
+}
+
+/**
+ * Approvals the thread's settings answer without asking: Scribe's own board tools, Pages mode's
+ * refusals, and the "full" and "edits" approval levels. Null when the user has to decide.
+ */
+function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<ApprovalDecision> | null {
+  const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
+  const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+  if (req.boardTool && allow) {
+    return Promise.resolve({ optionId: allow.id });
+  }
+  if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
+    // Pages mode never runs file or shell tools, whatever the approval setting.
+    if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
+    return Promise.reject(new Error("Pages mode has no file or shell access."));
+  }
+  if (t?.approval === "full" && allow) {
+    return Promise.resolve({ optionId: allow.id });
+  }
+  if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
+    return Promise.resolve({ optionId: allow.id });
+  }
+  return null;
+}
+
+/** PDFs, for providers that read them as documents beside the text that names them. */
+function pdfs(msg: QueuedMessage): ChatFile[] {
+  return msg.files.filter((file) => file.mimeType === "application/pdf");
+}
+
+/** A saved file as the transcript keeps it: without its local path. */
+function fileEntry(ref: FileRef): FileRef {
+  return { id: ref.id, name: ref.name, mimeType: ref.mimeType, size: ref.size };
+}
+
+function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
+  return {
+    kind: "user",
+    text: msg.text,
+    ...(msg.saved.images.length ? { images: msg.saved.images.map(fileEntry) } : {}),
+    ...(msg.saved.files.length ? { files: msg.saved.files.map(fileEntry) } : {}),
+    ...(msg.context.length ? { context: msg.context } : {}),
+    ...(msg.from ? { from: msg.from } : {}),
+  };
 }
 
 type RunState = {
@@ -162,7 +226,7 @@ type RunState = {
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
 };
 
-export type SendInput = { text: string; images?: ChatImage[]; context?: ContextChip[]; from?: "page" };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -209,7 +273,14 @@ export class AgentHost {
     const entry = fileURLToPath(new URL("../index.js", import.meta.url));
     const env: Record<string, string> = { SCRIBE_PORT: String(PORT) };
     if (process.env.SCRIBE_HOME) env.SCRIBE_HOME = process.env.SCRIBE_HOME;
-    this.ctx = { boardMcp: { command: process.execPath, args: [entry], env }, scratchDir, limits: (provider, info) => this.recordLimits(provider, info) };
+    this.ctx = {
+      boardMcp: { command: process.execPath, args: [entry], env },
+      scratchDir,
+      limits: (provider, info) => this.recordLimits(provider, info),
+      task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
+      followUp: (threadId, id) => this.followUp(threadId, id),
+      approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
+    };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
   }
 
@@ -511,6 +582,11 @@ export class AgentHost {
       if (item.threadId === id) this.dirty.delete(key);
     }
     this.db.deleteThread(id);
+    try {
+      removeThreadFiles(id);
+    } catch (err) {
+      log(`Removing the files of ${id} failed: ${(err as Error).message}`);
+    }
     this.emit({ type: "agent_thread_deleted", id });
   }
 
@@ -574,6 +650,7 @@ export class AgentHost {
       status: this.status.get(thread.id) ?? "idle",
       unread: this.unread.has(thread.id),
       queued: this.queues.get(thread.id)?.length ?? 0,
+      background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
     };
   }
@@ -589,6 +666,12 @@ export class AgentHost {
       items = this.db.listItems(id);
       this.items.set(id, items);
       this.seq.set(id, items.length ? items[items.length - 1].seq : 0);
+      // Loaded once per daemon run, before any session exists: tasks still marked running died with the last one.
+      const stale = items.filter((item) => item.kind === "tool" && item.task?.status === "running");
+      for (const item of stale) {
+        if (item.kind === "tool" && item.task) item.task = { ...item.task, status: "stopped", summary: "Stopped: Scribe restarted", endedAt: item.task.endedAt ?? Date.now() };
+      }
+      if (stale.length) this.db.saveItems(stale);
     }
     return items;
   }
@@ -715,9 +798,8 @@ export class AgentHost {
   send(threadId: string, input: SendInput): { queued: boolean; item: Item } {
     const thread = this.requireThread(threadId);
     const text = input.text.trim();
-    if (!text && !input.images?.length) throw new Error("Empty message");
+    if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
     const context = freshContext(input.context, this.knownContext(threadId, thread));
-    const msg: QueuedMessage = { text, images: input.images ?? [], context, ...(input.from === "page" ? { from: "page" as const } : {}) };
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
@@ -726,27 +808,25 @@ export class AgentHost {
     if (wt && !fs.existsSync(wt.path)) {
       throw new Error(`This thread's worktree is gone (${wt.path}). Use Leave branch in the branch menu to go back to the main checkout; the branch ${wt.branch} keeps its commits.`);
     }
+    const images = input.images ?? [];
+    const files = input.files ?? [];
+    const msg: QueuedMessage = {
+      text,
+      images,
+      files,
+      saved: { images: saveFiles(threadId, images), files: saveFiles(threadId, files) },
+      context,
+      ...(input.from === "page" ? { from: "page" as const } : {}),
+    };
     if (this.runs.has(threadId)) {
       const queue = this.queues.get(threadId) ?? [];
       queue.push(msg);
       this.queues.set(threadId, queue);
-      const item = this.addItem(threadId, null, {
-        kind: "user",
-        text,
-        ...(msg.images.length ? { images: msg.images.map((img) => ({ name: img.name, mimeType: img.mimeType })) } : {}),
-        ...(msg.context.length ? { context: msg.context } : {}),
-        ...(msg.from ? { from: msg.from } : {}),
-      });
+      const item = this.addItem(threadId, null, userBody(msg));
       this.emitThread(threadId);
       return { queued: true, item };
     }
-    const item = this.addItem(threadId, null, {
-      kind: "user",
-      text,
-      ...(msg.images.length ? { images: msg.images.map((img) => ({ name: img.name, mimeType: img.mimeType })) } : {}),
-      ...(msg.context.length ? { context: msg.context } : {}),
-      ...(msg.from ? { from: msg.from } : {}),
-    });
+    const item = this.addItem(threadId, null, userBody(msg));
     void this.runTurn(threadId, msg, item);
     return { queued: false, item };
   }
@@ -773,7 +853,7 @@ export class AgentHost {
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
     const item = this.queuedItems(threadId)[0];
-    const id = session.steer({ text: promptText(msg), images: msg.images });
+    const id = session.steer({ text: promptText(msg, this.requireThread(threadId)), images: msg.images, documents: pdfs(msg) });
     run.steer = { id, msg, itemId: item?.id };
     if (item && item.kind === "user") {
       item.steer = "waiting";
@@ -787,7 +867,7 @@ export class AgentHost {
    * Take the latest queued message back, or the waiting steered one when nothing else is queued, and
    * remove it from the transcript so it can be edited and sent again.
    */
-  async withdraw(threadId: string): Promise<{ text: string; images: ChatImage[]; context: ContextChip[] }> {
+  async withdraw(threadId: string): Promise<{ text: string; images: ChatImage[]; files: ChatFile[]; context: ContextChip[] }> {
     const queue = this.queues.get(threadId);
     const queued = this.queuedItems(threadId);
     if (queue?.length) {
@@ -795,8 +875,9 @@ export class AgentHost {
       if (!queue.length) this.queues.delete(threadId);
       const item = queued[queued.length - 1];
       if (item) this.removeItem(item);
+      this.forgetFiles(threadId, msg);
       this.emitThread(threadId);
-      return { text: msg.text, images: msg.images, context: msg.context };
+      return { text: msg.text, images: msg.images, files: msg.files, context: msg.context };
     }
     const run = this.runs.get(threadId);
     const steer = run?.steer;
@@ -806,8 +887,18 @@ export class AgentHost {
     run.steer = null;
     const item = steer.itemId ? this.loadItems(threadId).find((it) => it.id === steer.itemId) : undefined;
     if (item) this.removeItem(item);
+    this.forgetFiles(threadId, steer.msg);
     this.emitThread(threadId);
-    return { text: steer.msg.text, images: steer.msg.images, context: steer.msg.context };
+    return { text: steer.msg.text, images: steer.msg.images, files: steer.msg.files, context: steer.msg.context };
+  }
+
+  /** A withdrawn message's saved files: the composer has them again and saves them anew on send. */
+  private forgetFiles(threadId: string, msg: QueuedMessage): void {
+    try {
+      removeFiles(threadId, [...msg.saved.images, ...msg.saved.files].map((ref) => ref.id));
+    } catch (err) {
+      log(`Removing withdrawn files failed: ${(err as Error).message}`);
+    }
   }
 
   private removeItem(item: Item): void {
@@ -828,6 +919,76 @@ export class AgentHost {
     const run = this.runs.get(threadId);
     if (!run || (!run.steer && !this.queues.get(threadId)?.length)) return;
     await this.cancel(threadId, { keepQueue: true });
+  }
+
+  /**
+   * A background agent asked for approval between turns. The thread's own rules still apply; past
+   * those, nobody is there to answer, so it is refused with a note the agent can act on.
+   */
+  private approveBetweenTurns(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision> {
+    const auto = autoApproval(this.threads.get(threadId), req);
+    if (auto) return auto;
+    const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+    const note = "The user was not asked: this ran in the background after the turn ended. Leave it out, and mention it in your result.";
+    return reject ? Promise.resolve({ optionId: reject.id, note }) : Promise.reject(new Error(note));
+  }
+
+  /** A subagent or background command changed; its tool item can be from an earlier turn. */
+  private patchTask(threadId: string, toolId: string, patch: Partial<TaskInfo>): void {
+    if (!this.threads.has(threadId)) return;
+    const items = this.loadItems(threadId);
+    let item: Item | undefined;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "tool" && it.toolId === toolId) {
+        item = it;
+        break;
+      }
+    }
+    if (!item || item.kind !== "tool") return;
+    // A finished task stays finished: late progress frames do not bring it back.
+    if (item.task && item.task.status !== "running" && patch.status === undefined) return;
+    item.task = { id: "", type: "agent", status: "running", ...item.task, ...patch };
+    this.touch(item);
+    this.emitThread(threadId);
+  }
+
+  /** Background tasks still working in this thread. */
+  backgroundTasks(threadId: string): number {
+    const items = this.items.get(threadId);
+    if (!items) return 0;
+    return items.filter((it) => it.kind === "tool" && it.task?.status === "running" && (it.task.background || it.turnId !== this.runs.get(threadId)?.turn.id)).length;
+  }
+
+  private taskItem(threadId: string, itemId: string): Item & { kind: "tool" } {
+    const item = this.loadItems(threadId).find((it) => it.id === itemId);
+    if (!item || item.kind !== "tool" || !item.task) throw new Error("Task not found");
+    return item;
+  }
+
+  async stopTask(threadId: string, itemId: string): Promise<void> {
+    const item = this.taskItem(threadId, itemId);
+    if (item.task!.status !== "running") return;
+    const session = this.sessions.get(threadId);
+    if (!session?.stopTask) throw new Error("This agent cannot stop a single task");
+    await session.stopTask(item.task!.id);
+  }
+
+  async backgroundTask(threadId: string, itemId: string): Promise<{ moved: boolean }> {
+    const item = this.taskItem(threadId, itemId);
+    const session = this.sessions.get(threadId);
+    if (!session?.backgroundTask) throw new Error("This agent cannot move a task to the background");
+    return { moved: await session.backgroundTask(item.toolId) };
+  }
+
+  /**
+   * The agent started a turn of its own (a background agent finished and it reacts). Runs it as a
+   * turn with no user message, unless one of the user's is running or about to.
+   */
+  private followUp(threadId: string, id: string): boolean {
+    if (!this.threads.has(threadId) || this.runs.has(threadId) || this.queues.get(threadId)?.length) return false;
+    void this.runTurn(threadId, null, null, { adopt: id });
+    return true;
   }
 
   async cancel(threadId: string, { keepQueue = false }: { keepQueue?: boolean } = {}): Promise<void> {
@@ -874,7 +1035,8 @@ export class AgentHost {
     return session;
   }
 
-  private async runTurn(threadId: string, msg: QueuedMessage, userItem: Item, opts?: { adopt?: string }): Promise<void> {
+  /** Run one turn. Without msg and userItem it is a turn the agent started itself (see followUp). */
+  private async runTurn(threadId: string, msg: QueuedMessage | null, userItem: Item | null, opts?: { adopt?: string }): Promise<void> {
     let thread = this.requireThread(threadId);
     const turns = this.loadTurns(threadId);
     const turn: Turn = {
@@ -888,15 +1050,19 @@ export class AgentHost {
       startedAt: Date.now(),
     };
     turns.push(turn);
-    userItem.turnId = turn.id;
-    if (userItem.kind === "user") delete userItem.steer;
-    this.touch(userItem);
+    if (userItem) {
+      userItem.turnId = turn.id;
+      if (userItem.kind === "user") delete userItem.steer;
+      this.touch(userItem);
+    } else {
+      this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
+    }
     const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
     thread.activityAt = Date.now();
-    if (!thread.titleLocked && thread.title === "New thread") {
+    if (msg && !thread.titleLocked && thread.title === "New thread") {
       thread.title = titleFrom(msg.text);
     }
     this.db.saveThread(thread);
@@ -904,7 +1070,7 @@ export class AgentHost {
     this.emitThread(threadId);
 
     // Checkpoint the page this turn is about, so an agent edit to it can be reverted.
-    const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg.context.find((c) => c.kind === "page")?.id;
+    const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg?.context.find((c) => c.kind === "page")?.id;
     const pageTab = pageId ? store.get(pageId, "agent") : undefined;
     if (pageTab && !pageTab.templateId) {
       turn.page = { id: pageTab.id, title: pageTab.title, before: pageTab.revision };
@@ -939,8 +1105,9 @@ export class AgentHost {
         session.update(thread);
         result = await session.run(
           {
-            text: promptText(msg),
-            images: msg.images,
+            text: msg ? promptText(msg, thread) : "",
+            images: msg?.images ?? [],
+            documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
           },
           sink,
@@ -1005,6 +1172,11 @@ export class AgentHost {
     }
     turn.status = result.status;
     turn.endedAt = Date.now();
+    const rewound = this.threads.get(threadId);
+    if (rewound?.rewind && result.status !== "cancelled") {
+      delete rewound.rewind;
+      this.db.saveThread(rewound);
+    }
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
     this.saveTurn(turn);
@@ -1111,11 +1283,8 @@ export class AgentHost {
       text(delta, parentToolId) {
         if (!delta) return;
         if (parentToolId) {
-          const tool = run.tools.get(parentToolId);
-          if (tool && tool.kind === "tool") {
-            tool.output = ((tool.output ?? "") + delta).slice(-MAX_TOOL_OUTPUT);
-            host.touch(tool);
-          }
+          // A subagent's message, whole: one nested item each, shown under the tool call that started it.
+          if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "text", text: delta, parentToolId });
           return;
         }
         if (run.reasoningItem) {
@@ -1128,8 +1297,13 @@ export class AgentHost {
         }
         host.appendText(run.textItem as Item & { text: string }, delta);
       },
-      reasoning(delta) {
+      reasoning(delta, parentToolId) {
         if (!delta) return;
+        if (parentToolId) {
+          const now = Date.now();
+          if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "reasoning", text: delta, startedAt: now, endedAt: now, parentToolId });
+          return;
+        }
         if (run.textItem) {
           host.flushDelta(run.textItem.id);
           run.textItem = null;
@@ -1141,6 +1315,9 @@ export class AgentHost {
       },
       breakBlock() {
         host.closeBlocks(run);
+      },
+      checkpoint(id) {
+        run.turn.nativeEnd = id;
       },
       toolStart(tool: ToolStart) {
         if (run.tools.has(tool.toolId)) return;
@@ -1191,23 +1368,8 @@ export class AgentHost {
         await host.rememberBefore(run, thread(), file, true);
       },
       approval(req: ApprovalRequest, signal) {
-        const t = thread();
-        const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
-        const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
-        if (req.boardTool && allow) {
-          return Promise.resolve({ optionId: allow.id });
-        }
-        if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
-          // Pages mode never runs file or shell tools, whatever the approval setting.
-          if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
-          return Promise.reject(new Error("Pages mode has no file or shell access."));
-        }
-        if (t?.approval === "full" && allow) {
-          return Promise.resolve({ optionId: allow.id });
-        }
-        if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
-          return Promise.resolve({ optionId: allow.id });
-        }
+        const auto = autoApproval(thread(), req);
+        if (auto) return auto;
         const item = host.addItem(threadId, turnId, {
           kind: "approval",
           requestId: "",
@@ -1523,6 +1685,96 @@ export class AgentHost {
     this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: `Reverted “${turn.page.title}” to how it was before turn ${turn.seq}.` });
     this.flushNow();
     return { ok: true };
+  }
+
+  /**
+   * Take the thread back to just before a message of the user's: later turns leave the transcript,
+   * their file and page changes are undone (unless keepChanges), and the provider continues from
+   * the turn before it. Returns the message, so the chat can edit it or send it again.
+   */
+  async rewind(threadId: string, itemId: string, opts: { keepChanges?: boolean } = {}): Promise<{ text: string; images: ChatImage[]; files: ChatFile[]; context: ContextChip[] }> {
+    const thread = this.requireThread(threadId);
+    if (this.runs.has(threadId) || this.queues.get(threadId)?.length) throw new Error("Stop the running turn first.");
+    if (this.backgroundTasks(threadId)) throw new Error("Background tasks are still running in this thread. Stop them first.");
+    const items = this.loadItems(threadId);
+    const user = items.find((it) => it.id === itemId);
+    if (!user || user.kind !== "user") throw new Error("Message not found");
+    const turns = this.loadTurns(threadId);
+    const from = turns.find((t) => t.id === user.turnId);
+    if (!from) throw new Error("This message has not run yet.");
+    const dropped = turns.filter((t) => t.seq >= from.seq);
+    const kept = turns.filter((t) => t.seq < from.seq);
+
+    if (!opts.keepChanges) {
+      // Newest first, so each revert applies on top of the state the next one left.
+      for (const turn of [...dropped].reverse()) {
+        if (turn.reverted || !turn.files?.length || !turn.beforeTree) continue;
+        const result = await this.revertTurn(threadId, turn.id);
+        if (!result.ok) throw new Error(`Could not undo the file changes of turn ${turn.seq}: ${result.error ?? "unknown error"}. Turns after it were undone; nothing was removed from the chat.`);
+      }
+      const page = dropped.find((t) => t.page?.after && !t.page.reverted);
+      if (page) {
+        const result = this.revertPage(threadId, page.id);
+        if (!result.ok) throw new Error(`Could not restore the page: ${result.error ?? "unknown error"}`);
+      }
+    }
+
+    // What the message carried, read back before its files go.
+    const savedFiles = (refs: Array<{ id?: string; name: string; mimeType: string }> | undefined): ChatFile[] =>
+      (refs ?? []).flatMap((ref) => {
+        const full = ref.id ? filePath(threadId, ref.id) : null;
+        if (!full) return [];
+        try {
+          return [{ name: ref.name, mimeType: ref.mimeType, data: fs.readFileSync(full).toString("base64") }];
+        } catch {
+          return [];
+        }
+      });
+    const message = { text: user.text, images: savedFiles(user.images), files: savedFiles(user.files), context: user.context ?? [] };
+
+    // Where the provider continues from: its transcript at the end of the last kept turn.
+    const last = kept.at(-1);
+    const forks = this.providers[thread.provider].forks === true;
+    const at = forks && last?.nativeEnd ? last.nativeEnd : null;
+    const recap = kept.length && !at ? this.recap(items, kept) : "";
+    this.sessions.get(threadId)?.dispose();
+    this.sessions.delete(threadId);
+    thread.rewind = { at, ...(recap ? { recap } : {}) };
+    if (!at) thread.nativeId = null;
+
+    const droppedIds = new Set(dropped.map((t) => t.id));
+    const gone = items.filter((it) => it.turnId && droppedIds.has(it.turnId));
+    for (const item of gone) {
+      if (item.kind === "user") removeFiles(threadId, [...(item.images ?? []), ...(item.files ?? [])].flatMap((f) => (f.id ? [f.id] : [])));
+      this.removeItem(item);
+    }
+    for (const turn of dropped) {
+      turns.splice(turns.indexOf(turn), 1);
+      this.db.deleteTurn(turn.id);
+      this.db.deleteSetting(`checkpoint:${turn.id}`);
+      this.emit({ type: "agent_turn_deleted", threadId, id: turn.id });
+    }
+    thread.activityAt = Date.now();
+    this.db.saveThread(thread);
+    this.flushNow();
+    this.emitThread(threadId);
+    return message;
+  }
+
+  /** The kept conversation in short, for a provider that starts over after a rewind: each message and the reply to it. */
+  private recap(items: Item[], kept: Turn[]): string {
+    const parts: string[] = [];
+    for (const turn of kept) {
+      const ofTurn = items.filter((it) => it.turnId === turn.id && !("parentToolId" in it && it.parentToolId));
+      const asked = ofTurn.filter((it) => it.kind === "user").map((it) => (it.kind === "user" ? it.text : "")).join("\n\n");
+      const texts = ofTurn.filter((it) => it.kind === "text");
+      const reply = texts.at(-1)?.kind === "text" ? (texts.at(-1) as { text: string }).text : "";
+      if (asked) parts.push(`User: ${asked}`);
+      if (reply) parts.push(`You: ${reply}`);
+    }
+    const text = parts.join("\n\n");
+    // The latest part matters most; keep the prompt a sensible size.
+    return text.length > MAX_RECAP ? `…${text.slice(-MAX_RECAP)}` : text;
   }
 
   async revertTurn(threadId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {

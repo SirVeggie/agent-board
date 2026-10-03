@@ -145,6 +145,12 @@ function summary(state: BoardState, card: Card) {
   };
 }
 
+/** The same text, give or take spacing and case: a summary that only repeats a comment. */
+function sameText(a: string, b: string): boolean {
+  const norm = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  return norm(a) === norm(b);
+}
+
 function commentOp(card: Card, by: "user" | "agent", text: string, now: number): unknown {
   return { op: "insert", path: `${cardPath(card)}/comments`, value: { id: newId("cm"), by, at: now, text } };
 }
@@ -237,7 +243,9 @@ export const kanbanActions: ActionSet = {
       args: "{ card }",
       run(state, args) {
         const card = findCard(state, args.card);
-        return { ops: [], result: { ...card, ...summary(state, card), labelIds: arr(card.labels) } };
+        // The summary's comment count and last-comment stamp are for list rows; get keeps the comments themselves.
+        const { comments: _count, lastComment: _last, ...brief } = summary(state, card);
+        return { ops: [], result: { ...card, ...brief, comments: arr<Comment>(card.comments), labelIds: arr(card.labels) } };
       },
     },
     create: {
@@ -368,16 +376,24 @@ export const kanbanActions: ActionSet = {
     },
     finish: {
       description:
-        "Hand in finished work: adds your summary as a comment, clears status and claim, and moves the card to review (or done when the board has no review column).",
-      args: "{ card, summary, to? }",
+        "Hand in finished work: posts summary as the card's hand-in comment (so do not also comment the same wrap-up), clears status and claim, and moves the card to review (or done when the board has no review column). Leave summary out to make the comment you already posted since claiming the card the hand-in.",
+      args: "{ card, summary?, to? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);
         const text = str(args.summary).trim();
-        if (!text) throw new ActionError("summary is required: what you did, what to check");
+        // The caller's own comment from this claim, if it wrote its wrap-up as a comment already.
+        const since = card.claim && sameHolder(card.claim, ctx) ? card.claim.at : Infinity;
+        const own = arr<Comment>(card.comments).filter((c) => c.by === ctx.caller.by && c.at >= since).at(-1);
+        if (!text && !own) {
+          throw new ActionError(
+            "summary is required: it is posted as the card's hand-in comment (what changed, what to check). If you already posted that as a comment since claiming the card, call finish without summary and that comment is the hand-in."
+          );
+        }
+        const repeat = Boolean(text && own && sameText(text, own.text));
+        const ops: unknown[] = [...(text && !repeat ? [commentOp(card, ctx.caller.by, text, ctx.now)] : []), { op: "merge", path: cardPath(card), value: { claim: null, status: null } }];
         const col = args.to !== undefined ? findColumn(state, args.to) : (roleColumn(state, "review") ?? roleColumn(state, "done"));
-        const ops: unknown[] = [commentOp(card, ctx.caller.by, text, ctx.now), { op: "merge", path: cardPath(card), value: { claim: null, status: null } }];
         if (col) ops.push(...moveOps(state, card, col, ctx.now));
-        return { ops, result: { num: card.num, column: col?.title ?? null } };
+        return { ops, result: { num: card.num, column: col?.title ?? null, ...(text && !repeat ? {} : { handIn: "your earlier comment" }) } };
       },
     },
   },

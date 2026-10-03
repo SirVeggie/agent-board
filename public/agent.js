@@ -106,6 +106,56 @@
     app()?.showNotice?.(text);
   }
 
+  /** "working" / "in background" / "done" / "failed" / "stopped" for a task badge. */
+  function taskStatusLabel(task) {
+    if (task.status === "running") return task.background ? "in background" : "working";
+    if (task.status === "error") return "failed";
+    return task.status;
+  }
+
+  /* ----- attached files ----- */
+
+  /** Same limits as src/agent/attachments.ts, checked here first so a file is refused before it is read. */
+  const FILE_LIMITS = { count: 10, image: 8 * 1024 * 1024, file: 20 * 1024 * 1024, total: 50 * 1024 * 1024 };
+
+  function sentFileUrl(threadId, fileId) {
+    return `/api/agent/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(fileId)}`;
+  }
+
+  function base64Url(data, mimeType) {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    return URL.createObjectURL(new Blob([bytes], { type: mimeType || "application/octet-stream" }));
+  }
+
+  /** A file as a chip: a thumbnail for images, an icon and size for the rest. Click previews it. */
+  function fileChip(file, onOpen) {
+    const isImage = (file.mimeType || "").startsWith("image/");
+    // A span, not a button: the composer puts a remove button inside it.
+    const chip = el("span", `ag-chip small file${isImage ? " img" : ""}`);
+    chip.tabIndex = 0;
+    chip.setAttribute("role", "button");
+    chip.title = `Preview ${file.name}`;
+    chip.addEventListener("click", onOpen);
+    chip.addEventListener("keydown", (event) => {
+      if (event.target !== chip || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      onOpen();
+    });
+    if (isImage) {
+      const thumb = el("img");
+      thumb.src = file.url;
+      thumb.alt = "";
+      thumb.addEventListener("error", () => thumb.replaceWith(icon("image")));
+      chip.append(thumb);
+    } else {
+      chip.append(icon("read"));
+    }
+    chip.append(el("span", "ag-chip-name", file.name));
+    const size = window.scribePreview?.sizeLabel(file.size);
+    if (!isImage && size) chip.append(el("span", "ag-chip-size", size));
+    return chip;
+  }
+
   function prefs() {
     return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", approvals: {}, web: true, recentWorkspaces: [], scopeWorkspaces: {} };
   }
@@ -277,6 +327,15 @@
           if (view.threadId === msg.threadId) view.onDelta(item);
         }
         dock.onDelta(item);
+        return;
+      }
+      case "agent_turn_deleted": {
+        const detail = S.details.get(msg.threadId);
+        if (!detail) return;
+        detail.turns.delete(msg.id);
+        for (const view of views()) {
+          if (view.threadId === msg.threadId) view.onTurn({ id: msg.id, threadId: msg.threadId, status: "deleted" });
+        }
         return;
       }
       case "agent_turn": {
@@ -585,6 +644,46 @@
   }
   const modalStack = [];
 
+  /* ---------- rewind confirmation ---------- */
+
+  /** Resolves { keepChanges } to go ahead, or null. Only asked when the rewind would drop more than the one turn. */
+  function confirmRewind({ turns, files, page, resend }) {
+    return new Promise((resolve) => {
+      const { panel, close } = modal("ag-confirm");
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        close();
+        resolve(value);
+      };
+      modalStack[modalStack.length - 1] = () => finish(null);
+      const later = turns - 1;
+      panel.append(
+        el("h2", "ag-modal-title", resend ? "Retry this message?" : "Edit this message?"),
+        el("p", "ag-modal-hint", `The chat goes back to just before it${later ? `: this turn and the ${later} after it are removed` : ": its reply is removed"}.`)
+      );
+      let undo = null;
+      if (files || page) {
+        const what = [files ? `${files} file${files === 1 ? "" : "s"}` : "", page ? "the page" : ""].filter(Boolean).join(" and ");
+        const label = el("label", "ag-check");
+        undo = el("input");
+        undo.type = "checkbox";
+        undo.checked = true;
+        label.append(undo, el("span", null, `Also undo their changes to ${what}`));
+        panel.append(label);
+      }
+      const actions = el("div", "ag-modal-actions");
+      actions.append(
+        el("span", "ag-grow"),
+        button("Cancel", "ag-btn small", () => finish(null)),
+        button(resend ? "Retry" : "Edit", "ag-btn small primary", () => finish({ keepChanges: undo ? !undo.checked : false }))
+      );
+      panel.append(actions);
+      actions.lastElementChild.focus();
+    });
+  }
+
   /* ---------- workspace picker ---------- */
 
   function pickWorkspace(initial) {
@@ -805,7 +904,8 @@
       this.dirtyAll = false;
       this.raf = 0;
       this.mdTimers = new Map();
-      this.images = [];
+      /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
+      this.attachments = [];
       this.drafts = new Map();
       this.contextOn = variant === "dock";
 
@@ -1394,17 +1494,25 @@
       const row = el("div", `ag-user${queued ? " queued" : ""}`);
       row.dataset.itemId = item.id;
       const bubble = el("div", "ag-user-bubble");
-      if (item.context?.length || item.images?.length) {
+      if (item.context?.length || item.images?.length || item.files?.length) {
         const chips = el("div", "ag-chips");
         for (const c of item.context || []) {
           const chip = el("span", "ag-chip small");
           chip.append(icon(c.kind === "page" ? "page" : c.kind === "folder" ? "folder" : "read"), el("span", null, c.title || c.path || (c.text ? `“${c.text.slice(0, 30)}…”` : c.kind)));
           chips.append(chip);
         }
-        for (const img of item.images || []) {
-          const chip = el("span", "ag-chip small");
-          chip.append(icon("image"), el("span", null, img.name));
-          chips.append(chip);
+        const sent = [...(item.images || []), ...(item.files || [])];
+        const previews = sent.filter((f) => f.id).map((f) => ({ ...f, url: sentFileUrl(item.threadId, f.id) }));
+        for (const file of sent) {
+          if (!file.id) {
+            // Sent before files were kept: only the name is known.
+            const chip = el("span", "ag-chip small");
+            chip.append(icon(file.mimeType?.startsWith("image/") ? "image" : "read"), el("span", null, file.name));
+            chips.append(chip);
+            continue;
+          }
+          const at = previews.findIndex((f) => f.id === file.id);
+          chips.append(fileChip(previews[at], () => window.scribePreview?.open(previews, at)));
         }
         bubble.append(chips);
       }
@@ -1413,15 +1521,23 @@
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
+      const actions = el("div", "ag-user-actions");
       if (item.text) {
-        const copy = button(icon("copy"), "ag-icon-btn small ag-user-copy", () => {
+        const copy = button(icon("copy"), "ag-icon-btn ag-user-copy", () => {
           navigator.clipboard?.writeText(item.text)?.then(() => {
             copy.classList.add("done");
             setTimeout(() => copy.classList.remove("done"), 1200);
           });
         }, "Copy message");
-        row.append(copy);
+        actions.append(copy);
       }
+      if (item.turnId && !queued && !item.dropped && !item.steer) {
+        actions.append(
+          button(icon("revert"), "ag-icon-btn", () => this.rewindTo(item, true), "Retry: go back to before this message and send it again"),
+          button(icon("edit"), "ag-icon-btn", () => this.rewindTo(item, false), "Edit: go back to before this message and change it")
+        );
+      }
+      if (actions.childElementCount) row.append(actions);
       if (item.steer === "waiting") {
         row.classList.add("steering");
         row.append(el("div", "ag-queued", "Steering — waiting for a safe stop · Enter again to send it now"));
@@ -1482,6 +1598,49 @@
       node.classList.toggle(cls, this.expanded.has(key));
     }
 
+    /**
+     * Back to just before a message: later turns leave the chat and their changes are undone. Then
+     * the message is sent again (retry) or put back in the composer (edit).
+     */
+    async rewindTo(item, resend) {
+      const t = this.thread();
+      if (!t) return;
+      if (t.status !== "idle" || t.queued) return notice("Stop the running turn first");
+      const detail = S.details.get(t.id);
+      const from = detail?.turns.get(item.turnId);
+      if (!from) return;
+      const later = [...detail.turns.values()].filter((x) => x.seq >= from.seq);
+      const files = new Set(later.filter((x) => !x.reverted).flatMap((x) => (x.files || []).map((f) => f.path)));
+      const page = later.some((x) => x.page?.after && !x.page.reverted);
+      let keepChanges = false;
+      if (later.length > 1 || files.size || page) {
+        const choice = await confirmRewind({ turns: later.length, files: files.size, page, resend });
+        if (!choice) return;
+        keepChanges = choice.keepChanges;
+      }
+      let msg;
+      try {
+        msg = await api("POST", `/threads/${encodeURIComponent(t.id)}/rewind`, { itemId: item.id, keepChanges });
+      } catch (err) {
+        notice(err.message);
+        return;
+      }
+      if (resend) {
+        this.stick = true;
+        await api("POST", `/threads/${encodeURIComponent(t.id)}/messages`, { text: msg.text, images: msg.images, files: msg.files, context: msg.context }).catch((err) => notice(err.message));
+        return;
+      }
+      this.input.value = msg.text || "";
+      this.clearAttachments();
+      this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
+      const tab = activeTab();
+      if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
+      this.renderContext();
+      this.autosize();
+      this.focus();
+      this.input.setSelectionRange(this.input.value.length, this.input.value.length);
+    }
+
     renderReasoning(it) {
       const running = !it.endedAt;
       const openDefault = localStorage.getItem(LS.reasoning) === "1";
@@ -1526,10 +1685,14 @@
 
     renderTool(it, byParent) {
       const key = `t:${it.id}`;
-      const node = el("div", `ag-tool k-${it.tool} s-${it.status}${this.expanded.has(key) ? " open" : ""}`);
+      const task = it.task;
+      const node = el("div", `ag-tool k-${it.tool} s-${it.status}${task ? ` has-task ts-${task.status}` : ""}${this.expanded.has(key) ? " open" : ""}`);
       node.dataset.itemId = it.id;
       const head = button("", "ag-tool-head", () => this.toggle(key, node));
-      const status = it.status === "running" || it.status === "pending" ? el("span", "ag-spin") : it.status === "error" ? icon("cross", "ag-ico ag-st-err") : icon(it.tool, "ag-ico");
+      // A task outlives its tool call: a background agent is still working after the call returned.
+      const busy = task ? task.status === "running" : it.status === "running" || it.status === "pending";
+      const failed = task ? task.status === "error" : it.status === "error";
+      const status = busy ? el("span", "ag-spin") : failed ? icon("cross", "ag-ico ag-st-err") : icon(it.tool, "ag-ico");
       head.append(status);
       const label = el("span", "ag-tool-label");
       if ((it.tool === "edit" || it.tool === "delete") && (it.files?.length || it.paths?.length)) {
@@ -1550,13 +1713,15 @@
         label.append(el("span", "ag-tool-title", it.title));
       }
       head.append(label);
+      if (task) head.append(el("span", `ag-task-badge ts-${task.status}`, taskStatusLabel(task)));
       if (it.exitCode !== undefined && it.tool === "execute") head.append(el("span", `ag-exit${it.exitCode === 0 ? " ok" : " bad"}`, it.exitCode === 0 ? "exit 0" : `exit ${it.exitCode}`));
       if (it.endedAt && it.startedAt && it.endedAt - it.startedAt > 1500) head.append(el("span", "ag-muted ag-dur", R.duration(it.endedAt - it.startedAt)));
       head.append(icon("chevron", "ag-ico ag-chev"));
       node.append(head);
+      if (task) node.append(this.renderTaskLine(it));
       const body = el("div", "ag-tool-body");
       if (it.detail && it.tool === "execute" && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
-      else if (it.detail && it.tool !== "execute") body.append(el("pre", "ag-pre small", it.detail));
+      else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
       if (it.diff) {
         const files = R.parsePatch(it.diff);
         for (const f of files) {
@@ -1564,10 +1729,19 @@
           fh.append(el("span", "ag-fpath", f.path), R.counts(f.added, f.removed), button("Open", "ag-btn tiny", () => openDiff({ kind: "turn", threadId: it.threadId, turnId: it.turnId, path: f.path })));
           body.append(fh, R.renderDiffFile(f, { collapsedAfter: 160 }));
         }
+      } else if (it.tool === "task" && typeof it.input?.prompt === "string") {
+        // The brief the agent gave its subagent, readable rather than as JSON.
+        const brief = el("div", "ag-task-brief");
+        brief.append(el("div", "ag-task-brief-label", it.input.subagent_type ? `Brief for ${it.input.subagent_type}` : "Brief"));
+        const md = el("div", "ag-md small");
+        R.renderMarkdown(md, it.input.prompt, mdCtx);
+        brief.append(md);
+        body.append(brief);
       } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) {
         body.append(el("pre", "ag-pre small", jsonText(it.input)));
       }
-      if (it.output && !(it.tool === "read")) {
+      // A background task's tool result is only the launch receipt; its outcome is on the task line.
+      if (it.output && it.tool !== "read" && !task?.background) {
         const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
         body.append(out);
       }
@@ -1579,11 +1753,52 @@
           if (n) sub.append(n);
         }
         body.append(sub);
-        head.querySelector(".ag-tool-label")?.append(el("span", "ag-muted", ` · ${children.filter((c) => c.kind === "tool").length} steps`));
+        const steps = children.filter((c) => c.kind === "tool").length;
+        if (steps) head.querySelector(".ag-tool-label")?.append(el("span", "ag-muted", ` · ${steps} ${steps === 1 ? "step" : "steps"}`));
       }
       if (body.childElementCount) node.append(body);
       else node.classList.add("bare");
       return node;
+    }
+
+    /** Under a task's head, always visible: what it is doing now (or how it ended), its usage, and its controls. */
+    renderTaskLine(it) {
+      const task = it.task;
+      const line = el("div", "ag-task-line");
+      const running = task.status === "running";
+      const what = task.summary || (running ? (task.lastTool ? `Using ${task.lastTool}` : "Starting…") : "");
+      // A stopped task reports its own description as the summary; the head already says it.
+      if (what && !(it.title || "").endsWith(what)) {
+        const text = el("span", "ag-task-summary", what);
+        text.title = what;
+        line.append(text);
+      }
+      const usage = [];
+      if (task.toolUses) usage.push(`${task.toolUses} ${task.toolUses === 1 ? "tool use" : "tool uses"}`);
+      if (task.tokens) usage.push(`${task.tokens >= 1000 ? `${Math.round(task.tokens / 1000)}k` : task.tokens} tokens`);
+      if (task.durationMs) usage.push(R.duration(task.durationMs));
+      if (usage.length) line.append(el("span", "ag-task-usage", usage.join(" · ")));
+      if (running) {
+        const actions = el("span", "ag-task-actions");
+        const call = (action, label) =>
+          button(label, "ag-btn tiny", async (event) => {
+            event.stopPropagation();
+            event.currentTarget.disabled = true;
+            try {
+              const result = await api("POST", `/threads/${encodeURIComponent(it.threadId)}/tasks/${encodeURIComponent(it.id)}/${action}`);
+              if (action === "background" && result && result.moved === false) notice("It already finished or is not running in the foreground");
+            } catch (err) {
+              notice(err.message);
+              event.currentTarget.disabled = false;
+            }
+          });
+        // Only a call the turn is still waiting on can move to the background.
+        if (!task.background && (it.status === "running" || it.status === "pending")) actions.append(call("background", "Run in background"));
+        actions.append(call("stop", "Stop"));
+        line.append(actions);
+      }
+      if (!line.childElementCount) line.hidden = true;
+      return line;
     }
 
     renderApproval(it) {
@@ -1792,7 +2007,7 @@
 
     onThread(thread, prev) {
       if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added) this.renderHeader();
-      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns) {
+      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns) {
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
@@ -1811,6 +2026,11 @@
     onTurn(turn) {
       this.dirtyTurns.add(turn.id);
       this.schedule();
+      if (turn.usage?.contextWindow && this.ctxMeter?.isConnected) {
+        const next = contextMeter(this);
+        this.ctxMeter.replaceWith(next);
+        this.ctxMeter = next;
+      }
       // The strip's run clock starts from the running turn, which can arrive after the thread's status.
       if (this.status && turn.status === "running" && !this.status.querySelector(".ag-clock")) this.renderComposerBar();
     }
@@ -1924,15 +2144,31 @@
         strip.append(this.status, this.bar);
         box.append(row, strip);
       }
+      // Files dropped anywhere on the composer are attached; the outline shows where a drop lands.
+      let dragDepth = 0;
+      const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+      box.addEventListener("dragenter", (event) => {
+        if (!hasFiles(event)) return;
+        dragDepth += 1;
+        box.classList.add("drop-target");
+      });
+      box.addEventListener("dragleave", () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) box.classList.remove("drop-target");
+      });
       box.addEventListener("dragover", (event) => {
-        if ([...(event.dataTransfer?.items || [])].some((i) => i.type.startsWith("image/"))) event.preventDefault();
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
       });
       box.addEventListener("drop", (event) => {
-        const files = [...(event.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
-        if (files.length) {
-          event.preventDefault();
-          files.forEach((f) => this.addImage(f));
-        }
+        dragDepth = 0;
+        box.classList.remove("drop-target");
+        const files = [...(event.dataTransfer?.files || [])];
+        if (!files.length) return;
+        event.preventDefault();
+        this.addFiles(files);
+        this.focus();
       });
       return box;
     }
@@ -1980,12 +2216,12 @@
         chip.append(icon("page"), el("span", null, this.contextOn ? tab.title : `+ ${tab.title}`));
         row.append(chip);
       }
-      this.images.forEach((img, index) => {
-        const chip = el("span", "ag-chip small img");
-        const thumb = el("img");
-        thumb.src = `data:${img.mimeType};base64,${img.data}`;
-        chip.append(thumb, el("span", null, img.name), button(icon("close"), "ag-chip-x", () => {
-          this.images.splice(index, 1);
+      this.attachments.forEach((file, index) => {
+        const chip = fileChip(file, () => window.scribePreview?.open(this.attachments, index));
+        chip.append(button(icon("close"), "ag-chip-x", (event) => {
+          event.stopPropagation();
+          const [gone] = this.attachments.splice(index, 1);
+          if (gone?.url) URL.revokeObjectURL(gone.url);
           this.renderContext();
         }, "Remove"));
         row.append(chip);
@@ -2003,23 +2239,51 @@
     }
 
     onPaste(event) {
-      const files = [...(event.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
-      if (files.length) {
-        event.preventDefault();
-        files.forEach((f) => this.addImage(f));
-      }
+      const files = [...(event.clipboardData?.files || [])];
+      if (!files.length) return;
+      // Office apps put a picture of the copied text beside the text itself: paste the text then.
+      const text = event.clipboardData.getData("text/plain");
+      if (text.trim() && files.every((f) => f.type.startsWith("image/"))) return;
+      event.preventDefault();
+      this.addFiles(files);
     }
 
-    addImage(file) {
-      if (this.images.length >= 6) return notice("Up to 6 images per message");
-      if (file.size > 8 * 1024 * 1024) return notice("Images must be under 8 MB");
-      const reader = new FileReader();
-      reader.onload = () => {
-        const data = String(reader.result).split(",")[1] || "";
-        this.images.push({ name: file.name || "pasted.png", mimeType: file.type || "image/png", data });
-        this.renderContext();
-      };
-      reader.readAsDataURL(file);
+    /** Attach pasted or dropped files, within the limits the daemon applies too. */
+    addFiles(files) {
+      for (const file of files) {
+        const image = file.type.startsWith("image/");
+        const max = image ? FILE_LIMITS.image : FILE_LIMITS.file;
+        if (this.attachments.length >= FILE_LIMITS.count) return notice(`Up to ${FILE_LIMITS.count} files per message`);
+        if (file.size > max) {
+          notice(`${file.name || "That file"} is too big: ${image ? "images" : "files"} must be under ${max / 1024 / 1024} MB`);
+          continue;
+        }
+        const total = this.attachments.reduce((sum, f) => sum + f.size, 0);
+        if (total + file.size > FILE_LIMITS.total) {
+          notice(`A message's files must add up to under ${FILE_LIMITS.total / 1024 / 1024} MB`);
+          continue;
+        }
+        const entry = {
+          name: file.name || (image ? `pasted.${(file.type.split("/")[1] || "png").replace("jpeg", "jpg").replace(/\+.*/, "")}` : "pasted file"),
+          mimeType: file.type || "",
+          size: file.size,
+          data: null,
+          url: URL.createObjectURL(file),
+        };
+        this.attachments.push(entry);
+        const reader = new FileReader();
+        reader.onload = () => {
+          entry.data = String(reader.result).split(",")[1] || "";
+        };
+        reader.readAsDataURL(file);
+      }
+      this.renderContext();
+    }
+
+    /** Drop the composer's files, freeing their preview URLs. */
+    clearAttachments() {
+      for (const file of this.attachments) if (file.url) URL.revokeObjectURL(file.url);
+      this.attachments = [];
     }
 
     renderComposerBar() {
@@ -2031,7 +2295,7 @@
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model");
       model.append(el("span", `ag-prov p-${s.provider}`, s.provider === "claude" ? "C" : "⌘"), el("span", null, info?.label || s.model));
       bar.append(model);
-      const hasEffort = info?.efforts?.length || info?.params?.length;
+      const hasEffort = info?.efforts?.length || info?.params?.some((p) => p.id !== CONTEXT_PARAM);
       if (hasEffort) {
         const effortLabel = s.effort ? info.efforts.find((e) => e.id === s.effort)?.label || s.effort : info.defaultEffort ? `${info.efforts.find((e) => e.id === info.defaultEffort)?.label || info.defaultEffort}` : "Default";
         const fast = info.params?.find((p) => p.id === "fast");
@@ -2041,6 +2305,8 @@
         if (fastOn) eff.append(el("span", "ag-tag tiny", "fast"));
         bar.append(eff);
       }
+      this.ctxMeter = contextMeter(this);
+      bar.append(this.ctxMeter);
       const mode = MODES.find((m) => m.id === s.mode) || MODES[0];
       const modeBtn = button("", `ag-pill mode-${mode.id}`, (event) => this.modeMenu(event.currentTarget), mode.detail);
       modeBtn.append(el("span", null, mode.label));
@@ -2083,6 +2349,7 @@
         if (start) this.status.append(setClock(el("span", "ag-clock"), start));
       }
       if (t?.queued) tail.append(el("span", "ag-tag", `${t.queued} queued`));
+      if (t?.background) tail.append(el("span", "ag-tag", `${t.background} in background`));
       const running = t && t.status !== "idle";
       if (running) {
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
@@ -2134,6 +2401,7 @@
         for (const e of info.efforts) items.push({ label: e.label, checked: s.effort === e.id, run: () => this.updateSettings({ effort: e.id }) });
       }
       for (const param of info.params || []) {
+        if (param.id === CONTEXT_PARAM) continue;
         items.push({ header: param.label });
         const cur = s.modelParams?.[param.id] ?? param.default;
         for (const o of param.options) {
@@ -2192,11 +2460,11 @@
       }
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
-        if (!this.input.value.trim() && !this.images.length && this.pushQueued()) return;
+        if (!this.input.value.trim() && !this.attachments.length && this.pushQueued()) return;
         this.send();
         return;
       }
-      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.images.length && this.withdrawQueued()) {
+      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.attachments.length && this.withdrawQueued()) {
         event.preventDefault();
         return;
       }
@@ -2296,7 +2564,8 @@
         .then((msg) => {
           if (this.input.value || this.threadId !== t.id) return;
           this.input.value = msg.text || "";
-          this.images = (msg.images || []).slice();
+          this.clearAttachments();
+          this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
           const tab = activeTab();
           if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
           this.renderContext();
@@ -2311,14 +2580,19 @@
     async send() {
       const text = this.input.value.trim();
       const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
-      if (scopeCmd && !this.images.length) {
+      if (scopeCmd && !this.attachments.length) {
         this.input.value = "";
         this.slash.hidden = true;
         this.autosize();
         await this.applyScopeSlash(scopeCmd[1].toLowerCase());
         return;
       }
-      if (!text && !this.images.length) return;
+      if (!text && !this.attachments.length) return;
+      if (this.attachments.some((f) => f.data === null)) {
+        // Still being read (a large file just dropped): try again in a moment.
+        setTimeout(() => this.send(), 100);
+        return;
+      }
       const s = this.settings();
       if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) {
         const dir = await pickWorkspace(null);
@@ -2332,9 +2606,12 @@
       if (this.contextOn && tab && !this.pageInThread(tab)) {
         context.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
       }
-      const images = this.images.slice();
+      const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
+      const images = sending.filter((f) => f.mimeType.startsWith("image/"));
+      const files = sending.filter((f) => !f.mimeType.startsWith("image/"));
+      const held = this.attachments;
+      this.attachments = [];
       this.input.value = "";
-      this.images = [];
       this.autosize();
       this.renderContext();
       this.slash.hidden = true;
@@ -2365,13 +2642,18 @@
           this.renderAll();
         }
         this.stick = true;
-        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, context });
+        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context });
+        for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         this.renderContext();
       } catch (err) {
         notice(err.message);
-        if (!this.input.value) {
+        if (!this.input.value && !this.attachments.length) {
           this.input.value = text;
+          this.attachments = held;
           this.autosize();
+          this.renderContext();
+        } else {
+          for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         }
       }
     }
@@ -2567,7 +2849,8 @@
 
   function threadRow(t, current, onPick) {
     const row = button("", `ag-row${current ? " on" : ""}${t.unread ? " unread" : ""}`, () => onPick(t.id));
-    const dot = el("span", `ag-dot s-${t.status}`);
+    const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
+    if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
     const title = el("span", "ag-row-title", t.title);
     const meta = el("span", "ag-row-meta");
@@ -3039,7 +3322,7 @@
         return;
       }
       const detail = S.details.get(turn.threadId);
-      const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text") : null;
+      const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId) : null;
       const files = turn.files || [];
       if (files.length) {
         const added = files.reduce((a, f) => a + f.added, 0);
@@ -3329,6 +3612,109 @@
     }
     if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
     return tip;
+  }
+
+  /* ----- context window ----- */
+
+  /** Cursor's model parameter for the context window size ("272k", "1m"). */
+  const CONTEXT_PARAM = "context";
+
+  function tokenCount(n) {
+    if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`;
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return String(n);
+  }
+
+  /** "272k" or "1m" as tokens. */
+  function sizeTokens(value) {
+    const m = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(String(value || "").trim());
+    if (!m) return 0;
+    return Math.round(parseFloat(m[1]) * (m[2]?.toLowerCase() === "m" ? 1_000_000 : m[2] ? 1000 : 1));
+  }
+
+  /** The context of a chat: the latest turn's usage, and the size option when the model has one. */
+  function contextInfo(view) {
+    const s = view.settings();
+    const t = view.thread();
+    const info = modelInfo(s.provider, s.model);
+    const param = info?.params?.find((p) => p.id === CONTEXT_PARAM) || null;
+    const size = param ? (s.modelParams?.[CONTEXT_PARAM] ?? param.default) : null;
+    const turns = t ? [...(S.details.get(t.id)?.turns.values() || [])].sort((a, b) => a.seq - b.seq) : [];
+    const last = [...turns].reverse().find((x) => x.usage?.contextWindow || x.usage?.contextTokens);
+    const usage = last?.usage || null;
+    const window = usage?.contextWindow || sizeTokens(size) || 0;
+    const used = usage?.contextTokens || 0;
+    return { s, param, size, usage, used, window, fraction: window ? Math.min(1, used / window) : 0 };
+  }
+
+  /** A ring that fills as the context does. Click picks the window size where the model has one; hover gives details. */
+  function contextMeter(view) {
+    const ctx = contextInfo(view);
+    const level = usageLevel(ctx.fraction);
+    const meter = button("", `ag-ctx-meter lvl-${level}${ctx.param ? "" : " fixed"}`, (event) => {
+      if (!ctx.param) return;
+      hideUsageTip();
+      const cur = ctx.size;
+      openMenu(
+        event.currentTarget,
+        [
+          { header: "Context window" },
+          ...ctx.param.options.map((o) => ({
+            label: o.label,
+            detail: sizeTokens(o.id) > sizeTokens(ctx.param.default) ? "Uses more credits per message" : undefined,
+            checked: cur === o.id,
+            run: () => view.updateSettings({ modelParams: { ...(ctx.s.modelParams || {}), [CONTEXT_PARAM]: o.id } }),
+          })),
+        ],
+        { width: 240 }
+      );
+    });
+    meter.setAttribute("aria-label", ctx.window ? `Context ${percent(ctx.fraction)} of ${tokenCount(ctx.window)}` : "Context");
+    // Two circles: the track and an arc whose dash length is the share in use.
+    const r = 6;
+    const length = 2 * Math.PI * r;
+    meter.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="${r}" class="ag-ctx-track"/>${ctx.fraction > 0 ? `<circle cx="8" cy="8" r="${r}" class="ag-ctx-fill" stroke-dasharray="${(ctx.fraction * length).toFixed(2)} ${length.toFixed(2)}" transform="rotate(-90 8 8)"/>` : ""}</svg>`;
+    meter.addEventListener("pointerenter", () => {
+      clearTimeout(usageTipTimer);
+      usageTipTimer = setTimeout(() => showContextTip(meter, contextInfo(view)), 160);
+    });
+    meter.addEventListener("pointerleave", () => {
+      clearTimeout(usageTipTimer);
+      usageTipTimer = setTimeout(hideUsageTip, 120);
+    });
+    return meter;
+  }
+
+  function showContextTip(anchor, ctx) {
+    hideUsageTip();
+    const tip = el("div", "ag-usage-tip");
+    tip.append(el("div", "ag-usage-tip-title", "Context"));
+    if (ctx.window && ctx.used) {
+      const row = el("div", `ag-usage-tip-row lvl-${usageLevel(ctx.fraction)}`);
+      const bar = el("div", "ag-meter-bar");
+      const fill = el("div", "ag-meter-fill");
+      fill.style.width = `${Math.round(ctx.fraction * 100)}%`;
+      bar.append(fill);
+      row.append(el("span", "ag-usage-tip-label", `${tokenCount(ctx.used)} of ${tokenCount(ctx.window)}`), bar, el("span", "ag-usage-tip-pct", percent(ctx.fraction)));
+      tip.append(row);
+    } else {
+      tip.append(el("div", "ag-usage-tip-note", ctx.window ? `Window: ${tokenCount(ctx.window)}. Shows how full it is after the first reply.` : "Shows how full the context is after the first reply."));
+    }
+    const u = ctx.usage;
+    if (u && (u.inputTokens || u.outputTokens)) {
+      const parts = [u.inputTokens ? `${tokenCount(u.inputTokens)} in` : "", u.cacheReadTokens ? `${tokenCount(u.cacheReadTokens)} cached` : "", u.outputTokens ? `${tokenCount(u.outputTokens)} out` : ""].filter(Boolean);
+      tip.append(el("div", "ag-usage-tip-note", `Last turn: ${parts.join(" · ")}`));
+    }
+    if (ctx.param) tip.append(el("div", "ag-usage-tip-note", "Click to change the window size. A bigger window costs more credits per message."));
+    document.body.append(tip);
+    const rect = anchor.getBoundingClientRect();
+    const tw = Math.min(260, window.innerWidth - 16);
+    tip.style.width = `${tw}px`;
+    let top = rect.top - tip.offsetHeight - 8;
+    if (top < 8) top = rect.bottom + 8;
+    tip.style.top = `${Math.max(8, top)}px`;
+    tip.style.left = `${Math.min(Math.max(8, rect.left + rect.width / 2 - tw / 2), window.innerWidth - tw - 8)}px`;
+    usageTipEl = tip;
   }
 
   /** Compact "5h 84% · wk 76%" for the chat's settings bar; nothing until the provider has reported. */
