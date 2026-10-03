@@ -352,7 +352,7 @@ scribe.agent.onChange((t) => render(t));                   // { id, title, statu
 
 ## Waiting for user input
 
-`page_wait` is a single blocked call. The page logs a **named event** when the thing you care about happens; you wait for that name. Typing, `scribe.set`, and `scribe.bind` do **not** wake you.
+`page_wait` is a single blocked call. The page logs a **named event** when the thing you care about happens; you wait for that name. Typing, `scribe.set`, and `scribe.bind` do **not** wake you. Optional `where` matches fields on each event's `data` (compared as text), e.g. `{ column: "grok issues" }` on a Kanban `card_ready`.
 
 Handshake:
 

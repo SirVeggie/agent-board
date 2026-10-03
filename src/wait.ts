@@ -1,4 +1,4 @@
-import { store } from "./store.js";
+import { store, type BoardStore } from "./store.js";
 import { visibleTo, type PageEvent, type Tab, type Viewer } from "./types.js";
 
 export type WaitResult = {
@@ -18,8 +18,31 @@ export type WaitResult = {
   stateRevision: number;
 };
 
+/** True when the event's name is wanted and, if `where` is set, every field matches `data`. */
+export function eventMatches(
+  event: PageEvent,
+  names: string[],
+  where?: Record<string, string | number | boolean>
+): boolean {
+  if (names.length && !names.includes(event.name)) {
+    return false;
+  }
+  if (!where) {
+    return true;
+  }
+  const data = event.data;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return false;
+  }
+  const rec = data as Record<string, unknown>;
+  return Object.entries(where).every(
+    ([field, want]) => rec[field] !== undefined && rec[field] !== null && String(rec[field]) === String(want)
+  );
+}
+
 /**
  * Resolve with the events after `after` whose name is in `names` (any name when empty).
+ * `where` further requires those fields on event `data` (compared as text).
  * Without `after`, only events logged from now on count.
  */
 export function waitForEvents(opts: {
@@ -29,8 +52,11 @@ export function waitForEvents(opts: {
   timeoutMs: number;
   viewer: Viewer;
   abort?: AbortSignal;
+  where?: Record<string, string | number | boolean>;
+  store?: BoardStore;
 }): Promise<WaitResult> {
-  const initial = store.get(opts.idOrKey, opts.viewer);
+  const db = opts.store ?? store;
+  const initial = db.get(opts.idOrKey, opts.viewer);
   if (!initial) {
     return Promise.reject(new Error(`tab not found: ${opts.idOrKey}`));
   }
@@ -51,20 +77,18 @@ export function waitForEvents(opts: {
     };
 
     const check = (timedOut: boolean) => {
-      const current = store.get(tabId);
+      const current = db.get(tabId);
       if (!current || !visibleTo(current, opts.viewer)) {
         finish({ ...result(last, []), deleted: true });
         return;
       }
       last = current;
-      const matching = current.events.filter(
-        (event) => event.seq > after && (!opts.names.length || opts.names.includes(event.name))
-      );
+      const matching = current.events.filter((event) => event.seq > after && eventMatches(event, opts.names, opts.where));
       if (matching.length) {
         finish(result(current, matching));
         return;
       }
-      if (store.isClosed(tabId)) {
+      if (db.isClosed(tabId)) {
         finish({ ...result(current, []), closed: true });
         return;
       }
@@ -82,9 +106,9 @@ export function waitForEvents(opts: {
     const onAbort = () => check(true);
     const timer = setTimeout(() => check(true), opts.timeoutMs);
 
-    store.on("tab_event", onEvent);
-    store.on("tab_deleted", onEvent);
-    store.on("tab_closed", onEvent);
+    db.on("tab_event", onEvent);
+    db.on("tab_deleted", onEvent);
+    db.on("tab_closed", onEvent);
     if (opts.abort) {
       if (opts.abort.aborted) {
         onAbort();
@@ -97,9 +121,9 @@ export function waitForEvents(opts: {
 
     function cleanup() {
       clearTimeout(timer);
-      store.off("tab_event", onEvent);
-      store.off("tab_deleted", onEvent);
-      store.off("tab_closed", onEvent);
+      db.off("tab_event", onEvent);
+      db.off("tab_deleted", onEvent);
+      db.off("tab_closed", onEvent);
       opts.abort?.removeEventListener("abort", onAbort);
     }
   });

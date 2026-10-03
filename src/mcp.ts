@@ -661,7 +661,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_wait",
-    "Block until the page logs an event (scribe.signal(name, data) or data-scribe-signal in the page; Scribe itself logs some too, like claim_lost), then return the matching events, oldest first, and a cursor. Events carry a small data payload (e.g. { card: \"c_12\" }), not the page's state: read what you need with page_state path or a page action. Pass the returned cursor as after on the next wait so no event is missed or seen twice; without after, only events from now on count. Use this instead of polling page_state. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same after. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. missed: true means older events dropped out of the log (it keeps the last 500): scan the page's state instead.",
+    "Block until the page logs an event (scribe.signal(name, data) or data-scribe-signal in the page; Scribe itself logs some too, like claim_lost), then return the matching events, oldest first, and a cursor. Events carry a small data payload (e.g. { card: \"c_12\" }), not the page's state: read what you need with page_state path or a page action. Pass the returned cursor as after on the next wait so no event is missed or seen twice; without after, only events from now on count. Optional where matches fields on event data (e.g. { column: \"grok issues\" }). Use this instead of polling page_state. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same after. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. missed: true means older events dropped out of the log (it keeps the last 500): scan the page's state instead.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
@@ -681,9 +681,15 @@ export async function startMcp(): Promise<void> {
         .number()
         .optional()
         .describe("How long to wait, in milliseconds. Defaults to 7200000 (2 hours). There is no maximum; the user can interrupt you at any time."),
+      where: z
+        .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+        .optional()
+        .describe(
+          `Match fields on each event's data (compared as text), e.g. { column: "grok issues" } so card_ready for another agent column does not wake you. Omit to accept any payload.`
+        ),
     },
     { readOnlyHint: true },
-    async ({ id, key, events, after, timeoutMs }, extra) => {
+    async ({ id, key, events, after, timeoutMs, where }, extra) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -715,7 +721,7 @@ export async function startMcp(): Promise<void> {
         const { status, data } = await api(
           "POST",
           `/api/tabs/${encodeURIComponent(which)}/wait`,
-          { events: names, ...(after !== undefined ? { after } : {}), timeoutMs: waitMs },
+          { events: names, ...(after !== undefined ? { after } : {}), timeoutMs: waitMs, ...(where ? { where } : {}) },
           { timeoutMs: waitMs + 15_000, signal: extra.signal }
         );
         if (status >= 400) {

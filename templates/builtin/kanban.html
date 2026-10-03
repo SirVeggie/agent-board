@@ -1148,7 +1148,13 @@
     var col = column(toCol);
     if (col && col.role === "agent") {
       var moved = card(cardId);
-      scribe.signal("card_ready", { card: cardId, num: moved ? moved.num : null });
+      scribe.signal("card_ready", {
+        card: cardId,
+        num: moved ? moved.num : null,
+        column: col.title,
+        columnId: col.id,
+        role: col.role,
+      });
     }
   }
 

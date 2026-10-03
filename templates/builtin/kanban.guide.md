@@ -20,11 +20,11 @@ If your thread fails or is stopped, Scribe moves your card back to the agent col
 
 ## Events
 
-Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothing is missed or seen twice. Each event's `data` names the card: `{ card: "<id>", num: 12 }`.
+Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothing is missed or seen twice. Each event's `data` names the card: `{ card: "<id>", num: 12, column: "<title>", columnId, role }`. Pass `where` to match fields on that data (compared as text), e.g. `{ column: "grok issues" }`, so another agent column does not wake you.
 
 | event | when |
 |---|---|
-| `card_ready` | The user moved a card into an `agent` column. |
+| `card_ready` | The user moved a card into an `agent` column. `data` includes `column` (title), `columnId`, and `role`. |
 | `comment` | The user commented on a card. |
 | `approved` | The user approved a card in review; it moved to done. |
 | `changes` | The user requested changes. Their note is the card's last comment and the card is back in the agent column. |

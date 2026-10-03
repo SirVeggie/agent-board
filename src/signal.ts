@@ -42,3 +42,31 @@ export function parseCursor(value: unknown): number | undefined {
   }
   return Math.floor(value);
 }
+
+/**
+ * Fields to match on event `data` (same rules as page_state `where`: compared as text).
+ * A JSON string is accepted so GET /wait can pass it as a query param.
+ */
+export function parseWhere(input: unknown): Record<string, string | number | boolean> | undefined {
+  if (input == null || input === "") {
+    return undefined;
+  }
+  let value = input;
+  if (typeof input === "string") {
+    try {
+      value = JSON.parse(input);
+    } catch {
+      throw new Error("where must be a JSON object");
+    }
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("where must be an object");
+  }
+  const out: Record<string, string | number | boolean> = {};
+  for (const [field, want] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof want === "string" || typeof want === "number" || typeof want === "boolean") {
+      out[field] = want;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}

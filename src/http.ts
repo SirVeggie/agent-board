@@ -11,7 +11,7 @@ import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
-import { clampWaitMs, parseCursor, parseEventNames } from "./signal.js";
+import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
@@ -338,11 +338,11 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.post("/api/tabs/:id/wait", (req, res) => {
-    handleWait(req, res, req.body?.events ?? req.body?.names, req.body?.after, req.body?.timeoutMs);
+    handleWait(req, res, req.body?.events ?? req.body?.names, req.body?.after, req.body?.timeoutMs, req.body?.where);
   });
 
   app.get("/api/tabs/:id/wait", (req, res) => {
-    handleWait(req, res, req.query.events ?? req.query.names, req.query.after, req.query.timeoutMs);
+    handleWait(req, res, req.query.events ?? req.query.names, req.query.after, req.query.timeoutMs, req.query.where);
   });
 
   /**
@@ -1086,11 +1086,14 @@ function handleWait(
   res: express.Response,
   namesInput: unknown,
   afterInput: unknown,
-  timeoutInput: unknown
+  timeoutInput: unknown,
+  whereInput: unknown
 ): void {
   let names: string[];
+  let where: ReturnType<typeof parseWhere>;
   try {
     names = parseEventNames(namesInput);
+    where = parseWhere(whereInput);
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
     return;
@@ -1115,6 +1118,7 @@ function handleWait(
     timeoutMs,
     viewer: viewerOf(req),
     abort: abort.signal,
+    ...(where ? { where } : {}),
   })
     .then((result) => {
       if (!res.writableEnded) {
