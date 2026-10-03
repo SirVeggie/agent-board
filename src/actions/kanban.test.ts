@@ -59,6 +59,27 @@ test("finish comments, clears the claim, and hands the card to review", () => {
   assert.equal((c.comments as Array<{ by: string }>).at(-1)?.by, "agent");
 });
 
+test("finish without a summary hands in the comment posted since the claim, and never doubles it", () => {
+  const claimed = run(board(), "claim", { card: 1 }, agent({ session: "s1" }));
+  // A comment from before this claim does not count as the hand-in.
+  const old = run(board(), "comment", { card: 1, text: "Old note" }).state;
+  const reclaimed = run({ ...old }, "claim", { card: 1 }, { ...agent(), now: 2000 }).state;
+  assert.throws(() => run(reclaimed, "finish", { card: 1 }, { ...agent(), now: 3000 }), /summary is required/);
+
+  const commented = run(claimed.state, "comment", { card: 1, text: "Done: the filter works.\nRestart the app." }, { ...agent(), now: 1500 }).state;
+  const reused = run(commented, "finish", { card: 1 }, { ...agent(), now: 1600 });
+  const comments = card(reused.state, 1).comments as Array<{ text: string }>;
+  assert.equal(comments.length, 1);
+  assert.equal(reused.result.handIn, "your earlier comment");
+  assert.equal(card(reused.state, 1).col, "rev");
+
+  // The same text again as the summary is not posted twice; a different summary is.
+  const same = run(commented, "finish", { card: 1, summary: "done:  the filter works. restart the app." }, { ...agent(), now: 1600 });
+  assert.equal((card(same.state, 1).comments as unknown[]).length, 1);
+  const other = run(commented, "finish", { card: 1, summary: "Also fixed the sort." }, { ...agent(), now: 1600 });
+  assert.equal((card(other.state, 1).comments as unknown[]).length, 2);
+});
+
 test("get returns the comments themselves, not just their count", () => {
   const commented = run(board(), "comment", { card: 1, text: "First **note**" }).state;
   const { result } = run(commented, "get", { card: 1 });
