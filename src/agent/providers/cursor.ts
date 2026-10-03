@@ -24,6 +24,29 @@ const IDLE_KILL_MS = 15 * 60 * 1000;
 /** Name of the board MCP server this daemon hands each Cursor session. */
 export const BOARD_MCP = "scribe-chat";
 const MODELS_TTL_MS = 30 * 60 * 1000;
+/** Waits before each retry of a prompt Cursor's backend dropped; its length caps the retries. */
+const RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
+const RESUME_TEXT = "Your previous response was cut off by a network error. Continue from where you left off; don't redo steps that already finished.";
+
+/** Cursor marks transient backend failures (dropped HTTP/2 streams and the like) as RetriableError. */
+export function isRetriable(err: unknown): boolean {
+  if (!(err instanceof RpcError)) return false;
+  const data = isPlainRecord(err.data) ? JSON.stringify(err.data) : "";
+  return /RetriableError|stream closed with error code|ECONNRESET|ETIMEDOUT/i.test(`${err.message} ${data}`);
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+  });
+}
 
 type AgentBinary = { node: string; entry: string; version: string };
 
@@ -404,6 +427,8 @@ class CursorSession implements ProviderSession {
   private carry: string | null = null;
   /** Latest context usage, including updates that arrive with no turn running. */
   private lastUsage: Usage | null = null;
+  /** Whether the running prompt has streamed anything yet; decides how a retry resumes. */
+  private progressed = false;
 
   constructor(
     private provider: CursorProvider,
@@ -615,7 +640,7 @@ class CursorSession implements ProviderSession {
       for (const image of input.images) {
         prompt.push({ type: "image", data: image.data, mimeType: image.mimeType });
       }
-      const result = await conn.request<{ stopReason?: string }>("session/prompt", { sessionId: this.sessionId, prompt });
+      const result = await this.prompt(conn, prompt, sink);
       this.sentInstructions = true;
       const stop = result?.stopReason;
       if (stop === "cancelled") return this.endTurn({ status: "cancelled" });
@@ -634,6 +659,28 @@ class CursorSession implements ProviderSession {
       this.abort = null;
       this.sink = null;
       this.armIdle();
+    }
+  }
+
+  /**
+   * Sends session/prompt, retrying when Cursor's backend drops the stream with a RetriableError
+   * (e.g. "http/2 stream closed with error code CANCEL"). The CLI gives up on these instead of
+   * retrying itself. If the attempt streamed nothing, the same prompt goes again; otherwise a
+   * short note asks the model to pick up where it was cut off, so finished work is not redone.
+   */
+  private async prompt(conn: AcpConnection, prompt: unknown[], sink: RunSink): Promise<{ stopReason?: string } | undefined> {
+    let body = prompt;
+    for (let attempt = 1; ; attempt += 1) {
+      this.progressed = false;
+      try {
+        return await conn.request<{ stopReason?: string }>("session/prompt", { sessionId: this.sessionId, prompt: body });
+      } catch (err) {
+        if (attempt > RETRY_DELAYS_MS.length || !isRetriable(err) || this.abort?.signal.aborted || !conn.alive) throw err;
+        sink.notice("warn", `Cursor connection dropped (${(err as Error).message}). Retrying (attempt ${attempt + 1})…`);
+        await abortableDelay(RETRY_DELAYS_MS[attempt - 1], this.abort?.signal);
+        if (this.abort?.signal.aborted) throw err;
+        if (this.progressed) body = [{ type: "text", text: RESUME_TEXT }];
+      }
     }
   }
 
@@ -719,6 +766,7 @@ class CursorSession implements ProviderSession {
     }
     const sink = this.sink;
     if (!sink) return;
+    this.progressed = true;
     switch (kind) {
       case "agent_message_chunk": {
         const content = update.content;
