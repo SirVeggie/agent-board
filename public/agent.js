@@ -1839,7 +1839,7 @@
       this.ctxRow = el("div", "ag-ctx");
       this.input = el("textarea", "ag-textarea");
       this.input.rows = 1;
-      this.input.placeholder = this.variant === "dock" ? "Ask or make a change… (Enter to send)" : "Message the agent… (Enter to send, Shift+Enter for a new line)";
+      this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
       this.input.addEventListener("input", () => {
         this.autosize();
         this.updateSlash();
