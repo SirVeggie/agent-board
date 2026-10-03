@@ -59,6 +59,17 @@ test("finish comments, clears the claim, and hands the card to review", () => {
   assert.equal((c.comments as Array<{ by: string }>).at(-1)?.by, "agent");
 });
 
+test("get returns the comments themselves, not just their count", () => {
+  const commented = run(board(), "comment", { card: 1, text: "First **note**" }).state;
+  const { result } = run(commented, "get", { card: 1 });
+  const comments = result.comments as Array<{ by: string; text: string }>;
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].text, "First **note**");
+  assert.equal(comments[0].by, "agent");
+  assert.equal(result.lastComment, undefined);
+  assert.equal(result.column, "Ready for agent");
+});
+
 test("moving into done sets doneAt and puts the card on top; moving out clears it", () => {
   let { state } = run(board(), "move", { card: 1, to: "done" });
   assert.deepEqual(order(state), [2, 1, 3]);

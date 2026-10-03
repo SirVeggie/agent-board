@@ -223,7 +223,9 @@ export const kanbanActions: ActionSet = {
       args: "{ card }",
       run(state, args) {
         const card = findCard(state, args.card);
-        return { ops: [], result: { ...card, ...summary(state, card), labelIds: arr(card.labels) } };
+        // The summary's comment count and last-comment stamp are for list rows; get keeps the comments themselves.
+        const { comments: _count, lastComment: _last, ...brief } = summary(state, card);
+        return { ops: [], result: { ...card, ...brief, comments: arr<Comment>(card.comments), labelIds: arr(card.labels) } };
       },
     },
     create: {
