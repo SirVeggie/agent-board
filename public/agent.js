@@ -1885,8 +1885,11 @@
       node.append(head);
       if (task) node.append(this.renderTaskLine(it));
       const body = el("div", "ag-tool-body");
-      if (it.detail && it.tool === "execute" && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
-      else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
+      if (it.tool === "execute") {
+        if (it.detail && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
+        // The head cuts the command to one line; the body has all of it.
+        if (it.detail) body.append(el("pre", "ag-pre small ag-cmd-full", it.detail));
+      } else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
       if (it.diff) {
         const files = R.parsePatch(it.diff);
         for (const f of files) {

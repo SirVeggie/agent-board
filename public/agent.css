@@ -890,6 +890,11 @@ button.ag-tool-head:hover {
   color: var(--muted);
 }
 
+.ag-cmd-full::before {
+  content: "$ ";
+  color: var(--muted);
+}
+
 .ag-exit {
   font-family: var(--ag-mono);
   font-size: 10.5px;
