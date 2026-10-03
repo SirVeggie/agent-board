@@ -19,6 +19,8 @@ export type Prefs = {
   favoriteModels: string[];
   /** Last worktree choice per workspace (see workspaceKey), the default for new threads there. */
   worktrees: Record<string, boolean>;
+  /** Writes the summary a fork to another provider starts from. */
+  summarizer: { provider: ProviderId; model: string };
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -34,6 +36,7 @@ export const DEFAULT_PREFS: Prefs = {
   scopeWorkspaces: {},
   favoriteModels: [],
   worktrees: {},
+  summarizer: { provider: "claude", model: "haiku" },
 };
 
 /** Same as dirKey in public/agent.js, which looks up these keys for new threads. */

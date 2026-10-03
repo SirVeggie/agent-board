@@ -167,6 +167,8 @@ export interface AgentProvider {
   readonly forks?: boolean;
   status(): Promise<ProviderStatus>;
   models(refresh?: boolean): Promise<ModelOption[]>;
+  /** One answer to one prompt, with no tools and no saved session (the summary a fork carries over). */
+  complete(prompt: string, model: string, signal?: AbortSignal): Promise<string>;
   createSession(thread: Thread, ctx: SessionContext): ProviderSession;
   /** Warm a spare session for a thread that does not exist yet; createSession adopts it when the settings match. */
   prewarm(draft: Thread, instructions: string, ctx: SessionContext): void;

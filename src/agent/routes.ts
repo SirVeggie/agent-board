@@ -151,6 +151,14 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.post(
+    "/threads/:id/fork",
+    wrap((req) => {
+      const patch = threadPatch(isPlainRecord(req.body) ? req.body : {});
+      return { thread: host.fork(req.params.id, { provider: patch.provider, model: patch.model, mode: patch.mode }) };
+    })
+  );
+
+  router.post(
     "/threads/:id/read",
     wrap((req) => {
       host.markRead(req.params.id);

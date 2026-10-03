@@ -1635,6 +1635,58 @@ button.ag-change-row .ag-fname {
   display: none;
 }
 
+/* A fork before its first message: how the earlier thread comes along, and the offer to archive it. */
+.ag-fork-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ag-fork-note[hidden] {
+  display: none;
+}
+
+.ag-fork-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ag-fork-line > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.ag-fork-line.warn {
+  color: var(--ag-warn);
+}
+
+.ag-fork-line .ag-ico {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+
+.ag-fork-act {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--ag-card-border);
+  background: var(--ag-card);
+  color: var(--heading);
+  cursor: pointer;
+}
+
+.ag-fork-act:hover {
+  background: rgba(var(--lift-rgb), 0.08);
+}
+
 .ag-textarea {
   font: inherit;
   font-size: 13.5px;

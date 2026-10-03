@@ -87,6 +87,8 @@
     search: "",
     lastActiveId: null,
     ready: false,
+    /** Forks whose offer to archive the thread they came from was answered or dismissed. */
+    forkArchiveSeen: new Set(),
   };
 
   async function api(method, path, body) {
@@ -413,6 +415,18 @@
 
   function archiveThread(t) {
     api("PATCH", `/threads/${t.id}`, { archived: !t.archived }).catch((e) => notice(e.message));
+  }
+
+  /** A new thread that goes on from this one; `open` shows it. */
+  async function forkThread(t, open, patch = {}) {
+    try {
+      const { thread } = await api("POST", `/threads/${encodeURIComponent(t.id)}/fork`, patch);
+      S.threads.set(thread.id, thread);
+      S.details.set(thread.id, { items: [], byId: new Map(), turns: new Map() });
+      open(thread.id);
+    } catch (err) {
+      notice(err.message);
+    }
   }
 
   async function deleteThread(t) {
@@ -1073,9 +1087,9 @@
         return;
       }
       if (patch.provider && patch.provider !== t.provider && t.stats.turns > 0) {
-        // A thread keeps its provider; continue in a new thread in the same scope.
-        this.startDraft(t.scope, { provider: patch.provider, model: patch.model, mode: t.mode, cwd: homeDir(t), approval: approvalFor(patch.provider), web: t.web });
-        notice(`New ${PROVIDER_LABEL[patch.provider]} thread`);
+        // A thread keeps its provider; it goes on in a fork, which carries the conversation over.
+        await forkThread(t, (id) => this.openThread(id), { provider: patch.provider, model: patch.model, ...(patch.mode ? { mode: patch.mode } : {}) });
+        notice(`Forked into a new ${PROVIDER_LABEL[patch.provider]} thread`);
         return;
       }
       try {
@@ -1129,6 +1143,13 @@
           }
         });
       }
+    }
+
+    /** Show a thread here, and make it the one this view comes back to. */
+    openThread(id) {
+      if (this.variant !== "dock") setCurrent(id);
+      else dock.remember(id);
+      this.setThread(id);
     }
 
     startDraft(scope, settings = {}) {
@@ -1408,6 +1429,7 @@
         { label: "Rename", run: () => { const ti = this.header.querySelector(".ag-title"); if (ti) this.rename(ti); } },
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
         { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
+        ...(t.stats.turns ? [{ label: "Fork thread", detail: "Continue in a new thread", run: () => forkThread(t, (id) => this.openThread(id)) }] : []),
         { label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) },
         ...(openWorktree(t) ? [{ label: "Worktree…", detail: openWorktree(t).branch, icon: "git", run: () => this.worktreeMenu(anchor) }] : []),
         ...(t.nativeId ? [{ label: "Copy session id", detail: t.nativeId, run: () => navigator.clipboard?.writeText(t.nativeId) }] : []),
@@ -2257,7 +2279,9 @@
       // The send button sits beside the input. The dock places it and the settings bar itself;
       // the sidebar and full window put a strip under the input with the run status and the settings.
       this.sendSlot = el("div", "ag-send-slot");
-      box.append(this.slash, this.ctxRow);
+      this.forkNote = el("div", "ag-fork-note");
+      this.forkNote.hidden = true;
+      box.append(this.slash, this.forkNote, this.ctxRow);
       if (this.variant === "dock") {
         box.append(this.input);
       } else {
@@ -2419,6 +2443,7 @@
       const t = this.thread();
       const bar = this.bar;
       bar.replaceChildren();
+      this.renderForkNote(t);
       const info = modelInfo(s.provider, s.model);
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model");
       model.append(el("span", `ag-prov p-${s.provider}`, PROVIDER_GLYPH[s.provider] || "?"), el("span", null, info?.label || s.model));
@@ -2483,6 +2508,49 @@
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
       }
       tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : "Send (Enter)"));
+    }
+
+    /**
+     * Above the input of a fork that has not run yet: how the earlier conversation comes along, and an
+     * offer to archive the thread it came from. Both go once the first message is sent.
+     */
+    renderForkNote(t) {
+      const note = this.forkNote;
+      note.replaceChildren();
+      const fork = t && !t.stats.turns ? t.fork : null;
+      note.hidden = !fork;
+      if (!fork) return;
+      const from = S.threads.get(fork.from);
+      const fromName = `“${from?.title || fork.title}”`;
+      if (t.carry?.how === "summary") {
+        const switched = t.provider !== fork.provider;
+        const how = t.carry.summarizer
+          ? `its first and last messages, and a summary of the rest written by ${t.carry.summarizer}`
+          : "its messages and the last reply";
+        const line = el("div", "ag-fork-line warn");
+        line.append(icon("git"), el("span", null, `${switched ? `${PROVIDER_LABEL[t.provider]} can't continue a ${PROVIDER_LABEL[fork.provider]} session` : "This starts a new session"}, so ${fromName} comes along as ${how}.`));
+        note.append(line);
+      } else {
+        const line = el("div", "ag-fork-line");
+        line.append(icon("git"), el("span", null, `Continues ${fromName} with its whole conversation, in a session of its own.`));
+        note.append(line);
+      }
+      if (from && !from.archived && !S.forkArchiveSeen.has(t.id)) {
+        const line = el("div", "ag-fork-line");
+        line.append(
+          el("span", null, `Archive ${fromName}?`),
+          button("Archive", "ag-fork-act", () => {
+            S.forkArchiveSeen.add(t.id);
+            archiveThread(from);
+            this.renderForkNote(this.thread());
+          }),
+          button(icon("close"), "ag-icon-btn small", () => {
+            S.forkArchiveSeen.add(t.id);
+            this.renderForkNote(this.thread());
+          }, "Dismiss")
+        );
+        note.append(line);
+      }
     }
 
     /** Starred models only, plus the current one; "Show all models" opens the full, searchable list. */
@@ -3004,6 +3072,7 @@
       openMenu(wrap, [
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
         { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
+        ...(t.stats.turns ? [{ label: "Fork thread", run: () => forkThread(t, onPick) }] : []),
         ...(t.stats.files ? [{ label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) }] : []),
         { separator: true },
         {
@@ -4215,6 +4284,10 @@
           ),
           { id: "ag-reasoning-label" }
         ),
+        settingRow("Summaries for forks", this.summarizerButton(), {
+          id: "ag-summarizer-label",
+          title: "A fork that starts a new session (another provider) gets the earlier thread's first and last messages, and a summary of the rest written by this model. A small, fast model is enough.",
+        }),
         settingRow(
           "Enter on an empty box sends a queued message",
           choiceTrack(EMPTY_ENTER, emptyEnter, (id) => {
@@ -4298,10 +4371,51 @@
       if (!this.usage || !this.isOpen()) return;
       this.usage.replaceChildren(...["claude", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
     },
+    /** The model that writes a fork's summary; picks from every available provider's models. */
+    summarizerButton() {
+      const b = el("button", "ag-pill ag-summarizer");
+      b.type = "button";
+      this.summarizer = b;
+      b.addEventListener("click", () => {
+        const cur = prefs().summarizer || {};
+        const items = [];
+        for (const provider of PROVIDERS) {
+          if (!providerAvailable(provider)) continue;
+          items.push({ header: PROVIDER_LABEL[provider] });
+          for (const m of modelsOf(provider)) {
+            items.push({
+              label: m.label,
+              detail: m.id !== m.label ? m.id : m.description,
+              search: `${provider} ${m.id}`,
+              checked: cur.provider === provider && cur.model === m.id,
+              run: async () => {
+                try {
+                  S.config.prefs = await api("PUT", "/prefs", { summarizer: { provider, model: m.id } });
+                  this.renderSummarizer();
+                } catch (err) {
+                  notice(err.message);
+                }
+              },
+            });
+          }
+        }
+        openMenu(b, items, { search: true, width: 300, placeholder: "Search models" });
+      });
+      this.renderSummarizer();
+      return b;
+    },
+    renderSummarizer() {
+      if (!this.summarizer) return;
+      const cur = prefs()?.summarizer;
+      this.summarizer.replaceChildren();
+      if (!cur) return;
+      this.summarizer.append(el("span", `ag-prov p-${cur.provider}`, PROVIDER_GLYPH[cur.provider] || "?"), el("span", null, modelInfo(cur.provider, cur.model)?.label || cur.model));
+    },
     open() {
       if (!this.root) return;
       this.renderStatus();
       void this.renderSources();
+      this.renderSummarizer();
       this.root.hidden = false;
       this.renderUsage();
       this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });

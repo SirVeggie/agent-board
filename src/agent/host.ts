@@ -32,6 +32,7 @@ import type {
   TurnResult,
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
+import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromRateLimitInfo, planLimitsFromUsageReport } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import type {
@@ -183,6 +184,8 @@ type RunState = {
   usage: Usage;
   /** A queued message handed to this turn with steer, until the agent takes it in. */
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
+  /** Stops the summary a fork's first turn waits for. */
+  abort?: AbortController;
 };
 
 export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" };
@@ -454,6 +457,8 @@ export class AgentHost {
   async warm(id: string): Promise<void> {
     const thread = this.requireThread(id);
     if (this.runs.has(id) || thread.archived) return;
+    // Its session is set up on the first turn, from the thread it was forked from.
+    if (thread.fork) return;
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) return;
     // The session would start in the main checkout and restart once the worktree is made.
     if (wantsWorktree(thread)) return;
@@ -595,7 +600,8 @@ export class AgentHost {
     this.sessions.delete(id);
     forgetGuides(id);
     const wt = openWorktree(thread);
-    if (wt) {
+    // A fork shares its worktree: the folder stays while another thread still works in it.
+    if (wt && !this.sharers(id, wt).length) {
       // The folder goes; any work stays on the branch, so deleting a thread never loses it.
       try {
         await commitAll(wt, `WIP: ${thread.title}`);
@@ -614,6 +620,7 @@ export class AgentHost {
       if (item.threadId === id) this.dirty.delete(key);
     }
     this.db.deleteThread(id);
+    this.db.deleteSetting(`fork:${id}`);
     try {
       removeThreadFiles(id);
     } catch (err) {
@@ -684,6 +691,7 @@ export class AgentHost {
       queued: this.queues.get(thread.id)?.length ?? 0,
       background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
+      ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
     };
   }
 
@@ -1077,6 +1085,7 @@ export class AgentHost {
     }
     if (!run) return;
     run.cancelled = true;
+    run.abort?.abort();
     for (const [id, pending] of this.pending) {
       if (pending.threadId === threadId) {
         this.pending.delete(id);
@@ -1143,7 +1152,7 @@ export class AgentHost {
       try {
         thread = await this.makeWorktree(threadId, turn.id);
       } catch (err) {
-        setupError = (err as Error).message;
+        setupError = `Could not make the worktree: ${(err as Error).message}`;
       }
     }
 
@@ -1157,8 +1166,18 @@ export class AgentHost {
       }
     }
 
+    let earlier = "";
+    if (thread.fork && msg && !run.cancelled && !setupError) {
+      try {
+        earlier = await this.startFork(thread, thread.fork, run);
+        thread = this.requireThread(threadId);
+      } catch (err) {
+        if (!run.cancelled) setupError = `Could not carry over the earlier thread: ${(err as Error).message}`;
+      }
+    }
+
     const sink = this.makeSink(threadId, run);
-    let result: TurnResult = setupError ? { status: "error", error: `Could not make the worktree: ${setupError}` } : { status: "cancelled" };
+    let result: TurnResult = setupError ? { status: "error", error: setupError } : { status: "cancelled" };
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
     if (!run.cancelled && !setupError) {
       try {
@@ -1166,7 +1185,7 @@ export class AgentHost {
         session.update(thread);
         result = await session.run(
           {
-            text: msg ? promptText(msg, thread, this.pageGuides(thread, msg)) : "",
+            text: msg ? earlier + promptText(msg, thread, this.pageGuides(thread, msg)) : "",
             images: msg?.images ?? [],
             documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
@@ -1236,6 +1255,11 @@ export class AgentHost {
     const rewound = this.threads.get(threadId);
     if (rewound?.rewind && result.status !== "cancelled") {
       delete rewound.rewind;
+      this.db.saveThread(rewound);
+    }
+    if (rewound?.fork && result.status !== "cancelled") {
+      delete rewound.fork;
+      this.db.deleteSetting(`fork:${threadId}`);
       this.db.saveThread(rewound);
     }
     turn.usage = run.usage;
@@ -1661,6 +1685,9 @@ export class AgentHost {
     const thread = this.requireThread(threadId);
     const wt = openWorktree(thread);
     if (!wt) throw new Error("This thread has no open worktree.");
+    const sharers = this.sharers(threadId, wt);
+    const busy = sharers.find((t) => this.runs.has(t.id));
+    if (busy) throw new Error(`“${busy.title}” works in this worktree too and is running. Stop it first.`);
     let message: string;
     if (how === "merge") {
       const { commits } = await mergeWorktree(wt);
@@ -1672,26 +1699,38 @@ export class AgentHost {
       message = `Left the work on branch ${wt.branch}${committed ? "; its uncommitted changes were committed there as WIP" : ""}.`;
     }
     // The provider process runs in the worktree folder; Windows will not remove a folder in use.
-    this.sessions.get(threadId)?.dispose();
-    this.sessions.delete(threadId);
-    forgetGuides(threadId);
+    for (const id of [threadId, ...sharers.map((t) => t.id)]) {
+      this.sessions.get(id)?.dispose();
+      this.sessions.delete(id);
+      forgetGuides(id);
+    }
     await removeWorktree(wt);
     if (how === "merge") await dropBranchIfEmpty(wt);
     // Agent sessions are tied to their folder, so the next message starts a new one in the main checkout.
-    const next: Thread = {
-      ...this.requireThread(threadId),
-      cwd: wt.home,
-      useWorktree: false,
-      worktree: { ...wt, ahead: 0, dirty: false, closed: { how: how === "merge" ? "merged" : "left", at: Date.now() } },
-      nativeId: null,
-      updatedAt: Date.now(),
-    };
-    this.threads.set(threadId, next);
-    this.db.saveThread(next);
-    this.addItem(threadId, null, { kind: "notice", level: "info", text: `${message} The worktree folder is removed; new messages start a fresh agent session in ${wt.home}.` });
+    const closed = { how: how === "merge" ? ("merged" as const) : ("left" as const), at: Date.now() };
+    for (const id of [threadId, ...sharers.map((t) => t.id)]) {
+      const next: Thread = {
+        ...this.requireThread(id),
+        cwd: wt.home,
+        useWorktree: false,
+        worktree: { ...wt, ahead: 0, dirty: false, closed },
+        nativeId: null,
+        updatedAt: Date.now(),
+      };
+      this.threads.set(id, next);
+      this.db.saveThread(next);
+      const by = id === threadId ? "" : ` (from “${thread.title}”, which shared it)`;
+      this.addItem(id, null, { kind: "notice", level: "info", text: `${message}${by} The worktree folder is removed; new messages start a fresh agent session in ${wt.home}.` });
+      this.emitThread(id);
+    }
     this.flushNow();
-    this.emitThread(threadId);
     return { ok: true, message };
+  }
+
+  /** Other threads with the same worktree open: forks share it. */
+  private sharers(threadId: string, wt: ThreadWorktree): Thread[] {
+    const key = workspaceKey(wt.path);
+    return [...this.threads.values()].filter((t) => t.id !== threadId && openWorktree(t) && workspaceKey(openWorktree(t)!.path) === key);
   }
 
   // ---------- changes ----------
@@ -1838,6 +1877,164 @@ export class AgentHost {
     const text = parts.join("\n\n");
     // The latest part matters most; keep the prompt a sensible size.
     return text.length > MAX_RECAP ? `…${text.slice(-MAX_RECAP)}` : text;
+  }
+
+  // ---------- forks ----------
+
+  /**
+   * A new thread that goes on from this one's finished turns, with the same settings and folder (an
+   * open worktree is shared). Its first turn continues this thread's provider session when it can,
+   * or starts fresh with a summary; the provider can still be changed until then.
+   */
+  fork(threadId: string, to: { provider?: ProviderId; model?: string; mode?: ThreadMode } = {}): ThreadView {
+    const source = this.requireThread(threadId);
+    const turns = this.loadTurns(threadId).filter((t) => t.status !== "running");
+    if (!turns.length) throw new Error("This thread has no finished turns to fork from.");
+    const items = this.loadItems(threadId);
+    const last = turns.at(-1)!;
+    const wt = openWorktree(source);
+    const thread = this.draftThread({
+      title: `${source.title} (fork)`,
+      provider: source.provider,
+      model: source.model,
+      effort: source.effort,
+      modelParams: source.modelParams,
+      mode: source.mode,
+      approval: source.approval,
+      web: source.web,
+      scope: source.scope,
+      cwd: source.cwd,
+      useWorktree: Boolean(wt),
+    });
+    if (wt) thread.worktree = { ...wt };
+    if (to.provider && to.provider !== source.provider) {
+      // The other provider's own last-used settings, as when a new thread switches provider.
+      const prefs = this.prefs();
+      thread.provider = to.provider;
+      thread.model = to.model ?? prefs.models[to.provider] ?? "default";
+      thread.effort = prefs.efforts[to.provider] ?? null;
+      thread.modelParams = prefs.modelParams[to.provider] ?? {};
+      thread.approval = approvalFor(prefs, to.provider);
+    } else if (to.model) {
+      thread.model = to.model;
+    }
+    if (to.mode) thread.mode = to.mode;
+    const native = this.providers[source.provider].forks === true && source.nativeId && last.nativeEnd;
+    thread.fork = {
+      from: source.id,
+      title: source.title,
+      provider: source.provider,
+      cwd: source.cwd,
+      nativeId: native ? source.nativeId : null,
+      at: native ? last.nativeEnd! : null,
+      turns: turns.length,
+    };
+    const firstAsked = this.turnText(items, turns[0], false);
+    const lastTurn = turns.length > 1 ? this.turnText(items, last, false) : null;
+    const material: ForkMaterial = {
+      first: clip(firstAsked.asked, MAX_FORK_MESSAGE),
+      middle: turns
+        .slice(1, -1)
+        .map((turn) => this.turnText(items, turn, true).text)
+        .join("\n\n"),
+      last: lastTurn ? clip(lastTurn.asked, MAX_FORK_MESSAGE) : "",
+      reply: clip((lastTurn ?? firstAsked).reply, MAX_FORK_MESSAGE),
+    };
+    this.threads.set(thread.id, thread);
+    this.items.set(thread.id, []);
+    this.turns.set(thread.id, []);
+    this.seq.set(thread.id, 0);
+    this.db.setSetting(`fork:${thread.id}`, material);
+    this.db.saveThread(thread);
+    const view = this.view(thread);
+    this.emit({ type: "agent_thread", thread: view });
+    return view;
+  }
+
+  /** One turn as text: what the user asked and the final reply, or (full) every reply, tool and changed file in order. */
+  private turnText(items: Item[], turn: Turn, full: boolean): { asked: string; reply: string; text: string } {
+    const ofTurn = items.filter((it) => it.turnId === turn.id && !("parentToolId" in it && it.parentToolId));
+    const asked = ofTurn.flatMap((it) => (it.kind === "user" ? [it.text] : [])).join("\n\n");
+    const texts = ofTurn.flatMap((it) => (it.kind === "text" ? [it.text] : []));
+    const reply = texts.at(-1) ?? "";
+    if (!full) return { asked, reply, text: "" };
+    const lines: string[] = [];
+    for (const it of ofTurn) {
+      if (it.kind === "user") lines.push(`User: ${it.text}`);
+      else if (it.kind === "text") lines.push(`Agent: ${it.text}`);
+      else if (it.kind === "tool") lines.push(`[tool: ${it.title}${it.status === "error" ? " (failed)" : ""}]`);
+      else if (it.kind === "plan") lines.push(`[plan, ${it.status}]\n${it.text}`);
+    }
+    const files = turn.reverted ? [] : (turn.files ?? []).map((f) => f.path);
+    if (files.length) lines.push(`[files changed: ${files.join(", ")}]`);
+    return { asked, reply, text: lines.join("\n") };
+  }
+
+  /** Whether a fork's first turn can continue the other thread's own provider session. */
+  private forksNatively(thread: Thread, fork: NonNullable<Thread["fork"]>): boolean {
+    return Boolean(fork.nativeId && fork.at && thread.provider === fork.provider && this.providers[thread.provider].forks && (thread.cwd ?? null) === (fork.cwd ?? null));
+  }
+
+  private forkCarry(thread: Thread, fork: NonNullable<Thread["fork"]>): ThreadView["carry"] {
+    if (this.forksNatively(thread, fork)) return { how: "native" };
+    return { how: "summary", ...(fork.turns > 2 ? { summarizer: this.summarizerLabel() } : {}) };
+  }
+
+  private summarizerLabel(): string {
+    const { provider, model } = this.prefs().summarizer;
+    const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
+    return `${label} (${this.providers[provider].label})`;
+  }
+
+  /**
+   * Set up a fork's first turn: point the session at the other thread's session, or build the
+   * earlier conversation to send ahead of the message, summarizing its middle turns.
+   */
+  private async startFork(thread: Thread, fork: NonNullable<Thread["fork"]>, run: RunState): Promise<string> {
+    const threadId = thread.id;
+    if (this.forksNatively(thread, fork)) {
+      this.sessions.get(threadId)?.dispose();
+      this.sessions.delete(threadId);
+      const next: Thread = { ...thread, nativeId: fork.nativeId, rewind: { at: fork.at } };
+      this.threads.set(threadId, next);
+      this.db.saveThread(next);
+      return "";
+    }
+    // A fresh session, wherever this thread had one going.
+    if (thread.nativeId) {
+      this.sessions.get(threadId)?.dispose();
+      this.sessions.delete(threadId);
+      const next: Thread = { ...thread, nativeId: null };
+      this.threads.set(threadId, next);
+      this.db.saveThread(next);
+    }
+    const material = this.db.getSetting<ForkMaterial | null>(`fork:${threadId}`, null);
+    if (!material) return "";
+    if (material.middle && !material.summary) {
+      const { provider, model } = this.prefs().summarizer;
+      const label = this.summarizerLabel();
+      const notice = this.addItem(threadId, run.turn.id, { kind: "notice", level: "info", text: `Summarizing “${fork.title}” with ${label}…` });
+      run.abort = new AbortController();
+      try {
+        const middle = material.middle.length > MAX_FORK_MIDDLE ? `…${material.middle.slice(-MAX_FORK_MIDDLE)}` : material.middle;
+        const summary = (await this.providers[provider].complete(summaryPrompt(middle), model, run.abort.signal)).trim();
+        if (!summary) throw new Error("the summary came back empty");
+        material.summary = summary;
+        this.db.setSetting(`fork:${threadId}`, material);
+        if (notice.kind === "notice") notice.text = `Summarized “${fork.title}” with ${label}.`;
+      } catch (err) {
+        if (run.cancelled) throw err;
+        if (notice.kind === "notice") {
+          notice.level = "warn";
+          notice.text = `Summarizing with ${label} failed (${(err as Error).message}), so the turns in between go along as they were, cut to the latest part.`;
+        }
+      } finally {
+        run.abort = undefined;
+        this.touch(notice);
+        this.flushNow();
+      }
+    }
+    return forkBlock(fork.title, this.providers[fork.provider].label, material);
   }
 
   async revertTurn(threadId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {

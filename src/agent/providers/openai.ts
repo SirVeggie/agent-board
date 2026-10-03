@@ -118,6 +118,24 @@ export class OpenAIProvider implements AgentProvider {
     return first ? this.resolveModel(first.id) : null;
   }
 
+  async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
+    const target = await this.resolveModel(model);
+    if (!target) throw new Error(`Unknown model: ${model}`);
+    const res = await fetch(`${target.source.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders(target.source) },
+      body: JSON.stringify({ model: target.model, messages: [{ role: "user", content: prompt }] }),
+      signal,
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`${target.source.name}: ${res.status} ${errorMessage(text) || res.statusText}`);
+    const body = JSON.parse(text) as unknown;
+    const choice = isPlainRecord(body) && Array.isArray(body.choices) && isPlainRecord(body.choices[0]) ? body.choices[0] : null;
+    const content = choice && isPlainRecord(choice.message) ? choice.message.content : null;
+    if (typeof content !== "string") throw new Error(`${target.source.name} sent no answer`);
+    return content;
+  }
+
   createSession(thread: Thread, ctx: SessionContext): ProviderSession {
     const session = new OpenAISession(this, thread, ctx, () => this.sessions.delete(session));
     this.sessions.add(session);

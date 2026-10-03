@@ -186,6 +186,40 @@ export class CursorProvider implements AgentProvider {
     }
   }
 
+  /** A throwaway session in Ask mode in a temp folder; tool requests are refused. */
+  async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
+    const bin = locateCursorAgent();
+    if (!bin) throw new Error("Cursor agent CLI not found. Install it and run `agent login`.");
+    const cwd = os.tmpdir();
+    const conn = spawnAcp(bin, cwd);
+    const kill = () => conn.kill();
+    signal?.addEventListener("abort", kill, { once: true });
+    let text = "";
+    conn.onNotification = (method, params) => {
+      if (method !== "session/update" || !isPlainRecord(params) || !isPlainRecord(params.update)) return;
+      const { sessionUpdate, content } = params.update;
+      if (sessionUpdate === "agent_message_chunk" && isPlainRecord(content) && content.type === "text" && typeof content.text === "string") text += content.text;
+    };
+    conn.onRequest = async (method) => {
+      if (method === "session/request_permission") return { outcome: { outcome: "cancelled" } };
+      throw new RpcError(`Method not found: ${method}`, -32601);
+    };
+    try {
+      await conn.request("initialize", INIT_PARAMS, 60_000);
+      const created = await conn.request("session/new", { cwd, mcpServers: [] }, 120_000);
+      const sessionId = isPlainRecord(created) && typeof created.sessionId === "string" ? created.sessionId : null;
+      if (!sessionId) throw new Error("Cursor did not return a session id");
+      await conn.request("session/set_config_option", { sessionId, configId: "mode", value: "ask" }, 30_000).catch(() => undefined);
+      if (model && model !== "default") await conn.request("session/set_config_option", { sessionId, configId: "model", value: model }, 30_000);
+      await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: prompt }] });
+      if (signal?.aborted) throw new Error("cancelled");
+      return text;
+    } finally {
+      signal?.removeEventListener("abort", kill);
+      conn.kill();
+    }
+  }
+
   createSession(thread: Thread, ctx: SessionContext): ProviderSession {
     const spare = thread.nativeId ? null : this.spares.take(spareKey(thread, ctx));
     if (spare) {

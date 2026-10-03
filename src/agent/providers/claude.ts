@@ -158,6 +158,32 @@ export class ClaudeProvider implements AgentProvider {
     }
   }
 
+  async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
+    const sdk = await loadSdk();
+    const abortController = new AbortController();
+    const abort = () => abortController.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    const q = sdk.query({
+      prompt,
+      options: { ...(model && model !== "default" ? { model } : {}), settingSources: [], tools: [], persistSession: false, maxTurns: 1, abortController },
+    });
+    try {
+      for await (const msg of q) {
+        if (msg.type !== "result") continue;
+        if (msg.subtype === "success") return msg.result;
+        throw new Error(`Claude stopped: ${msg.subtype}`);
+      }
+      throw new Error("Claude sent no answer");
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      try {
+        q.close();
+      } catch {
+        abortController.abort();
+      }
+    }
+  }
+
   createSession(thread: Thread, ctx: SessionContext): ProviderSession {
     const spare = thread.nativeId ? null : this.spares.take(claudeSpareKey(thread));
     if (spare) {

@@ -45,12 +45,31 @@ export type Thread = {
    * conversation, sent ahead of the next message when the provider cannot fork.
    */
   rewind?: { at: string | null; recap?: string };
+  /**
+   * Made by forking another thread, until its first turn ends. The first turn continues the other
+   * thread's provider session when it can (same provider and folder, and the provider forks), or
+   * starts fresh with a summary of that conversation.
+   */
+  fork?: ThreadFork;
   pinned: boolean;
   archived: boolean;
   createdAt: number;
   updatedAt: number;
   /** Last user message or finished turn; drives list order. */
   activityAt: number;
+};
+
+export type ThreadFork = {
+  /** The thread it was forked from, as it was then. */
+  from: string;
+  title: string;
+  provider: ProviderId;
+  cwd: string | null;
+  /** That thread's provider session and where in it the fork continues; null when it cannot. */
+  nativeId: string | null;
+  at: string | null;
+  /** Finished turns it had; with more than two, the ones between the first and last are summarized. */
+  turns: number;
 };
 
 /** A git worktree the board made for a thread, on a branch of its own. */
@@ -95,6 +114,8 @@ export type ThreadView = Thread & {
   /** Subagents and commands still working in the background, after or beside the current turn. */
   background: number;
   stats: { turns: number; files: number; added: number; removed: number };
+  /** A fork that has not run yet: how its first turn gets the earlier conversation, and which model summarizes it. */
+  carry?: { how: "native" | "summary"; summarizer?: string };
 };
 
 export type FileChange = {
