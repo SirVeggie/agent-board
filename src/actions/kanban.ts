@@ -48,6 +48,12 @@ const labels = (state: BoardState) => arr<Label>(state.labels);
 const cards = (state: BoardState) => arr<Card>(state.cards);
 const cardPath = (card: Card) => `cards/id=${card.id}`;
 
+/** The user asked the column's agent worker (settings.workers, set up on the page) to stop after its card. */
+function workerStopRequested(state: BoardState, columnId: string): boolean {
+  const settings = state.settings as { workers?: Record<string, { stop?: unknown }> } | undefined;
+  return settings?.workers?.[columnId]?.stop === true;
+}
+
 function findCard(state: BoardState, ref: unknown): Card {
   const text = str(ref).trim().replace(/^#/, "");
   if (!text) {
@@ -200,7 +206,7 @@ export const kanbanActions: ActionSet = {
   actions: {
     list: {
       description:
-        "Compact rows for the board's cards (no descriptions or comment text), plus the columns. Filter by column (role, id or title), label, assignee, or q (words in title or description). Archived cards only with archived: true.",
+        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role, id or title), label, assignee, or q (words in title or description). Archived cards only with archived: true.",
       args: "{ column?, label?, assignee?, q?, archived?, limit? }",
       run(state, args) {
         let list = cards(state).filter((c) => (args.archived ? c.archived : !c.archived));
@@ -231,6 +237,7 @@ export const kanbanActions: ActionSet = {
               title: c.title,
               ...(c.role ? { role: c.role } : {}),
               cards: cards(state).filter((x) => x.col === c.id && !x.archived).length,
+              ...(workerStopRequested(state, c.id) ? { stopRequested: true } : {}),
             })),
             cards: list.slice(0, limit).map((c) => summary(state, c)),
             ...(list.length > limit ? { more: list.length - limit } : {}),

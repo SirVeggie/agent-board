@@ -133,6 +133,14 @@ test("list gives compact rows and column counts", () => {
   const { result } = run(board(), "list", { column: "agent" });
   assert.deepEqual((result.cards as Array<{ num: number }>).map((c) => c.num), [1, 2]);
   assert.equal((result.columns as Array<{ cards: number }>)[1].cards, 2);
+  assert.equal((result.columns as Array<{ stopRequested?: boolean }>)[1].stopRequested, undefined);
+});
+
+test("list marks a column whose agent worker was asked to stop", () => {
+  const state = { ...board(), settings: { workers: { ready: { name: "Opus", stop: true }, in: { name: "Other" } } } };
+  const cols = run(state, "list", {}).result.columns as Array<{ id: string; stopRequested?: boolean }>;
+  assert.equal(cols.find((c) => c.id === "ready")?.stopRequested, true);
+  assert.equal(cols.find((c) => c.id === "in")?.stopRequested, undefined);
 });
 
 test("the sweep releases a card whose thread failed and flags one whose thread went quiet", () => {

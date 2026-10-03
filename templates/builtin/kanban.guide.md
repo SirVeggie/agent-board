@@ -18,6 +18,10 @@ Columns are named by role (`agent`, `working`, `review`, `done`), id, or title. 
 
 If your thread fails or is stopped, Scribe moves your card back to the agent column with a blocked note. If you go quiet for a long time, it marks the card as held by a stale agent so someone can pick it up.
 
+## Agent workers
+
+The user can set up a worker for an agent column (its header's start button). The board starts it as an agent chat with the user's instructions and how to work that column. A worker takes that column's cards one at a time and waits for `card_ready` when it is empty. When the user asks it to stop after its card, `list` shows `stopRequested: true` on the column and the page logs `worker_stop`: take no more cards and end your turn.
+
 ## Events
 
 Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothing is missed or seen twice. Each event's `data` names the card: `{ card: "<id>", num: 12, column: "<title>", columnId, role }`. Pass `where` to match fields on that data (compared as text), e.g. `{ column: "grok issues" }`, so another agent column does not wake you.
@@ -30,6 +34,7 @@ Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothi
 | `changes` | The user requested changes. Their note is the card's last comment and the card is back in the agent column. |
 | `claim_lost` | Scribe released a card because its agent's thread stopped. |
 | `claim_stale` | Scribe flagged a card whose agent went quiet. |
+| `worker_stop` | The user asked the column's agent worker to stop once its card is done. `data`: `{ column, columnId, role }`. |
 
 ## State
 
@@ -44,7 +49,9 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             blockedBy: [cardId], status?, claim?, archived?,
             createdAt, movedAt, doneAt? }]
 nextNum: number
-settings: { hideAddColumn?, showDoneDate? }  // the user's page settings; leave them alone
+settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave them alone
+            workers?: { [columnId]: { name?, instructions, provider?, model?, effort?, mode?,
+                                      cwd?, approval?, worktree?, show?, threadId?, stop? } } }
 ```
 
 - `description` and comments are markdown. `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.

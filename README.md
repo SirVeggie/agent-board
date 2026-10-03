@@ -179,6 +179,8 @@ Per-viewer state (`scribe.local`) is stored per page and viewer (the desktop app
 
 Built-in templates ship actions (`src/actions`), which the agent runs with `page_action` and a page with `scribe.action`. They read the latest state and apply the template's rules in one step; the template's guide lists them. Kanban's `claim` records which MCP session and chat thread holds a card. When that thread's turn fails or is stopped (or the daemon restarts mid-turn), a sweep moves the card back to the agent column with a blocked note; a holder that goes quiet gets its card flagged instead.
 
+A Kanban agent column can also have an **agent worker** (Board settings → Agent workers, or the column's ⋯ menu): instructions plus provider, model, reasoning, mode, folder, and approval. The column's header then has a button that starts it as an agent chat for the board, which takes the column's cards one at a time (claiming them under the worker's name) and waits for more. Clicking it while it works offers *Stop when its card is done* (the column shows `stopRequested` in `list` and the page logs `worker_stop`), *Stop now*, or Cancel. Code and Plan workers go through the page's permissions (see above).
+
 ## Agent chat
 
 Scribe has its own chat with coding agents, so Claude and Cursor run from one place. The daemon runs the agents; the browser only shows them.

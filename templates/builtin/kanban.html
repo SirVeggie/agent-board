@@ -88,7 +88,7 @@
   .select-btn.open::after { margin-top: -1px; transform: rotate(225deg); }
   .select-list {
     position: fixed;
-    z-index: 85;
+    z-index: 100; /* above dialogs (.confirm-back) that hold selects */
     min-width: 160px;
     max-height: 300px;
     overflow-y: auto;
@@ -707,6 +707,46 @@
   .confirm-row .danger-solid:hover { background: #ff8592; }
   .confirm-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .settings-box { width: min(440px, 100%); }
+  /* Agent workers: a launch button in an agent column's header, its setup, and the stop choice. */
+  .worker-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    line-height: 1;
+    padding: 4px 7px;
+    border-radius: 7px;
+    color: var(--agent);
+    background: rgba(224, 179, 74, .12);
+  }
+  .worker-btn:hover { background: rgba(224, 179, 74, .22); }
+  .worker-btn svg { width: 10px; height: 10px; fill: currentColor; }
+  .worker-btn:disabled { opacity: .6; }
+  .worker-error { margin: -2px 10px 6px; font-size: 12px; color: var(--danger); }
+  .worker-error button { color: var(--text); text-decoration: underline; padding: 0; margin-left: 4px; }
+  .workers-section { border-top: 1px solid rgba(255, 255, 255, .06); padding-top: 12px; }
+  .workers-section h4 { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
+  .workers-section > p { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+  .worker-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .worker-row .txt { flex: 1; min-width: 0; }
+  .worker-row .txt b { display: block; font-weight: 600; }
+  .worker-row .txt span { display: block; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .worker-box { width: min(560px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+  .worker-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; overflow-y: auto; padding: 10px 2px 2px; }
+  .worker-form > label { color: var(--muted); font-size: 12.5px; }
+  .worker-form > label.top { align-self: start; padding-top: 7px; }
+  .worker-form .field { width: 100%; }
+  .worker-form textarea.field { min-height: 120px; resize: vertical; line-height: 1.45; }
+  .worker-form .row { display: flex; gap: 8px; min-width: 0; }
+  .worker-form .row .field { flex: 1; }
+  .worker-form .help { grid-column: 2; margin: -4px 0 0; color: var(--muted); font-size: 12px; }
+  .worker-form .check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+  .worker-note { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
+  .worker-note.warn { color: var(--agent); }
+  .confirm-row .spacer { flex: 1; }
+  #confirmBack { z-index: 95; }
+  .confirm-row .accent-solid { padding: 6px 14px; font-weight: 650; background: var(--accent); color: #0b1220; }
   .setting { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; cursor: pointer; }
   .setting + .setting { border-top: 1px solid rgba(255, 255, 255, .06); }
   .setting .txt { flex: 1; }
@@ -858,8 +898,33 @@
         <span class="txt"><b>Show done date on cards</b><span>Cards that are done show when they were completed.</span></span>
         <input class="switch" id="sShowDoneDate" type="checkbox">
       </label>
+      <div class="workers-section hidden" id="sWorkers"></div>
       <div class="confirm-row">
         <button class="ghost" id="settingsClose" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+  <div class="confirm-back hidden" id="workerBack">
+    <div class="confirm-box worker-box" role="dialog" aria-modal="true" aria-labelledby="workerTitle">
+      <h3 id="workerTitle">Agent worker</h3>
+      <p id="workerIntro">An agent chat that takes this column's cards one by one, following your instructions.</p>
+      <div class="worker-form" id="workerForm"></div>
+      <p class="worker-note" id="workerNote"></p>
+      <div class="confirm-row">
+        <button class="ghost" id="workerRemove" type="button">Remove worker</button>
+        <span class="spacer"></span>
+        <button class="ghost" id="workerClose" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+  <div class="confirm-back hidden" id="stopBack">
+    <div class="confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="stopTitle" aria-describedby="stopText">
+      <h3 id="stopTitle">Stop the agent?</h3>
+      <p id="stopText"></p>
+      <div class="confirm-row">
+        <button class="ghost" id="stopCancel" type="button">Cancel</button>
+        <button class="ghost" id="stopLater" type="button">Stop when its card is done</button>
+        <button class="danger-solid" id="stopNow" type="button">Stop now</button>
       </div>
     </div>
   </div>
@@ -1459,6 +1524,7 @@
   // ---------- board rendering ----------
   function render() {
     if (drag) return;
+    refreshWorkerThreads();
     renderToolbar();
     renderBoard();
     if (openId) renderModal();
@@ -1507,6 +1573,8 @@
         if (col.role && ROLE_TAG[col.role] && (AGENT_MODE || col.role === "done")) {
           head.appendChild(el("span", "role " + col.role, ROLE_TAG[col.role]));
         }
+        var workerBtn = AGENT_MODE && col.role === "agent" ? workerButton(col) : null;
+        if (workerBtn) head.appendChild(workerBtn);
       }
       var list = cardsIn(col.id);
       var visible = filtering ? list.filter(matches) : list;
@@ -1525,6 +1593,8 @@
       head.appendChild(menuBtn);
       head.addEventListener("pointerdown", function (e) { startColumnDrag(e, col.id, colEl); });
       colEl.appendChild(head);
+      var workerError = workerErrorRow(col);
+      if (workerError) colEl.appendChild(workerError);
 
       var ul = el("ul", "cards");
       ul.dataset.col = col.id;
@@ -1778,6 +1848,7 @@
       menuButton(menu, "Rename", function () { editingCol = col.id; render(); });
       menuButton(menu, "Move left", function () { moveColumn(col.id, idx - 1); }, idx <= 0);
       menuButton(menu, "Move right", function () { moveColumn(col.id, idx + 1); }, idx >= cols.length - 1);
+      if (AGENT_MODE && col.role === "agent") menuButton(menu, worker(col.id) ? "Agent worker…" : "Set up an agent worker…", function () { openWorker(col.id); });
 
       menu.appendChild(el("div", "sep"));
       menu.appendChild(el("div", "label", "Card limit"));
@@ -3169,6 +3240,7 @@
     var s = settings();
     sHideAddColumn.checked = Boolean(s.hideAddColumn);
     sShowDoneDate.checked = Boolean(s.showDoneDate);
+    renderWorkersSettings();
   }
   function openSettings() {
     closeMenu();
@@ -3205,6 +3277,440 @@
     e.preventDefault();
     e.stopImmediatePropagation();
     closeSettings();
+  }, true);
+
+  // ---------- agent workers ----------
+  // An agent column can have a worker: an agent chat this board starts with the user's
+  // instructions, which then takes the column's cards one at a time and waits for more. Its setup
+  // is settings.workers[columnId]; the thread runs in Scribe's agent chat, scoped to this page.
+  // "Stop when its card is done" sets stop on the worker (list shows it as stopRequested on the
+  // column) and logs worker_stop, which wakes a worker waiting for cards.
+  var FOLDER_MODES = { code: true, plan: true };
+  var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
+  var PLAY_SVG = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z"/></svg>';
+  var agentOptions = null;
+  /** Thread id -> { status, queued } as Scribe last reported it. */
+  var threadStatus = {};
+  var launching = {};
+  var workerErrors = {};
+  var workerCol = null;
+  var stopCol = null;
+
+  function hasWorkerApi() {
+    return Boolean(scribe.agent && typeof scribe.agent.options === "function");
+  }
+  function workers() {
+    var w = settings().workers;
+    return w && typeof w === "object" ? w : {};
+  }
+  function worker(colId) {
+    var w = workers()[colId];
+    return w && typeof w === "object" ? w : null;
+  }
+  function workerMode(w) { return str(w && w.mode) || "code"; }
+  function workerReady(w) {
+    return Boolean(w && str(w.instructions).trim() && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
+  }
+  function workerRunning(w) {
+    var t = w && w.threadId ? threadStatus[w.threadId] : null;
+    return Boolean(t && (t.status !== "idle" || t.queued > 0));
+  }
+  function saveWorker(colId, patch) {
+    var all = Object.assign({}, workers());
+    var next = Object.assign({}, all[colId] || {}, patch);
+    Object.keys(next).forEach(function (k) { if (next[k] == null || next[k] === "" || next[k] === false) delete next[k]; });
+    all[colId] = next;
+    scribe.set({ settings: Object.assign({}, settings(), { workers: all }) });
+  }
+  function removeWorker(colId) {
+    var all = Object.assign({}, workers());
+    delete all[colId];
+    var next = Object.assign({}, settings());
+    if (Object.keys(all).length) next.workers = all; else delete next.workers;
+    scribe.set({ settings: next });
+  }
+  function workerSummary(w) {
+    if (!w) return "Not set up";
+    var mode = workerMode(w);
+    var parts = [str(w.name) || "Agent", MODE_LABELS[mode] || mode];
+    if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
+    if (!workerReady(w)) parts.push(FOLDER_MODES[mode] && !w.cwd ? "needs a folder" : "needs instructions");
+    else if (workerRunning(w)) parts.push(w.stop ? "stopping" : "working");
+    return parts.join(" · ");
+  }
+
+  /** Ask Scribe how each worker's last thread is doing, once per thread; onChange keeps it current. */
+  function refreshWorkerThreads() {
+    if (!hasWorkerApi()) return;
+    Object.keys(workers()).forEach(function (colId) {
+      var id = worker(colId).threadId;
+      if (!id || threadStatus[id]) return;
+      threadStatus[id] = { status: "idle", queued: 0 };
+      scribe.agent.get(id).then(function (r) {
+        if (r && r.ok && r.thread) threadStatus[id] = { status: r.thread.status, queued: r.thread.queued || 0 };
+        render();
+      });
+    });
+  }
+  if (scribe.agent && scribe.agent.onChange) {
+    scribe.agent.onChange(function (t) {
+      threadStatus[t.id] = { status: t.status, queued: t.queued || 0 };
+      Object.keys(workers()).forEach(function (colId) {
+        var w = worker(colId);
+        if (w.threadId === t.id && w.stop && !workerRunning(w)) saveWorker(colId, { stop: null });
+      });
+      render();
+    });
+  }
+
+  function boardTitle() {
+    var h = document.querySelector("h1");
+    return h ? h.textContent.trim() : "Board";
+  }
+  function workerPrompt(col, w) {
+    var name = str(w.name).trim();
+    var colRef = JSON.stringify(col.id);
+    return [
+      "You are the agent worker for the \"" + col.title + "\" column of the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + ").",
+      "",
+      "The user's instructions:",
+      str(w.instructions).trim(),
+      "",
+      "How to work the column:",
+      "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with the first result; follow it.",
+      "- Take cards from this column only (column id " + colRef + "), one at a time: list { column: " + colRef + " }, get the card, claim it" +
+        (name ? " with assignee \"" + name + "\"" : "") + ", do the work, then finish it, or update its status or release it when you are blocked.",
+      "- Before you take each card, list the column. If this column in the result has stopRequested: true, the user asked you to stop: take no more cards and end your turn with a short summary.",
+      "- When the column is empty, wait with page_wait { id: \"" + scribe.id + "\", events: \"card_ready,worker_stop\", where: { columnId: " + colRef + " } }, passing the previous cursor as after. card_ready means a card arrived; worker_stop means stop as above. If the wait times out, wait again.",
+    ].join("\n");
+  }
+  function launchError(r) {
+    var error = r && r.error;
+    if (error === "denied") return "Scribe didn't allow it. Change it from the tab menu → Permissions…";
+    if (error === "no_board") return "Open this board in Scribe to launch agents.";
+    if (error === "no_gesture") return "Click the button to launch the agent.";
+    if (error === "timeout") return "Scribe didn't answer in time.";
+    if (/^(unknown_|needs_folder|no_provider)/.test(str(error))) return "Check the worker's setup (" + error + ").";
+    return error ? "Could not launch: " + error : "Could not launch the agent.";
+  }
+  function launchWorker(col) {
+    var w = worker(col.id);
+    if (!workerReady(w)) { openWorker(col.id); return; }
+    var mode = workerMode(w);
+    var opts = { title: (str(w.name) || "Agent") + " · " + col.title, mode: mode };
+    ["provider", "model", "effort", "show"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    if (FOLDER_MODES[mode]) {
+      opts.cwd = w.cwd;
+      if (w.approval) opts.approval = w.approval;
+      if (w.worktree) opts.worktree = true;
+    }
+    // First thing in the click: Scribe checks that the click reached it.
+    var started = scribe.agent.start(workerPrompt(col, w), opts);
+    launching[col.id] = true;
+    delete workerErrors[col.id];
+    render();
+    started.then(function (r) {
+      delete launching[col.id];
+      if (!r || !r.ok) {
+        workerErrors[col.id] = launchError(r);
+      } else {
+        threadStatus[r.threadId] = { status: "running", queued: 0 };
+        saveWorker(col.id, { threadId: r.threadId, stop: null, startedAt: Date.now() });
+      }
+      render();
+    });
+  }
+  function workerButton(col) {
+    var w = worker(col.id);
+    if (!w || !workerReady(w) || !hasWorkerApi()) return null;
+    var running = workerRunning(w);
+    var btn = el("button", "worker-btn");
+    btn.type = "button";
+    if (launching[col.id]) {
+      btn.disabled = true;
+      btn.appendChild(el("span", "pulse"));
+      btn.appendChild(document.createTextNode("Starting"));
+    } else if (running) {
+      btn.appendChild(el("span", "pulse"));
+      btn.appendChild(document.createTextNode(w.stop ? "Stopping" : str(w.name) || "Working"));
+      btn.title = (w.stop ? "Stops when its card is done. " : "") + "Click to stop the agent";
+    } else {
+      btn.innerHTML = PLAY_SVG;
+      btn.appendChild(document.createTextNode(str(w.name) || "Start"));
+      btn.title = "Start the agent on this column";
+    }
+    btn.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (workerRunning(worker(col.id))) openStop(col.id);
+      else launchWorker(col);
+    });
+    return btn;
+  }
+  function workerErrorRow(col) {
+    if (!workerErrors[col.id]) return null;
+    var row = el("div", "worker-error", workerErrors[col.id]);
+    var dismiss = el("button", null, "Dismiss");
+    dismiss.type = "button";
+    dismiss.addEventListener("click", function () { delete workerErrors[col.id]; render(); });
+    row.appendChild(dismiss);
+    return row;
+  }
+
+  // The stop choice.
+  var stopBack = $("stopBack");
+  function openStop(colId) {
+    var col = column(colId), w = worker(colId);
+    if (!col || !w) return;
+    stopCol = colId;
+    $("stopText").textContent = "\"" + (str(w.name) || "The agent") + "\" is working on " + col.title + ". Stopping now cancels its turn; a card it holds goes back to the column.";
+    $("stopLater").classList.toggle("hidden", Boolean(w.stop));
+    stopBack.classList.remove("hidden");
+    $("stopCancel").focus();
+  }
+  function closeStop() {
+    stopBack.classList.add("hidden");
+    stopCol = null;
+  }
+  $("stopCancel").addEventListener("click", closeStop);
+  stopBack.addEventListener("pointerdown", function (e) { if (e.target === stopBack) closeStop(); });
+  $("stopLater").addEventListener("click", function () {
+    var col = column(stopCol);
+    if (col) {
+      saveWorker(col.id, { stop: true });
+      scribe.signal("worker_stop", { column: col.title, columnId: col.id, role: "agent" });
+    }
+    closeStop();
+    render();
+  });
+  $("stopNow").addEventListener("click", function () {
+    var w = worker(stopCol);
+    var colId = stopCol;
+    closeStop();
+    if (!w || !w.threadId) return;
+    scribe.agent.stop(w.threadId).then(function (r) {
+      if (!r || !r.ok) workerErrors[colId] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
+      render();
+    });
+  });
+
+  // The worker's setup.
+  var workerBack = $("workerBack"), workerForm = $("workerForm");
+  var workerSaveTimer = 0;
+  /** Typing is saved a moment later, all fields together, so one field's pause doesn't drop another's. */
+  var workerPending = null;
+  function flushWorker() {
+    clearTimeout(workerSaveTimer);
+    if (workerPending && workerPending.colId) saveWorker(workerPending.colId, workerPending.patch);
+    workerPending = null;
+  }
+  function loadAgentOptions() {
+    if (agentOptions) return Promise.resolve(agentOptions);
+    return scribe.agent.options().then(function (r) {
+      if (r && r.ok) agentOptions = r;
+      return agentOptions;
+    });
+  }
+  function workerSelect(options, value, label, onChange) {
+    var sel = el("select", "field");
+    sel.setAttribute("aria-label", label);
+    options.forEach(function (o) {
+      var opt = el("option", null, o[1]);
+      opt.value = o[0];
+      sel.appendChild(opt);
+    });
+    sel.value = value == null ? "" : String(value);
+    if (sel.value !== String(value == null ? "" : value)) sel.value = options.length ? options[0][0] : "";
+    sel.addEventListener("change", function () { onChange(sel.value); });
+    return sel;
+  }
+  function openWorker(colId) {
+    closeMenu();
+    if (settingsBack && !settingsBack.classList.contains("hidden")) closeSettings();
+    var col = column(colId);
+    if (!col) return;
+    workerCol = colId;
+    $("workerTitle").textContent = "Agent worker · " + col.title;
+    workerForm.replaceChildren(el("p", "worker-note", hasWorkerApi() ? "Loading…" : "Restart Scribe to set up agent workers."));
+    $("workerNote").textContent = "";
+    $("workerRemove").classList.toggle("hidden", !worker(colId));
+    workerBack.classList.remove("hidden");
+    $("workerClose").focus();
+    if (!hasWorkerApi()) return;
+    loadAgentOptions().then(function (opts) {
+      if (workerCol !== colId) return;
+      if (!opts) {
+        workerForm.replaceChildren(el("p", "worker-note", "Open this board in Scribe to set up agent workers."));
+        return;
+      }
+      renderWorkerForm(colId);
+    });
+  }
+  function closeWorker() {
+    flushWorker();
+    workerBack.classList.add("hidden");
+    workerCol = null;
+    render();
+  }
+  function renderWorkerForm(colId) {
+    var w = worker(colId) || {};
+    var opts = agentOptions;
+    var defaults = opts.defaults || {};
+    var set = function (patch) {
+      if (workerPending && workerPending.colId === colId) patch = Object.assign(workerPending.patch, patch);
+      workerPending = null;
+      clearTimeout(workerSaveTimer);
+      saveWorker(colId, patch);
+      $("workerRemove").classList.remove("hidden");
+      renderWorkerNote(colId);
+    };
+    var setLater = function (patch) {
+      if (!workerPending || workerPending.colId !== colId) workerPending = { colId: colId, patch: {} };
+      Object.assign(workerPending.patch, patch);
+      clearTimeout(workerSaveTimer);
+      workerSaveTimer = setTimeout(function () { set({}); }, 300);
+    };
+    workerForm.replaceChildren();
+    function row(label, control, help, top) {
+      var l = el("label", top ? "top" : null, label);
+      workerForm.appendChild(l);
+      workerForm.appendChild(control);
+      if (help) workerForm.appendChild(el("p", "help", help));
+      return control;
+    }
+    function enhanced(sel) {
+      var wrap = el("div");
+      wrap.appendChild(sel);
+      enhanceSelect(sel);
+      return wrap;
+    }
+
+    var name = el("input", "field");
+    name.value = str(w.name);
+    name.placeholder = "e.g. Opus";
+    name.maxLength = 40;
+    name.addEventListener("input", function () { setLater({ name: name.value.trim() }); });
+    row("Name", name, "Set as the assignee of the cards it takes, and shown on the column's button.");
+
+    var instructions = el("textarea", "field");
+    instructions.value = str(w.instructions);
+    instructions.placeholder = "What it should do with each card: where the code is, how to test, commit rules, when to ask you…";
+    instructions.addEventListener("input", function () { setLater({ instructions: instructions.value }); });
+    row("Instructions", instructions, null, true);
+
+    var providers = (opts.providers || []).filter(function (p) { return p.available; });
+    var provider = str(w.provider);
+    var effectiveProvider = provider || str(defaults.provider);
+    row("Provider", enhanced(workerSelect([["", "Default" + (defaults.provider ? " (" + labelOf(providers, defaults.provider) + ")" : "")]].concat(providers.map(function (p) { return [p.id, p.label]; })), provider, "Provider", function (v) {
+      set({ provider: v, model: null, effort: null });
+      renderWorkerForm(colId);
+    })));
+    var models = (opts.models && opts.models[effectiveProvider]) || [];
+    row("Model", enhanced(workerSelect([["", "Default"]].concat(models.map(function (m) { return [m.id, m.label]; })), str(w.model), "Model", function (v) {
+      set({ model: v, effort: null });
+      renderWorkerForm(colId);
+    })));
+    var model = models.filter(function (m) { return m.id === str(w.model); })[0];
+    var efforts = model ? model.efforts || [] : [];
+    if (efforts.length) {
+      row("Reasoning", enhanced(workerSelect([["", "Default"]].concat(efforts.map(function (e) { return [e.id, e.label]; })), str(w.effort), "Reasoning", function (v) { set({ effort: v }); })));
+    }
+    var mode = workerMode(w);
+    row("Mode", enhanced(workerSelect((opts.modes || []).map(function (m) { return [m.id, m.label]; }), mode, "Mode", function (v) {
+      set({ mode: v });
+      renderWorkerForm(colId);
+    })), ((opts.modes || []).filter(function (m) { return m.id === mode; })[0] || {}).detail);
+    if (FOLDER_MODES[mode]) {
+      var folderRow = el("div", "row");
+      var folder = el("input", "field");
+      folder.value = str(w.cwd);
+      folder.placeholder = "C:\\path\\to\\project";
+      folder.addEventListener("input", function () { setLater({ cwd: folder.value.trim() }); });
+      var browse = el("button", "tool", "Browse…");
+      browse.type = "button";
+      browse.addEventListener("click", function () {
+        scribe.agent.pickFolder({ initial: folder.value.trim() }).then(function (r) {
+          if (r && r.ok && r.path) {
+            folder.value = r.path;
+            set({ cwd: r.path });
+          }
+        });
+      });
+      folderRow.appendChild(folder);
+      folderRow.appendChild(browse);
+      row("Folder", folderRow, "Scribe asks you once before the board may run agents with file and shell access here.");
+      var approvals = opts.approvals || [];
+      row("Approval", enhanced(workerSelect([["", "Default" + (defaults.approval ? " (" + labelOf(approvals, defaults.approval) + ")" : "")]].concat(approvals.map(function (a) { return [a.id, a.label]; })), str(w.approval), "Approval", function (v) { set({ approval: v }); })));
+      var wt = el("label", "check");
+      var wtBox = el("input", "switch");
+      wtBox.type = "checkbox";
+      wtBox.checked = Boolean(w.worktree);
+      wtBox.addEventListener("change", function () { set({ worktree: wtBox.checked }); });
+      wt.appendChild(wtBox);
+      wt.appendChild(document.createTextNode("Work in a git worktree of its own"));
+      row("", wt);
+    }
+    row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
+    renderWorkerNote(colId);
+  }
+  function labelOf(list, id) {
+    var found = list.filter(function (x) { return x.id === id; })[0];
+    return found ? found.label : id;
+  }
+  function renderWorkerNote(colId) {
+    var w = worker(colId);
+    var note = $("workerNote");
+    var ready = workerReady(w);
+    note.classList.toggle("warn", !ready);
+    note.textContent = ready
+      ? "The column's header has a button to start it. Changes apply the next time it starts."
+      : FOLDER_MODES[workerMode(w)] && w && str(w.instructions).trim()
+        ? "Pick a folder to show the start button."
+        : "Write instructions to show the start button on the column.";
+  }
+  $("workerClose").addEventListener("click", closeWorker);
+  workerBack.addEventListener("pointerdown", function (e) { if (e.target === workerBack) closeWorker(); });
+  $("workerRemove").addEventListener("click", function () {
+    var colId = workerCol;
+    askConfirm({ title: "Remove this worker?", text: "Its setup is deleted. A running agent keeps going until you stop it from the chat.", ok: "Remove" }).then(function (ok) {
+      if (!ok) return;
+      workerPending = null;
+      removeWorker(colId);
+      closeWorker();
+    });
+  });
+
+  function renderWorkersSettings() {
+    var box = $("sWorkers");
+    var agentCols = AGENT_MODE ? columns().filter(function (c) { return c.role === "agent"; }) : [];
+    box.classList.toggle("hidden", !agentCols.length);
+    box.replaceChildren();
+    if (!agentCols.length) return;
+    box.appendChild(el("h4", null, "Agent workers"));
+    box.appendChild(el("p", null, "Start an agent from an agent column's header to work its cards."));
+    agentCols.forEach(function (col) {
+      var w = worker(col.id);
+      var line = el("div", "worker-row");
+      var txt = el("span", "txt");
+      txt.appendChild(el("b", null, col.title));
+      txt.appendChild(el("span", null, workerSummary(w)));
+      var edit = el("button", "tool", w ? "Edit" : "Set up");
+      edit.type = "button";
+      edit.addEventListener("click", function () { openWorker(col.id); });
+      line.appendChild(txt);
+      line.appendChild(edit);
+      box.appendChild(line);
+    });
+  }
+
+  // Capture phase: Esc closes only the top dialog.
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || confirmDone || openSelect) return;
+    if (!stopBack.classList.contains("hidden")) closeStop();
+    else if (!workerBack.classList.contains("hidden")) closeWorker();
+    else return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
   }, true);
 
   // ---------- toolbar ----------
