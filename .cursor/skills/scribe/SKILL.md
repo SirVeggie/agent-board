@@ -306,7 +306,7 @@ page_update({
 })
 ```
 
-Every file must be referenced and every `asset:<name>` needs a file; otherwise the write is refused. The built-in Todo list keeps images per item as `images: [{ id, name, data }]` and shows one inline in the description with `![alt](#img-<image id>)`.
+Every file must be referenced and every `asset:<name>` needs a file; otherwise the write is refused. The built-in Todo list keeps images per item as `images: [{ id, name, data }]` and shows one inline in the description with `![alt](#img-<image id>)`. `page_action` get (and a `page_state` path to one card or item) attaches those images so you can see them; a whole-board read does not inline every cover.
 
 ### Previewing files
 

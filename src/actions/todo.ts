@@ -64,11 +64,14 @@ export const todoActions: ActionSet = {
       },
     },
     get: {
-      description: "One item in full, with its description.",
+      description: "One item in full, with its description and images (attached so you can see them).",
       args: "{ item }",
       run(state, args, ctx) {
         const item = findItem(state, args.item);
-        return { ops: [], result: { ...row(state, ctx, item), description: str(item.description) } };
+        return {
+          ops: [],
+          result: { ...row(state, ctx, item), description: str(item.description), images: arr(item.images) },
+        };
       },
     },
     add: {

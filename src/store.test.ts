@@ -1421,6 +1421,11 @@ test("a page asset saved right after creating its page is stored and served", ()
   assert.equal(usage.bytes, 9);
   assert.equal(usage.warning, undefined);
   assert.equal(store.readPageAsset(asset.id)?.data.toString(), "png-bytes");
+  const owned = store.readTabPageAsset("kanban", asset.id);
+  assert.equal(owned.meta.id, asset.id);
+  assert.equal(owned.data.toString(), "png-bytes");
+  const other = store.upsert({ key: "other", title: "Other", html: "<p>x</p>" }).tab;
+  assert.throws(() => store.readTabPageAsset(other.id, asset.id), /asset not found/);
   assert.deepEqual(
     store.listPageAssets(tab.id).assets.map((item) => item.id),
     [asset.id]

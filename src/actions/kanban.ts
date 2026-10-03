@@ -239,7 +239,8 @@ export const kanbanActions: ActionSet = {
       },
     },
     get: {
-      description: "One card in full: description, checklist, comments, images, with column and label names resolved.",
+      description:
+        "One card in full: description, checklist, comments, images (attached so you can see them), with column and label names resolved.",
       args: "{ card }",
       run(state, args) {
         const card = findCard(state, args.card);

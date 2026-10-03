@@ -1727,6 +1727,16 @@ export class BoardStore extends EventEmitter {
     return this.db.readPageAsset(assetId);
   }
 
+  /** One asset that belongs to this page. */
+  readTabPageAsset(idOrKey: string, assetId: string): { meta: PageAssetMeta; data: Buffer } {
+    const tab = this.requireAny(idOrKey);
+    const found = this.readPageAsset(assetId);
+    if (!found || found.meta.tabId !== tab.id) {
+      throw new Error(`asset not found: ${assetId}`);
+    }
+    return found;
+  }
+
   pageAssetUsageOf(tabId: string): PageAssetUsage {
     return pageAssetUsage(this.pageAssetTotals.get(tabId));
   }

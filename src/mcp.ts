@@ -15,6 +15,7 @@ import { STATE_OP_NAMES, filterItems, getAt } from "./stateOps.js";
 import { clampLibraryPage } from "./librarySearch.js";
 import { withAgentDates } from "./dates.js";
 import type { PageAssetUsage } from "./pageAssets.js";
+import { MAX_INLINE_PAGE_IMAGES, collectStateImages, mcpImageMime } from "./mcpImages.js";
 import type { Tab, TabAsset, TabMeta } from "./types.js";
 
 type ApiError = { error?: string };
@@ -612,7 +613,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_state",
-    "Read the live state of an interactive page: what the user has actually added, edited, or checked off. Returns the state (or, with path, just that part), stateRevision, and eventCursor (pass it to page_wait to wait for events after this read). Works whether or not the tab is focused, closed, or the browser is open. On a page with large arrays, read one part: path \"cards/num=12\", or path \"cards\" with where. Pages with template actions often have a cheaper list action. Do not poll this tool while waiting for the user — use page_wait.",
+    "Read the live state of an interactive page: what the user has actually added, edited, or checked off. Returns the state (or, with path, just that part), stateRevision, and eventCursor (pass it to page_wait to wait for events after this read). Works whether or not the tab is focused, closed, or the browser is open. On a page with large arrays, read one part: path \"cards/num=12\", or path \"cards\" with where. Images on a single card or todo are attached so you can see them; a whole-board read does not inline every cover. Pages with template actions often have a cheaper list action. Do not poll this tool while waiting for the user — use page_wait.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
@@ -654,7 +655,7 @@ export async function startMcp(): Promise<void> {
           return errorResult((err as Error).message);
         }
       }
-      const result = jsonResult(view);
+      const result = await withImages(jsonResult(view), view, which);
       return (data as { templateId?: string }).templateId ? withGuide(result, which, guide === true) : result;
     }
   );
@@ -826,7 +827,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_action",
-    "Run one of the page template's actions, e.g. on a Kanban board: list, get, create, comment, move, claim, finish. Actions apply the page's own rules (timestamps, ordering, numbering, who holds a card) in one atomic step, and read the latest state, so there's nothing to merge or retry. The page's agent guide lists its actions and their arguments; an unknown action name returns the list. Pages without a template (or with a template that has no actions) use page_update.",
+    "Run one of the page template's actions, e.g. on a Kanban board: list, get, create, comment, move, claim, finish. Actions apply the page's own rules (timestamps, ordering, numbering, who holds a card) in one atomic step, and read the latest state, so there's nothing to merge or retry. The page's agent guide lists its actions and their arguments; an unknown action name returns the list. Pages without a template (or with a template that has no actions) use page_update. get attaches images on the card or item so you can see them.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:agent-todo."),
@@ -842,7 +843,7 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return withGuide(errorResult((data as ApiError).error || `HTTP ${status}`), which);
       }
-      return withGuide(jsonResult(data), which);
+      return withGuide(await withImages(jsonResult(data), data, which), which);
     }
   );
 
@@ -1152,6 +1153,54 @@ function jsonResult(value: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
   };
+}
+
+/**
+ * Attach raster images found on one card or todo in a tool's JSON so the model can see
+ * them. A whole-board dump is left as `/blob/` URLs; get one item to inline its photos.
+ */
+async function withImages(result: ToolResult, value: unknown, which: string): Promise<ToolResult> {
+  const refs = collectStateImages(value);
+  if (!refs.length) {
+    return result;
+  }
+  const picked = refs.slice(0, MAX_INLINE_PAGE_IMAGES);
+  const notes: string[] = [];
+  if (refs.length > picked.length) {
+    notes.push(
+      `${refs.length} images in this result; inlining the first ${picked.length}. Read one card or item with get to see the rest.`
+    );
+  }
+  for (const ref of picked) {
+    try {
+      const { status, data } = await api(
+        "GET",
+        `/api/tabs/${encodeURIComponent(which)}/assets/${encodeURIComponent(ref.assetId)}`
+      );
+      if (status >= 400) {
+        notes.push(`${ref.name}: ${(data as ApiError).error || `HTTP ${status}`}`);
+        continue;
+      }
+      const asset = data as { mimeType?: string; data?: string; skipped?: string };
+      if (asset.skipped || !asset.data) {
+        notes.push(`${ref.name}: ${asset.skipped || "not inlined"}`);
+        continue;
+      }
+      const label = ref.id ? `${ref.name} (${ref.id})` : ref.name;
+      result.content.push({ type: "text", text: `Attached image: ${label}` });
+      result.content.push({
+        type: "image",
+        mimeType: mcpImageMime(asset.mimeType || "image/png"),
+        data: asset.data,
+      });
+    } catch (err) {
+      notes.push(`${ref.name}: ${(err as Error).message}`);
+    }
+  }
+  if (notes.length) {
+    result.content.push({ type: "text", text: notes.join("\n") });
+  }
+  return result;
 }
 
 function errorResult(message: string) {

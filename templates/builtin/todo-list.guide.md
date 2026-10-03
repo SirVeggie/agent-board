@@ -15,4 +15,4 @@ todos: [{ id, text, done, description, images: [{ id, name, data }], col }]   //
 columnTitles: [string]
 ```
 
-For anything the actions don't cover, read with `page_state` and a `path` (`todos/t_ab12`) and write with `page_update` ops. `description` is markdown; `![alt](#img-<image id>)` shows one of the item's images. To attach an image, insert into `todos/<id>/images` with `page_update`, pass the file in `assets`, and write `data: "asset:<file name>"`.
+For anything the actions don't cover, read with `page_state` and a `path` (`todos/t_ab12`) and write with `page_update` ops. `description` is markdown; `![alt](#img-<image id>)` shows one of the item's images. To attach an image, insert into `todos/<id>/images` with `page_update`, pass the file in `assets`, and write `data: "asset:<file name>"`. `get` attaches those images so you can see them.

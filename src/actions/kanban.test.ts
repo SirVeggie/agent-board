@@ -92,13 +92,22 @@ test("finish without a summary hands in the comment posted since the claim, and 
 
 test("get returns the comments themselves, not just their count", () => {
   const commented = run(board(), "comment", { card: 1, text: "First **note**" }).state;
-  const { result } = run(commented, "get", { card: 1 });
+  const withImage = {
+    ...commented,
+    cards: (commented.cards as Array<Record<string, unknown>>).map((c) =>
+      c.num === 1
+        ? { ...c, images: [{ id: "im_1", name: "shot.png", data: "/blob/pa_aaaaaaaaaaaaaaaaaaaaaaaa" }] }
+        : c
+    ),
+  };
+  const { result } = run(withImage, "get", { card: 1 });
   const comments = result.comments as Array<{ by: string; text: string }>;
   assert.equal(comments.length, 1);
   assert.equal(comments[0].text, "First **note**");
   assert.equal(comments[0].by, "agent");
   assert.equal(result.lastComment, undefined);
   assert.equal(result.column, "Ready for agent");
+  assert.deepEqual(result.images, [{ id: "im_1", name: "shot.png", data: "/blob/pa_aaaaaaaaaaaaaaaaaaaaaaaa" }]);
 });
 
 test("moving into done sets doneAt and puts the card on top; moving out clears it", () => {

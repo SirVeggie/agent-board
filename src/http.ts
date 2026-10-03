@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
 import { checkFramable } from "./frameCheck.js";
@@ -447,6 +448,24 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const result = store.listPageAssets(req.params.id);
       res.json({ assets: result.assets.map(assetView), usage: result.usage });
+    } catch (err) {
+      sendAssetError(res, err);
+    }
+  });
+
+  /** JSON for agents: metadata always, base64 bytes when the blob is a small raster image. */
+  app.get("/api/tabs/:id/assets/:assetId", (req, res) => {
+    try {
+      const { meta, data } = store.readTabPageAsset(req.params.id, req.params.assetId);
+      const skipped = skipInlinePageImage(meta.mimeType, meta.bytes);
+      res.json({
+        id: meta.id,
+        name: meta.name,
+        mimeType: meta.mimeType,
+        bytes: meta.bytes,
+        url: pageAssetUrl(meta.id),
+        ...(skipped ? { skipped } : { data: data.toString("base64") }),
+      });
     } catch (err) {
       sendAssetError(res, err);
     }
@@ -1224,7 +1243,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
       next();
       return;
     }
-    if (req.method === "DELETE" && ASSET_PATH.test(req.path)) {
+    if ((req.method === "GET" || req.method === "DELETE") && ASSET_PATH.test(req.path)) {
       next();
       return;
     }
