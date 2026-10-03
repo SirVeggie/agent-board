@@ -620,7 +620,8 @@
   .thumb img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; display: block; }
   .thumb .rm { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 7px; background: rgba(15, 17, 21, .8); font-size: 14px; line-height: 1; }
   .thumb .rm:hover { color: var(--danger); }
-  .thumb .cov { position: absolute; left: 4px; bottom: 4px; font-size: 10px; padding: 1px 5px; border-radius: 5px; background: rgba(15, 17, 21, .8); color: var(--muted); }
+  .thumb .cov { position: absolute; left: 4px; bottom: 4px; font-size: 10px; padding: 1px 5px; border-radius: 5px; background: rgba(15, 17, 21, .8); color: var(--muted); height: auto; line-height: 1.3; box-shadow: none; }
+  .thumb .cov:hover { color: var(--text); }
   .add-img { width: 84px; height: 84px; background: rgba(255, 255, 255, .04); color: var(--muted); font-size: 26px; box-shadow: var(--depth); border-radius: 10px; }
   .add-img:hover { color: var(--text); }
   .links { display: flex; flex-direction: column; gap: 4px; }
@@ -2217,7 +2218,21 @@
       });
       t.appendChild(img);
       t.appendChild(rm);
-      if (i === 0 && c.cover !== false) t.appendChild(el("span", "cov", "cover"));
+      if (i === 0) {
+        var shown = c.cover !== false;
+        var cov = el("button", "cov" + (shown ? "" : " off"), shown ? "cover" : "hidden");
+        cov.type = "button";
+        cov.title = shown ? "Hide this image on the board card" : "Show this image on the board card";
+        cov.addEventListener("click", function (e) {
+          e.stopPropagation();
+          updateCard(c.id, function (x) {
+            if (x.cover === false) delete x.cover;
+            else x.cover = false;
+            return x;
+          });
+        });
+        t.appendChild(cov);
+      }
       galleryEl.appendChild(t);
     });
     var addImg = el("button", "add-img", "+");
