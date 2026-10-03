@@ -75,6 +75,19 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** Claude Code's /usage control request. The method name is still experimental in the SDK. */
+async function queryPlanUsage(q: Query): Promise<unknown | null> {
+  const rec = q as unknown as Record<string, unknown>;
+  const fn = rec.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET ?? rec.getUsage;
+  if (typeof fn !== "function") return null;
+  try {
+    return await (fn as (opts?: { skipBehaviors?: boolean }) => Promise<unknown>).call(q, { skipBehaviors: true });
+  } catch (err) {
+    log(`Claude usage fetch failed: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 export class ClaudeProvider implements AgentProvider {
   readonly id = "claude" as const;
   readonly label = "Claude";
@@ -178,6 +191,44 @@ export class ClaudeProvider implements AgentProvider {
     this.spares.dispose();
     for (const session of this.sessions) {
       session.dispose();
+    }
+  }
+
+  /**
+   * Plan usage from Claude Code's /usage path: no model message. Uses a live session
+   * when one is already up, otherwise a short-lived query.
+   */
+  async fetchPlanUsage(): Promise<unknown | null> {
+    let tried = false;
+    for (const session of this.sessions) {
+      if (!session.hasQuery()) continue;
+      tried = true;
+      const report = await session.fetchPlanUsage();
+      if (report) return report;
+    }
+    if (tried) return null;
+    return this.fetchPlanUsageStandalone();
+  }
+
+  private async fetchPlanUsageStandalone(): Promise<unknown | null> {
+    const sdk = await loadSdk();
+    const input = new InputQueue();
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), 45_000);
+    const q = sdk.query({ prompt: input, options: { settingSources: ["user"], tools: [], persistSession: false, abortController } });
+    try {
+      return await queryPlanUsage(q);
+    } catch (err) {
+      log(`Claude usage fetch failed: ${(err as Error).message}`);
+      return null;
+    } finally {
+      clearTimeout(timer);
+      input.close();
+      try {
+        q.close();
+      } catch {
+        abortController.abort();
+      }
     }
   }
 }
@@ -357,6 +408,14 @@ class ClaudeSession implements ProviderSession {
 
   scribeThreadId(): string {
     return this.thread.id;
+  }
+
+  hasQuery(): boolean {
+    return this.query !== null;
+  }
+
+  fetchPlanUsage(): Promise<unknown | null> {
+    return this.query ? queryPlanUsage(this.query) : Promise.resolve(null);
   }
 
   /** Options that need a new process when they change. */

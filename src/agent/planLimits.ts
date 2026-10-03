@@ -1,0 +1,141 @@
+import { isPlainRecord, type PlanLimits } from "./types.js";
+
+export const LIMIT_LABELS: Record<string, string> = {
+  five_hour: "5-hour",
+  seven_day: "Weekly",
+  seven_day_opus: "Weekly (Opus)",
+  seven_day_sonnet: "Weekly (Sonnet)",
+  seven_day_overage_included: "Weekly (with extra usage)",
+  seven_day_oauth_apps: "Weekly (apps)",
+  overage: "Extra usage",
+};
+
+const USAGE_WINDOW_IDS = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included", "seven_day_oauth_apps"] as const;
+
+const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
+const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
+
+function limitLabel(id: string): string {
+  return LIMIT_LABELS[id] ?? id.replaceAll("_", " ");
+}
+
+function windowPeriodMs(id: string): number | undefined {
+  if (id === "five_hour") return FIVE_HOUR_MS;
+  if (id.startsWith("seven_day")) return SEVEN_DAY_MS;
+  return undefined;
+}
+
+/** Unix seconds, unix ms, or ISO 8601 → epoch ms. */
+export function parseResetsAt(raw: unknown): number | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
+  if (typeof raw === "string") {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : undefined;
+  }
+  return undefined;
+}
+
+function pushWindow(windows: PlanLimits["windows"], id: string, utilization: number, resetsAt?: number): void {
+  windows.push({ id, label: limitLabel(id), utilization: Math.max(0, utilization), ...(resetsAt ? { resetsAt } : {}) });
+}
+
+/** Claude's rate_limit_event payload (utilization 0–1, resetsAt unix seconds). */
+export function planLimitsFromRateLimitInfo(info: unknown, now: number, prev?: PlanLimits): PlanLimits | null {
+  if (!isPlainRecord(info)) return null;
+  const windows: PlanLimits["windows"] = [];
+  const add = (id: string, raw: unknown) => {
+    if (!isPlainRecord(raw) || typeof raw.utilization !== "number") return;
+    pushWindow(windows, id, raw.utilization, parseResetsAt(raw.resetsAt));
+  };
+  if (isPlainRecord(info.unifiedWindows)) {
+    for (const [id, raw] of Object.entries(info.unifiedWindows)) add(id, raw);
+  } else if (typeof info.rateLimitType === "string") {
+    add(info.rateLimitType, info);
+  }
+  return {
+    at: now,
+    ...(typeof info.status === "string" ? { status: info.status } : {}),
+    windows: windows.length ? windows : prev?.windows ?? [],
+    ...(info.isUsingOverage === true ? { overage: true } : {}),
+  };
+}
+
+function usageUtilization(raw: number): number {
+  return Math.max(0, Math.min(1, raw / 100));
+}
+
+function windowFromUsage(id: string, raw: unknown): PlanLimits["windows"][number] | null {
+  if (!isPlainRecord(raw) || typeof raw.utilization !== "number") return null;
+  const resetsAt = parseResetsAt(raw.resets_at ?? raw.resetsAt);
+  return { id, label: limitLabel(id), utilization: usageUtilization(raw.utilization), ...(resetsAt ? { resetsAt } : {}) };
+}
+
+/**
+ * Structured /usage (get_usage) rate_limits: utilization 0–100, resets_at ISO or unix.
+ * Null when plan limits do not apply or the body has no windows.
+ */
+export function planLimitsFromUsageReport(report: unknown, now: number): PlanLimits | null {
+  if (!isPlainRecord(report) || report.rate_limits_available === false) return null;
+  const limits = report.rate_limits;
+  if (!isPlainRecord(limits)) return null;
+  const windows: PlanLimits["windows"] = [];
+  for (const id of USAGE_WINDOW_IDS) {
+    const w = windowFromUsage(id, limits[id]);
+    if (w) windows.push(w);
+  }
+  if (Array.isArray(limits.model_scoped)) {
+    for (const raw of limits.model_scoped) {
+      if (!isPlainRecord(raw) || typeof raw.display_name !== "string" || typeof raw.utilization !== "number") continue;
+      const id = `model:${raw.display_name}`;
+      if (windows.some((w) => w.id === id || w.label === raw.display_name)) continue;
+      const resetsAt = parseResetsAt(raw.resets_at ?? raw.resetsAt);
+      windows.push({ id, label: raw.display_name, utilization: usageUtilization(raw.utilization), ...(resetsAt ? { resetsAt } : {}) });
+    }
+  }
+  const extra = isPlainRecord(limits.extra_usage) ? limits.extra_usage : null;
+  if (extra && typeof extra.utilization === "number" && extra.utilization > 0) {
+    const w = windowFromUsage("overage", extra);
+    if (w) windows.push(w);
+  }
+  if (!windows.length) return null;
+  return {
+    at: now,
+    windows,
+    ...(extra?.is_enabled === true && typeof extra.utilization === "number" && extra.utilization > 0 ? { overage: true } : {}),
+  };
+}
+
+/** Next reset strictly after `now`, or undefined when the window length is unknown. */
+export function nextResetAfter(id: string, resetsAt: number, now: number): number | undefined {
+  const period = windowPeriodMs(id);
+  if (!period) return undefined;
+  let at = resetsAt;
+  while (at <= now) at += period;
+  return at;
+}
+
+/** Zero windows whose reset has passed, and roll their next reset forward. */
+export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanLimits {
+  let changed = false;
+  const windows = limits.windows.map((w) => {
+    if (!w.resetsAt || w.resetsAt > now) return w;
+    changed = true;
+    const resetsAt = nextResetAfter(w.id, w.resetsAt, now);
+    const { resetsAt: _was, ...rest } = w;
+    return { ...rest, utilization: 0, ...(resetsAt ? { resetsAt } : {}) };
+  });
+  if (!changed) return limits;
+  return { ...limits, at: now, windows };
+}
+
+/** Soonest window reset, including ones already due. Null when none are known. */
+export function nextRefreshAt(limits: PlanLimits | undefined): number | null {
+  if (!limits) return null;
+  const times = limits.windows.map((w) => w.resetsAt).filter((t): t is number => typeof t === "number");
+  if (!times.length) return null;
+  return Math.min(...times);
+}
+
+export function livePlanLimits(limits: PlanLimits, now = Date.now()): PlanLimits {
+  return applyExpiredWindows(limits, now);
+}

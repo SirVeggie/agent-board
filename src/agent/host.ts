@@ -31,6 +31,7 @@ import type {
   TurnResult,
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
+import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromRateLimitInfo, planLimitsFromUsageReport } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import type {
   AgentEvent,
@@ -57,7 +58,6 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
-import { isPlainRecord } from "./types.js";
 
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
@@ -84,15 +84,6 @@ type Pending =
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
   | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
   | { kind: "plan"; threadId: string; itemId: string; resolve: (d: PlanDecision) => void; reject: (err: Error) => void };
-
-const LIMIT_LABELS: Record<string, string> = {
-  five_hour: "5-hour",
-  seven_day: "Weekly",
-  seven_day_opus: "Weekly (Opus)",
-  seven_day_sonnet: "Weekly (Sonnet)",
-  seven_day_overage_included: "Weekly (with extra usage)",
-  overage: "Extra usage",
-};
 
 function approvalFor(prefs: Prefs, provider: ProviderId): ApprovalPolicy {
   return prefs.approvals[provider] ?? prefs.approval;
@@ -249,40 +240,96 @@ export class AgentHost {
       approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
+    this.scheduleClaudeUsageRefresh();
   }
 
   private planLimits: Partial<Record<ProviderId, PlanLimits>> = {};
+  private usageTimer: NodeJS.Timeout | null = null;
+  private usageFetch: Promise<void> | null = null;
+  private lastUsageFetchAt = 0;
+  private closed = false;
 
-  /** Last reported plan usage per provider. */
+  /** Last reported plan usage per provider. Expired windows read as 0% until a fetch or turn updates them. */
   limits(): Partial<Record<ProviderId, PlanLimits>> {
-    return this.planLimits;
+    return this.liveLimits();
+  }
+
+  private liveLimits(): Partial<Record<ProviderId, PlanLimits>> {
+    const claude = this.planLimits.claude;
+    if (!claude) return this.planLimits;
+    const live = livePlanLimits(claude);
+    return live === claude ? this.planLimits : { ...this.planLimits, claude: live };
   }
 
   private recordLimits(provider: ProviderId, info: unknown): void {
-    if (!isPlainRecord(info)) return;
-    const windows: PlanLimits["windows"] = [];
-    const add = (id: string, raw: unknown) => {
-      if (!isPlainRecord(raw) || typeof raw.utilization !== "number") return;
-      const resetsAt = typeof raw.resetsAt === "number" ? raw.resetsAt * 1000 : undefined;
-      windows.push({ id, label: LIMIT_LABELS[id] ?? id.replaceAll("_", " "), utilization: Math.max(0, raw.utilization), ...(resetsAt ? { resetsAt } : {}) });
-    };
-    if (isPlainRecord(info.unifiedWindows)) {
-      for (const [id, raw] of Object.entries(info.unifiedWindows)) add(id, raw);
-    } else if (typeof info.rateLimitType === "string") {
-      add(info.rateLimitType, info);
-    }
-    const prev = this.planLimits[provider];
-    // A report without window figures keeps the last known ones.
-    const next: PlanLimits = {
-      at: Date.now(),
-      ...(typeof info.status === "string" ? { status: info.status } : {}),
-      windows: windows.length ? windows : prev?.windows ?? [],
-      ...(info.isUsingOverage === true ? { overage: true } : {}),
-    };
+    const next = planLimitsFromRateLimitInfo(info, Date.now(), this.planLimits[provider]);
+    if (!next) return;
+    this.commitLimits(provider, next, true);
+  }
+
+  private commitLimits(provider: ProviderId, next: PlanLimits, fromTurn: boolean): void {
     this.planLimits = { ...this.planLimits, [provider]: next };
     this.db.setSetting("limits", this.planLimits);
-    this.emit({ type: "agent_limits", limits: this.planLimits });
-    this.applyPlanCost(provider, next);
+    this.emit({ type: "agent_limits", limits: this.liveLimits() });
+    if (fromTurn) this.applyPlanCost(provider, next);
+    this.scheduleClaudeUsageRefresh();
+  }
+
+  /** After a window resets, pull plan usage from Claude without sending a model message. */
+  private scheduleClaudeUsageRefresh(): void {
+    if (this.usageTimer) {
+      clearTimeout(this.usageTimer);
+      this.usageTimer = null;
+    }
+    if (this.closed) return;
+    const at = nextRefreshAt(this.planLimits.claude);
+    if (at == null) return;
+    const delay = Math.max(0, at - Date.now() + 2000);
+    this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), Math.min(delay, 7 * 24 * 60 * 60 * 1000));
+    this.usageTimer.unref?.();
+  }
+
+  private claudeTurnRunning(): boolean {
+    for (const [id] of this.runs) {
+      if (this.threads.get(id)?.provider === "claude") return true;
+    }
+    return false;
+  }
+
+  private refreshClaudeUsage(): Promise<void> {
+    if (this.usageFetch) return this.usageFetch;
+    this.usageFetch = this.doRefreshClaudeUsage().finally(() => {
+      this.usageFetch = null;
+    });
+    return this.usageFetch;
+  }
+
+  private async doRefreshClaudeUsage(): Promise<void> {
+    if (this.closed) return;
+    if (this.claudeTurnRunning()) {
+      this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), 30_000);
+      this.usageTimer.unref?.();
+      return;
+    }
+    const prev = this.planLimits.claude;
+    if (prev) {
+      const overlaid = applyExpiredWindows(prev);
+      if (overlaid !== prev) this.commitLimits("claude", overlaid, false);
+    }
+    if (Date.now() - this.lastUsageFetchAt < 60_000) {
+      this.scheduleClaudeUsageRefresh();
+      return;
+    }
+    this.lastUsageFetchAt = Date.now();
+    try {
+      const report = await (this.providers.claude as ClaudeProvider).fetchPlanUsage();
+      if (this.closed) return;
+      const parsed = planLimitsFromUsageReport(report, Date.now());
+      if (parsed) this.commitLimits("claude", applyExpiredWindows(parsed), false);
+    } catch {
+      /* overlay already applied; the next turn still reports */
+    }
+    this.scheduleClaudeUsageRefresh();
   }
 
   /** Attach this report's window deltas to the turn that was running when it started. */
@@ -304,6 +351,11 @@ export class AgentHost {
   }
 
   dispose(): void {
+    this.closed = true;
+    if (this.usageTimer) {
+      clearTimeout(this.usageTimer);
+      this.usageTimer = null;
+    }
     this.flushNow();
     for (const session of this.sessions.values()) session.dispose();
     for (const provider of Object.values(this.providers)) provider.dispose();

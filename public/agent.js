@@ -184,6 +184,7 @@
     } catch {
       return;
     }
+    armUsageTick();
     for (const provider of PROVIDERS) {
       if (!providerAvailable(provider)) continue;
       api("GET", `/models?provider=${provider}`)
@@ -311,6 +312,7 @@
           view.renderHeader();
         }
         agentSettings.renderUsage();
+        armUsageTick();
         return;
       }
       case "agent_item_deleted": {
@@ -3633,7 +3635,7 @@
   function resetText(at) {
     if (!at) return "";
     const ms = at - Date.now();
-    if (ms <= 0) return "resets now";
+    if (ms <= 0) return "";
     if (ms < 24 * 3600 * 1000) {
       const h = Math.floor(ms / 3600000);
       const m = Math.round((ms % 3600000) / 60000);
@@ -3642,9 +3644,46 @@
     return `resets ${new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
   }
 
+  function liveWindows(windows) {
+    const now = Date.now();
+    return (windows || []).map((w) => (w.resetsAt && w.resetsAt <= now ? { ...w, utilization: 0 } : w));
+  }
+
   function planLimits(provider) {
     const limits = S.config.limits?.[provider];
-    return limits && limits.windows?.length ? limits : null;
+    if (!limits?.windows?.length) return null;
+    return { ...limits, windows: liveWindows(limits.windows) };
+  }
+
+  let usageTick = 0;
+
+  function refreshUsageUi() {
+    for (const view of views()) {
+      view.renderComposerBar();
+      view.renderHeader();
+    }
+    agentSettings.renderUsage();
+  }
+
+  function soonestFutureReset(limits) {
+    const now = Date.now();
+    let next = null;
+    for (const entry of Object.values(limits || {})) {
+      for (const w of entry?.windows || []) {
+        if (typeof w.resetsAt === "number" && w.resetsAt > now && (next == null || w.resetsAt < next)) next = w.resetsAt;
+      }
+    }
+    return next;
+  }
+
+  function armUsageTick() {
+    clearTimeout(usageTick);
+    const next = soonestFutureReset(S.config?.limits);
+    if (next == null) return;
+    usageTick = setTimeout(() => {
+      refreshUsageUi();
+      armUsageTick();
+    }, Math.min(Math.max(50, next - Date.now()), 24 * 3600 * 1000));
   }
 
   let hoverTipEl = null;
@@ -3869,7 +3908,7 @@
         el(
           "p",
           "ag-muted ag-meter-none",
-          provider === "claude" ? "Shows after the next Claude turn: Claude Code reports the plan's usage as it runs." : "Cursor does not report plan usage to Scribe (its ACP server has no usage call)."
+          provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Cursor does not report plan usage to Scribe (its ACP server has no usage call)."
         )
       );
       return box;
