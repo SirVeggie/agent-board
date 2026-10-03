@@ -460,6 +460,15 @@
     menu.style.width = `${width}px`;
     const list = el("div", "ag-menu-list");
     let filter = "";
+    let active = 0;
+    const rows = () => [...list.querySelectorAll(".ag-menu-item:not(:disabled)")];
+    const highlight = () => {
+      const items = rows();
+      if (!items.length) return;
+      active = ((active % items.length) + items.length) % items.length;
+      items.forEach((row, i) => row.classList.toggle("ag-menu-active", i === active));
+      items[active]?.scrollIntoView({ block: "nearest" });
+    };
     const renderItems = () => {
       list.replaceChildren();
       const q = filter.trim().toLowerCase();
@@ -479,6 +488,7 @@
         const row = el("button", `ag-menu-item${item.checked ? " on" : ""}${item.danger ? " danger" : ""}`);
         row.type = "button";
         row.disabled = Boolean(item.disabled);
+        if (search) row.tabIndex = -1;
         if (item.icon) row.append(icon(item.icon));
         const text = el("span", "ag-menu-text");
         text.append(el("span", "ag-menu-label", item.label));
@@ -506,6 +516,10 @@
         list.append(row);
       }
       if (!list.childElementCount) list.append(el("div", "ag-menu-empty", "Nothing matches"));
+      if (search) {
+        active = 0;
+        highlight();
+      }
     };
     if (search) {
       const input = el("input", "ag-menu-search");
@@ -516,9 +530,18 @@
         renderItems();
       });
       input.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const items = rows();
+          if (!items.length) return;
+          active += event.key === "ArrowDown" ? 1 : -1;
+          highlight();
+          return;
+        }
         if (event.key === "Enter") {
-          const first = list.querySelector(".ag-menu-item:not(:disabled)");
-          first?.click();
+          event.preventDefault();
+          const items = rows();
+          (items[active] || items[0])?.click();
         }
       });
       menu.append(input);

@@ -1774,7 +1774,8 @@ button.ag-menu-item {
   flex-shrink: 0;
 }
 
-button.ag-menu-item:hover:not(:disabled) {
+button.ag-menu-item:hover:not(:disabled),
+button.ag-menu-item.ag-menu-active:not(:disabled) {
   background: var(--accent-soft);
 }
 
