@@ -45,6 +45,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   }
   if (thread.cwd && thread.mode !== "board") {
     lines.push("", `Workspace: ${thread.cwd}`);
+    // Agents otherwise tend to start every command with `cd <workspace> &&`, which is noise in the
+    // transcript and, with Claude, a compound command that can need approval where the bare one would not.
+    lines.push("Shell commands already run in the workspace folder. Do not start them with `cd` to it; use paths relative to it.");
     const wt = thread.worktree && !thread.worktree.closed ? thread.worktree : null;
     if (wt) {
       lines.push(
