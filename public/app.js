@@ -223,7 +223,12 @@
     rerender: () => render(),
     modeFromEvent: (event) => views.modeFromEvent(event),
     openIn: (id, mode) => views.open(id, mode),
-    canSplit: (id) => Boolean(state.activeId) && state.activeId !== id,
+    canSplit: (id) => {
+      if (!state.activeId) return false;
+      if (state.activeId !== id) return true;
+      const idx = state.tabs.findIndex((tab) => tab.id === id);
+      return Boolean((idx >= 0 ? state.tabs[idx + 1] ?? state.tabs[idx - 1] : null)?.id);
+    },
     hoverCard,
     stripSlot,
     clearStripSlot,

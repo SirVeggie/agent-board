@@ -711,8 +711,18 @@ window.createViews = function createViews(host) {
 
     // split
     if (visibleAsPrimary) {
-      flash(frameId);
-      return { ok: true, mode, id: target.id, alreadyVisible: true };
+      const tabs = host.tabs();
+      const idx = tabs.findIndex((tab) => tab.id === active);
+      const neighbor = (idx >= 0 ? tabs[idx + 1] ?? tabs[idx - 1] : null)?.id;
+      if (!neighbor || neighbor === active) {
+        host.showNotice("Open another tab to split beside");
+        return { ok: false, error: "no_neighbor" };
+      }
+      closeSplit(active);
+      host.selectTab(neighbor);
+      setSplit(neighbor, target);
+      host.render();
+      return { ok: true, mode, id: target.id };
     }
     if (source.role === "peek" || sameTarget(peekTarget(), target)) {
       peek = null;
