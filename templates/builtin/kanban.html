@@ -331,8 +331,10 @@
     display: block;
     width: calc(100% + 20px);
     margin: -9px -10px 8px;
-    height: 110px;
-    object-fit: cover;
+    max-height: 180px;
+    height: auto;
+    object-fit: contain;
+    object-position: center;
     border-radius: 9px 11px 0 0;
   }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
