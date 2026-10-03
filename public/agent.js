@@ -3024,6 +3024,10 @@
   }
 
   function renderThreadList(container, { onPick, currentId, onNew }) {
+    // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
+    const oldSearch = container.querySelector(".ag-list-top input[type=search]");
+    const hadFocus = Boolean(oldSearch) && document.activeElement === oldSearch;
+    const caret = hadFocus ? [oldSearch.selectionStart, oldSearch.selectionEnd] : null;
     container.replaceChildren();
     const top = el("div", "ag-list-top");
     const search = el("input", "ag-input small");
@@ -3032,7 +3036,31 @@
     search.value = S.search;
     search.addEventListener("input", () => {
       S.search = search.value;
+      container.dataset.activeId = "";
       fill();
+    });
+    // Up and Down move a highlight through the rows; Enter opens the highlighted thread.
+    const rows = () => [...list.querySelectorAll("button.ag-row")];
+    const highlight = (at, scroll = true) => {
+      const items = rows();
+      if (!items.length) return;
+      const i = ((at % items.length) + items.length) % items.length;
+      items.forEach((row, j) => row.classList.toggle("ag-row-active", j === i));
+      container.dataset.activeId = items[i].dataset.id;
+      if (scroll) items[i].scrollIntoView({ block: "nearest" });
+    };
+    search.addEventListener("keydown", (event) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const items = rows();
+        const at = items.findIndex((row) => row.classList.contains("ag-row-active"));
+        highlight(at < 0 ? (event.key === "ArrowDown" ? 0 : -1) : at + (event.key === "ArrowDown" ? 1 : -1));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const items = rows();
+        (items.find((row) => row.classList.contains("ag-row-active")) || items[0])?.click();
+      }
     });
     const seg = el("div", "ag-seg small");
     for (const [id, label] of [
@@ -3084,12 +3112,19 @@
         list.append(head);
         for (const t of groups.get(key)) list.append(threadRow(t, t.id === currentId, onPick));
       }
+      const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
+      highlight(Math.max(0, at), false);
     };
     fill();
+    if (hadFocus) {
+      search.focus();
+      search.setSelectionRange(caret[0], caret[1]);
+    }
   }
 
   function threadRow(t, current, onPick) {
     const row = button("", `ag-row${current ? " on" : ""}${t.unread ? " unread" : ""}`, () => onPick(t.id));
+    row.dataset.id = t.id;
     const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
     if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
@@ -3211,6 +3246,7 @@
           setCurrent(id);
           this.view.setThread(id);
           this.toggleList();
+          this.view.focus();
         },
         onNew: (anchor) => {
           newThreadMenu(anchor, {
@@ -3275,6 +3311,7 @@
           setCurrent(id);
           this.view.setThread(id);
           this.renderList();
+          this.view.focus();
         },
         onNew: (anchor) => newThreadMenu(anchor, this.view),
       });
@@ -4872,17 +4909,26 @@
     else if (dockFocused()) dock.setShown(false);
   }
 
+  /** Ctrl+J: open the thread picker of the chat in use; a second press closes it and gives the focus back to the input. */
   function openThreads() {
+    // The floating chat's menu takes the focus out of the dock, so check for it before picking a chat.
+    if (openMenuEl && openMenuAnchor === dock.titleBtn) {
+      closeMenu();
+      dock.view.focus();
+      return;
+    }
     const where = shortcutChat();
     if (where === "full") {
-      full.list.querySelector("input[type=search]")?.focus();
+      const search = full.list.querySelector("input[type=search]");
+      if (search && document.activeElement === search) full.view.focus();
+      else search?.focus();
     } else if (where === "dock") {
-      // A second press closes the menu again (it toggles); give the focus back to the input.
-      const wasOpen = Boolean(openMenuEl);
       dock.threadMenu(dock.titleBtn);
-      if (wasOpen && !openMenuEl) dock.view.focus();
+    } else if (sidebar.listOpen) {
+      sidebar.toggleList();
+      sidebar.view.focus();
     } else {
-      if (!sidebar.listOpen) sidebar.toggleList();
+      sidebar.toggleList();
       setTimeout(() => sidebar.listEl.querySelector("input[type=search]")?.focus(), 0);
     }
   }
@@ -4936,7 +4982,14 @@
     if (allowlists.close()) return true;
     if (agentSettings.close()) return true;
     if (openMenuEl) {
+      const fromDock = openMenuAnchor === dock.titleBtn;
       closeMenu();
+      if (fromDock) dock.view.focus();
+      return true;
+    }
+    if (sidebar.listOpen && sideFocused()) {
+      sidebar.toggleList();
+      sidebar.view.focus();
       return true;
     }
     if (modalStack.length) {

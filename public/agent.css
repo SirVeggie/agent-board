@@ -2114,6 +2114,15 @@ button.ag-row.on {
   background: var(--accent-soft);
 }
 
+/* The row Enter opens, shown while the search box has the focus. */
+.ag-list-top:focus-within + .ag-list button.ag-row.ag-row-active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.ag-list-top:focus-within + .ag-list button.ag-row.ag-row-active:not(.on) {
+  background: rgba(var(--lift-rgb), 0.05);
+}
+
 .ag-row-wrap {
   position: relative;
 }
