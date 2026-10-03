@@ -1756,7 +1756,7 @@
   function renderComposer(col) {
     var wrap = el("div", "composer");
     var ta = el("textarea", "composer-input");
-    ta.placeholder = "Card title. Enter adds, Shift+Enter for a new line.";
+    ta.placeholder = "Card title. Enter adds, Ctrl+Enter opens, Shift+Enter for a new line.";
     ta.value = composerText;
     ta.addEventListener("input", function () { composerText = ta.value; });
     ta.addEventListener("keydown", function (e) {
@@ -1808,7 +1808,10 @@
     afterMove(c.id, null, colId);
     var list = boardEl.querySelector('.cards[data-col="' + colId + '"]');
     if (list) list.scrollTop = list.scrollHeight;
-    if (open) openCard(c.id);
+    if (open) {
+      openCard(c.id);
+      startEditDesc();
+    }
     return c.id;
   }
 
@@ -2398,6 +2401,18 @@
       renderModal();
     }
   }
+  function startEditDesc() {
+    var c = openId && card(openId);
+    if (!c) return;
+    if (editingTitle) saveTitle();
+    if (!editingDesc) {
+      editingDesc = true;
+      mdEditor.value = c.description;
+      mdPreview.classList.add("hidden");
+      mdEditor.classList.remove("hidden");
+    }
+    mdEditor.focus();
+  }
 
   mTitle.addEventListener("click", function (e) {
     if (e.target.closest && e.target.closest("a")) return;
@@ -2419,13 +2434,7 @@
   mdPreview.addEventListener("click", function (e) {
     if (e.target.tagName === "IMG") { showLightbox(e.target.src); return; }
     if (e.target.tagName === "A") return;
-    var c = card(openId);
-    if (!c) return;
-    editingDesc = true;
-    mdEditor.value = c.description;
-    mdPreview.classList.add("hidden");
-    mdEditor.classList.remove("hidden");
-    mdEditor.focus();
+    startEditDesc();
   });
   mdEditor.addEventListener("blur", function () { if (editingDesc) saveDescription(); });
   mdEditor.addEventListener("keydown", function (e) {
