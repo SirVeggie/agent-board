@@ -1346,6 +1346,15 @@
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
+      if (item.text) {
+        const copy = button(icon("copy"), "ag-icon-btn small ag-user-copy", () => {
+          navigator.clipboard?.writeText(item.text)?.then(() => {
+            copy.classList.add("done");
+            setTimeout(() => copy.classList.remove("done"), 1200);
+          });
+        }, "Copy message");
+        row.append(copy);
+      }
       if (item.steer === "waiting") {
         row.classList.add("steering");
         row.append(el("div", "ag-queued", "Steering — waiting for a safe stop · Enter again to send it now"));

@@ -2688,6 +2688,30 @@ button.dock-scope.warn {
   padding-left: 20px;
 }
 
+button.ag-user-copy {
+  opacity: 0;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: -2px;
+}
+
+.ag-user:hover > button.ag-user-copy,
+.ag-user:focus-within > button.ag-user-copy,
+button.ag-user-copy:focus-visible,
+button.ag-user-copy.done {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  button.ag-user-copy {
+    opacity: 1;
+  }
+}
+
+button.ag-user-copy.done {
+  color: var(--ag-ok);
+}
+
 /* Plan usage: a compact chip in the chat header (sidebar/full) or the floating chat's settings bar. */
 .ag-bar button.ag-usage {
   margin-left: auto;
