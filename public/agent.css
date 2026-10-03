@@ -1920,6 +1920,40 @@ button.ag-row.on {
   background: var(--accent-soft);
 }
 
+.ag-row-wrap {
+  position: relative;
+}
+
+.ag-row-wrap > button.ag-row {
+  padding-right: 54px;
+}
+
+.ag-row-actions {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  z-index: 1;
+}
+
+@media (hover: hover) {
+  .ag-row-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .ag-row-wrap:hover .ag-row-actions,
+  .ag-row-wrap:focus-within .ag-row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+button.ag-icon-btn.danger:hover {
+  color: var(--danger);
+}
+
 .ag-row-main {
   flex: 1;
   min-width: 0;

@@ -338,6 +338,15 @@
     return `Delete “${t.title}”? This removes its transcript from Scribe.${extra}`;
   }
 
+  function archiveThread(t) {
+    api("PATCH", `/threads/${t.id}`, { archived: !t.archived }).catch((e) => notice(e.message));
+  }
+
+  async function deleteThread(t) {
+    if (!(await app().confirm(deletePrompt(t)))) return;
+    await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
+  }
+
   /** Last used folders, with `prefer` first when it is not already among them. */
   function recentWorkspaceDirs(prefer) {
     const out = [];
@@ -1119,7 +1128,7 @@
       openMenu(anchor, [
         { label: "Rename", run: () => { const ti = this.header.querySelector(".ag-title"); if (ti) this.rename(ti); } },
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
-        { label: t.archived ? "Unarchive" : "Archive", run: () => api("PATCH", `/threads/${t.id}`, { archived: !t.archived }).catch((e) => notice(e.message)) },
+        { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
         { label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) },
         ...(openWorktree(t) ? [{ label: "Worktree…", detail: openWorktree(t).branch, icon: "git", run: () => this.worktreeMenu(anchor) }] : []),
         ...(t.nativeId ? [{ label: "Copy session id", detail: t.nativeId, run: () => navigator.clipboard?.writeText(t.nativeId) }] : []),
@@ -1127,10 +1136,7 @@
         {
           label: "Delete thread",
           danger: true,
-          run: async () => {
-            if (!(await app().confirm(deletePrompt(t)))) return;
-            await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
-          },
+          run: () => deleteThread(t),
         },
       ]);
     }
@@ -2505,24 +2511,34 @@
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     row.title = t.title;
-    row.addEventListener("contextmenu", (event) => {
+    const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
+    wrap.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      openMenu(row, [
+      openMenu(wrap, [
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
-        { label: t.archived ? "Unarchive" : "Archive", run: () => api("PATCH", `/threads/${t.id}`, { archived: !t.archived }).catch((e) => notice(e.message)) },
+        { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
         ...(t.stats.files ? [{ label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) }] : []),
         { separator: true },
         {
           label: "Delete thread",
           danger: true,
-          run: async () => {
-            if (!(await app().confirm(deletePrompt(t)))) return;
-            await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
-          },
+          run: () => deleteThread(t),
         },
       ], { width: 220 });
     });
-    return row;
+    const acts = el("div", "ag-row-actions");
+    acts.append(
+      button(icon("archive"), "ag-icon-btn small", (e) => {
+        e.stopPropagation();
+        archiveThread(t);
+      }, t.archived ? "Unarchive" : "Archive"),
+      button(icon("trash"), "ag-icon-btn small danger", (e) => {
+        e.stopPropagation();
+        void deleteThread(t);
+      }, "Delete thread"),
+    );
+    wrap.append(row, acts);
+    return wrap;
   }
 
   /* ---------- sidebar pane ---------- */
