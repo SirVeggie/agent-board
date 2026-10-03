@@ -1705,7 +1705,7 @@
         row.classList.add("steered");
         row.append(el("div", "ag-queued", "Steered in"));
       } else if (queued) {
-        row.append(el("div", "ag-queued", `Queued — sends when the current turn ends · Enter on an empty box ${emptyEnter() === "send" ? "sends it now" : "steers it in"}`));
+        row.append(el("div", "ag-queued", `Queued · Enter again ${emptyEnter() === "send" ? "sends it now" : "steers it in"}`));
       }
       if (item.dropped) {
         row.classList.add("dropped");
