@@ -444,7 +444,8 @@ class ClaudeSession implements ProviderSession {
     } else {
       options.tools = { type: "preset", preset: "claude_code" };
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`];
-      if (!thread.web) options.disallowedTools = ["WebSearch", "WebFetch"];
+      // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
+      options.disallowedTools = ["EnterWorktree", "ExitWorktree", ...(thread.web ? [] : ["WebSearch", "WebFetch"])];
     }
     return options;
   }

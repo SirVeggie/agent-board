@@ -318,6 +318,22 @@
     return String(dir || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
+  /** The thread's worktree while it is open. */
+  function openWorktree(t) {
+    return t?.worktree && !t.worktree.closed ? t.worktree : null;
+  }
+
+  /** The folder a thread works on in the main checkout, also while it runs in a worktree. */
+  function homeDir(t) {
+    return openWorktree(t)?.home || t?.cwd || null;
+  }
+
+  function deletePrompt(t) {
+    const wt = openWorktree(t);
+    const extra = wt ? ` Its worktree folder is removed too; the work stays on branch ${wt.branch}, with uncommitted changes committed there first.` : "";
+    return `Delete “${t.title}”? This removes its transcript from Scribe.${extra}`;
+  }
+
   /** Last used folders, with `prefer` first when it is not already among them. */
   function recentWorkspaceDirs(prefer) {
     const out = [];
@@ -339,7 +355,7 @@
     const byKey = new Map();
     for (const t of S.threads.values()) {
       if (t.archived) continue;
-      const dir = t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : t.cwd;
+      const dir = t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : homeDir(t);
       if (!dir) continue;
       const key = dirKey(dir);
       const cur = byKey.get(key);
@@ -622,7 +638,7 @@
     const kinds = [];
     if (source.turnId) kinds.push({ id: "turn", label: "This turn" });
     if (source.threadId) kinds.push({ id: "thread", label: "Thread" });
-    if (cwd) kinds.push({ id: "git", label: "Git working tree" });
+    if (cwd) kinds.push({ id: "git", label: openWorktree(thread) && !source.cwd ? "Branch" : "Git working tree" });
     let current = source.kind;
 
     const renderTabs = () => {
@@ -646,12 +662,15 @@
       let truncated = false;
       try {
         if (current === "git") {
-          const info = await api("GET", `/git?cwd=${encodeURIComponent(cwd)}`);
+          // A worktree thread shows everything on its branch: commits and uncommitted changes since it started.
+          const wt = openWorktree(thread);
+          const base = wt && !source.cwd ? `&base=${wt.baseCommit}` : "";
+          const info = await api("GET", `/git?cwd=${encodeURIComponent(cwd)}${base}`);
           if (!info.repo) {
             side.replaceChildren(el("div", "ag-muted ag-pad", "Not a git repository"));
             return;
           }
-          title.textContent = `Changes · ${info.branch || R.basename(info.repo)}`;
+          title.textContent = `Changes · ${info.branch || R.basename(info.repo)}${base ? ` since ${wt.base || "it started"}` : ""}`;
           files = info.files || [];
           if (files.length) {
             const p = await api("GET", `/git/patch?repo=${encodeURIComponent(info.repo)}&from=${info.head}&to=${info.tree}`);
@@ -775,6 +794,7 @@
       const d = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
       const provider = d.settings.provider || (providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id || "cursor");
       const scopeKey = d.scope.kind === "global" ? "global" : `${d.scope.kind}:${d.scope.ref}`;
+      const cwd = d.settings.cwd !== undefined ? d.settings.cwd : d.scope.kind === "workspace" ? d.scope.ref : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null;
       return {
         id: null,
         provider,
@@ -784,7 +804,9 @@
         mode: d.settings.mode || (d.scope.kind === "page" || d.scope.kind === "folder" ? "board" : p.mode || "code"),
         approval: d.settings.approval || p.approval || "ask",
         web: d.settings.web !== undefined ? d.settings.web : p.web !== false,
-        cwd: d.settings.cwd !== undefined ? d.settings.cwd : d.scope.kind === "workspace" ? d.scope.ref : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null,
+        cwd,
+        // Last choice made in this workspace.
+        useWorktree: d.settings.useWorktree !== undefined ? d.settings.useWorktree : Boolean(cwd && p.worktrees?.[dirKey(cwd)]),
         scope: d.scope,
         title: "New thread",
         status: "idle",
@@ -809,7 +831,7 @@
       }
       if (patch.provider && patch.provider !== t.provider && t.stats.turns > 0) {
         // A thread keeps its provider; continue in a new thread in the same scope.
-        this.startDraft(t.scope, { provider: patch.provider, model: patch.model, mode: t.mode, cwd: t.cwd, approval: t.approval, web: t.web });
+        this.startDraft(t.scope, { provider: patch.provider, model: patch.model, mode: t.mode, cwd: homeDir(t), approval: t.approval, web: t.web });
         notice(`New ${PROVIDER_LABEL[patch.provider]} thread`);
         return;
       }
@@ -913,7 +935,8 @@
       if (meter) this.header.append(meter);
       const acts = el("div", "ag-thead-actions");
       if (s.cwd && s.mode !== "board") {
-        acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, cwd: s.cwd }), "Git working tree changes"));
+        const onBranch = openWorktree(t);
+        acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, ...(onBranch ? {} : { cwd: s.cwd }) }), onBranch ? `Changes on ${onBranch.branch}` : "Git working tree changes"));
       }
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
       acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings"));
@@ -1007,9 +1030,82 @@
     }
 
     async pickOtherWorkspace() {
-      const dir = await pickWorkspace(this.settings().cwd);
+      const dir = await pickWorkspace(homeDir(this.settings()));
       if (dir) await this.setWorkspace(dir);
       this.focus();
+    }
+
+    /** Turn a new git worktree on or off for this thread, before its first message. Remembered per workspace. */
+    async setWorktree(on) {
+      const s = this.settings();
+      if (s.cwd && !this.thread()) {
+        // Existing threads remember it on the server when patched.
+        const p = prefs();
+        p.worktrees = { ...(p.worktrees || {}), [dirKey(s.cwd)]: on };
+        api("PUT", "/prefs", { worktrees: p.worktrees }).catch(() => undefined);
+      }
+      await this.updateSettings({ useWorktree: on });
+    }
+
+    worktreeMenu(anchor) {
+      const t = this.thread();
+      const wt = openWorktree(t);
+      if (!wt) return;
+      const state = [wt.ahead ? `${wt.ahead} commit${wt.ahead === 1 ? "" : "s"}` : "No commits yet", wt.dirty ? "uncommitted changes" : ""].filter(Boolean).join(", ");
+      openMenu(
+        anchor,
+        [
+          { header: wt.branch },
+          { label: "Changes on this branch", detail: state, icon: "diff", run: () => openDiff({ kind: "git", threadId: t.id }) },
+          { label: "Copy worktree path", detail: wt.path, icon: "folder", run: () => navigator.clipboard?.writeText(wt.path) },
+          { separator: true },
+          {
+            label: wt.base ? `Merge into ${wt.base}` : "Merge",
+            detail: wt.base ? "In the main checkout, then remove the worktree" : "Made from a detached HEAD; nothing to merge into",
+            icon: "git",
+            disabled: !wt.base || t.status !== "idle",
+            run: () => this.finishWorktree("merge"),
+          },
+          { label: "Leave branch", detail: "Keep the work on the branch, remove the folder", disabled: t.status !== "idle", run: () => this.finishWorktree("leave") },
+        ],
+        { width: 300 }
+      );
+    }
+
+    async finishWorktree(how) {
+      const t = this.thread();
+      const wt = openWorktree(t);
+      if (!wt) return;
+      let st = null;
+      try {
+        ({ status: st } = await api("GET", `/threads/${encodeURIComponent(t.id)}/worktree`));
+      } catch (err) {
+        notice(err.message);
+        return;
+      }
+      if (how === "merge" && st) {
+        if (st.dirty.length) {
+          notice(`The worktree has ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch.`);
+          return;
+        }
+        if (st.mainBranch !== wt.base) {
+          notice(`The main checkout is on ${st.mainBranch || "a detached HEAD"}. Switch it to ${wt.base} to merge.`);
+          return;
+        }
+      }
+      const question =
+        how === "merge"
+          ? st?.ahead
+            ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
+            : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
+          : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
+      if (!confirm(`${question}\n\nThe thread then continues in the main checkout, in a fresh agent session.`)) return;
+      try {
+        const res = await api("POST", `/threads/${encodeURIComponent(t.id)}/worktree`, { action: how });
+        notice(res.message);
+      } catch (err) {
+        notice(err.message);
+      }
     }
 
     threadMenu(anchor) {
@@ -1020,13 +1116,14 @@
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
         { label: t.archived ? "Unarchive" : "Archive", run: () => api("PATCH", `/threads/${t.id}`, { archived: !t.archived }).catch((e) => notice(e.message)) },
         { label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) },
+        ...(openWorktree(t) ? [{ label: "Worktree…", detail: openWorktree(t).branch, icon: "git", run: () => this.worktreeMenu(anchor) }] : []),
         ...(t.nativeId ? [{ label: "Copy session id", detail: t.nativeId, run: () => navigator.clipboard?.writeText(t.nativeId) }] : []),
         { separator: true },
         {
           label: "Delete thread",
           danger: true,
           run: async () => {
-            if (!confirm(`Delete “${t.title}”? This removes its transcript from Scribe.`)) return;
+            if (!confirm(deletePrompt(t))) return;
             await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
           },
         },
@@ -1619,7 +1716,7 @@
 
     onThread(thread, prev) {
       if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added) this.renderHeader();
-      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued) {
+      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns) {
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
@@ -1774,14 +1871,14 @@
       const t = this.thread();
       if (t && t.status !== "idle") return;
       if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) return;
-      const key = JSON.stringify([this.draftKey(), s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope]);
+      const key = JSON.stringify([this.draftKey(), s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope, s.useWorktree]);
       const now = Date.now();
       if (this.lastWarm && this.lastWarm.key === key && now - this.lastWarm.at < 60_000) return;
       this.lastWarm = { key, at: now };
       if (t) {
         api("POST", `/threads/${encodeURIComponent(t.id)}/warm`).catch(() => undefined);
       } else {
-        api("POST", "/warm", { provider: s.provider, model: s.model, effort: s.effort, modelParams: s.modelParams, mode: s.mode, approval: s.approval, web: s.web, cwd: s.cwd, scope: s.scope }).catch(() => undefined);
+        api("POST", "/warm", { provider: s.provider, model: s.model, effort: s.effort, modelParams: s.modelParams, mode: s.mode, approval: s.approval, web: s.web, cwd: s.cwd, scope: s.scope, useWorktree: Boolean(s.useWorktree) }).catch(() => undefined);
       }
     }
 
@@ -1877,6 +1974,21 @@
         const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.approvalMenu(event.currentTarget), ap.detail);
         apBtn.append(icon("shield"), el("span", null, ap.label));
         bar.append(apBtn);
+      }
+      const wt = openWorktree(t);
+      if (wt) {
+        const wtBtn = button("", `ag-pill ag-wt${wt.ahead || wt.dirty ? " pending" : ""}`, (event) => this.worktreeMenu(event.currentTarget), `Worktree on ${wt.branch}: merge or leave it here`);
+        wtBtn.append(icon("git"), el("span", null, wt.branch.replace(/^agent\//, "")));
+        bar.append(wtBtn);
+      } else if ((s.mode === "code" || s.mode === "plan") && s.cwd && !t?.stats.turns) {
+        const wtBtn = button(
+          "",
+          `ag-pill toggle${s.useWorktree ? " on" : ""}`,
+          () => this.setWorktree(!s.useWorktree),
+          s.useWorktree ? "Works in a new git worktree on a branch of its own, made on the first message" : "Works in the folder directly. Click to use a new git worktree instead"
+        );
+        wtBtn.append(icon("git"), el("span", null, "Worktree"));
+        bar.append(wtBtn);
       }
       const web = button("", `ag-pill toggle${s.web ? " on" : ""}`, () => this.updateSettings({ web: !s.web }), s.web ? "Web search is on" : "Web search is off");
       web.append(icon("fetch"), el("span", null, "Web"));
@@ -2147,6 +2259,7 @@
             approval: cur.approval,
             web: cur.web,
             cwd: cur.cwd,
+            useWorktree: Boolean(cur.useWorktree),
             scope: cur.scope,
           });
           S.threads.set(thread.id, thread);
@@ -2367,6 +2480,13 @@
     const meta = el("span", "ag-row-meta");
     meta.append(el("span", `ag-prov p-${t.provider}`, t.provider === "claude" ? "C" : "⌘"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), el("span", null, R.timeAgo(t.activityAt)));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
+    const wt = openWorktree(t);
+    if (wt) {
+      const branch = el("span", `ag-row-branch${wt.ahead || wt.dirty ? " pending" : ""}`);
+      branch.append(icon("git"), el("span", null, wt.branch.replace(/^agent\//, "")));
+      branch.title = `${wt.branch}${wt.ahead || wt.dirty ? ": work not merged yet" : ""}`;
+      meta.append(branch);
+    }
     main.append(title, meta);
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
@@ -2382,7 +2502,7 @@
           label: "Delete thread",
           danger: true,
           run: async () => {
-            if (!confirm(`Delete “${t.title}”? This removes its transcript from Scribe.`)) return;
+            if (!confirm(deletePrompt(t))) return;
             await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
           },
         },

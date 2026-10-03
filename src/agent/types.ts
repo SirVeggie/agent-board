@@ -32,8 +32,11 @@ export type Thread = {
   /** Web search and fetch tools. */
   web: boolean;
   scope: ThreadScope;
-  /** Working directory for file and shell tools. */
+  /** Working directory for file and shell tools. While the thread has an open worktree, a folder inside it. */
   cwd: string | null;
+  /** Work in a git worktree of its own. The worktree is made on the first message. */
+  useWorktree?: boolean;
+  worktree?: ThreadWorktree | null;
   /** Provider session id used to resume. */
   nativeId: string | null;
   pinned: boolean;
@@ -42,6 +45,27 @@ export type Thread = {
   updatedAt: number;
   /** Last user message or finished turn; drives list order. */
   activityAt: number;
+};
+
+/** A git worktree the board made for a thread, on a branch of its own. */
+export type ThreadWorktree = {
+  /** The folder the user picked, in the main checkout. The thread goes back to it when the worktree closes. */
+  home: string;
+  /** Top level of the main checkout. */
+  repo: string;
+  /** Top level of the worktree. */
+  path: string;
+  branch: string;
+  /** Branch the worktree started from; null when the main checkout was on a detached HEAD. */
+  base: string | null;
+  baseCommit: string;
+  /** Repo-relative folders linked in from the main checkout (node_modules and the like). */
+  links: string[];
+  createdAt: number;
+  /** As of the last turn: commits not in the base yet, and uncommitted changes. */
+  ahead?: number;
+  dirty?: boolean;
+  closed?: { how: "merged" | "left" | "removed"; at: number };
 };
 
 export type RunStatus = "idle" | "running" | "waiting";
@@ -103,6 +127,9 @@ export type Turn = {
   repo?: string;
   beforeTree?: string;
   afterTree?: string;
+  /** HEAD before and after, for worktree turns, so a revert also undoes the turn's commits. */
+  beforeHead?: string;
+  afterHead?: string;
   files?: FileChange[];
   usage?: Usage;
   error?: string;

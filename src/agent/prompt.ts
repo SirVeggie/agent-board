@@ -45,6 +45,12 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   }
   if (thread.cwd && thread.mode !== "board") {
     lines.push("", `Workspace: ${thread.cwd}`);
+    const wt = thread.worktree && !thread.worktree.closed ? thread.worktree : null;
+    if (wt) {
+      lines.push(
+        `This is a git worktree of its own for this thread, on branch ${wt.branch} (from ${wt.base ?? "a detached HEAD"}). The main checkout is ${wt.repo}; do not edit files there. Commit your work on this branch as you go, in small commits with clear messages. The user merges the branch from Scribe when it is done.`
+      );
+    }
   }
   return lines.join("\n");
 }

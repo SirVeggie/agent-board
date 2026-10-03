@@ -10,9 +10,9 @@ import type { FileChange } from "./types.js";
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_PATCH_BYTES = 4 * 1024 * 1024;
 
-type GitResult = { stdout: string; stderr: string; code: number };
+export type GitResult = { stdout: string; stderr: string; code: number };
 
-function git(args: string[], cwd: string, options: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number; maxBuffer?: number } = {}): Promise<GitResult> {
+export function git(args: string[], cwd: string, options: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number; maxBuffer?: number } = {}): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = execFile(
       "git",
@@ -80,8 +80,8 @@ export async function snapshotTree(repo: string): Promise<string | null> {
   }
 }
 
-export async function headTree(repo: string): Promise<string> {
-  const res = await git(["rev-parse", "--verify", "--quiet", "HEAD^{tree}"], repo, { timeoutMs: 5000 });
+export async function headTree(repo: string, rev = "HEAD"): Promise<string> {
+  const res = await git(["rev-parse", "--verify", "--quiet", `${rev}^{tree}`], repo, { timeoutMs: 5000 });
   return res.code === 0 && res.stdout.trim() ? res.stdout.trim() : EMPTY_TREE;
 }
 
@@ -162,9 +162,9 @@ export async function fileAtTree(repo: string, tree: string, file: string): Prom
   return res.code === 0 ? res.stdout : null;
 }
 
-/** Working copy against HEAD, untracked files included. */
-export async function workingChanges(repo: string): Promise<{ head: string; tree: string; files: FileChange[]; branch: string | null } | null> {
-  const [head, tree, branch] = await Promise.all([headTree(repo), snapshotTree(repo), branchName(repo)]);
+/** Working copy against HEAD (or another commit), untracked files included. */
+export async function workingChanges(repo: string, base = "HEAD"): Promise<{ head: string; tree: string; files: FileChange[]; branch: string | null } | null> {
+  const [head, tree, branch] = await Promise.all([headTree(repo, base), snapshotTree(repo), branchName(repo)]);
   if (!tree) {
     return null;
   }

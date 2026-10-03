@@ -187,6 +187,18 @@ export function agentRouter(host: AgentHost): express.Router {
     )
   );
 
+  router.get("/threads/:id/worktree", wrap((req) => host.worktreeInfo(req.params.id)));
+
+  // Finish a thread's worktree: merge its branch into the base, or leave the branch for later.
+  router.post(
+    "/threads/:id/worktree",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      if (body.action !== "merge" && body.action !== "leave") throw new Error("action must be merge or leave");
+      return host.finishWorktree(req.params.id, body.action);
+    })
+  );
+
   router.post("/threads/:id/turns/:turnId/revert", wrap((req) => host.revertTurn(req.params.id, req.params.turnId)));
   router.post("/threads/:id/turns/:turnId/revert-page", wrap((req) => host.revertPage(req.params.id, req.params.turnId)));
 
@@ -239,7 +251,9 @@ export function agentRouter(host: AgentHost): express.Router {
       const cwd = typeof req.query.cwd === "string" ? req.query.cwd : "";
       const repo = await findRepo(cwd);
       if (!repo) return { repo: null, files: [] };
-      const changes = await workingChanges(repo);
+      // A worktree thread compares against the commit its branch started from, so its commits show too.
+      const base = typeof req.query.base === "string" && /^[0-9a-f]{40,64}$/.test(req.query.base) ? req.query.base : undefined;
+      const changes = await workingChanges(repo, base);
       return changes ? { repo, ...changes } : { repo, files: [], error: "Could not read the working copy" };
     })
   );
@@ -344,6 +358,7 @@ function threadPatch(body: Record<string, unknown>): Partial<Thread> {
   if (body.mode === "code" || body.mode === "ask" || body.mode === "plan" || body.mode === "board") patch.mode = body.mode;
   if (body.approval === "ask" || body.approval === "edits" || body.approval === "auto" || body.approval === "full") patch.approval = body.approval;
   if (typeof body.web === "boolean") patch.web = body.web;
+  if (typeof body.useWorktree === "boolean") patch.useWorktree = body.useWorktree;
   if (body.cwd === null || typeof body.cwd === "string") {
     const cwd = (body.cwd as string | null) || null;
     if (cwd && !fs.existsSync(cwd)) throw new Error(`Folder not found: ${cwd}`);

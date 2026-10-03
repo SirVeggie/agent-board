@@ -32,7 +32,7 @@ export type RuleSet = {
 const MAX_RULES = 500;
 const MAX_RULE = 500;
 
-function claudeDir(): string {
+export function claudeDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 }
 

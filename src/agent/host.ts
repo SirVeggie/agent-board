@@ -8,6 +8,7 @@ import { log } from "../log.js";
 import { store } from "../store.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
+import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "./prompt.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
@@ -45,6 +46,7 @@ import type {
   ThreadMode,
   ThreadScope,
   ThreadView,
+  ThreadWorktree,
   Turn,
   Usage,
 } from "./types.js";
@@ -69,6 +71,8 @@ export type Prefs = {
   scopeWorkspaces: Record<string, string>;
   /** Starred models as "provider:modelId", in the order they were starred. Ctrl+' cycles them. */
   favoriteModels: string[];
+  /** Last worktree choice per workspace (see workspaceKey), the default for new threads there. */
+  worktrees: Record<string, boolean>;
 };
 
 const DEFAULT_PREFS: Prefs = {
@@ -82,7 +86,23 @@ const DEFAULT_PREFS: Prefs = {
   recentWorkspaces: [],
   scopeWorkspaces: {},
   favoriteModels: [],
+  worktrees: {},
 };
+
+/** Same as dirKey in public/agent.js, which looks up these keys for new threads. */
+export function workspaceKey(dir: string): string {
+  return dir.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/** The thread's worktree while it is open. */
+export function openWorktree(thread: Thread): ThreadWorktree | null {
+  return thread.worktree && !thread.worktree.closed ? thread.worktree : null;
+}
+
+/** Code and Plan threads in a workspace can have a worktree; Pages and Ask never edit files. */
+function wantsWorktree(thread: Thread): boolean {
+  return Boolean(thread.useWorktree && thread.cwd && (thread.mode === "code" || thread.mode === "plan") && !openWorktree(thread));
+}
 
 type Pending =
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
@@ -307,6 +327,8 @@ export class AgentHost {
     const thread = this.requireThread(id);
     if (this.runs.has(id) || thread.archived) return;
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) return;
+    // The session would start in the main checkout and restart once the worktree is made.
+    if (wantsWorktree(thread)) return;
     const session = this.session(thread);
     session.update(thread);
     await session.warm(threadInstructions(thread, this.scopeInfo(thread)));
@@ -316,6 +338,7 @@ export class AgentHost {
   warmDraft(input: Partial<Thread> & { scope?: ThreadScope }): void {
     const draft = this.draftThread(input);
     if (draft.mode !== "board" && draft.mode !== "ask" && !draft.cwd) return;
+    if (wantsWorktree(draft)) return;
     this.providers[draft.provider].prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
   }
 
@@ -360,6 +383,7 @@ export class AgentHost {
       web: input.web ?? prefs.web,
       scope,
       cwd: cwd ?? null,
+      useWorktree: input.useWorktree ?? (cwd ? prefs.worktrees[workspaceKey(cwd)] ?? false : false),
       nativeId: null,
       pinned: false,
       archived: false,
@@ -399,7 +423,13 @@ export class AgentHost {
     if (patch.cwd !== undefined) {
       const cwd = patch.cwd ? path.normalize(patch.cwd) : null;
       if (cwd !== thread.cwd && this.runs.has(id)) throw new Error("Stop the running turn before changing the workspace.");
+      if (cwd !== thread.cwd && openWorktree(thread)) throw new Error("This thread works in its own worktree. Merge or leave it before changing the workspace.");
       next.cwd = cwd;
+    }
+    if (typeof patch.useWorktree === "boolean" && patch.useWorktree !== Boolean(thread.useWorktree)) {
+      if (openWorktree(thread)) throw new Error("This thread already has a worktree. Merge or leave it from the branch menu.");
+      if (this.loadTurns(id).length) throw new Error("A worktree can only be turned on before the first message. Start a new thread to use one.");
+      next.useWorktree = patch.useWorktree;
     }
     if (patch.scope) next.scope = patch.scope;
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
@@ -433,14 +463,28 @@ export class AgentHost {
         next.scopeWorkspaces = { ...prefs.scopeWorkspaces, [`${thread.scope.kind}:${thread.scope.ref}`]: thread.cwd };
       }
     }
+    if (typeof patch.useWorktree === "boolean" && thread.cwd) {
+      next.worktrees = { ...prefs.worktrees, [workspaceKey(thread.cwd)]: patch.useWorktree };
+    }
     if (Object.keys(next).length) this.setPrefs(next);
   }
 
   async deleteThread(id: string): Promise<void> {
-    this.requireThread(id);
+    const thread = this.requireThread(id);
     await this.cancel(id);
     this.sessions.get(id)?.dispose();
     this.sessions.delete(id);
+    const wt = openWorktree(thread);
+    if (wt) {
+      // The folder goes; any work stays on the branch, so deleting a thread never loses it.
+      try {
+        await commitAll(wt, `WIP: ${thread.title}`);
+        await removeWorktree(wt);
+        await dropBranchIfEmpty(wt);
+      } catch (err) {
+        log(`Removing the worktree of ${id} failed: ${(err as Error).message}`);
+      }
+    }
     this.threads.delete(id);
     this.items.delete(id);
     this.turns.delete(id);
@@ -661,6 +705,10 @@ export class AgentHost {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
     }
+    const wt = openWorktree(thread);
+    if (wt && !fs.existsSync(wt.path)) {
+      throw new Error(`This thread's worktree is gone (${wt.path}). Use Leave branch in the branch menu to go back to the main checkout; the branch ${wt.branch} keeps its commits.`);
+    }
     if (this.runs.has(threadId)) {
       const queue = this.queues.get(threadId) ?? [];
       queue.push(msg);
@@ -810,7 +858,7 @@ export class AgentHost {
   }
 
   private async runTurn(threadId: string, msg: QueuedMessage, userItem: Item, opts?: { adopt?: string }): Promise<void> {
-    const thread = this.requireThread(threadId);
+    let thread = this.requireThread(threadId);
     const turns = this.loadTurns(threadId);
     const turn: Turn = {
       id: `tu_${crypto.randomBytes(6).toString("hex")}`,
@@ -846,18 +894,29 @@ export class AgentHost {
       this.db.setSetting(`checkpoint:${turn.id}`, { html: pageTab.html, revision: pageTab.revision });
     }
 
-    if (thread.mode !== "board" && thread.cwd) {
+    let setupError: string | null = null;
+    if (wantsWorktree(thread) && !run.cancelled) {
+      try {
+        thread = await this.makeWorktree(threadId, turn.id);
+      } catch (err) {
+        setupError = (err as Error).message;
+      }
+    }
+
+    const worktree = openWorktree(thread);
+    if (thread.mode !== "board" && thread.cwd && !setupError) {
       run.repo = await findRepo(thread.cwd);
       if (run.repo) {
         turn.repo = run.repo;
         turn.beforeTree = (await snapshotTree(run.repo)) ?? undefined;
+        if (worktree) turn.beforeHead = (await headCommit(run.repo)) ?? undefined;
       }
     }
 
     const sink = this.makeSink(threadId, run);
-    let result: TurnResult = { status: "cancelled" };
+    let result: TurnResult = setupError ? { status: "error", error: `Could not make the worktree: ${setupError}` } : { status: "cancelled" };
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
-    if (!run.cancelled) {
+    if (!run.cancelled && !setupError) {
       try {
         const session = this.session(thread);
         session.update(thread);
@@ -913,6 +972,7 @@ export class AgentHost {
       if (turn.afterTree) {
         turn.files = await diffTrees(run.repo, turn.beforeTree, turn.afterTree).catch(() => []);
       }
+      if (turn.beforeHead) turn.afterHead = (await headCommit(run.repo)) ?? undefined;
     } else {
       turn.files = this.toolFiles(run);
     }
@@ -935,6 +995,11 @@ export class AgentHost {
     this.runs.delete(threadId);
     this.status.set(threadId, "idle");
     const latest = this.threads.get(threadId);
+    const latestWt = latest ? openWorktree(latest) : null;
+    if (latest && latestWt) {
+      const progress = await worktreeProgress(latestWt).catch(() => null);
+      if (progress) latest.worktree = { ...latestWt, ...progress };
+    }
     if (latest) {
       latest.activityAt = Date.now();
       this.db.saveThread(latest);
@@ -1314,6 +1379,80 @@ export class AgentHost {
     pending.resolve(decision);
   }
 
+  // ---------- worktrees ----------
+
+  /** Make the thread's worktree and move the thread into it. Runs at the start of its first turn. */
+  private async makeWorktree(threadId: string, turnId: string): Promise<Thread> {
+    const home = this.requireThread(threadId).cwd!;
+    const repo = await findRepo(home);
+    let thread = this.requireThread(threadId);
+    if (!repo) {
+      thread = { ...thread, useWorktree: false };
+      this.threads.set(threadId, thread);
+      this.db.saveThread(thread);
+      this.addItem(threadId, turnId, { kind: "notice", level: "info", text: "This folder is not in a git repository, so the thread works in it directly." });
+      this.emitThread(threadId);
+      return thread;
+    }
+    const made = await createWorktree(home, repo, thread.title);
+    // Re-read: settings can change while git runs.
+    thread = { ...this.requireThread(threadId), worktree: made.worktree, cwd: made.cwd };
+    this.threads.set(threadId, thread);
+    this.db.saveThread(thread);
+    this.addItem(threadId, turnId, {
+      kind: "notice",
+      level: "info",
+      text: `Working in a worktree on branch ${made.worktree.branch}, from ${made.worktree.base ?? made.worktree.baseCommit.slice(0, 8)}.${made.worktree.links.length ? ` Linked from the main checkout: ${made.worktree.links.join(", ")}.` : ""}`,
+    });
+    for (const note of made.notes) this.addItem(threadId, turnId, { kind: "notice", level: "warn", text: note });
+    this.emitThread(threadId);
+    return thread;
+  }
+
+  async worktreeInfo(threadId: string): Promise<{ worktree: ThreadWorktree | null; status: WorktreeStatus | null }> {
+    const thread = this.requireThread(threadId);
+    const wt = openWorktree(thread);
+    return { worktree: thread.worktree ?? null, status: wt ? await worktreeStatus(wt) : null };
+  }
+
+  /** Merge the worktree's branch into its base, or leave the branch for later. Either way the folder goes and the thread returns to the main checkout. */
+  async finishWorktree(threadId: string, how: "merge" | "leave"): Promise<{ ok: true; message: string }> {
+    if (this.runs.has(threadId)) throw new Error("Stop the running turn first.");
+    const thread = this.requireThread(threadId);
+    const wt = openWorktree(thread);
+    if (!wt) throw new Error("This thread has no open worktree.");
+    let message: string;
+    if (how === "merge") {
+      const { commits } = await mergeWorktree(wt);
+      message = commits
+        ? `Merged ${commits} commit${commits === 1 ? "" : "s"} from ${wt.branch} into ${wt.base}.`
+        : `${wt.branch} had no new commits, so there was nothing to merge.`;
+    } else {
+      const committed = await commitAll(wt, `WIP: ${thread.title}`);
+      message = `Left the work on branch ${wt.branch}${committed ? "; its uncommitted changes were committed there as WIP" : ""}.`;
+    }
+    // The provider process runs in the worktree folder; Windows will not remove a folder in use.
+    this.sessions.get(threadId)?.dispose();
+    this.sessions.delete(threadId);
+    await removeWorktree(wt);
+    if (how === "merge") await dropBranchIfEmpty(wt);
+    // Agent sessions are tied to their folder, so the next message starts a new one in the main checkout.
+    const next: Thread = {
+      ...this.requireThread(threadId),
+      cwd: wt.home,
+      useWorktree: false,
+      worktree: { ...wt, ahead: 0, dirty: false, closed: { how: how === "merge" ? "merged" : "left", at: Date.now() } },
+      nativeId: null,
+      updatedAt: Date.now(),
+    };
+    this.threads.set(threadId, next);
+    this.db.saveThread(next);
+    this.addItem(threadId, null, { kind: "notice", level: "info", text: `${message} The worktree folder is removed; new messages start a fresh agent session in ${wt.home}.` });
+    this.flushNow();
+    this.emitThread(threadId);
+    return { ok: true, message };
+  }
+
   // ---------- changes ----------
 
   /** Files changed by one turn, or by the whole thread when turnId is omitted. */
@@ -1374,7 +1513,16 @@ export class AgentHost {
     const turn = this.loadTurns(threadId).find((t) => t.id === turnId);
     if (!turn) return { ok: false, error: "Turn not found" };
     if (!turn.repo || !turn.beforeTree || !turn.afterTree) return { ok: false, error: "This turn has no git snapshot, so it cannot be reverted automatically." };
+    // In a worktree the agent commits as it goes: move the branch back too, but only if nothing was committed after this turn.
+    const moveHead = turn.beforeHead && turn.afterHead && turn.beforeHead !== turn.afterHead;
+    if (moveHead && (await headCommit(turn.repo)) !== turn.afterHead) {
+      return { ok: false, error: "The branch has commits from after this turn. Revert the later turns first." };
+    }
     const result = await revertTrees(turn.repo, turn.beforeTree, turn.afterTree);
+    if (result.ok && moveHead) {
+      const reset = await resetHead(turn.repo, turn.beforeHead!);
+      if (!reset.ok) return { ok: false, error: `The files were reverted, but moving the branch back failed: ${reset.error}` };
+    }
     if (result.ok) {
       turn.reverted = true;
       this.saveTurn(turn);
