@@ -1958,11 +1958,18 @@ button.ag-menu-item {
   color: var(--text);
   border-radius: 7px;
   flex-shrink: 0;
+  /* A fading highlight trails behind the arrow keys as two lit rows. */
+  transition: none;
 }
 
 button.ag-menu-item:hover:not(:disabled),
 button.ag-menu-item.ag-menu-active:not(:disabled) {
   background: var(--accent-soft);
+}
+
+/* Searchable menus have one highlight, which the pointer moves too; hover alone doesn't light a second row. */
+.ag-menu-keyed button.ag-menu-item:hover:not(.ag-menu-active):not(:disabled) {
+  background: transparent;
 }
 
 button.ag-menu-item.on {

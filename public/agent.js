@@ -537,18 +537,19 @@
       return null;
     }
     closeMenu();
-    const menu = el("div", "ag-menu");
+    const menu = el("div", `ag-menu${search ? " ag-menu-keyed" : ""}`);
     menu.style.width = `${width}px`;
     const list = el("div", "ag-menu-list");
     let filter = "";
     let active = 0;
+    let lastPointer = { x: -1, y: -1 };
     const rows = () => [...list.querySelectorAll(".ag-menu-item:not(:disabled)")];
-    const highlight = () => {
+    const highlight = (scroll = true) => {
       const items = rows();
       if (!items.length) return;
       active = ((active % items.length) + items.length) % items.length;
       items.forEach((row, i) => row.classList.toggle("ag-menu-active", i === active));
-      items[active]?.scrollIntoView({ block: "nearest" });
+      if (scroll) items[active]?.scrollIntoView({ block: "nearest" });
     };
     const renderItems = () => {
       list.replaceChildren();
@@ -594,6 +595,17 @@
           closeMenu();
           item.run?.();
         });
+        if (search) {
+          // The pointer moves the one highlight; a list scrolling under a still pointer doesn't.
+          row.addEventListener("pointermove", (event) => {
+            if (event.clientX === lastPointer.x && event.clientY === lastPointer.y) return;
+            lastPointer = { x: event.clientX, y: event.clientY };
+            const at = rows().indexOf(row);
+            if (at < 0 || at === active) return;
+            active = at;
+            highlight(false);
+          });
+        }
         list.append(row);
       }
       if (!list.childElementCount) list.append(el("div", "ag-menu-empty", "Nothing matches"));
