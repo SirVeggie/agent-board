@@ -2319,9 +2319,13 @@
     }
 
     autosize() {
-      this.input.style.height = "auto";
+      const el = this.input;
       const max = this.variant === "full" ? 320 : 220;
-      this.input.style.height = `${Math.min(max, this.input.scrollHeight)}px`;
+      el.style.overflowY = "hidden";
+      el.style.height = "auto";
+      const needed = el.scrollHeight;
+      el.style.height = `${Math.min(max, needed)}px`;
+      if (needed > max) el.style.overflowY = "auto";
     }
 
     renderContext() {

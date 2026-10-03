@@ -1588,6 +1588,7 @@ button.ag-change-row .ag-fname {
   flex: 1;
   min-width: 0;
   padding: 4px 0;
+  min-height: calc(1lh + 8px);
 }
 
 .ag-compose-bar {
@@ -1644,9 +1645,11 @@ button.ag-change-row .ag-fname {
   outline: none;
   resize: none;
   padding: 3px 4px;
-  min-height: 24px;
+  /* 1lh + padding; 24px is shorter than one line under border-box, which drew a scrollbar. */
+  min-height: calc(1lh + 6px);
   max-height: 320px;
-  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-y: hidden;
 }
 
 .ag-textarea::placeholder {
@@ -2423,6 +2426,7 @@ html.tight-small .agent-full {
 
 .dock-input .ag-textarea {
   padding: 4px 0;
+  min-height: calc(1lh + 8px);
   max-height: 220px;
 }
 
@@ -2710,6 +2714,7 @@ button.dock-scope.warn {
 
 .style-island .dock-input .ag-textarea {
   padding: 3px 4px;
+  min-height: calc(1lh + 6px);
 }
 
 .style-island button.dock-orb {
