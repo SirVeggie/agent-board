@@ -2305,8 +2305,6 @@
         if (fastOn) eff.append(el("span", "ag-tag tiny", "fast"));
         bar.append(eff);
       }
-      this.ctxMeter = contextMeter(this);
-      bar.append(this.ctxMeter);
       const mode = MODES.find((m) => m.id === s.mode) || MODES[0];
       const modeBtn = button("", `ag-pill mode-${mode.id}`, (event) => this.modeMenu(event.currentTarget), mode.detail);
       modeBtn.append(el("span", null, mode.label));
@@ -2338,6 +2336,8 @@
         const meter = usageChip(s.provider);
         if (meter) bar.append(meter);
       }
+      this.ctxMeter = contextMeter(this);
+      bar.append(this.ctxMeter);
       const tail = this.sendSlot;
       tail.replaceChildren();
       if (this.status) {

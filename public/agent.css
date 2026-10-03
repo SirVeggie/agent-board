@@ -2464,9 +2464,14 @@ button.dock-orb,
 }
 
 .dock-bar .ag-bar {
+  flex: 1;
   flex-wrap: nowrap;
   gap: 2px;
   min-width: 0;
+}
+
+.dock-bar-right > .ag-grow {
+  display: none;
 }
 
 .dock-bar button.ag-pill {
@@ -2856,6 +2861,10 @@ button.ag-user-copy.done {
 /* Plan usage: a compact chip in the chat header (sidebar/full) or the floating chat's settings bar. */
 .ag-bar button.ag-usage {
   margin-left: auto;
+}
+
+button.ag-usage + .ag-ctx-meter {
+  margin-left: 0;
 }
 
 button.ag-usage {
@@ -3900,6 +3909,7 @@ button.ag-ctx-meter {
   border-radius: 6px;
   box-shadow: none;
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 button.ag-ctx-meter:hover {
