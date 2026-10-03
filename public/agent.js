@@ -2053,17 +2053,16 @@
       }
       const wt = openWorktree(t);
       if (wt) {
-        const wtBtn = button("", `ag-pill ag-wt${wt.ahead || wt.dirty ? " pending" : ""}`, (event) => this.worktreeMenu(event.currentTarget), `Worktree on ${wt.branch}: merge or leave it here`);
-        wtBtn.append(icon("git"), el("span", null, wt.branch.replace(/^agent\//, "")));
+        const wtBtn = button("", `ag-pill ag-wt ag-wt-icon${wt.ahead || wt.dirty ? " pending" : ""}`, (event) => this.worktreeMenu(event.currentTarget));
+        wtBtn.append(icon("git"));
+        wtBtn.setAttribute("aria-label", `Worktree ${wt.branch}`);
+        bindHoverTip(wtBtn, () => worktreeTip(wt));
         bar.append(wtBtn);
       } else if ((s.mode === "code" || s.mode === "plan") && s.cwd && !t?.stats.turns) {
-        const wtBtn = button(
-          "",
-          `ag-pill toggle${s.useWorktree ? " on" : ""}`,
-          () => this.setWorktree(!s.useWorktree),
-          s.useWorktree ? "Works in a new git worktree on a branch of its own, made on the first message" : "Works in the folder directly. Click to use a new git worktree instead"
-        );
-        wtBtn.append(icon("git"), el("span", null, "Worktree"));
+        const wtBtn = button("", `ag-pill ag-wt-icon toggle${s.useWorktree ? " on" : ""}`, () => this.setWorktree(!s.useWorktree));
+        wtBtn.append(icon("git"));
+        wtBtn.setAttribute("aria-label", s.useWorktree ? "Worktree on first message. Click to turn off." : "Works in the folder. Click to use a worktree.");
+        bindHoverTip(wtBtn, () => worktreePendingTip(s.useWorktree));
         bar.append(wtBtn);
       }
       const web = button("", `ag-pill toggle${s.web ? " on" : ""}`, () => this.updateSettings({ web: !s.web }), s.web ? "Web search is on" : "Web search is off");
@@ -3241,19 +3240,81 @@
     return limits && limits.windows?.length ? limits : null;
   }
 
-  let usageTipEl = null;
-  let usageTipTimer = 0;
+  let hoverTipEl = null;
+  let hoverTipTimer = 0;
 
-  function hideUsageTip() {
-    clearTimeout(usageTipTimer);
-    usageTipEl?.remove();
-    usageTipEl = null;
+  function hideHoverTip() {
+    clearTimeout(hoverTipTimer);
+    hoverTipEl?.remove();
+    hoverTipEl = null;
   }
 
-  function showUsageTip(anchor, provider) {
-    hideUsageTip();
+  function placeHoverTip(anchor, tip, width = 280) {
+    hideHoverTip();
+    document.body.append(tip);
+    const rect = anchor.getBoundingClientRect();
+    const tw = Math.min(width, window.innerWidth - 16);
+    tip.style.width = `${tw}px`;
+    let top = rect.top - tip.offsetHeight - 8;
+    if (top < 8) top = rect.bottom + 8;
+    const left = Math.min(Math.max(8, rect.right - tw), window.innerWidth - tw - 8);
+    tip.style.top = `${Math.max(8, top)}px`;
+    tip.style.left = `${left}px`;
+    hoverTipEl = tip;
+  }
+
+  function bindHoverTip(anchor, build) {
+    anchor.addEventListener("pointerenter", (event) => {
+      if (event.pointerType !== "mouse") return;
+      clearTimeout(hoverTipTimer);
+      hoverTipTimer = setTimeout(() => {
+        const node = build();
+        if (node) placeHoverTip(anchor, node);
+      }, 160);
+    });
+    anchor.addEventListener("pointerleave", () => {
+      clearTimeout(hoverTipTimer);
+      hoverTipTimer = setTimeout(hideHoverTip, 120);
+    });
+    anchor.addEventListener("pointerdown", hideHoverTip);
+  }
+
+  function worktreePendingTip(on) {
+    const tip = el("div", "ag-usage-tip ag-wt-tip");
+    tip.append(el("div", "ag-usage-tip-title", "Worktree"));
+    tip.append(
+      el(
+        "div",
+        "ag-usage-tip-note",
+        on ? "New git worktree on a branch of its own, made on the first message. Click to turn off." : "Works in the folder. Click to use a new git worktree instead."
+      )
+    );
+    return tip;
+  }
+
+  function worktreeTip(wt) {
+    const tip = el("div", "ag-usage-tip ag-wt-tip");
+    tip.append(el("div", "ag-usage-tip-title", wt.branch));
+    const rows = el("dl", "ag-wt-tip-rows");
+    const add = (label, value, cls) => {
+      rows.append(el("dt", null, label), el("dd", cls, value));
+    };
+    add("From", wt.base || "detached HEAD");
+    const state = [wt.ahead ? `${wt.ahead} commit${wt.ahead === 1 ? "" : "s"} ahead` : "No new commits"];
+    if (wt.dirty) state.push("uncommitted changes");
+    add("State", state.join(" · "));
+    add("Path", wt.path, "ag-wt-tip-path");
+    tip.append(rows);
+    return tip;
+  }
+
+  function hideUsageTip() {
+    hideHoverTip();
+  }
+
+  function usageTip(provider) {
     const limits = planLimits(provider);
-    if (!limits) return;
+    if (!limits) return null;
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
     for (const w of limits.windows) {
@@ -3267,16 +3328,7 @@
       tip.append(row);
     }
     if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
-    document.body.append(tip);
-    const rect = anchor.getBoundingClientRect();
-    const tw = Math.min(280, window.innerWidth - 16);
-    tip.style.width = `${tw}px`;
-    let top = rect.top - tip.offsetHeight - 8;
-    if (top < 8) top = rect.bottom + 8;
-    const left = Math.min(Math.max(8, rect.right - tw), window.innerWidth - tw - 8);
-    tip.style.top = `${Math.max(8, top)}px`;
-    tip.style.left = `${left}px`;
-    usageTipEl = tip;
+    return tip;
   }
 
   /** Compact "5h 84% · wk 76%" for the chat's settings bar; nothing until the provider has reported. */
@@ -3290,14 +3342,7 @@
     }, "");
     chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
     for (const w of limits.windows) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${w.label === "5-hour" ? "5h" : w.label === "Weekly" ? "wk" : w.label} ${percent(w.utilization)}`));
-    chip.addEventListener("pointerenter", () => {
-      clearTimeout(usageTipTimer);
-      usageTipTimer = setTimeout(() => showUsageTip(chip, provider), 160);
-    });
-    chip.addEventListener("pointerleave", () => {
-      clearTimeout(usageTipTimer);
-      usageTipTimer = setTimeout(hideUsageTip, 120);
-    });
+    bindHoverTip(chip, () => usageTip(provider));
     return chip;
   }
 

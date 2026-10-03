@@ -1576,6 +1576,17 @@ button.ag-pill.toggle:not(.on) {
   opacity: 0.6;
 }
 
+button.ag-pill.ag-wt-icon {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+  max-width: none;
+}
+
+button.ag-pill.ag-wt-icon span {
+  overflow: visible;
+}
+
 /* A dot on the branch pill and list badge: work not merged yet. */
 button.ag-pill.ag-wt.pending::after,
 .ag-row-branch.pending::after {
@@ -2820,6 +2831,27 @@ button.ag-usage:hover {
 .ag-usage-tip-reset {
   grid-column: 2 / 4;
   font-size: 11px;
+  color: var(--muted);
+}
+
+.ag-wt-tip-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin: 0;
+}
+
+.ag-wt-tip-rows dt {
+  color: var(--muted);
+}
+
+.ag-wt-tip-rows dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ag-wt-tip-path {
+  font: 11px var(--ag-mono);
   color: var(--muted);
 }
 
