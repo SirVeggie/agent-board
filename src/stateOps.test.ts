@@ -175,3 +175,12 @@ test("diff removes keys that are gone", () => {
   assert.deepEqual(diffState({ a: 1, b: 2 }, { a: 1 }, ["a", "b"]), [{ op: "remove", path: "b" }]);
   assert.deepEqual(diffState({}, { a: [1] }), [{ op: "set", path: "a", value: [1] }]);
 });
+
+test("the page bridge's embedded engine runs in a bare scope", async () => {
+  // Under tsx, function sources carry esbuild's __name(...) calls; the page has no such helper.
+  const { ENGINE_JS } = await import("./bridge.js");
+  const engine = new Function(`return ${ENGINE_JS};`)();
+  const state = engine.apply({ cards: [{ id: "c1", title: "One" }] }, [{ op: "set", path: "cards/c1/title", value: "Uno" }]).state;
+  assert.deepEqual(state, { cards: [{ id: "c1", title: "Uno" }] });
+  assert.deepEqual(engine.diff({ a: 1 }, { a: 2 }), [{ op: "set", path: "a", value: 2 }]);
+});

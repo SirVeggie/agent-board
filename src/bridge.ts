@@ -17,12 +17,21 @@ import { createStateOps } from "./stateOps.js";
  */
 const ENGINE_SRC = createStateOps.toString();
 
+/**
+ * An expression that builds the engine in the page. Under tsx (dev mode), esbuild's keepNames
+ * wraps functions in `__name(fn, "name")`, a helper the page doesn't have, so give it a no-op one.
+ */
+export const ENGINE_JS = `(function () {
+  var __name = function (fn) { return fn; };
+  return (${ENGINE_SRC})();
+})()`;
+
 export const BOARD_BRIDGE_JS = `
 (function () {
   var boot = window.__SCRIBE_BOOT__ || {};
   try { delete window.__SCRIBE_BOOT__; } catch (err) { window.__SCRIBE_BOOT__ = undefined; }
 
-  var engine = (${ENGINE_SRC})();
+  var engine = ${ENGINE_JS};
 
   var IDLE_MS = 250;
   var MAX_WAIT_MS = 1000;

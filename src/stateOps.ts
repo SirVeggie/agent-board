@@ -8,7 +8,8 @@
  * text), and "#3" the item at index 3. The empty path is the whole state (only for set and test).
  *
  * Everything lives in createStateOps so the page bridge can embed the very same code with
- * Function.prototype.toString. Keep it free of imports and outside references.
+ * Function.prototype.toString. Keep it free of imports and outside references (bridge.ts
+ * stubs esbuild's __name helper, which tsx adds in dev mode).
  */
 
 export type StatePosition = {
