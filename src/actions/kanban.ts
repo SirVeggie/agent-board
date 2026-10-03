@@ -15,7 +15,7 @@ import {
 type Column = { id: string; title: string; role?: string; wip?: number };
 type Label = { id: string; name: string; color?: string };
 type Comment = { id: string; by: "user" | "agent"; at: number; text: string };
-type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean };
+type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string };
 type Card = {
   id: string;
   num: number;
@@ -32,6 +32,8 @@ type Card = {
   blockedBy?: string[];
   status?: { kind: string; text: string };
   claim?: Claim;
+  /** Last agent column this card entered; sweep/release/changes return it there. */
+  from?: string;
   archived?: boolean;
   createdAt?: number;
   movedAt?: number;
@@ -98,6 +100,36 @@ function roleColumn(state: BoardState, role: string): Column | undefined {
   return columns(state).find((c) => c.role === role);
 }
 
+function columnById(state: BoardState, id: string | undefined): Column | undefined {
+  return id ? columns(state).find((c) => c.id === id) : undefined;
+}
+
+/** Agent column the card was in (or last came from) when this claim started. */
+function claimFrom(state: BoardState, card: Card): string | undefined {
+  const current = columnById(state, card.col);
+  if (current?.role === "agent") return current.id;
+  return columnById(state, card.from)?.id ?? columnById(state, card.claim?.from)?.id;
+}
+
+function workerColumnForThread(state: BoardState, threadId: string): Column | undefined {
+  const settings = state.settings as { workers?: Record<string, Worker> } | undefined;
+  const workers = settings?.workers;
+  if (!workers) return undefined;
+  return columns(state).find((c) => workers[c.id]?.threadId === threadId);
+}
+
+/** Where a stopped or released card goes: the inbox it came from, else that thread's worker, else the first agent column. */
+function returnColumn(state: BoardState, card: Card): Column | undefined {
+  const origin = columnById(state, card.claim?.from) ?? columnById(state, card.from);
+  if (origin) return origin;
+  const thread = card.claim?.thread;
+  if (thread) {
+    const viaWorker = workerColumnForThread(state, thread);
+    if (viaWorker) return viaWorker;
+  }
+  return roleColumn(state, "agent");
+}
+
 function labelIds(state: BoardState, refs: unknown): string[] {
   return arr(refs).map((ref) => {
     const text = str(ref).trim();
@@ -127,6 +159,7 @@ function moveOps(state: BoardState, card: Card, col: Column, now: number, positi
     fields.col = col.id;
     fields.movedAt = now;
   }
+  if (col.role === "agent") fields.from = col.id;
   if (done && !card.doneAt) fields.doneAt = now;
   if (!done && card.doneAt) fields.doneAt = null;
   const ops: unknown[] = [];
@@ -182,7 +215,7 @@ function checkStatus(value: unknown): { kind: string; text: string } | null {
   return { kind, text: str(status?.text) };
 }
 
-function claimFor(ctx: ActionContext, now: number): Claim {
+function claimFor(ctx: ActionContext, now: number, from?: string): Claim {
   const caller = ctx.caller;
   return {
     holder: caller.label || (caller.by === "agent" ? "agent" : "user"),
@@ -190,6 +223,7 @@ function claimFor(ctx: ActionContext, now: number): Claim {
     ...(caller.thread ? { thread: caller.thread } : {}),
     at: now,
     seenAt: now,
+    ...(from ? { from } : {}),
   };
 }
 
@@ -293,6 +327,7 @@ export const kanbanActions: ActionSet = {
           blockedBy: [],
           createdAt: now,
           movedAt: now,
+          ...(col.role === "agent" ? { from: col.id } : {}),
           ...(col.role === "done" ? { doneAt: now } : {}),
         };
         const top = args.position === "top" || (args.position === undefined && col.role === "done");
@@ -363,6 +398,7 @@ export const kanbanActions: ActionSet = {
           throw new ActionError(`#${card.num} is held by ${card.claim.holder} since ${new Date(card.claim.at).toISOString()}`);
         }
         const working = roleColumn(state, "working");
+        const from = claimFrom(state, card);
         const ops: unknown[] = [
           // Another claim landing first makes this write fail as a whole.
           { op: "test", path: `${cardPath(card)}/claim`, value: card.claim ?? null },
@@ -372,7 +408,8 @@ export const kanbanActions: ActionSet = {
             value: {
               assignee: claimAssignee(args, ctx),
               status: { kind: "working", text: str(args.text) || "Working on it" },
-              claim: claimFor(ctx, ctx.now),
+              claim: claimFor(ctx, ctx.now, from),
+              ...(from ? { from } : {}),
             },
           },
         ];
@@ -382,11 +419,11 @@ export const kanbanActions: ActionSet = {
     },
     release: {
       description:
-        "Give a card back without finishing it: clears your claim and status and moves it (default: the agent column). note adds a comment; status (e.g. { kind: \"blocked\", text }) stays on the card.",
+        "Give a card back without finishing it: clears your claim and status and moves it (default: the column it was claimed from). note adds a comment; status (e.g. { kind: \"blocked\", text }) stays on the card.",
       args: "{ card, to?, note?, status? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);
-        const col = args.to !== undefined ? findColumn(state, args.to) : roleColumn(state, "agent");
+        const col = args.to !== undefined ? findColumn(state, args.to) : returnColumn(state, card);
         const ops: unknown[] = [{ op: "merge", path: cardPath(card), value: { claim: null, status: args.status !== undefined ? checkStatus(args.status) : null } }];
         if (str(args.note).trim()) ops.push(commentOp(card, ctx.caller.by, str(args.note).trim(), ctx.now));
         if (col) ops.push(...moveOps(state, card, col, ctx.now));
@@ -452,7 +489,6 @@ export const kanbanActions: ActionSet = {
   sweep(state: BoardState, ctx: SweepContext): ActionOutcome | null {
     const ops: unknown[] = [];
     const events: ActionOutcome["events"] = [];
-    const agentCol = roleColumn(state, "agent");
     for (const card of cards(state)) {
       const claim = card.claim;
       if (!claim || claim.stale) continue;
@@ -484,6 +520,7 @@ export const kanbanActions: ActionSet = {
       }
       if (release) {
         ops.push({ op: "merge", path: cardPath(card), value: { claim: null, status: { kind: "blocked", text: release } } });
+        const agentCol = returnColumn(state, card);
         if (agentCol) ops.push(...moveOps(state, card, agentCol, ctx.now));
         events.push({ name: "claim_lost", data: { card: card.id, num: card.num, reason: release } });
       } else if (stale) {

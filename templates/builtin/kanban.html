@@ -1098,6 +1098,11 @@
     for (var i = 0; i < cols.length; i++) if (cols[i].role === role) return cols[i];
     return null;
   }
+  /** Agent inbox this card should return to: last one it entered, else the first agent column. */
+  function returnColumn(c) {
+    var origin = c && c.from ? column(c.from) : null;
+    return origin || firstRole("agent");
+  }
   function cardsIn(colId) {
     var first = columns()[0];
     return liveCards().filter(function (c) {
@@ -1129,6 +1134,7 @@
     });
     out.blockedBy = arr(out.blockedBy).filter(function (x) { return typeof x === "string" && x !== out.id; });
     if (colIds.indexOf(out.col) === -1) out.col = fallbackCol;
+    if (out.from && colIds.indexOf(out.from) === -1) delete out.from;
     if (typeof out.num !== "number" || !isFinite(out.num) || numbers[out.num]) out.num = 0;
     else numbers[out.num] = true;
     if (!out.createdAt) out.createdAt = Date.now();
@@ -1198,6 +1204,7 @@
     var col = column(colId);
     c.col = colId;
     c.movedAt = now;
+    if (col && col.role === "agent") c.from = colId;
     if (col && col.role === "done") { if (!c.doneAt) c.doneAt = now; }
     else delete c.doneAt;
     return c;
@@ -2870,7 +2877,7 @@
     var c = card(id);
     if (!c) return;
     var text = commentBox.value.trim();
-    var target = firstRole("agent");
+    var target = returnColumn(c);
     var now = Date.now();
     var cards = allCards().map(function (x) {
       if (x.id !== id) return x;

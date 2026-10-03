@@ -43,6 +43,8 @@ test("claim moves a card to working, records the holder, and refuses a second ag
   assert.equal(c.assignee, "Claude Code");
   assert.deepEqual(c.status, { kind: "working", text: "Fixing it" });
   assert.equal((c.claim as { holder: string }).holder, "Claude Code");
+  assert.equal(c.from, "ready");
+  assert.equal((c.claim as { from?: string }).from, "ready");
   assert.throws(() => run(state, "claim", { card: 2 }, agent({ session: "s2" })), /held by Claude Code/);
   // The same session may claim again.
   run(state, "claim", { card: 2 }, agent());
@@ -126,6 +128,7 @@ test("create numbers the card, resolves labels, and lands at the column's end", 
   assert.equal(state.nextNum, 5);
   assert.deepEqual(order(state), [1, 2, 4, 3]);
   assert.deepEqual(card(state, 4).labels, ["lb1"]);
+  assert.equal(card(state, 4).from, "ready");
   assert.throws(() => run(board(), "create", { title: "x", labels: ["nope"] }), /no label "nope"/);
 });
 
@@ -219,4 +222,103 @@ test("the sweep keeps a claim whose thread id is unknown while its MCP session i
   assert.equal(card(next, 1).claim, undefined);
   assert.match((card(next, 1).status as { text: string }).text, /was deleted/);
   assert.deepEqual(lost.events?.map((e) => e.name), ["claim_lost"]);
+});
+
+test("claim, release, and sweep return a card to the agent column it came from, not the first one", () => {
+  const two = () => ({
+    columns: [
+      { id: "claude", title: "claude", role: "agent" },
+      { id: "grok", title: "grok", role: "agent" },
+      { id: "work", title: "Agent working", role: "working" },
+      { id: "done", title: "Done", role: "done" },
+    ],
+    labels: [],
+    cards: [
+      { id: "c1", num: 1, col: "grok", title: "One", comments: [], createdAt: 1, movedAt: 1 },
+      { id: "c2", num: 2, col: "claude", title: "Two", comments: [], createdAt: 1, movedAt: 1 },
+    ],
+    nextNum: 3,
+  });
+  const claimed = run(two(), "claim", { card: 1 }, agent({ session: undefined, thread: "th_g" }));
+  assert.equal(card(claimed.state, 1).col, "work");
+  assert.equal(card(claimed.state, 1).from, "grok");
+  assert.equal((card(claimed.state, 1).claim as { from?: string }).from, "grok");
+
+  const released = run(claimed.state, "release", { card: 1 });
+  assert.equal(card(released.state, 1).col, "grok");
+
+  const again = run(claimed.state, "claim", { card: 1 }, agent({ session: undefined, thread: "th_g" }));
+  assert.equal((card(again.state, 1).claim as { from?: string }).from, "grok");
+
+  const threads: Record<string, ThreadRunInfo> = {
+    th_g: { exists: true, running: false, title: "G", lastTurn: { status: "cancelled", endedAt: 2000 } },
+  };
+  const ctx: SweepContext = { now: 3000, thread: (id) => threads[id] ?? { exists: false }, sessionSeenAt: () => undefined };
+  const lost = kanbanActions.sweep!(claimed.state, ctx)!;
+  assert.equal(card(applyStateOps(claimed.state, lost.ops), 1).col, "grok");
+});
+
+test("sweep with no stored origin still returns via the worker that started the thread", () => {
+  const state = {
+    columns: [
+      { id: "claude", title: "claude", role: "agent" },
+      { id: "grok", title: "grok", role: "agent" },
+      { id: "work", title: "Agent working", role: "working" },
+    ],
+    labels: [],
+    cards: [
+      {
+        id: "c1",
+        num: 1,
+        col: "work",
+        title: "One",
+        comments: [],
+        createdAt: 1,
+        movedAt: 1,
+        claim: { holder: "Grok", thread: "th_g", at: 1, seenAt: 1 },
+      },
+    ],
+    nextNum: 2,
+    settings: { workers: { grok: { threadId: "th_g" }, claude: { threadId: "th_c" } } },
+  };
+  const threads: Record<string, ThreadRunInfo> = {
+    th_g: { exists: true, running: false, title: "G", lastTurn: { status: "error", endedAt: 2000 } },
+  };
+  const lost = kanbanActions.sweep!(state, {
+    now: 3000,
+    thread: (id) => threads[id] ?? { exists: false },
+    sessionSeenAt: () => undefined,
+  })!;
+  assert.equal(card(applyStateOps(state, lost.ops), 1).col, "grok");
+});
+
+test("sweep falls back to the first agent column when the origin column is gone", () => {
+  const claimed = run(
+    {
+      columns: [
+        { id: "claude", title: "claude", role: "agent" },
+        { id: "grok", title: "grok", role: "agent" },
+        { id: "work", title: "Agent working", role: "working" },
+      ],
+      labels: [],
+      cards: [{ id: "c1", num: 1, col: "grok", title: "One", comments: [], createdAt: 1, movedAt: 1 }],
+      nextNum: 2,
+    },
+    "claim",
+    { card: 1 },
+    agent({ session: undefined, thread: "th" })
+  );
+  const gone = {
+    ...claimed.state,
+    columns: (claimed.state.columns as Array<{ id: string }>).filter((c) => c.id !== "grok"),
+  };
+  const threads: Record<string, ThreadRunInfo> = {
+    th: { exists: true, running: false, title: "A", lastTurn: { status: "error", endedAt: 2000 } },
+  };
+  const lost = kanbanActions.sweep!(gone, {
+    now: 3000,
+    thread: (id) => threads[id] ?? { exists: false },
+    sessionSeenAt: () => undefined,
+  })!;
+  assert.equal(card(applyStateOps(gone, lost.ops), 1).col, "claude");
 });

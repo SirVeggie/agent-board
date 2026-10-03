@@ -16,7 +16,7 @@ Columns are named by role (`agent`, `working`, `review`, `done`), id, or title. 
 4. Done: `finish` with a summary (what changed, what to check). The summary is posted as the card's hand-in comment, so do not also `comment` the same wrap-up. If you already did, call `finish` without `summary` and that comment is the hand-in. It moves the card to review, or to done when the board has no review column.
 5. Giving up or handing back: `release` with a note.
 
-If your thread fails or is stopped, Scribe moves your card back to the agent column with a blocked note. If you go quiet for a long time, it marks the card as held by a stale agent so someone can pick it up.
+If your thread fails or is stopped, Scribe moves your card back to the column it was claimed from with a blocked note. If you go quiet for a long time, it marks the card as held by a stale agent so someone can pick it up.
 
 ## Agent workers
 
@@ -31,7 +31,7 @@ Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothi
 | `card_ready` | The user moved a card into an `agent` column. `data` includes `column` (title), `columnId`, and `role`. |
 | `comment` | The user commented on a card. |
 | `approved` | The user approved a card in review; it moved to done. |
-| `changes` | The user requested changes. Their note is the card's last comment and the card is back in the agent column. |
+| `changes` | The user requested changes. Their note is the card's last comment and the card is back in the column it came from. |
 | `claim_lost` | Scribe released a card because its agent's thread stopped. |
 | `claim_stale` | Scribe flagged a card whose agent went quiet. |
 | `worker_stop` | The user asked the column's agent worker to stop once its card is done. `data`: `{ column, columnId, role }`. |
@@ -46,7 +46,7 @@ labels:  [{ id, name, color }]
 cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             due?, assignee?, checklist: [{ id, text, done }],
             comments: [{ id, by, at, text }], images: [{ id, name, data }],
-            blockedBy: [cardId], status?, claim?, archived?,
+            blockedBy: [cardId], status?, claim?, from?, archived?,
             createdAt, movedAt, doneAt? }]
 nextNum: number
 settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave them alone
@@ -59,4 +59,5 @@ settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave
 - Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. Use keys you created or found with `page_list` / `library_search`.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
 - Images: insert into `cards/num=12/images` with `page_update`, pass the file in `assets`, and write `data: "asset:<file name>"`. The first image is the card's cover. `get` (and a `page_state` path to one card) attaches those images so you can see them; a whole-board read does not inline every cover.
+- `from` is the last agent column the card entered. Sweep, `release` (no `to`), and Request changes send it back there when there is more than one agent column.
 - Keep `archived` cards; they are the user's archive.
