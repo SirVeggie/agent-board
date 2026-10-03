@@ -117,3 +117,50 @@ export function contextBlock(chips: ContextChip[] | undefined): string {
   }
   return `<context>\n${lines.join("\n")}\n</context>\n\n`;
 }
+
+/** A page that came up in a message and the agent guide of its template. */
+export type PageGuide = {
+  key: string;
+  guide: { id: string; title: string; text: string };
+  /** The agent was already given this guide in this conversation. */
+  given: boolean;
+};
+
+/**
+ * Template guides for the pages a message brings up, so the agent knows how to work with them
+ * without reading them first. Each guide goes in once, naming every page it covers; one the agent
+ * already has is only named.
+ */
+export function guidesBlock(pages: PageGuide[]): string {
+  const groups = new Map<string, { title: string; text: string; given: boolean; keys: string[] }>();
+  for (const { key, guide, given } of pages) {
+    const group = groups.get(guide.id);
+    if (group) {
+      if (!group.keys.includes(key)) group.keys.push(key);
+      group.given &&= given;
+    } else {
+      groups.set(guide.id, { title: guide.title, text: guide.text, given, keys: [key] });
+    }
+  }
+  const parts: string[] = [];
+  for (const { title, text, given, keys } of groups.values()) {
+    const head = `<page_guide template="${title}" pages="${keys.join(", ")}">`;
+    parts.push(
+      given
+        ? `${head}Given earlier in this conversation; follow it for these pages.</page_guide>`
+        : `${head}\nAgent guide for "${title}" pages. Follow it when reading or changing them; the page tools will not send it again.\n\n${text}\n</page_guide>`
+    );
+  }
+  return parts.length ? `${parts.join("\n\n")}\n\n` : "";
+}
+
+/** scribe: page keys written in a message, in order, without repeats. */
+export function pageKeysIn(text: string): string[] {
+  const keys: string[] = [];
+  for (const match of text.matchAll(/(?<![\w-])scribe:([a-z0-9][a-z0-9._:-]*)/gi)) {
+    // A key at the end of a sentence keeps its slug, not the full stop.
+    const key = `scribe:${match[1].replace(/[.:-]+$/, "").toLowerCase()}`;
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}

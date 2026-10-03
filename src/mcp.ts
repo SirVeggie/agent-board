@@ -39,22 +39,26 @@ type ToolResult = { content: Array<{ type: "text"; text: string } | { type: "ima
 /**
  * Template guides already handed to this agent. One MCP process serves one agent session, so
  * a guide goes out in full the first time the agent touches a page from that template and as a
- * one-line pointer after that, instead of every template's guide living in the skill.
+ * one-line pointer after that, instead of every template's guide living in the skill. In a Scribe
+ * chat the daemon keeps that memory instead (sent), since the chat's prompt can carry guides too.
  */
 const deliveredGuides = new Map<string, string>();
 
 async function withGuide(result: ToolResult, which: string, force = false): Promise<ToolResult> {
   let guide: TemplateGuide | null = null;
+  let sent: boolean | undefined;
   try {
-    const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}/guide`);
-    guide = status < 400 ? ((data as { guide?: TemplateGuide | null }).guide ?? null) : null;
+    const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}/guide?deliver=1${force ? "&force=1" : ""}`);
+    if (status < 400) {
+      ({ guide = null, sent } = data as { guide?: TemplateGuide | null; sent?: boolean });
+    }
   } catch {
     return result;
   }
   if (!guide) {
     return result;
   }
-  if (!force && deliveredGuides.get(guide.id) === guide.text) {
+  if (!force && (sent ?? deliveredGuides.get(guide.id) === guide.text)) {
     result.content.push({
       type: "text",
       text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; page_state with guide: true shows it again.`,

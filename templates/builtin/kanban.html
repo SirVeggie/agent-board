@@ -3409,7 +3409,7 @@
       "Your card: #" + c.num + " " + c.title,
       "",
       "How to work:",
-      "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with the first result; follow it.",
+      "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with this message (or with your first page_action result); follow it.",
       "- get the card, claim it" + (name ? " with assignee \"" + name + "\"" : "") + ", do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
     ];
     if (FOLDER_MODES[workerMode(w)] && w.worktree) {

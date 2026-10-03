@@ -5,6 +5,7 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
+import { guideSent, markGuideSent } from "./guideMemory.js";
 import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
@@ -287,14 +288,26 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  /** The agent guide of the template a page was made from; the MCP hands it to the agent once per session. */
+  /**
+   * The agent guide of the template a page was made from; the MCP hands it to the agent once per
+   * session. For a Scribe chat's MCP, deliver=1 also says whether that chat already has it (its
+   * prompt may have carried it) and records it as given; force=1 records it without asking.
+   */
   app.get("/api/tabs/:id/guide", (req, res) => {
     const tab = store.get(req.params.id, viewerOf(req));
     if (!tab) {
       res.status(404).json({ error: `tab not found: ${req.params.id}` });
       return;
     }
-    res.json({ guide: (tab.templateId && store.templateGuide(tab.templateId)) || null });
+    const guide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!guide || !thread || req.query.deliver !== "1") {
+      res.json({ guide });
+      return;
+    }
+    const sent = req.query.force !== "1" && guideSent(thread, guide);
+    markGuideSent(thread, guide);
+    res.json({ guide, sent });
   });
 
   app.get("/api/tabs/:id/state", (req, res) => {

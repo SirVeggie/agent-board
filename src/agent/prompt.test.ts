@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextChipKey, freshContext, threadInstructions } from "./prompt.js";
+import { contextChipKey, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
 import type { ContextChip, Thread } from "./types.js";
 
 const page = (id: string, title = id): ContextChip => ({ kind: "page", id, key: `scribe:${id}`, title });
@@ -32,4 +32,23 @@ test("threads with a workspace are told their shell already starts there", () =>
   assert.match(threadInstructions(thread({}), {}), /Workspace: \/work\nShell commands already run in the workspace folder/);
   assert.doesNotMatch(threadInstructions(thread({ cwd: null }), {}), /Shell commands/);
   assert.doesNotMatch(threadInstructions(thread({ mode: "board" }), {}), /Shell commands/);
+});
+
+test("guidesBlock sends each guide once, naming every page it covers", () => {
+  const kanban = { id: "tpl_kanban", title: "Kanban board", text: "Use page_action." };
+  const todo = { id: "tpl_todo", title: "Todo list", text: "Items live in todos." };
+  const block = guidesBlock([
+    { key: "scribe:a", guide: kanban, given: false },
+    { key: "scribe:b", guide: kanban, given: false },
+    { key: "scribe:c", guide: todo, given: true },
+  ]);
+  assert.equal(block.match(/Use page_action\./g)?.length, 1);
+  assert.match(block, /<page_guide template="Kanban board" pages="scribe:a, scribe:b">/);
+  assert.match(block, /<page_guide template="Todo list" pages="scribe:c">Given earlier/);
+  assert.doesNotMatch(block, /Items live in todos/);
+  assert.equal(guidesBlock([]), "");
+});
+
+test("pageKeysIn finds scribe: keys without trailing punctuation or repeats", () => {
+  assert.deepEqual(pageKeysIn("See [[scribe:agent-todo]] and scribe:Notes.v2. Also scribe:agent-todo, not xscribe:nope."), ["scribe:agent-todo", "scribe:notes.v2"]);
 });

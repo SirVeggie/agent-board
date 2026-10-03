@@ -9,7 +9,8 @@ import { store } from "../store.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
-import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "./prompt.js";
+import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
+import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
@@ -115,14 +116,14 @@ type QueuedMessage = {
   from?: "page";
 };
 
-/** What the model reads for a message: where it came from, its context chips, its files, then the text. */
-function promptText(msg: QueuedMessage, thread: Thread): string {
+/** What the model reads for a message: where it came from, its context chips, the guides of the pages it brings up, its files, then the text. */
+function promptText(msg: QueuedMessage, thread: Thread, guides: string): string {
   const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n" : "";
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" && thread.provider !== "openai" });
   const recap = thread.rewind?.recap
     ? `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
     : "";
-  return recap + origin + contextBlock(msg.context) + files + msg.text;
+  return recap + origin + contextBlock(msg.context) + guides + files + msg.text;
 }
 
 /**
@@ -549,6 +550,7 @@ export class AgentHost {
       next.nativeId = null;
       this.sessions.get(id)?.dispose();
       this.sessions.delete(id);
+      forgetGuides(id);
     }
     if (typeof patch.model === "string") next.model = patch.model;
     if (patch.effort !== undefined) next.effort = patch.effort;
@@ -591,6 +593,7 @@ export class AgentHost {
     await this.cancel(id);
     this.sessions.get(id)?.dispose();
     this.sessions.delete(id);
+    forgetGuides(id);
     const wt = openWorktree(thread);
     if (wt) {
       // The folder goes; any work stays on the branch, so deleting a thread never loses it.
@@ -724,6 +727,34 @@ export class AgentHost {
       return folderPath ? { folder: { id: thread.scope.ref, path: folderPath } } : { folder: null };
     }
     return {};
+  }
+
+  /**
+   * The agent guides for the pages a message brings up: the thread's own page, page chips, and
+   * scribe: keys in the text. A guide goes in once per conversation (the MCP checks the same
+   * memory, so its tool results skip it too); after that a chip or link only names it.
+   */
+  private pageGuides(thread: Thread, msg: QueuedMessage): string {
+    const ids: Array<{ ref: string; own?: boolean }> = [];
+    if (thread.scope.kind === "page" && thread.scope.ref) ids.push({ ref: thread.scope.ref, own: true });
+    for (const chip of msg.context) if (chip.kind === "page") ids.push({ ref: chip.id });
+    // Pasted text can hold many keys; a few is what "look at this page" looks like.
+    for (const key of pageKeysIn(msg.text).slice(0, 8)) ids.push({ ref: key });
+    const pages: PageGuide[] = [];
+    const seen = new Set<string>();
+    for (const { ref, own } of ids) {
+      const tab = store.get(ref, "agent");
+      if (!tab?.templateId || seen.has(tab.id)) continue;
+      seen.add(tab.id);
+      const guide = store.templateGuide(tab.templateId);
+      if (!guide) continue;
+      const given = guideSent(thread.id, guide);
+      // The thread's own page is named in its instructions; it only needs the guide the first time.
+      if (given && own) continue;
+      pages.push({ key: tab.key, guide, given });
+    }
+    for (const page of pages) markGuideSent(thread.id, page.guide);
+    return guidesBlock(pages);
   }
 
   // ---------- items ----------
@@ -882,7 +913,8 @@ export class AgentHost {
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
     const item = this.queuedItems(threadId)[0];
-    const id = session.steer({ text: promptText(msg, this.requireThread(threadId)), images: msg.images, documents: pdfs(msg) });
+    const thread = this.requireThread(threadId);
+    const id = session.steer({ text: promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
     run.steer = { id, msg, itemId: item?.id };
     if (item && item.kind === "user") {
       item.steer = "waiting";
@@ -1134,7 +1166,7 @@ export class AgentHost {
         session.update(thread);
         result = await session.run(
           {
-            text: msg ? promptText(msg, thread) : "",
+            text: msg ? promptText(msg, thread, this.pageGuides(thread, msg)) : "",
             images: msg?.images ?? [],
             documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
@@ -1642,6 +1674,7 @@ export class AgentHost {
     // The provider process runs in the worktree folder; Windows will not remove a folder in use.
     this.sessions.get(threadId)?.dispose();
     this.sessions.delete(threadId);
+    forgetGuides(threadId);
     await removeWorktree(wt);
     if (how === "merge") await dropBranchIfEmpty(wt);
     // Agent sessions are tied to their folder, so the next message starts a new one in the main checkout.
@@ -1768,6 +1801,7 @@ export class AgentHost {
     const recap = kept.length && !at ? this.recap(items, kept) : "";
     this.sessions.get(threadId)?.dispose();
     this.sessions.delete(threadId);
+    forgetGuides(threadId);
     thread.rewind = { at, ...(recap ? { recap } : {}) };
     if (!at) thread.nativeId = null;
 
