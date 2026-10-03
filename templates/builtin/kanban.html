@@ -743,6 +743,21 @@
   .worker-form .row { display: flex; gap: 8px; min-width: 0; }
   .worker-form .row .field { flex: 1; }
   .worker-form .help { grid-column: 2; margin: -4px 0 0; color: var(--muted); font-size: 12px; }
+  .worker-form .worker-hint { grid-column: 1 / -1; margin: 0 0 4px; }
+  .worker-form .worker-hint summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  .worker-form .worker-hint summary:hover { color: var(--text); }
+  .worker-form .worker-hint > p { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+  .worker-form .worker-hint pre {
+    margin: 8px 0 0;
+    padding: 10px 12px;
+    max-height: 240px;
+    overflow: auto;
+    font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    color: var(--text);
+    background: rgba(255, 255, 255, .04);
+    border-radius: 8px;
+  }
   .worker-form .check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
   .worker-note { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
   .worker-note.warn { color: var(--agent); }
@@ -3316,6 +3331,7 @@
   var workerErrors = {};
   var workersTimer = 0;
   var workerCol = null;
+  var workerHintOpen = false;
   var stopCol = null;
 
   function hasWorkerApi() {
@@ -3330,6 +3346,15 @@
     return w && typeof w === "object" ? w : null;
   }
   function workerMode(w) { return str(w && w.mode) || "code"; }
+  function modelParamsOf(opts, provider, modelId) {
+    var models = (opts && opts.models && opts.models[provider]) || [];
+    var model = models.filter(function (m) { return m.id === modelId; })[0];
+    if (!model) model = models.filter(function (m) { return m.id === str(opts && opts.defaults && opts.defaults.model); })[0] || models[0];
+    return (model && model.params) || [];
+  }
+  function fastParamOf(opts, provider, modelId) {
+    return modelParamsOf(opts, provider, modelId).filter(function (p) { return p.id === "fast"; })[0] || null;
+  }
   function workerReady(w) {
     return Boolean(w && str(w.instructions).trim() && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
   }
@@ -3365,6 +3390,7 @@
     if (!w) return "Not set up";
     var mode = workerMode(w);
     var parts = [str(w.name) || "Agent", MODE_LABELS[mode] || mode];
+    if (w.fast === "true") parts.push("fast");
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (!workerReady(w)) parts.push(FOLDER_MODES[mode] && !w.cwd ? "needs a folder" : "needs instructions");
     else if (workerRunning(w)) parts.push(w.stop ? "stopping" : "working");
@@ -3397,14 +3423,14 @@
     var h = document.querySelector("h1");
     return h ? h.textContent.trim() : "Board";
   }
-  function workerPrompt(col, w, c) {
+  function workerPrompt(col, w, c, fallbackInstructions) {
     var name = str(w.name).trim();
     var colRef = JSON.stringify(col.id);
     var lines = [
       "You are an agent worker for the \"" + col.title + "\" column of the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + ").",
       "",
       "The user's instructions:",
-      str(w.instructions).trim(),
+      str(w.instructions).trim() || fallbackInstructions || "",
       "",
       "Your card: #" + c.num + " " + c.title,
       "",
@@ -3544,6 +3570,9 @@
     var mode = workerMode(w);
     var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
     ["provider", "model", "effort", "show"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    if (w.fast === "true") opts.fast = true;
+    else if (w.fast === "false") opts.fast = false;
+    else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
     if (FOLDER_MODES[mode]) {
       opts.cwd = w.cwd;
       if (w.approval) opts.approval = w.approval;
@@ -3741,12 +3770,14 @@
       saveWorker(colId, patch);
       $("workerRemove").classList.remove("hidden");
       renderWorkerNote(colId);
+      refreshWorkerHint(colId);
     };
     var setLater = function (patch) {
       if (!workerPending || workerPending.colId !== colId) workerPending = { colId: colId, patch: {} };
       Object.assign(workerPending.patch, patch);
       clearTimeout(workerSaveTimer);
       workerSaveTimer = setTimeout(function () { set({}); }, 300);
+      refreshWorkerHint(colId);
     };
     workerForm.replaceChildren();
     function row(label, control, help, top) {
@@ -3775,6 +3806,7 @@
     instructions.placeholder = "What it should do with each card: where the code is, how to test, commit rules, when to ask you…";
     instructions.addEventListener("input", function () { setLater({ instructions: instructions.value }); });
     row("Instructions", instructions, null, true);
+    workerForm.appendChild(workerGuideHint(column(colId), w));
 
     row("Context", enhanced(workerSelect([
       ["", "Fresh for each card, kept for related ones"],
@@ -3786,7 +3818,7 @@
     var provider = str(w.provider);
     var effectiveProvider = provider || str(defaults.provider);
     row("Provider", enhanced(workerSelect([["", "Default" + (defaults.provider ? " (" + labelOf(providers, defaults.provider) + ")" : "")]].concat(providers.map(function (p) { return [p.id, p.label]; })), provider, "Provider", function (v) {
-      set({ provider: v, model: null, effort: null });
+      set({ provider: v, model: null, effort: null, fast: null });
       renderWorkerForm(colId);
     })));
     var models = (opts.models && opts.models[effectiveProvider]) || [];
@@ -3798,6 +3830,14 @@
     var efforts = model ? model.efforts || [] : [];
     if (efforts.length) {
       row("Reasoning", enhanced(workerSelect([["", "Default"]].concat(efforts.map(function (e) { return [e.id, e.label]; })), str(w.effort), "Reasoning", function (v) { set({ effort: v }); })));
+    }
+    var fast = fastParamOf(opts, effectiveProvider, str(w.model));
+    if (!fast && effectiveProvider === "cursor") {
+      fast = { id: "fast", label: "Fast", description: "", options: [{ id: "true", label: "On" }, { id: "false", label: "Off" }] };
+    }
+    if (fast) {
+      row("Fast", enhanced(workerSelect([["", "Default"]].concat((fast.options || []).map(function (o) { return [o.id, o.label]; })), str(w.fast), "Fast", function (v) { set({ fast: v }); })),
+        fast.description || "Cursor's faster, cheaper mode. Default follows your chat settings when this worker uses the default model.");
     }
     var mode = workerMode(w);
     row("Mode", enhanced(workerSelect((opts.modes || []).map(function (m) { return [m.id, m.label]; }), mode, "Mode", function (v) {
@@ -3840,6 +3880,26 @@
   function labelOf(list, id) {
     var found = list.filter(function (x) { return x.id === id; })[0];
     return found ? found.label : id;
+  }
+  function workerDraft(colId) {
+    var w = Object.assign({}, worker(colId) || {});
+    if (workerPending && workerPending.colId === colId) Object.assign(w, workerPending.patch);
+    return w;
+  }
+  function workerGuideHint(col, w) {
+    var hint = el("details", "worker-hint");
+    if (workerHintOpen) hint.open = true;
+    hint.appendChild(el("summary", null, "What the board also sends the agent"));
+    hint.appendChild(el("p", null, "Each card is wrapped with the text below. The Kanban agent guide (claim, finish, actions) is attached to the thread as well."));
+    hint.appendChild(el("pre", null, col ? workerPrompt(col, w, { num: "N", title: "…" }, "« your instructions above »") : ""));
+    hint.addEventListener("toggle", function () { workerHintOpen = hint.open; });
+    return hint;
+  }
+  function refreshWorkerHint(colId) {
+    var pre = workerForm.querySelector(".worker-hint pre");
+    var col = column(colId);
+    if (!pre || !col) return;
+    pre.textContent = workerPrompt(col, workerDraft(colId), { num: "N", title: "…" }, "« your instructions above »");
   }
   function renderWorkerNote(colId) {
     var w = worker(colId);

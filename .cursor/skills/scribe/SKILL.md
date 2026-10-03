@@ -357,12 +357,12 @@ const { thread, reply: last } = await scribe.agent.get(threadId);
 scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
 await scribe.agent.stop(threadId);                         // stop the turn and drop queued messages
 await scribe.agent.merge(threadId);                        // idle Code thread: merge its worktree branch back, close the worktree
-const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts }] }, modes, approvals, defaults }
+const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, approvals, defaults }
 const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)
 await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
 ```
 
-- Threads default to Pages mode (`mode: "ask"` for read-only Q&A): page tools and the web, no files or shell. Unset `provider` / `model` / `effort` / `approval` / `web` follow the user's defaults; take ids from `options()`.
+- Threads default to Pages mode (`mode: "ask"` for read-only Q&A): page tools and the web, no files or shell. Unset `provider` / `model` / `effort` / `approval` / `web` / `fast` follow the user's defaults; take ids from `options()`. Cursor models expose a `fast` param; pass `fast: true` (or `modelParams: { fast: "true" }`) to turn it on.
 - A page only sees and drives **its own** threads (scoped to that page). It cannot reach other threads.
 - `show: "dock"` or `"sidebar"` opens the thread in that chat; omit it to run quietly. The tab still shows its working dot.
 - What else a page may do is the user's call, per page (tab menu → Permissions…). Scribe asks the user when a call needs a permission the page doesn't have yet, so `start`, `send`, and `stop` may take as long as the user does. A refusal is `{ ok: false, error: "denied", permission }`; show it on the page instead of retrying in a loop.

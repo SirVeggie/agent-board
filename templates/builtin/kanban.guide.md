@@ -50,7 +50,7 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             createdAt, movedAt, doneAt? }]
 nextNum: number
 settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave them alone
-            workers?: { [columnId]: { name?, instructions, context?, provider?, model?, effort?, mode?,
+            workers?: { [columnId]: { name?, instructions, context?, provider?, model?, effort?, fast?, mode?,
                                       cwd?, approval?, worktree?, show?,
                                       threadId?, run?, step?, stop?, merge?, error? } } }  // run..error: the page's
 ```

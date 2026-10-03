@@ -1024,19 +1024,28 @@ export const BOARD_BRIDGE_JS = `
         out[name] = String(opts[name]);
       }
     });
-    ["worktree", "web"].forEach(function (name) {
+    ["worktree", "web", "fast"].forEach(function (name) {
       if (typeof opts[name] === "boolean") {
         out[name] = opts[name];
       }
     });
+    if (opts.modelParams && typeof opts.modelParams === "object" && !Array.isArray(opts.modelParams)) {
+      var params = {};
+      Object.keys(opts.modelParams).forEach(function (key) {
+        var val = opts.modelParams[key];
+        if (val != null && val !== "") params[key] = String(val);
+      });
+      if (Object.keys(params).length) out.modelParams = params;
+    }
     return out;
   }
 
   var agent = {
     /**
      * New thread for this page: { ok, threadId, queued }. opts: { title, show: "dock" | "sidebar",
-     * mode: "board" | "ask" | "code" | "plan", provider, model, effort, and for Code and Plan:
-     * cwd (folder), approval: "ask" | "edits" | "auto" | "full", worktree, web }.
+     * mode: "board" | "ask" | "code" | "plan", provider, model, effort, fast (Cursor),
+     * modelParams, and for Code and Plan: cwd (folder), approval: "ask" | "edits" | "auto" | "full",
+     * worktree, web }.
      */
     start: function (prompt, opts) {
       var message = agentSettings(opts || {});
@@ -1073,7 +1082,7 @@ export const BOARD_BRIDGE_JS = `
       var ms = opts && typeof opts.timeoutMs === "number" ? Math.max(1000, opts.timeoutMs) : 600000;
       return agentCall({ op: "wait", threadId: agentText(threadId), timeoutMs: ms }, ms + 5000);
     },
-    /** What start() can pick from: { ok, providers, models, modes, approvals, defaults }. */
+    /** What start() can pick from: { ok, providers, models (id, label, efforts, params), modes, approvals, defaults }. */
     options: function () {
       return agentCall({ op: "options" });
     },

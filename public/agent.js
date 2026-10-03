@@ -4560,12 +4560,34 @@
       ok: true,
       providers: S.config.providers.map((x) => ({ id: x.id, label: x.label, available: Boolean(x.available) })),
       models: Object.fromEntries(
-        available.map((x) => [x.id, modelsOf(x.id).map((m) => ({ id: m.id, label: m.label, efforts: m.efforts || [], defaultEffort: m.defaultEffort ?? null }))])
+        available.map((x) => [
+          x.id,
+          modelsOf(x.id).map((m) => ({
+            id: m.id,
+            label: m.label,
+            efforts: m.efforts || [],
+            defaultEffort: m.defaultEffort ?? null,
+            params: (m.params || []).map((param) => ({
+              id: param.id,
+              label: param.label,
+              description: param.description || "",
+              options: (param.options || []).map((o) => ({ id: o.id, label: o.label })),
+              default: param.default || "",
+            })),
+          })),
+        ])
       ),
       modes: MODES.map((m) => ({ id: m.id, label: m.label, detail: m.detail, needsFolder: FOLDER_MODES.has(m.id) })),
       approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail })),
       defaults: provider
-        ? { provider, model: p.models?.[provider] || "default", effort: p.efforts?.[provider] ?? null, approval: approvalFor(provider, p), web: p.web !== false }
+        ? {
+            provider,
+            model: p.models?.[provider] || "default",
+            effort: p.efforts?.[provider] ?? null,
+            approval: approvalFor(provider, p),
+            web: p.web !== false,
+            fast: p.modelParams?.[provider]?.fast === "true",
+          }
         : null,
     };
   }
@@ -4591,11 +4613,19 @@
     const folderMode = FOLDER_MODES.has(mode);
     const cwd = folderMode && typeof data.cwd === "string" ? data.cwd.trim() : "";
     if (folderMode && !cwd) return { error: "needs_folder" };
+    const modelParams = { ...(own ? {} : p.modelParams?.[provider] || {}) };
+    if (data.modelParams && typeof data.modelParams === "object" && !Array.isArray(data.modelParams)) {
+      for (const [key, value] of Object.entries(data.modelParams)) {
+        if (value != null && value !== "") modelParams[key] = String(value);
+      }
+    }
+    if (typeof data.fast === "boolean") modelParams.fast = data.fast ? "true" : "false";
+    else if (data.fast === "true" || data.fast === "false") modelParams.fast = data.fast;
     return {
       provider,
       model,
       effort: data.effort || (own ? null : p.efforts?.[provider] ?? null),
-      modelParams: own ? {} : p.modelParams?.[provider] || {},
+      modelParams,
       mode,
       approval: data.approval || approvalFor(provider, p),
       web: typeof data.web === "boolean" ? data.web : p.web !== false,
