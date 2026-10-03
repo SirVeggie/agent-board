@@ -259,7 +259,7 @@ export class BoardDb {
     fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
     const existed = fs.existsSync(sqlitePath);
     if (existed) {
-      return BoardDb.openExisting(sqlitePath);
+      return openWithRetry(sqlitePath, () => BoardDb.openExisting(sqlitePath));
     }
     let db: DatabaseSync | undefined;
     try {
@@ -598,10 +598,50 @@ export class BoardDb {
 }
 
 function configure(db: DatabaseSync): void {
+  // Set first, so the pragmas below wait on a lock instead of failing at once.
+  db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
-  db.exec("PRAGMA busy_timeout = 5000");
+}
+
+const OPEN_ATTEMPTS = 6;
+const OPEN_RETRY_MS = 300;
+
+/**
+ * A daemon restarted right after the old one stopped can find the old process still letting go
+ * of scribe.sqlite (and its -wal/-shm files on Windows), so opening fails with SQLITE_IOERR or
+ * SQLITE_BUSY. Waits a little and tries again before giving up.
+ */
+function openWithRetry<T>(sqlitePath: string, open: () => T): T {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return open();
+    } catch (err) {
+      if (attempt >= OPEN_ATTEMPTS || !isTransientOpenError(err)) {
+        throw err;
+      }
+      console.warn(
+        `[scribe] ${path.basename(sqlitePath)} is busy (${String((err as Error).message ?? err)}); ` +
+          `waiting for the previous daemon to let go (attempt ${attempt}/${OPEN_ATTEMPTS - 1})`
+      );
+      sleepSync(OPEN_RETRY_MS * attempt);
+    }
+  }
+}
+
+/** SQLITE_BUSY (5), SQLITE_LOCKED (6), SQLITE_IOERR (10) and their extended codes. */
+export function isTransientOpenError(err: unknown): boolean {
+  const code = (err as { errcode?: unknown } | null)?.errcode;
+  if (typeof code === "number") {
+    const primary = code & 0xff;
+    return primary === 5 || primary === 6 || primary === 10;
+  }
+  return /disk I\/O error|database is locked|database table is locked/i.test(String((err as Error)?.message ?? ""));
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /** A deleted page keeps closedAt when it was closed, so undo knows whether to reopen its tab. */
