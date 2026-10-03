@@ -510,6 +510,9 @@ class ClaudeSession implements ProviderSession {
     for (const image of input.images) {
       content.push({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } });
     }
+    for (const doc of input.documents) {
+      content.push({ type: "document", title: doc.name, source: { type: "base64", media_type: doc.mimeType, data: doc.data } });
+    }
     this.input?.push({
       type: "user",
       message: { role: "user", content: content as never },
@@ -596,6 +599,9 @@ class ClaudeSession implements ProviderSession {
       const content: unknown[] = [{ type: "text", text: input.text }];
       for (const image of input.images) {
         content.push({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } });
+      }
+      for (const doc of input.documents) {
+        content.push({ type: "document", title: doc.name, source: { type: "base64", media_type: doc.mimeType, data: doc.data } });
       }
       const done = new Promise<TurnResult>((resolve) => {
         this.finish = resolve;

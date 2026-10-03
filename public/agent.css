@@ -491,7 +491,39 @@ button.ag-chip.toggle.on {
   border-radius: 3px;
 }
 
+.ag-chip.file {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ag-chip.file:hover,
+.ag-chip.file:focus-visible {
+  color: var(--text);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.ag-chip.file .ag-chip-name {
+  flex: 0 1 auto;
+}
+
+.ag-chip.file .ag-chip-size {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.ag-chip.file .ag-ico {
+  flex-shrink: 0;
+}
+
+/* An outline, not a shadow: each chat view styles the composer's shadow its own way. */
+.ag-composer.drop-target {
+  outline: 2px dashed var(--accent-ring);
+  outline-offset: -2px;
+}
+
 button.ag-chip-x {
+  flex-shrink: 0;
   width: 16px;
   height: 16px;
   padding: 0;

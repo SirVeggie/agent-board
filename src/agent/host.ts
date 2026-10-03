@@ -10,6 +10,7 @@ import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { contextBlock, freshContext, threadInstructions, type ScopeInfo } from "./prompt.js";
+import { filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider } from "./providers/cursor.js";
 import type {
@@ -31,9 +32,11 @@ import { unifiedDiff } from "./textDiff.js";
 import type {
   AgentEvent,
   ApprovalPolicy,
+  ChatFile,
   ChatImage,
   ContextChip,
   FileChange,
+  FileRef,
   Item,
   ItemBody,
   ModelOption,
@@ -133,12 +136,43 @@ function planUsed(before: PlanLimits["windows"], after: PlanLimits["windows"]): 
     .filter((w) => w.used >= 0.0005);
 }
 
-type QueuedMessage = { text: string; images: ChatImage[]; context: ContextChip[]; from?: "page" };
+type QueuedMessage = {
+  text: string;
+  images: ChatImage[];
+  /** Attached files other than images. */
+  files: ChatFile[];
+  /** Where the images and files were saved, in the same order. */
+  saved: { images: FileRef[]; files: FileRef[] };
+  context: ContextChip[];
+  from?: "page";
+};
 
-/** What the model reads for a message: where it came from, its context chips, then the text. */
-function promptText(msg: QueuedMessage): string {
+/** What the model reads for a message: where it came from, its context chips, its files, then the text. */
+function promptText(msg: QueuedMessage, thread: Thread): string {
   const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent, after a click or key press on it), not typed by the user.\n</context>\n\n" : "";
-  return origin + contextBlock(msg.context) + msg.text;
+  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
+  return origin + contextBlock(msg.context) + files + msg.text;
+}
+
+/** PDFs, for providers that read them as documents beside the text that names them. */
+function pdfs(msg: QueuedMessage): ChatFile[] {
+  return msg.files.filter((file) => file.mimeType === "application/pdf");
+}
+
+/** A saved file as the transcript keeps it: without its local path. */
+function fileEntry(ref: FileRef): FileRef {
+  return { id: ref.id, name: ref.name, mimeType: ref.mimeType, size: ref.size };
+}
+
+function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
+  return {
+    kind: "user",
+    text: msg.text,
+    ...(msg.saved.images.length ? { images: msg.saved.images.map(fileEntry) } : {}),
+    ...(msg.saved.files.length ? { files: msg.saved.files.map(fileEntry) } : {}),
+    ...(msg.context.length ? { context: msg.context } : {}),
+    ...(msg.from ? { from: msg.from } : {}),
+  };
 }
 
 type RunState = {
@@ -155,7 +189,7 @@ type RunState = {
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
 };
 
-export type SendInput = { text: string; images?: ChatImage[]; context?: ContextChip[]; from?: "page" };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -494,6 +528,11 @@ export class AgentHost {
       if (item.threadId === id) this.dirty.delete(key);
     }
     this.db.deleteThread(id);
+    try {
+      removeThreadFiles(id);
+    } catch (err) {
+      log(`Removing the files of ${id} failed: ${(err as Error).message}`);
+    }
     this.emit({ type: "agent_thread_deleted", id });
   }
 
@@ -698,9 +737,8 @@ export class AgentHost {
   send(threadId: string, input: SendInput): { queued: boolean; item: Item } {
     const thread = this.requireThread(threadId);
     const text = input.text.trim();
-    if (!text && !input.images?.length) throw new Error("Empty message");
+    if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
     const context = freshContext(input.context, this.knownContext(threadId, thread));
-    const msg: QueuedMessage = { text, images: input.images ?? [], context, ...(input.from === "page" ? { from: "page" as const } : {}) };
     if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
@@ -709,27 +747,25 @@ export class AgentHost {
     if (wt && !fs.existsSync(wt.path)) {
       throw new Error(`This thread's worktree is gone (${wt.path}). Use Leave branch in the branch menu to go back to the main checkout; the branch ${wt.branch} keeps its commits.`);
     }
+    const images = input.images ?? [];
+    const files = input.files ?? [];
+    const msg: QueuedMessage = {
+      text,
+      images,
+      files,
+      saved: { images: saveFiles(threadId, images), files: saveFiles(threadId, files) },
+      context,
+      ...(input.from === "page" ? { from: "page" as const } : {}),
+    };
     if (this.runs.has(threadId)) {
       const queue = this.queues.get(threadId) ?? [];
       queue.push(msg);
       this.queues.set(threadId, queue);
-      const item = this.addItem(threadId, null, {
-        kind: "user",
-        text,
-        ...(msg.images.length ? { images: msg.images.map((img) => ({ name: img.name, mimeType: img.mimeType })) } : {}),
-        ...(msg.context.length ? { context: msg.context } : {}),
-        ...(msg.from ? { from: msg.from } : {}),
-      });
+      const item = this.addItem(threadId, null, userBody(msg));
       this.emitThread(threadId);
       return { queued: true, item };
     }
-    const item = this.addItem(threadId, null, {
-      kind: "user",
-      text,
-      ...(msg.images.length ? { images: msg.images.map((img) => ({ name: img.name, mimeType: img.mimeType })) } : {}),
-      ...(msg.context.length ? { context: msg.context } : {}),
-      ...(msg.from ? { from: msg.from } : {}),
-    });
+    const item = this.addItem(threadId, null, userBody(msg));
     void this.runTurn(threadId, msg, item);
     return { queued: false, item };
   }
@@ -756,7 +792,7 @@ export class AgentHost {
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
     const item = this.queuedItems(threadId)[0];
-    const id = session.steer({ text: promptText(msg), images: msg.images });
+    const id = session.steer({ text: promptText(msg, this.requireThread(threadId)), images: msg.images, documents: pdfs(msg) });
     run.steer = { id, msg, itemId: item?.id };
     if (item && item.kind === "user") {
       item.steer = "waiting";
@@ -770,7 +806,7 @@ export class AgentHost {
    * Take the latest queued message back, or the waiting steered one when nothing else is queued, and
    * remove it from the transcript so it can be edited and sent again.
    */
-  async withdraw(threadId: string): Promise<{ text: string; images: ChatImage[]; context: ContextChip[] }> {
+  async withdraw(threadId: string): Promise<{ text: string; images: ChatImage[]; files: ChatFile[]; context: ContextChip[] }> {
     const queue = this.queues.get(threadId);
     const queued = this.queuedItems(threadId);
     if (queue?.length) {
@@ -778,8 +814,9 @@ export class AgentHost {
       if (!queue.length) this.queues.delete(threadId);
       const item = queued[queued.length - 1];
       if (item) this.removeItem(item);
+      this.forgetFiles(threadId, msg);
       this.emitThread(threadId);
-      return { text: msg.text, images: msg.images, context: msg.context };
+      return { text: msg.text, images: msg.images, files: msg.files, context: msg.context };
     }
     const run = this.runs.get(threadId);
     const steer = run?.steer;
@@ -789,8 +826,18 @@ export class AgentHost {
     run.steer = null;
     const item = steer.itemId ? this.loadItems(threadId).find((it) => it.id === steer.itemId) : undefined;
     if (item) this.removeItem(item);
+    this.forgetFiles(threadId, steer.msg);
     this.emitThread(threadId);
-    return { text: steer.msg.text, images: steer.msg.images, context: steer.msg.context };
+    return { text: steer.msg.text, images: steer.msg.images, files: steer.msg.files, context: steer.msg.context };
+  }
+
+  /** A withdrawn message's saved files: the composer has them again and saves them anew on send. */
+  private forgetFiles(threadId: string, msg: QueuedMessage): void {
+    try {
+      removeFiles(threadId, [...msg.saved.images, ...msg.saved.files].map((ref) => ref.id));
+    } catch (err) {
+      log(`Removing withdrawn files failed: ${(err as Error).message}`);
+    }
   }
 
   private removeItem(item: Item): void {
@@ -922,8 +969,9 @@ export class AgentHost {
         session.update(thread);
         result = await session.run(
           {
-            text: promptText(msg),
+            text: promptText(msg, thread),
             images: msg.images,
+            documents: pdfs(msg),
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
           },
           sink,

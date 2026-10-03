@@ -96,6 +96,49 @@
     app()?.showNotice?.(text);
   }
 
+  /* ----- attached files ----- */
+
+  /** Same limits as src/agent/attachments.ts, checked here first so a file is refused before it is read. */
+  const FILE_LIMITS = { count: 10, image: 8 * 1024 * 1024, file: 20 * 1024 * 1024, total: 50 * 1024 * 1024 };
+
+  function sentFileUrl(threadId, fileId) {
+    return `/api/agent/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(fileId)}`;
+  }
+
+  function base64Url(data, mimeType) {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    return URL.createObjectURL(new Blob([bytes], { type: mimeType || "application/octet-stream" }));
+  }
+
+  /** A file as a chip: a thumbnail for images, an icon and size for the rest. Click previews it. */
+  function fileChip(file, onOpen) {
+    const isImage = (file.mimeType || "").startsWith("image/");
+    // A span, not a button: the composer puts a remove button inside it.
+    const chip = el("span", `ag-chip small file${isImage ? " img" : ""}`);
+    chip.tabIndex = 0;
+    chip.setAttribute("role", "button");
+    chip.title = `Preview ${file.name}`;
+    chip.addEventListener("click", onOpen);
+    chip.addEventListener("keydown", (event) => {
+      if (event.target !== chip || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      onOpen();
+    });
+    if (isImage) {
+      const thumb = el("img");
+      thumb.src = file.url;
+      thumb.alt = "";
+      thumb.addEventListener("error", () => thumb.replaceWith(icon("image")));
+      chip.append(thumb);
+    } else {
+      chip.append(icon("read"));
+    }
+    chip.append(el("span", "ag-chip-name", file.name));
+    const size = window.scribePreview?.sizeLabel(file.size);
+    if (!isImage && size) chip.append(el("span", "ag-chip-size", size));
+    return chip;
+  }
+
   function prefs() {
     return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", web: true, recentWorkspaces: [], scopeWorkspaces: {} };
   }
@@ -763,7 +806,8 @@
       this.dirtyAll = false;
       this.raf = 0;
       this.mdTimers = new Map();
-      this.images = [];
+      /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
+      this.attachments = [];
       this.drafts = new Map();
       this.contextOn = variant === "dock";
 
@@ -1327,17 +1371,25 @@
       const row = el("div", `ag-user${queued ? " queued" : ""}`);
       row.dataset.itemId = item.id;
       const bubble = el("div", "ag-user-bubble");
-      if (item.context?.length || item.images?.length) {
+      if (item.context?.length || item.images?.length || item.files?.length) {
         const chips = el("div", "ag-chips");
         for (const c of item.context || []) {
           const chip = el("span", "ag-chip small");
           chip.append(icon(c.kind === "page" ? "page" : c.kind === "folder" ? "folder" : "read"), el("span", null, c.title || c.path || (c.text ? `“${c.text.slice(0, 30)}…”` : c.kind)));
           chips.append(chip);
         }
-        for (const img of item.images || []) {
-          const chip = el("span", "ag-chip small");
-          chip.append(icon("image"), el("span", null, img.name));
-          chips.append(chip);
+        const sent = [...(item.images || []), ...(item.files || [])];
+        const previews = sent.filter((f) => f.id).map((f) => ({ ...f, url: sentFileUrl(item.threadId, f.id) }));
+        for (const file of sent) {
+          if (!file.id) {
+            // Sent before files were kept: only the name is known.
+            const chip = el("span", "ag-chip small");
+            chip.append(icon(file.mimeType?.startsWith("image/") ? "image" : "read"), el("span", null, file.name));
+            chips.append(chip);
+            continue;
+          }
+          const at = previews.findIndex((f) => f.id === file.id);
+          chips.append(fileChip(previews[at], () => window.scribePreview?.open(previews, at)));
         }
         bubble.append(chips);
       }
@@ -1848,15 +1900,31 @@
         strip.append(this.status, this.bar);
         box.append(row, strip);
       }
+      // Files dropped anywhere on the composer are attached; the outline shows where a drop lands.
+      let dragDepth = 0;
+      const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+      box.addEventListener("dragenter", (event) => {
+        if (!hasFiles(event)) return;
+        dragDepth += 1;
+        box.classList.add("drop-target");
+      });
+      box.addEventListener("dragleave", () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) box.classList.remove("drop-target");
+      });
       box.addEventListener("dragover", (event) => {
-        if ([...(event.dataTransfer?.items || [])].some((i) => i.type.startsWith("image/"))) event.preventDefault();
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
       });
       box.addEventListener("drop", (event) => {
-        const files = [...(event.dataTransfer?.files || [])].filter((f) => f.type.startsWith("image/"));
-        if (files.length) {
-          event.preventDefault();
-          files.forEach((f) => this.addImage(f));
-        }
+        dragDepth = 0;
+        box.classList.remove("drop-target");
+        const files = [...(event.dataTransfer?.files || [])];
+        if (!files.length) return;
+        event.preventDefault();
+        this.addFiles(files);
+        this.focus();
       });
       return box;
     }
@@ -1904,12 +1972,12 @@
         chip.append(icon("page"), el("span", null, this.contextOn ? tab.title : `+ ${tab.title}`));
         row.append(chip);
       }
-      this.images.forEach((img, index) => {
-        const chip = el("span", "ag-chip small img");
-        const thumb = el("img");
-        thumb.src = `data:${img.mimeType};base64,${img.data}`;
-        chip.append(thumb, el("span", null, img.name), button(icon("close"), "ag-chip-x", () => {
-          this.images.splice(index, 1);
+      this.attachments.forEach((file, index) => {
+        const chip = fileChip(file, () => window.scribePreview?.open(this.attachments, index));
+        chip.append(button(icon("close"), "ag-chip-x", (event) => {
+          event.stopPropagation();
+          const [gone] = this.attachments.splice(index, 1);
+          if (gone?.url) URL.revokeObjectURL(gone.url);
           this.renderContext();
         }, "Remove"));
         row.append(chip);
@@ -1927,23 +1995,51 @@
     }
 
     onPaste(event) {
-      const files = [...(event.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
-      if (files.length) {
-        event.preventDefault();
-        files.forEach((f) => this.addImage(f));
-      }
+      const files = [...(event.clipboardData?.files || [])];
+      if (!files.length) return;
+      // Office apps put a picture of the copied text beside the text itself: paste the text then.
+      const text = event.clipboardData.getData("text/plain");
+      if (text.trim() && files.every((f) => f.type.startsWith("image/"))) return;
+      event.preventDefault();
+      this.addFiles(files);
     }
 
-    addImage(file) {
-      if (this.images.length >= 6) return notice("Up to 6 images per message");
-      if (file.size > 8 * 1024 * 1024) return notice("Images must be under 8 MB");
-      const reader = new FileReader();
-      reader.onload = () => {
-        const data = String(reader.result).split(",")[1] || "";
-        this.images.push({ name: file.name || "pasted.png", mimeType: file.type || "image/png", data });
-        this.renderContext();
-      };
-      reader.readAsDataURL(file);
+    /** Attach pasted or dropped files, within the limits the daemon applies too. */
+    addFiles(files) {
+      for (const file of files) {
+        const image = file.type.startsWith("image/");
+        const max = image ? FILE_LIMITS.image : FILE_LIMITS.file;
+        if (this.attachments.length >= FILE_LIMITS.count) return notice(`Up to ${FILE_LIMITS.count} files per message`);
+        if (file.size > max) {
+          notice(`${file.name || "That file"} is too big: ${image ? "images" : "files"} must be under ${max / 1024 / 1024} MB`);
+          continue;
+        }
+        const total = this.attachments.reduce((sum, f) => sum + f.size, 0);
+        if (total + file.size > FILE_LIMITS.total) {
+          notice(`A message's files must add up to under ${FILE_LIMITS.total / 1024 / 1024} MB`);
+          continue;
+        }
+        const entry = {
+          name: file.name || (image ? `pasted.${(file.type.split("/")[1] || "png").replace("jpeg", "jpg").replace(/\+.*/, "")}` : "pasted file"),
+          mimeType: file.type || "",
+          size: file.size,
+          data: null,
+          url: URL.createObjectURL(file),
+        };
+        this.attachments.push(entry);
+        const reader = new FileReader();
+        reader.onload = () => {
+          entry.data = String(reader.result).split(",")[1] || "";
+        };
+        reader.readAsDataURL(file);
+      }
+      this.renderContext();
+    }
+
+    /** Drop the composer's files, freeing their preview URLs. */
+    clearAttachments() {
+      for (const file of this.attachments) if (file.url) URL.revokeObjectURL(file.url);
+      this.attachments = [];
     }
 
     renderComposerBar() {
@@ -2117,11 +2213,11 @@
       }
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
-        if (!this.input.value.trim() && !this.images.length && this.pushQueued()) return;
+        if (!this.input.value.trim() && !this.attachments.length && this.pushQueued()) return;
         this.send();
         return;
       }
-      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.images.length && this.withdrawQueued()) {
+      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.attachments.length && this.withdrawQueued()) {
         event.preventDefault();
         return;
       }
@@ -2211,7 +2307,8 @@
         .then((msg) => {
           if (this.input.value || this.threadId !== t.id) return;
           this.input.value = msg.text || "";
-          this.images = (msg.images || []).slice();
+          this.clearAttachments();
+          this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
           const tab = activeTab();
           if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
           this.renderContext();
@@ -2225,7 +2322,12 @@
 
     async send() {
       const text = this.input.value.trim();
-      if (!text && !this.images.length) return;
+      if (!text && !this.attachments.length) return;
+      if (this.attachments.some((f) => f.data === null)) {
+        // Still being read (a large file just dropped): try again in a moment.
+        setTimeout(() => this.send(), 100);
+        return;
+      }
       const s = this.settings();
       if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) {
         const dir = await pickWorkspace(null);
@@ -2239,9 +2341,12 @@
       if (this.contextOn && tab && !this.pageInThread(tab)) {
         context.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
       }
-      const images = this.images.slice();
+      const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
+      const images = sending.filter((f) => f.mimeType.startsWith("image/"));
+      const files = sending.filter((f) => !f.mimeType.startsWith("image/"));
+      const held = this.attachments;
+      this.attachments = [];
       this.input.value = "";
-      this.images = [];
       this.autosize();
       this.renderContext();
       this.slash.hidden = true;
@@ -2272,13 +2377,18 @@
           this.renderAll();
         }
         this.stick = true;
-        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, context });
+        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context });
+        for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         this.renderContext();
       } catch (err) {
         notice(err.message);
-        if (!this.input.value) {
+        if (!this.input.value && !this.attachments.length) {
           this.input.value = text;
+          this.attachments = held;
           this.autosize();
+          this.renderContext();
+        } else {
+          for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         }
       }
     }

@@ -156,7 +156,11 @@ export type QuestionSpec = {
   options: Array<{ id: string; label: string; description?: string }>;
 };
 
-export type ChatImage = { name: string; mimeType: string; data: string };
+/** A file sent with a message, as base64. Images go to the model as images; other files see attachments.ts. */
+export type ChatFile = { name: string; mimeType: string; data: string };
+export type ChatImage = ChatFile;
+/** A sent file as the transcript keeps it: saved under the data folder, served by id. */
+export type FileRef = { id: string; name: string; mimeType: string; size: number; path?: string };
 
 export type ContextChip =
   | { kind: "page"; id: string; key: string; title: string }
@@ -176,7 +180,9 @@ export type ItemBody =
   | {
       kind: "user";
       text: string;
-      images?: Array<{ name: string; mimeType: string }>;
+      /** id and size are missing on messages from before files were saved. */
+      images?: Array<{ name: string; mimeType: string; id?: string; size?: number }>;
+      files?: FileRef[];
       context?: ContextChip[];
       /** Queued, then dropped by Stop. */
       dropped?: boolean;

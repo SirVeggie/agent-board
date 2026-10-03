@@ -17,6 +17,8 @@ export type TurnInput = {
   /** Text sent to the model, with context blocks already prepended. */
   text: string;
   images: ChatImage[];
+  /** PDFs, for providers that read them natively (the prompt text already names them). */
+  documents: ChatImage[];
   /** Extra system instructions for this thread (board context, link syntax). */
   instructions: string;
 };
@@ -98,7 +100,7 @@ export type TurnResult = {
 };
 
 /** A message for a turn that is already running. */
-export type SteerInput = { text: string; images: ChatImage[] };
+export type SteerInput = { text: string; images: ChatImage[]; documents: ChatImage[] };
 
 /** One live conversation with a provider, bound to a thread. */
 export interface ProviderSession {

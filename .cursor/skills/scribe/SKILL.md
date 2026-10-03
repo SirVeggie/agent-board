@@ -255,6 +255,7 @@ scribe.bind(el, "draft", { local: true })
 scribe.signal("submitted", { item: "t_1" })   // log an event agents can wait on, with small data
 scribe.action("move", { card: 12, to: "done" })  // run one of the page template's actions
 scribe.saveAsset(file)            // store an image/file for this page; see Page assets
+scribe.preview(fileOrAssetId)     // show images, PDFs, text and more in Scribe's viewer; see Previewing files
 scribe.open("scribe:key", { mode })  // open a page or URL as "tab", "peek", or "split"; see Linking pages
 scribe.agent.start(prompt)        // start an agent chat thread for this page; see Pages that use the agent
 ```
@@ -306,6 +307,19 @@ page_update({
 ```
 
 Every file must be referenced and every `asset:<name>` needs a file; otherwise the write is refused. The built-in Todo list keeps images per item as `images: [{ id, name, data }]` and shows one inline in the description with `![alt](#img-<image id>)`.
+
+### Previewing files
+
+Do not build a lightbox or document viewer into a page. `scribe.preview` opens Scribe's own viewer over the window. It shows images, PDFs, video and audio, Markdown, CSV/TSV as a table, HTML (sandboxed, no scripts), JSON, and plain text or code. Other types get a download button. With several files, the arrow keys step through them.
+
+```js
+thumb.addEventListener("click", () => scribe.preview(card.image, { name: "photo.png" }));  // an asset id or /blob/ url
+input.addEventListener("change", () => scribe.preview([...input.files]));                 // Blobs or Files
+scribe.preview(images.map((i) => ({ src: i.data, name: i.name })), { index: 2 });          // a gallery, opened at the third
+```
+
+- It takes a Blob or File, an asset id, a URL the page can fetch, `{ src | blob, name?, mimeType? }`, or an array of any of these. It resolves `{ ok }` or `{ ok: false, error }`.
+- Like `scribe.open`, it only works inside a click or key press; otherwise it resolves `{ ok: false, error: "no_gesture" }`. Call it first in the handler.
 
 The shape to follow — bind the fields once, render the rest from state, and call `render()` yourself after your own writes:
 

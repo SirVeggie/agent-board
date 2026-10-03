@@ -5,14 +5,16 @@ import { listPermissions, setRules } from "./permissions.js";
 import type { AgentHost } from "./host.js";
 import { baseUrl } from "../config.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
-import type { ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
+import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
+import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord } from "./types.js";
 
 /** /api/agent/* for the board shell. The content origin gate keeps tab pages out of these. */
 export function agentRouter(host: AgentHost): express.Router {
   const router = express.Router();
   router.use(shellOnly);
-  router.use(express.json({ limit: "40mb" }));
+  // Room for a message's files as base64 (MAX_MESSAGE_BYTES, plus a third).
+  router.use(express.json({ limit: "80mb" }));
 
   const wrap =
     (fn: (req: express.Request, res: express.Response) => Promise<unknown> | unknown) =>
@@ -141,9 +143,43 @@ export function agentRouter(host: AgentHost): express.Router {
             .map((img) => ({ name: String(img.name ?? "image"), mimeType: String(img.mimeType ?? "image/png"), data: String(img.data ?? "") }))
             .filter((img) => img.data && /^image\//.test(img.mimeType))
         : [];
+      const files: ChatFile[] = Array.isArray(body.files)
+        ? body.files
+            .filter(isPlainRecord)
+            .map((file) => {
+              const name = String(file.name ?? "file");
+              return { name, mimeType: guessMimeType(name, String(file.mimeType ?? "")), data: String(file.data ?? "") };
+            })
+            .filter((file) => file.data)
+        : [];
+      if (images.length + files.length > MAX_FILES_PER_MESSAGE) throw new Error(`Up to ${MAX_FILES_PER_MESSAGE} files per message`);
+      let total = 0;
+      for (const file of [...images, ...files]) {
+        const bytes = Math.floor((file.data.length * 3) / 4);
+        const max = file.mimeType.startsWith("image/") ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+        if (bytes > max) throw new Error(`${file.name} is over ${max / 1024 / 1024} MB`);
+        total += bytes;
+      }
+      if (total > MAX_MESSAGE_BYTES) throw new Error(`A message's files must add up to under ${MAX_MESSAGE_BYTES / 1024 / 1024} MB`);
       const context = Array.isArray(body.context) ? (body.context.filter(isPlainRecord) as ContextChip[]) : [];
       // The board sends from: "page" for messages a page's own code sent through board.agent.
-      return host.send(req.params.id, { text: String(body.text ?? ""), images, context, ...(body.from === "page" ? { from: "page" as const } : {}) });
+      return host.send(req.params.id, { text: String(body.text ?? ""), images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}) });
+    })
+  );
+
+  // A file sent with a message, for the chat's previews. Shown inline; download is the viewer's choice.
+  router.get(
+    "/threads/:id/files/:fileId",
+    wrap(async (req, res) => {
+      const full = filePath(req.params.id, req.params.fileId);
+      if (!full) throw new Error("File not found");
+      const name = path.basename(full);
+      res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(name)}`);
+      res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      // Text and HTML come back as plain text, so a preview never runs a sent file's scripts.
+      res.type(isTextFile(name, "") ? "text/plain; charset=utf-8" : path.extname(name) || "application/octet-stream");
+      await new Promise<void>((resolve, reject) => res.sendFile(full, (err) => (err ? reject(err) : resolve())));
     })
   );
 

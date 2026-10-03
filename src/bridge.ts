@@ -10,7 +10,7 @@ import { createStateOps } from "./stateOps.js";
  * - `scribe.signal(name, data)` and `data-scribe-signal`: events agents wait on.
  * - `scribe.action(name, args)`: the page template's actions.
  * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
- *   and `scribe.agent` for chat threads the page starts.
+ *   `scribe.preview` for Scribe's file viewer, and `scribe.agent` for chat threads the page starts.
  *
  * Boot data is inlined ahead of this script so `scribe.state` is readable synchronously.
  * The ops engine is the daemon's own (stateOps.ts), embedded by source.
@@ -926,6 +926,62 @@ export const BOARD_BRIDGE_JS = `
     return value.indexOf("/blob/") === 0 ? value : "/blob/" + value;
   }
 
+  // ---------- file preview ----------
+  // scribe.preview shows files in Scribe's own viewer (images, PDFs, media, text, Markdown, CSV,
+  // HTML), so pages need no viewer of their own. The page reads each file itself (it may be one of
+  // its assets) and hands the bytes over; Scribe never loads a URL for it.
+
+  function previewFile(item, opts) {
+    if (item instanceof Blob) {
+      return Promise.resolve({ blob: item, name: item.name || opts.name || "file", mimeType: item.type || opts.mimeType || "" });
+    }
+    var spec = typeof item === "string" ? { src: item } : item || {};
+    if (spec.blob instanceof Blob) {
+      return Promise.resolve({ blob: spec.blob, name: spec.name || spec.blob.name || "file", mimeType: spec.mimeType || spec.blob.type || "" });
+    }
+    var src = String(spec.src || spec.url || spec.asset || "");
+    if (!src) {
+      return Promise.reject(new Error("Nothing to preview"));
+    }
+    // An asset id or /blob/ path, or any URL this page may fetch.
+    var url = /^[a-z][a-z0-9+.-]*:|^\\//i.test(src) ? src : assetUrl(src);
+    return fetch(url).then(function (res) {
+      if (!res.ok) {
+        throw new Error("Could not load " + src + " (" + res.status + ")");
+      }
+      return res.blob().then(function (blob) {
+        var name = spec.name || opts.name || decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() || "file");
+        return { blob: blob, name: name, mimeType: spec.mimeType || opts.mimeType || blob.type || "" };
+      });
+    });
+  }
+
+  /**
+   * Preview one file or several (arrow keys step through them): a Blob or File, an asset id or URL,
+   * or { src | blob, name?, mimeType? }. Needs a click or key press, like scribe.open.
+   * opts: { index, name, mimeType }. Resolves { ok } or { ok: false, error }.
+   */
+  function preview(files, opts) {
+    opts = opts || {};
+    if (!hasGesture()) {
+      console.warn("[scribe] scribe.preview needs a click or key press; ignored");
+      return Promise.resolve({ ok: false, error: "no_gesture" });
+    }
+    var list = Array.isArray(files) ? files : [files];
+    return Promise.all(
+      list.map(function (item) {
+        return previewFile(item, list.length === 1 ? opts : {});
+      })
+    ).then(
+      function (resolved) {
+        return askBoard({ type: "scribe-preview", files: resolved, index: Number(opts.index) || 0 });
+      },
+      function (err) {
+        return { ok: false, error: String((err && err.message) || err) };
+      }
+    );
+  }
+
   // ---------- agent ----------
   // A page can start agent chat threads of its own and continue them. Starting or sending needs a
   // click or key press, like scribe.open (Scribe checks again on its side); reading does not.
@@ -1008,6 +1064,7 @@ export const BOARD_BRIDGE_JS = `
     action: action,
     open: open,
     resolve: resolve,
+    preview: preview,
     agent: agent,
     /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
     ops: {
