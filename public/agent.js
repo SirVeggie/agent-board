@@ -54,6 +54,12 @@
   ];
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
+  const SCOPE_SLASH = [
+    { name: "here", description: "This thread belongs to the current page" },
+    { name: "folder", description: "This thread belongs to the current page's folder" },
+    { name: "workspace", description: "Set the workspace folder" },
+    { name: "global", description: "Not tied to a page or folder" },
+  ];
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor" };
 
   /* ---------- state ---------- */
@@ -1029,6 +1035,33 @@
         return;
       }
       await this.updateSettings({ scope });
+    }
+
+    async applyScopeSlash(name) {
+      const tab = activeTab();
+      if (name === "here") {
+        if (!tab) {
+          notice("Open a page first");
+          return;
+        }
+        await this.setScope({ kind: "page", ref: tab.id });
+        return;
+      }
+      if (name === "folder") {
+        if (!tab?.folderId) {
+          notice(tab ? "This page is not in a folder" : "Open a page first");
+          return;
+        }
+        await this.setScope({ kind: "folder", ref: tab.folderId });
+        return;
+      }
+      if (name === "workspace") {
+        await this.pickOtherWorkspace();
+        return;
+      }
+      if (name === "global") {
+        await this.setScope({ kind: "global", ref: null });
+      }
     }
 
     async setWorkspace(dir) {
@@ -2182,7 +2215,9 @@
         }
       }
       const q = m[1].toLowerCase();
-      const hits = (list || []).filter((c) => c.name.toLowerCase().includes(q)).slice(0, 40);
+      const local = SCOPE_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
+      const remote = (list || []).filter((c) => c.name.toLowerCase().includes(q) && !SCOPE_SLASH.some((s) => s.name === c.name.toLowerCase()));
+      const hits = [...local, ...remote].slice(0, 40);
       this.slash.replaceChildren();
       if (!hits.length) {
         this.slash.hidden = true;
@@ -2190,6 +2225,14 @@
       }
       hits.forEach((c, i) => {
         const row = button("", `ag-slash-item${i === 0 ? " on" : ""}`, () => {
+          if (c.local) {
+            this.input.value = "";
+            this.slash.hidden = true;
+            this.autosize();
+            void this.applyScopeSlash(c.name);
+            this.focus();
+            return;
+          }
           this.input.value = `/${c.name} `;
           this.slash.hidden = true;
           this.autosize();
@@ -2245,6 +2288,14 @@
 
     async send() {
       const text = this.input.value.trim();
+      const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
+      if (scopeCmd && !this.images.length) {
+        this.input.value = "";
+        this.slash.hidden = true;
+        this.autosize();
+        await this.applyScopeSlash(scopeCmd[1].toLowerCase());
+        return;
+      }
       if (!text && !this.images.length) return;
       const s = this.settings();
       if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) {
