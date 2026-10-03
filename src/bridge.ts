@@ -1044,6 +1044,13 @@ export const BOARD_BRIDGE_JS = `
     stop: function (threadId) {
       return agentCall({ op: "stop", threadId: agentText(threadId) }, AGENT_ASK_MS);
     },
+    /**
+     * Merge an idle thread's worktree branch into the branch it came from, and close the worktree:
+     * { ok, merged, message }. merged is false when the thread has no open worktree.
+     */
+    merge: function (threadId) {
+      return agentCall({ op: "merge", threadId: agentText(threadId) }, AGENT_ASK_MS);
+    },
     /** This page's threads, newest first: { ok, threads: [{ id, title, status, queued, activityAt, mode, model, cwd }] }. */
     threads: function () {
       return agentCall({ op: "threads" });

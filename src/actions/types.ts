@@ -18,6 +18,8 @@ export type ActionContext = {
   now: number;
   /** The page's template form values. */
   values: TemplateValues;
+  /** How a chat thread is doing, when the daemon runs agents. */
+  thread?(id: string): ThreadRunInfo;
 };
 
 export type ActionEvent = { name: string; data?: unknown };

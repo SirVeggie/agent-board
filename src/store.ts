@@ -42,7 +42,7 @@ import { normalizeSignalName } from "./signal.js";
 import { applyOps } from "./stateOps.js";
 import { normalizeEvents } from "./events.js";
 import { upgradeLegacyHtml } from "./legacyPages.js";
-import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionSet, type SweepContext } from "./actions/index.js";
+import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type SweepContext } from "./actions/index.js";
 import {
   TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
@@ -411,7 +411,13 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Run a template action: it reads the latest state and its ops apply all or nothing. */
-  runAction(idOrKey: string, name: string, args: unknown, caller: ActionCaller): { result: unknown; stateRevision: number; tab: Tab } {
+  runAction(
+    idOrKey: string,
+    name: string,
+    args: unknown,
+    caller: ActionCaller,
+    thread?: ActionContext["thread"]
+  ): { result: unknown; stateRevision: number; tab: Tab } {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
@@ -432,6 +438,7 @@ export class BoardStore extends EventEmitter {
       caller,
       now: Date.now(),
       values: tab.templateValues ?? {},
+      ...(thread ? { thread } : {}),
     });
     if (outcome.ops.length) {
       const write = this.writeState(tab.id, { ops: outcome.ops });

@@ -400,7 +400,9 @@ export async function startHttp(): Promise<http.Server> {
   /** Run a template action (see src/actions). Agents through page_action; pages through scribe.action. */
   app.post("/api/tabs/:id/action", (req, res) => {
     try {
-      const { result, stateRevision } = store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req));
+      const { result, stateRevision } = store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
+        agentHost ? agentHost.runInfo(id) : { exists: false }
+      );
       res.json({ result: result ?? null, stateRevision });
     } catch (err) {
       const message = (err as Error).message;

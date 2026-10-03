@@ -356,6 +356,7 @@ const { threads } = await scribe.agent.threads();          // this page's thread
 const { thread, reply: last } = await scribe.agent.get(threadId);
 scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
 await scribe.agent.stop(threadId);                         // stop the turn and drop queued messages
+await scribe.agent.merge(threadId);                        // idle Code thread: merge its worktree branch back, close the worktree
 const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts }] }, modes, approvals, defaults }
 const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)
 await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });

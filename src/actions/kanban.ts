@@ -48,10 +48,21 @@ const labels = (state: BoardState) => arr<Label>(state.labels);
 const cards = (state: BoardState) => arr<Card>(state.cards);
 const cardPath = (card: Card) => `cards/id=${card.id}`;
 
-/** The user asked the column's agent worker (settings.workers, set up on the page) to stop after its card. */
+/** An agent column's worker, set up on the page in settings.workers. */
+type Worker = { threadId?: string; stop?: boolean; run?: unknown; step?: { token: string; at: number } };
+
+/** How long a page holds a worker's step before another window may take over: covers a permission prompt. */
+const STEP_LEASE_MS = 15 * 60 * 1000;
+
+function worker(state: BoardState, columnId: string): Worker | undefined {
+  const settings = state.settings as { workers?: Record<string, Worker> } | undefined;
+  const w = settings?.workers?.[columnId];
+  return w && typeof w === "object" ? w : undefined;
+}
+
+/** The user asked the column's agent worker to stop after its card. */
 function workerStopRequested(state: BoardState, columnId: string): boolean {
-  const settings = state.settings as { workers?: Record<string, { stop?: unknown }> } | undefined;
-  return settings?.workers?.[columnId]?.stop === true;
+  return worker(state, columnId)?.stop === true;
 }
 
 function findCard(state: BoardState, ref: unknown): Card {
@@ -402,6 +413,38 @@ export const kanbanActions: ActionSet = {
         const col = args.to !== undefined ? findColumn(state, args.to) : (roleColumn(state, "review") ?? roleColumn(state, "done"));
         if (col) ops.push(...moveOps(state, card, col, ctx.now));
         return { ops, result: { num: card.num, column: col?.title ?? null, ...(text && !repeat ? {} : { handIn: "your earlier comment" }) } };
+      },
+    },
+    worker_step: {
+      description:
+        "The board's own bookkeeping for its agent workers; only the page calls it. Takes the column's worker for one step (start, or move on from its thread once that thread is done), so two windows don't both start the next agent.",
+      args: "{ column, from, token, start? }",
+      run(state, args, ctx) {
+        if (ctx.caller.by !== "user") throw new ActionError("worker_step is for the board page itself");
+        const col = findColumn(state, args.column);
+        const w = worker(state, col.id);
+        if (!w) throw new ActionError(`${col.title} has no agent worker`);
+        const token = str(args.token).trim();
+        if (!token) throw new ActionError("token is required");
+        if ((str(args.from) || null) !== (str(w.threadId) || null)) throw new ActionError("the worker has moved on");
+        if (args.start) {
+          // The page only starts a worker that isn't running, so a lease left behind is a window that went away mid-step.
+          if (w.run) throw new ActionError("the worker is already running");
+        } else {
+          if (!w.run) throw new ActionError("the worker is not running");
+          if (w.step && w.step.token !== token && w.step.at > ctx.now - STEP_LEASE_MS) throw new ActionError("another window is on it");
+        }
+        let lastTurn: { status: string; error?: string } | null = null;
+        if (w.threadId && ctx.thread) {
+          const info = ctx.thread(w.threadId);
+          if (info.exists) {
+            if (info.running || !info.lastTurn || info.lastTurn.status === "running") throw new ActionError("the agent is still working");
+            lastTurn = { status: info.lastTurn.status, ...(info.lastTurn.error ? { error: info.lastTurn.error } : {}) };
+          }
+        }
+        const value: Record<string, unknown> = { step: { token, at: ctx.now } };
+        if (args.start) Object.assign(value, { run: { since: ctx.now }, stop: null, error: null });
+        return { ops: [{ op: "merge", path: `settings/workers/${col.id}`, value }], result: { ok: true, lastTurn } };
       },
     },
   },

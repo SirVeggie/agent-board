@@ -143,6 +143,39 @@ test("list marks a column whose agent worker was asked to stop", () => {
   assert.equal(cols.find((c) => c.id === "in")?.stopRequested, undefined);
 });
 
+test("worker_step lets one window at a time move a worker on, once its thread is done", () => {
+  const threads: Record<string, ThreadRunInfo> = {
+    busy: { exists: true, running: true, title: "Busy" },
+    fresh: { exists: true, running: false, title: "Fresh" },
+    failed: { exists: true, running: false, title: "Failed", lastTurn: { status: "error", endedAt: 900, error: "rate limited" } },
+  };
+  const page = (now = 1000): ActionContext => ({ caller: { by: "user", label: "user" }, now, values: {}, thread: (id) => threads[id] ?? { exists: false } });
+  const withWorker = (w: Record<string, unknown>) => ({ ...board(), settings: { workers: { ready: { name: "Opus", ...w } } } });
+  const workerOf = (state: Record<string, unknown>) => (state.settings as { workers: Record<string, Record<string, unknown>> }).workers.ready;
+
+  assert.throws(() => run(withWorker({}), "worker_step", { column: "ready", from: null, token: "a", start: true }), /board page itself/);
+  assert.throws(() => run(withWorker({}), "worker_step", { column: "ready", from: null, token: "a" }, page()), /not running/);
+
+  const started = run(withWorker({ stop: true, error: "old" }), "worker_step", { column: "ready", from: null, token: "a", start: true }, page());
+  assert.deepEqual(workerOf(started.state).run, { since: 1000 });
+  assert.deepEqual(workerOf(started.state).step, { token: "a", at: 1000 });
+  assert.equal(workerOf(started.state).stop, undefined);
+  assert.equal(workerOf(started.state).error, undefined);
+  assert.throws(() => run(started.state, "worker_step", { column: "ready", from: null, token: "b" }, page()), /another window/);
+  assert.throws(() => run(started.state, "worker_step", { column: "ready", from: null, token: "b", start: true }, page()), /already running/);
+  run(started.state, "worker_step", { column: "ready", from: null, token: "b" }, page(1000 + 16 * 60 * 1000));
+  run(withWorker({ step: { token: "gone", at: 999 } }), "worker_step", { column: "ready", from: null, token: "b", start: true }, page());
+
+  const running = { run: { since: 1 } };
+  assert.throws(() => run(withWorker({ ...running, threadId: "busy" }), "worker_step", { column: "ready", from: "busy", token: "a" }, page()), /still working/);
+  assert.throws(() => run(withWorker({ ...running, threadId: "fresh" }), "worker_step", { column: "ready", from: "fresh", token: "a" }, page()), /still working/);
+  assert.throws(() => run(withWorker({ ...running, threadId: "failed" }), "worker_step", { column: "ready", from: "other", token: "a" }, page()), /moved on/);
+  const failed = run(withWorker({ ...running, threadId: "failed" }), "worker_step", { column: "ready", from: "failed", token: "a" }, page());
+  assert.deepEqual(failed.result, { ok: true, lastTurn: { status: "error", error: "rate limited" } });
+  const gone = run(withWorker({ ...running, threadId: "deleted" }), "worker_step", { column: "ready", from: "deleted", token: "a" }, page());
+  assert.deepEqual(gone.result, { ok: true, lastTurn: null });
+});
+
 test("the sweep releases a card whose thread failed and flags one whose thread went quiet", () => {
   let state: Record<string, unknown> = board();
   state = run(state, "claim", { card: 1 }, agent({ session: undefined, thread: "th_fail" })).state;

@@ -723,6 +723,8 @@
   .worker-btn:hover { background: rgba(224, 179, 74, .22); }
   .worker-btn svg { width: 10px; height: 10px; fill: currentColor; }
   .worker-btn:disabled { opacity: .6; }
+  .worker-btn.waiting { color: var(--muted); background: rgba(255, 255, 255, .05); }
+  .worker-btn.waiting .pulse { background: var(--muted); }
   .worker-error { margin: -2px 10px 6px; font-size: 12px; color: var(--danger); }
   .worker-error button { color: var(--text); text-decoration: underline; padding: 0; margin-left: 4px; }
   .workers-section { border-top: 1px solid rgba(255, 255, 255, .06); padding-top: 12px; }
@@ -907,7 +909,7 @@
   <div class="confirm-back hidden" id="workerBack">
     <div class="confirm-box worker-box" role="dialog" aria-modal="true" aria-labelledby="workerTitle">
       <h3 id="workerTitle">Agent worker</h3>
-      <p id="workerIntro">An agent chat that takes this column's cards one by one, following your instructions.</p>
+      <p id="workerIntro">Takes this column's cards one by one, following your instructions, and waits for more.</p>
       <div class="worker-form" id="workerForm"></div>
       <p class="worker-note" id="workerNote"></p>
       <div class="confirm-row">
@@ -1525,6 +1527,7 @@
   function render() {
     if (drag) return;
     refreshWorkerThreads();
+    scheduleWorkers();
     renderToolbar();
     renderBoard();
     if (openId) renderModal();
@@ -3280,19 +3283,29 @@
   }, true);
 
   // ---------- agent workers ----------
-  // An agent column can have a worker: an agent chat this board starts with the user's
-  // instructions, which then takes the column's cards one at a time and waits for more. Its setup
-  // is settings.workers[columnId]; the thread runs in Scribe's agent chat, scoped to this page.
+  // An agent column can have a worker: while it runs (settings.workers[columnId].run), the board
+  // starts a fresh agent chat for each card, so a long run doesn't carry one ever-growing context.
+  // The agent may take a closely related card in the same chat, and ends its turn otherwise. When
+  // a chat ends, the board merges its worktree branch (if it has one), so the next agent starts
+  // from the latest work, then starts the next card or waits for one. Every open window runs this
+  // code: the worker_step action lets one of them take each step. Anything unexpected (a failed
+  // turn, an unfinished card, a merge that doesn't go through) pauses the worker with its reason.
   // "Stop when its card is done" sets stop on the worker (list shows it as stopRequested on the
-  // column) and logs worker_stop, which wakes a worker waiting for cards.
+  // column) and logs worker_stop.
   var FOLDER_MODES = { code: true, plan: true };
+  /** Cards one agent chat may take before the board starts a fresh one. */
+  var MAX_CARDS_PER_AGENT = 3;
+  /** Matches the worker_step action's lease. */
+  var STEP_LEASE_MS = 15 * 60 * 1000;
   var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
   var PLAY_SVG = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z"/></svg>';
   var agentOptions = null;
   /** Thread id -> { status, queued } as Scribe last reported it. */
   var threadStatus = {};
   var launching = {};
+  var advancing = {};
   var workerErrors = {};
+  var workersTimer = 0;
   var workerCol = null;
   var stopCol = null;
 
@@ -3315,12 +3328,22 @@
     var t = w && w.threadId ? threadStatus[w.threadId] : null;
     return Boolean(t && (t.status !== "idle" || t.queued > 0));
   }
+  /** Started and not stopped: working on a card, or waiting for one. */
+  function workerOn(w) { return Boolean(w && w.run); }
   function saveWorker(colId, patch) {
     var all = Object.assign({}, workers());
     var next = Object.assign({}, all[colId] || {}, patch);
     Object.keys(next).forEach(function (k) { if (next[k] == null || next[k] === "" || next[k] === false) delete next[k]; });
     all[colId] = next;
     scribe.set({ settings: Object.assign({}, settings(), { workers: all }) });
+  }
+  /**
+   * Change a worker's run fields on the latest state (null removes one), whatever this window has
+   * seen: worker_step and other windows write them too.
+   */
+  function patchWorker(colId, patch) {
+    if (!worker(colId)) return;
+    scribe.update([{ op: "merge", path: "settings/workers/" + colId, value: patch }]);
   }
   function removeWorker(colId) {
     var all = Object.assign({}, workers());
@@ -3336,6 +3359,7 @@
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (!workerReady(w)) parts.push(FOLDER_MODES[mode] && !w.cwd ? "needs a folder" : "needs instructions");
     else if (workerRunning(w)) parts.push(w.stop ? "stopping" : "working");
+    else if (workerOn(w)) parts.push("waiting for cards");
     return parts.join(" · ");
   }
 
@@ -3345,9 +3369,10 @@
     Object.keys(workers()).forEach(function (colId) {
       var id = worker(colId).threadId;
       if (!id || threadStatus[id]) return;
-      threadStatus[id] = { status: "idle", queued: 0 };
+      threadStatus[id] = { status: "idle", queued: 0, unknown: true };
       scribe.agent.get(id).then(function (r) {
         if (r && r.ok && r.thread) threadStatus[id] = { status: r.thread.status, queued: r.thread.queued || 0 };
+        else if (r && r.error === "not_found") threadStatus[id] = { status: "idle", queued: 0 };
         render();
       });
     });
@@ -3355,10 +3380,6 @@
   if (scribe.agent && scribe.agent.onChange) {
     scribe.agent.onChange(function (t) {
       threadStatus[t.id] = { status: t.status, queued: t.queued || 0 };
-      Object.keys(workers()).forEach(function (colId) {
-        var w = worker(colId);
-        if (w.threadId === t.id && w.stop && !workerRunning(w)) saveWorker(colId, { stop: null });
-      });
       render();
     });
   }
@@ -3367,22 +3388,31 @@
     var h = document.querySelector("h1");
     return h ? h.textContent.trim() : "Board";
   }
-  function workerPrompt(col, w) {
+  function workerPrompt(col, w, c) {
     var name = str(w.name).trim();
     var colRef = JSON.stringify(col.id);
-    return [
-      "You are the agent worker for the \"" + col.title + "\" column of the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + ").",
+    var lines = [
+      "You are an agent worker for the \"" + col.title + "\" column of the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + ").",
       "",
       "The user's instructions:",
       str(w.instructions).trim(),
       "",
-      "How to work the column:",
+      "Your card: #" + c.num + " " + c.title,
+      "",
+      "How to work:",
       "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with the first result; follow it.",
-      "- Take cards from this column only (column id " + colRef + "), one at a time: list { column: " + colRef + " }, get the card, claim it" +
-        (name ? " with assignee \"" + name + "\"" : "") + ", do the work, then finish it, or update its status or release it when you are blocked.",
-      "- Before you take each card, list the column. If this column in the result has stopRequested: true, the user asked you to stop: take no more cards and end your turn with a short summary.",
-      "- When the column is empty, wait with page_wait { id: \"" + scribe.id + "\", events: \"card_ready,worker_stop\", where: { columnId: " + colRef + " } }, passing the previous cursor as after. card_ready means a card arrived; worker_stop means stop as above. If the wait times out, wait again.",
-    ].join("\n");
+      "- get the card, claim it" + (name ? " with assignee \"" + name + "\"" : "") + ", do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
+    ];
+    if (FOLDER_MODES[workerMode(w)] && w.worktree) {
+      lines.push("- You work in a git worktree, on a branch of your own. Commit your work. Before you end your turn, rebase onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list) and resolve any conflicts, so it merges cleanly. When your turn ends, the board merges your branch, and the next agent starts from there.");
+    }
+    if (w.context === "fresh") {
+      lines.push("- Work on this card only, then end your turn. The board starts a fresh agent for the next card.");
+    } else {
+      lines.push("- When it is finished, list the column (list { column: " + colRef + " }). If the column shows stopRequested: true, end your turn. If one of its cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way, up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
+    }
+    lines.push("- Don't wait for new cards; the board does that. End your turn with a short summary.");
+    return lines.join("\n");
   }
   function launchError(r) {
     var error = r && r.error;
@@ -3393,32 +3423,150 @@
     if (/^(unknown_|needs_folder|no_provider)/.test(str(error))) return "Check the worker's setup (" + error + ").";
     return error ? "Could not launch: " + error : "Could not launch the agent.";
   }
-  function launchWorker(col) {
-    var w = worker(col.id);
-    if (!workerReady(w)) { openWorker(col.id); return; }
+  /** The column's next card for a worker: top first, skipping held ones, blocked ones the user hasn't answered, and ones waiting on unfinished cards. */
+  function nextCard(colId) {
+    return cardsIn(colId).filter(function (c) {
+      if (c.claim && !c.claim.stale) return false;
+      if (c.status && c.status.kind === "blocked") {
+        var last = c.comments[c.comments.length - 1];
+        if (!last || last.by !== "user") return false;
+      }
+      return !c.blockedBy.some(function (id) {
+        var b = card(id);
+        var bCol = b && colOf(b);
+        return b && !b.archived && !(bCol && (bCol.role === "done" || bCol.role === "review"));
+      });
+    })[0] || null;
+  }
+
+  function scheduleWorkers() {
+    clearTimeout(workersTimer);
+    workersTimer = setTimeout(advanceWorkers, 400);
+  }
+  /** Move on any running worker whose agent is done, or that waits and has a card to take. */
+  function advanceWorkers() {
+    if (!AGENT_MODE || !hasWorkerApi()) return;
+    Object.keys(workers()).forEach(function (colId) {
+      var col = column(colId), w = worker(colId);
+      if (!col || col.role !== "agent" || !workerOn(w) || advancing[colId] || launching[colId]) return;
+      if (w.step && Number(w.step.at) > Date.now() - STEP_LEASE_MS) return;
+      if (w.threadId) {
+        var t = threadStatus[w.threadId];
+        if (!t || t.unknown || t.status !== "idle" || t.queued > 0) return;
+      } else if (!w.stop && !nextCard(colId)) {
+        return;
+      }
+      stepWorker(colId, false);
+    });
+  }
+
+  /** One step, held through worker_step: wrap up the last agent (check, merge), then start the next card, wait, or stop. */
+  function stepWorker(colId, start) {
+    var w = worker(colId);
+    var from = str(w && w.threadId) || null;
+    // A click goes on from a pause; it only wraps up a chat whose merge didn't go through.
+    var wrap = Boolean(from && (!start || w.merge === from));
+    advancing[colId] = true;
+    var since = start ? Date.now() : Number(w.run.since) || Date.now();
+    return scribe.action("worker_step", { column: colId, from: from, token: newId("st"), start: Boolean(start) }).then(
+      function (r) {
+        return (wrap ? wrapUp(colId, from, start ? null : r) : Promise.resolve(true)).then(function (ok) {
+          if (ok) return nextStep(colId, since, start);
+        });
+      },
+      function (err) {
+        // Another window took the step, or the agent isn't done after all. A click says why.
+        if (start) workerErrors[colId] = "Could not start: " + str(err && err.message);
+      }
+    ).then(function () {
+      delete advancing[colId];
+      delete launching[colId];
+      render();
+    });
+  }
+
+  /**
+   * The last agent's chat ended: pause on a failed turn or a card it didn't finish (r is null on
+   * a click, which goes on from such a pause), else merge its worktree. Resolves whether to go on.
+   */
+  function wrapUp(colId, threadId, r) {
+    var w = worker(colId), run = w.run || {};
+    if (r) {
+      var turn = r.lastTurn;
+      if (turn && (turn.status === "error" || turn.status === "cancelled")) {
+        endRun(colId, "The agent's turn " + (turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped") + ". Its chat is kept; press ▶ to go on with the next card.", true);
+        return Promise.resolve(false);
+      }
+      var held = liveCards().filter(function (c) { return c.claim && !c.claim.stale && c.claim.thread === threadId; });
+      if (held.length) {
+        endRun(colId, "The agent ended without finishing #" + held.map(function (c) { return c.num; }).join(", #") + ". Its chat is kept; press ▶ to go on with the next card.", true);
+        return Promise.resolve(false);
+      }
+      var given = run.card ? byNum(run.card) : null;
+      if (given && given.col === colId && (Number(given.movedAt) || 0) <= (Number(run.startedAt) || 0)) {
+        endRun(colId, "The agent didn't take #" + given.num + ". Its chat is kept; press ▶ to try again.", true);
+        return Promise.resolve(false);
+      }
+    }
+    if (!FOLDER_MODES[workerMode(w)]) return Promise.resolve(true);
+    return scribe.agent.merge(threadId).then(function (m) {
+      if (m && (m.ok || m.error === "not_found")) return true;
+      var why = m && m.error === "merge_failed" ? m.message : launchError(m);
+      endRun(colId, "Could not merge the agent's branch: " + why + " Sort it out from its chat's branch menu, or press ▶ to try again.", false);
+      return false;
+    });
+  }
+
+  /** start: the step began with a click, which already cleared stop in the daemon (this window may not have that yet). */
+  function nextStep(colId, since, start) {
+    var w = worker(colId);
+    if (!w) return;
+    if (w.stop && !start) { endRun(colId, null, true); return; }
+    var c = nextCard(colId);
+    if (!c) {
+      patchWorker(colId, { threadId: null, step: null, merge: null, run: { since: since } });
+      return;
+    }
+    return startCard(colId, c, since);
+  }
+
+  function startCard(colId, c, since) {
+    var col = column(colId), w = worker(colId);
     var mode = workerMode(w);
-    var opts = { title: (str(w.name) || "Agent") + " · " + col.title, mode: mode };
+    var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
     ["provider", "model", "effort", "show"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
     if (FOLDER_MODES[mode]) {
       opts.cwd = w.cwd;
       if (w.approval) opts.approval = w.approval;
       if (w.worktree) opts.worktree = true;
     }
-    // First thing in the click: Scribe checks that the click reached it.
-    var started = scribe.agent.start(workerPrompt(col, w), opts);
+    var startedAt = Date.now();
+    return scribe.agent.start(workerPrompt(col, w, c), opts).then(function (r) {
+      if (!r || !r.ok) {
+        endRun(colId, launchError(r), true);
+        return;
+      }
+      threadStatus[r.threadId] = { status: "running", queued: 0 };
+      patchWorker(colId, { threadId: r.threadId, step: null, merge: null, run: { since: since, card: c.num, startedAt: startedAt } });
+    });
+  }
+
+  /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
+  function endRun(colId, error, clearThread) {
+    var w = worker(colId);
+    var patch = { run: null, step: null, stop: null, error: error || null, merge: null };
+    if (clearThread) patch.threadId = null;
+    else if (w && w.threadId) patch.merge = w.threadId;
+    patchWorker(colId, patch);
+  }
+
+  function launchWorker(col) {
+    var w = worker(col.id);
+    if (!workerReady(w)) { openWorker(col.id); return; }
     launching[col.id] = true;
     delete workerErrors[col.id];
     render();
-    started.then(function (r) {
-      delete launching[col.id];
-      if (!r || !r.ok) {
-        workerErrors[col.id] = launchError(r);
-      } else {
-        threadStatus[r.threadId] = { status: "running", queued: 0 };
-        saveWorker(col.id, { threadId: r.threadId, stop: null, startedAt: Date.now() });
-      }
-      render();
-    });
+    stepWorker(col.id, true);
   }
   function workerButton(col) {
     var w = worker(col.id);
@@ -3434,6 +3582,11 @@
       btn.appendChild(el("span", "pulse"));
       btn.appendChild(document.createTextNode(w.stop ? "Stopping" : str(w.name) || "Working"));
       btn.title = (w.stop ? "Stops when its card is done. " : "") + "Click to stop the agent";
+    } else if (workerOn(w)) {
+      btn.classList.add("waiting");
+      btn.appendChild(el("span", "pulse"));
+      btn.appendChild(document.createTextNode(w.stop ? "Stopping" : "Waiting"));
+      btn.title = str(w.name || "The agent") + " starts on the next card that comes in. Click to stop.";
     } else {
       btn.innerHTML = PLAY_SVG;
       btn.appendChild(document.createTextNode(str(w.name) || "Start"));
@@ -3442,17 +3595,24 @@
     btn.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
     btn.addEventListener("click", function (e) {
       e.stopPropagation();
-      if (workerRunning(worker(col.id))) openStop(col.id);
+      var now = worker(col.id);
+      if (workerRunning(now) || workerOn(now)) openStop(col.id);
       else launchWorker(col);
     });
     return btn;
   }
   function workerErrorRow(col) {
-    if (!workerErrors[col.id]) return null;
-    var row = el("div", "worker-error", workerErrors[col.id]);
+    var w = worker(col.id);
+    var text = workerErrors[col.id] || str(w && w.error);
+    if (!text) return null;
+    var row = el("div", "worker-error", text);
     var dismiss = el("button", null, "Dismiss");
     dismiss.type = "button";
-    dismiss.addEventListener("click", function () { delete workerErrors[col.id]; render(); });
+    dismiss.addEventListener("click", function () {
+      delete workerErrors[col.id];
+      if (worker(col.id) && worker(col.id).error) patchWorker(col.id, { error: null });
+      render();
+    });
     row.appendChild(dismiss);
     return row;
   }
@@ -3463,8 +3623,13 @@
     var col = column(colId), w = worker(colId);
     if (!col || !w) return;
     stopCol = colId;
-    $("stopText").textContent = "\"" + (str(w.name) || "The agent") + "\" is working on " + col.title + ". Stopping now cancels its turn; a card it holds goes back to the column.";
-    $("stopLater").classList.toggle("hidden", Boolean(w.stop));
+    var working = workerRunning(w);
+    var who = "\"" + (str(w.name) || "The agent") + "\"";
+    $("stopText").textContent = working
+      ? who + " is working on " + col.title + ". Stopping now cancels its turn; a card it holds goes back to the column, and its chat keeps any worktree for you to merge or leave."
+      : who + " is waiting for cards in " + col.title + ".";
+    $("stopLater").classList.toggle("hidden", Boolean(w.stop) || !working);
+    $("stopNow").textContent = working ? "Stop now" : "Stop";
     stopBack.classList.remove("hidden");
     $("stopCancel").focus();
   }
@@ -3477,7 +3642,7 @@
   $("stopLater").addEventListener("click", function () {
     var col = column(stopCol);
     if (col) {
-      saveWorker(col.id, { stop: true });
+      patchWorker(col.id, { stop: true });
       scribe.signal("worker_stop", { column: col.title, columnId: col.id, role: "agent" });
     }
     closeStop();
@@ -3487,8 +3652,12 @@
     var w = worker(stopCol);
     var colId = stopCol;
     closeStop();
-    if (!w || !w.threadId) return;
-    scribe.agent.stop(w.threadId).then(function (r) {
+    if (!w) return;
+    var threadId = workerRunning(w) ? w.threadId : null;
+    endRun(colId, null, true);
+    render();
+    if (!threadId) return;
+    scribe.agent.stop(threadId).then(function (r) {
       if (!r || !r.ok) workerErrors[colId] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
       render();
     });
@@ -3598,6 +3767,12 @@
     instructions.addEventListener("input", function () { setLater({ instructions: instructions.value }); });
     row("Instructions", instructions, null, true);
 
+    row("Context", enhanced(workerSelect([
+      ["", "Fresh for each card, kept for related ones"],
+      ["fresh", "Fresh for every card"],
+    ], str(w.context), "Context", function (v) { set({ context: v }); })),
+      "Each card gets a new agent chat with a clean context, so a long run doesn't pay for an ever-growing one. With the first choice, the agent decides to take a closely related card in the same chat (up to " + MAX_CARDS_PER_AGENT + ").");
+
     var providers = (opts.providers || []).filter(function (p) { return p.available; });
     var provider = str(w.provider);
     var effectiveProvider = provider || str(defaults.provider);
@@ -3647,8 +3822,8 @@
       wtBox.checked = Boolean(w.worktree);
       wtBox.addEventListener("change", function () { set({ worktree: wtBox.checked }); });
       wt.appendChild(wtBox);
-      wt.appendChild(document.createTextNode("Work in a git worktree of its own"));
-      row("", wt);
+      wt.appendChild(document.createTextNode("Give each agent a git worktree of its own"));
+      row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through pauses the worker.");
     }
     row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
     renderWorkerNote(colId);
@@ -3663,7 +3838,7 @@
     var ready = workerReady(w);
     note.classList.toggle("warn", !ready);
     note.textContent = ready
-      ? "The column's header has a button to start it. Changes apply the next time it starts."
+      ? "The column's header has a button to start it. Changes apply to the next agent it starts. The board starts those itself, so keep it open while the worker runs (Scribe asks once before it may)."
       : FOLDER_MODES[workerMode(w)] && w && str(w.instructions).trim()
         ? "Pick a folder to show the start button."
         : "Write instructions to show the start button on the column.";

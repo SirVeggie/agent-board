@@ -4541,6 +4541,21 @@
         await api("POST", `/threads/${encodeURIComponent(thread.id)}/cancel`);
         return { ok: true };
       }
+      case "merge": {
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        if (!openWorktree(thread)) return { ok: true, merged: false, message: "The thread has no open worktree." };
+        if (thread.status !== "idle") return { ok: false, error: "busy" };
+        const may = await pageMayWrite(tab, activated);
+        if (!may.ok) return may;
+        const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
+        if (!folder.ok) return folder;
+        try {
+          const res = await api("POST", `/threads/${encodeURIComponent(thread.id)}/worktree`, { action: "merge" });
+          return { ok: true, merged: true, message: res.message };
+        } catch (err) {
+          return { ok: false, error: "merge_failed", message: String(err?.message || err) };
+        }
+      }
       default:
         return { ok: false, error: "unknown_op" };
     }
