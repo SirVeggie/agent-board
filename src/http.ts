@@ -1153,10 +1153,9 @@ function callerOf(req: express.Request): ActionCaller {
   }
   const session = req.get(SESSION_HEADER)?.slice(0, 40);
   const thread = req.get(THREAD_HEADER)?.slice(0, 60);
-  const threadTitle = thread && agentHost ? agentHost.runInfo(thread) : undefined;
-  const label =
-    threadTitle && threadTitle.exists ? `Scribe chat: ${threadTitle.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
-  return { by: "agent", label, ...(session ? { session } : {}), ...(thread ? { thread } : {}) };
+  const chat = thread && agentHost ? agentHost.getThread(thread) : null;
+  const label = chat ? `Scribe chat: ${chat.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
+  return { by: "agent", label, ...(chat?.provider ? { provider: chat.provider } : {}), ...(session ? { session } : {}), ...(thread ? { thread } : {}) };
 }
 
 let sweepQueued: NodeJS.Timeout | null = null;

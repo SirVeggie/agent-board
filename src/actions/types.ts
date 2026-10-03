@@ -5,6 +5,8 @@ export type ActionCaller = {
   by: "user" | "agent";
   /** Short name for the holder of a claim, e.g. "Claude Code" or a thread title. */
   label?: string;
+  /** In-app chat provider id (`claude` | `cursor`), when Scribe started the agent. */
+  provider?: string;
   /** One MCP server process. Every call it makes counts as a sign of life for its claims. */
   session?: string;
   /** Scribe chat thread the agent runs in. */

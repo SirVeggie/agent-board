@@ -40,12 +40,22 @@ test("claim moves a card to working, records the holder, and refuses a second ag
   const { state } = run(board(), "claim", { card: "#2", text: "Fixing it" });
   const c = card(state, 2);
   assert.equal(c.col, "work");
-  assert.equal(c.assignee, "agent");
+  assert.equal(c.assignee, "Claude Code");
   assert.deepEqual(c.status, { kind: "working", text: "Fixing it" });
   assert.equal((c.claim as { holder: string }).holder, "Claude Code");
   assert.throws(() => run(state, "claim", { card: 2 }, agent({ session: "s2" })), /held by Claude Code/);
   // The same session may claim again.
   run(state, "claim", { card: 2 }, agent());
+});
+
+test("claim assignee uses the arg, else Claude/Cursor for in-app threads", () => {
+  const named = run(board(), "claim", { card: 1, assignee: "Grok" });
+  assert.equal(card(named.state, 1).assignee, "Grok");
+  const cursor = run(board(), "claim", { card: 1 }, agent({ label: "Scribe chat: Grok Issues", provider: "cursor" }));
+  assert.equal(card(cursor.state, 1).assignee, "Cursor");
+  const claude = run(board(), "claim", { card: 1 }, agent({ label: "Scribe chat: Board", provider: "claude" }));
+  assert.equal(card(claude.state, 1).assignee, "Claude");
+  assert.throws(() => run(board(), "claim", { card: 1, assignee: "  " }), /assignee is empty/);
 });
 
 test("finish comments, clears the claim, and hands the card to review", () => {

@@ -176,6 +176,20 @@ function sameHolder(claim: Claim, ctx: ActionContext): boolean {
   return Boolean(claim.session && claim.session === caller.session);
 }
 
+const PROVIDER_ASSIGNEE: Record<string, string> = { claude: "Claude", cursor: "Cursor" };
+
+/** Who shows on the card: an explicit arg, else the MCP client name, else Claude/Cursor from the in-app thread. */
+function claimAssignee(args: Record<string, unknown>, ctx: ActionContext): string {
+  if (args.assignee !== undefined) {
+    const name = str(args.assignee).trim().slice(0, 60);
+    if (!name) throw new ActionError("assignee is empty");
+    return name;
+  }
+  const label = ctx.caller.label?.trim() ?? "";
+  if (label && label !== "agent" && !label.startsWith("Scribe chat:")) return label.slice(0, 60);
+  return PROVIDER_ASSIGNEE[ctx.caller.provider ?? ""] || "agent";
+}
+
 export const kanbanActions: ActionSet = {
   actions: {
     list: {
@@ -314,8 +328,8 @@ export const kanbanActions: ActionSet = {
     },
     claim: {
       description:
-        "Start work on a card: moves it to the working column, sets assignee \"agent\" and a working status, and records you as its holder. Refused while another live agent holds it. If your thread or session stops, Scribe releases the card for you.",
-      args: "{ card, text? }",
+        "Start work on a card: moves it to the working column, sets assignee (your name, or assignee if you pass one) and a working status, and records you as its holder. Refused while another live agent holds it. If your thread or session stops, Scribe releases the card for you.",
+      args: "{ card, text?, assignee? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);
         if (card.claim && !card.claim.stale && !sameHolder(card.claim, ctx)) {
@@ -329,7 +343,7 @@ export const kanbanActions: ActionSet = {
             op: "merge",
             path: cardPath(card),
             value: {
-              assignee: "agent",
+              assignee: claimAssignee(args, ctx),
               status: { kind: "working", text: str(args.text) || "Working on it" },
               claim: claimFor(ctx, ctx.now),
             },
