@@ -191,6 +191,16 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // A subagent or background command, by the id of the tool item that started it.
+  router.post(
+    "/threads/:id/tasks/:itemId/stop",
+    wrap(async (req) => {
+      await host.stopTask(req.params.id, req.params.itemId);
+      return { ok: true };
+    })
+  );
+  router.post("/threads/:id/tasks/:itemId/background", wrap((req) => host.backgroundTask(req.params.id, req.params.itemId)));
+
   // Enter on an empty composer while a turn runs: steer the first queued message in (again: send it now).
   router.post("/threads/:id/steer", wrap((req) => host.steer(req.params.id)));
 

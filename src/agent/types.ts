@@ -86,6 +86,8 @@ export type ThreadView = Thread & {
   status: RunStatus;
   unread: boolean;
   queued: number;
+  /** Subagents and commands still working in the background, after or beside the current turn. */
+  background: number;
   stats: { turns: number; files: number; added: number; removed: number };
 };
 
@@ -168,6 +170,23 @@ export type ContextChip =
   | { kind: "file"; path: string }
   | { kind: "selection"; text: string; source?: string };
 
+/** A provider task (Claude's subagents and background commands), as the tool that started it shows it. */
+export type TaskInfo = {
+  id: string;
+  /** "agent" for subagents, "command" for background shell commands, or the provider's own type. */
+  type: string;
+  status: "running" | "done" | "error" | "stopped";
+  /** Runs without blocking the turn; it may still be working after the turn ends. */
+  background?: boolean;
+  /** One line on what it is doing now, or how it ended. */
+  summary?: string;
+  lastTool?: string;
+  tokens?: number;
+  toolUses?: number;
+  durationMs?: number;
+  endedAt?: number;
+};
+
 type ItemBase = {
   id: string;
   threadId: string;
@@ -208,6 +227,8 @@ export type ItemBody =
       diff?: string;
       exitCode?: number;
       parentToolId?: string;
+      /** A subagent or background command this tool started; it can outlive the tool call and the turn. */
+      task?: TaskInfo;
       startedAt: number;
       endedAt?: number;
     }

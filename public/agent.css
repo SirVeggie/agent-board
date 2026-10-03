@@ -967,6 +967,89 @@ button.ag-tool-head:hover {
   flex-direction: column;
 }
 
+.ag-subtools > .ag-md {
+  margin: 3px 0 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* subagents and background commands */
+
+.ag-task-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--ag-sunken);
+}
+
+.ag-task-badge.ts-running {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ag-task-badge.ts-done {
+  color: var(--ag-ok);
+}
+
+.ag-task-badge.ts-error {
+  color: var(--danger);
+}
+
+.ag-task-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px 22px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ag-task-line[hidden] {
+  display: none;
+}
+
+.ag-task-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-tool.ts-running .ag-task-summary {
+  color: var(--text);
+}
+
+.ag-task-usage {
+  flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ag-task-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ag-task-brief-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.ag-task-brief .ag-md {
+  font-size: 12.5px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--ag-sunken);
+  border-radius: 7px;
+  padding: 7px 9px;
+}
+
 .ag-inline-diff-head {
   display: flex;
   align-items: center;

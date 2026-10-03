@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { log } from "../../log.js";
-import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind } from "../types.js";
+import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { isPlainRecord } from "../types.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
@@ -334,6 +334,15 @@ class ClaudeSession implements ProviderSession {
   private buffer: SDKMessage[] = [];
   /** A dropped steer that started anyway: interrupted, and its frames ignored until its result. */
   private swallowing: string | null = null;
+  /**
+   * Tool calls started in the current turn. Subagent frames whose parent is not among them belong
+   * to a subagent from an earlier turn, still working in the background: only its task row updates.
+   */
+  private turnTools = new Set<string>();
+  /** Live tasks (subagents, background commands) by task id, to the tool call that started them. */
+  private tasks = new Map<string, string>();
+  /** Background tasks still working; while there are any, the idle timer leaves the process alone. */
+  private backgroundLive = new Set<string>();
 
   constructor(
     private thread: Thread,
@@ -357,7 +366,8 @@ class ClaudeSession implements ProviderSession {
     const q = this.query;
     if (!q || !this.live) return;
     if (this.live.key !== this.restartKey(thread)) {
-      if (!this.sink && !this.carry) this.close();
+      // Background agents would die with the process; the next turn restarts it instead.
+      if (!this.sink && !this.carry && !this.backgroundLive.size) this.close();
       return;
     }
     if (thread.model !== this.live.model) {
@@ -406,6 +416,11 @@ class ClaudeSession implements ProviderSession {
       ...(thread.effort ? { effort: thread.effort as EffortLevel } : {}),
       thinking: { type: "adaptive", display: "summarized" },
       includePartialMessages: true,
+      // Subagents: their text shows nested under the tool call that started them, with a live one-line
+      // summary, and Stop spares background agents (each has its own stop button).
+      forwardSubagentText: true,
+      agentProgressSummaries: true,
+      perTaskStopAffordance: true,
       mcpServers: { [BOARD_SERVER]: { type: "stdio", command, args, env } },
       settingSources: board ? ["user"] : ["user", "project", "local"],
       systemPrompt: { type: "preset", preset: "claude_code", append: this.instructions },
@@ -577,8 +592,17 @@ class ClaudeSession implements ProviderSession {
     } catch (err) {
       log(`Claude warm-up failed: ${(err as Error).message}`);
     }
+    this.armIdle();
+  }
+
+  /** Close the process after a quiet spell, but not while background agents are still working in it. */
+  private armIdle(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.backgroundLive.size || this.sink) this.armIdle();
+      else this.close();
+    }, IDLE_CLOSE_MS);
   }
 
   async run(input: TurnInput, sink: RunSink, opts?: { adopt?: string }): Promise<TurnResult> {
@@ -589,6 +613,7 @@ class ClaudeSession implements ProviderSession {
     this.instructions = input.instructions;
     this.cancelled = false;
     this.sink = sink;
+    this.turnTools.clear();
     if (opts?.adopt) return this.adopt(opts.adopt);
     this.carry = null;
     this.buffer = [];
@@ -618,7 +643,7 @@ class ClaudeSession implements ProviderSession {
       return { status: "error", error: (err as Error).message };
     } finally {
       this.sink = null;
-      this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
+      this.armIdle();
     }
   }
 
@@ -638,7 +663,71 @@ class ClaudeSession implements ProviderSession {
       return await done;
     } finally {
       this.sink = null;
-      this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS);
+      this.armIdle();
+    }
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    if (!this.query) throw new Error("The agent is not running");
+    await this.query.stopTask(taskId);
+  }
+
+  async backgroundTask(toolId: string): Promise<boolean> {
+    if (!this.query) return false;
+    return this.query.backgroundTasks(toolId);
+  }
+
+  /** Subagent and background-command lifecycle frames, turned into updates on the tool call that started each one. */
+  private onTask(m: Record<string, unknown>): void {
+    const taskId = typeof m.task_id === "string" ? m.task_id : "";
+    const toolId = typeof m.tool_use_id === "string" ? m.tool_use_id : taskId ? this.tasks.get(taskId) : undefined;
+    const report = (patch: Partial<TaskInfo>) => {
+      if (toolId) this.ctx.task?.(this.thread.id, toolId, patch);
+    };
+    const usage = isPlainRecord(m.usage) ? m.usage : null;
+    const usagePatch: Partial<TaskInfo> = usage
+      ? {
+          ...(typeof usage.total_tokens === "number" ? { tokens: usage.total_tokens } : {}),
+          ...(typeof usage.tool_uses === "number" ? { toolUses: usage.tool_uses } : {}),
+          ...(typeof usage.duration_ms === "number" ? { durationMs: usage.duration_ms } : {}),
+        }
+      : {};
+    switch (m.subtype) {
+      case "task_started": {
+        // Housekeeping tasks (watchers and the like) are not shown.
+        if (m.skip_transcript === true || m.ambient === true || !taskId || !toolId) return;
+        this.tasks.set(taskId, toolId);
+        const type = m.task_type === "local_agent" ? "agent" : m.task_type === "local_bash" ? "command" : String(m.task_type ?? "agent");
+        report({ id: taskId, type, status: "running", background: m.is_backgrounded === true });
+        return;
+      }
+      case "task_progress":
+        if (!this.tasks.has(taskId)) return;
+        report({ ...(typeof m.summary === "string" && m.summary ? { summary: m.summary } : {}), ...(typeof m.last_tool_name === "string" ? { lastTool: m.last_tool_name } : {}), ...usagePatch });
+        return;
+      case "task_updated": {
+        if (!this.tasks.has(taskId) || !isPlainRecord(m.patch)) return;
+        const patch = m.patch;
+        const status = patch.status === "completed" ? "done" : patch.status === "failed" ? "error" : patch.status === "killed" ? "stopped" : undefined;
+        report({
+          ...(typeof patch.is_backgrounded === "boolean" ? { background: patch.is_backgrounded } : {}),
+          ...(status ? { status, endedAt: Date.now() } : {}),
+          ...(typeof patch.error === "string" && patch.error ? { summary: patch.error } : {}),
+        });
+        return;
+      }
+      case "task_notification": {
+        if (!this.tasks.has(taskId)) return;
+        this.tasks.delete(taskId);
+        const status = m.status === "completed" ? "done" : m.status === "failed" ? "error" : "stopped";
+        report({ status, endedAt: Date.now(), ...(typeof m.summary === "string" && m.summary ? { summary: m.summary } : {}), ...usagePatch });
+        return;
+      }
+      case "background_tasks_changed":
+        this.backgroundLive = new Set(
+          (Array.isArray(m.tasks) ? m.tasks : []).filter((t) => isPlainRecord(t) && t.ambient !== true && typeof t.task_id === "string").map((t) => String((t as Record<string, unknown>).task_id))
+        );
+        return;
     }
   }
 
@@ -669,6 +758,11 @@ class ClaudeSession implements ProviderSession {
     this.buffer = [];
     this.swallowing = null;
     this.turnOpen = false;
+    for (const toolId of this.tasks.values()) {
+      this.ctx.task?.(this.thread.id, toolId, { status: "stopped", summary: "Stopped: the agent's process ended", endedAt: Date.now() });
+    }
+    this.tasks.clear();
+    this.backgroundLive.clear();
     if (q) {
       try {
         q.close();
@@ -691,7 +785,9 @@ class ClaudeSession implements ProviderSession {
     opts: { signal: AbortSignal; suggestions?: unknown[]; title?: string; decisionReason?: string; toolUseID?: string; blockedPath?: string }
   ): Promise<PermissionResult> {
     const sink = this.sink;
-    if (!sink) return { behavior: "deny", message: "No active turn." };
+    // Between turns (a background agent at work) the host answers from the thread's rules alone.
+    const ask: RunSink["approval"] | undefined = sink ? (req, signal) => sink.approval(req, signal) : this.ctx.approval ? (req) => this.ctx.approval!(this.thread.id, req) : undefined;
+    if (!ask || (!sink && (name === "AskUserQuestion" || name === "ExitPlanMode"))) return { behavior: "deny", message: "No active turn: the user is not there to answer." };
     if (name === "AskUserQuestion") {
       const raw = Array.isArray(input.questions) ? input.questions : [];
       const questions = raw.filter(isPlainRecord).map((q, index) => ({
@@ -706,7 +802,7 @@ class ClaudeSession implements ProviderSession {
         })),
       }));
       try {
-        const answer = await sink.question({ questions }, opts.signal);
+        const answer = await sink!.question({ questions }, opts.signal);
         if ("skipped" in answer) {
           return { behavior: "deny", message: answer.reason || "The user skipped these questions. Continue with your best judgement." };
         }
@@ -723,9 +819,9 @@ class ClaudeSession implements ProviderSession {
     }
     if (name === "ExitPlanMode") {
       try {
-        const decision = await sink.plan({ title: "Plan", text: String(input.plan ?? "") }, opts.signal);
+        const decision = await sink!.plan({ title: "Plan", text: String(input.plan ?? "") }, opts.signal);
         if (decision.accepted) {
-          sink.modeChanged?.("code");
+          sink!.modeChanged?.("code");
           return { behavior: "allow", updatedInput: input };
         }
         return { behavior: "deny", message: decision.note ? `The user wants changes to the plan: ${decision.note}` : "The user did not accept the plan. Keep planning." };
@@ -746,7 +842,7 @@ class ClaudeSession implements ProviderSession {
       .filter(Boolean)
       .join("\n");
     try {
-      const decision = await sink.approval(
+      const decision = await ask(
         {
           toolId: opts.toolUseID,
           tool: toolKind(name),
@@ -782,9 +878,24 @@ class ClaudeSession implements ProviderSession {
       this.ctx.limits?.("claude", m.rate_limit_info);
       return;
     }
+    if (m.type === "system" && (m.subtype === "task_started" || m.subtype === "task_progress" || m.subtype === "task_updated" || m.subtype === "task_notification" || m.subtype === "background_tasks_changed")) {
+      this.onTask(m);
+      return;
+    }
     if (this.swallowing) {
       if (m.type === "result") this.swallowing = null;
       return;
+    }
+    // Between turns, Claude Code starts one of its own when a background agent it is waiting on
+    // finishes. The host runs it like a steered message; its frames wait in buffer until it does.
+    if (!this.turnOpen && !this.carry && this.query && (m.type === "assistant" || m.type === "stream_event") && !m.parent_tool_use_id) {
+      const id = `follow:${randomUUID()}`;
+      this.carry = id;
+      this.buffer = [msg];
+      if (this.ctx.followUp?.(this.thread.id, id)) return;
+      // The host is busy starting a turn of its own: these frames belong to it.
+      this.carry = null;
+      this.buffer = [];
     }
     if (!this.turnOpen && this.carry) {
       this.buffer.push(msg);
@@ -802,6 +913,8 @@ class ClaudeSession implements ProviderSession {
       return;
     }
     if (!sink) return;
+    const parent = typeof m.parent_tool_use_id === "string" ? m.parent_tool_use_id : null;
+    if (parent && !this.turnTools.has(parent)) return;
     switch (m.type) {
       case "stream_event":
         this.onStream(m as never);
@@ -864,6 +977,7 @@ class ClaudeSession implements ProviderSession {
         sink.breakBlock();
       } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
         this.streamTools.set(Number(event.index), block.id);
+        this.turnTools.add(block.id);
         if (block.name === "AskUserQuestion" || block.name === "ExitPlanMode") return;
         const described = describeTool(block.name, {}, this.thread.cwd);
         sink.toolStart({ toolId: block.id, name: block.name, tool: toolKind(block.name), title: block.name.startsWith("mcp__") ? described.title : block.name, status: "pending", parentToolId: parent });
@@ -889,6 +1003,7 @@ class ClaudeSession implements ProviderSession {
       if (!isPlainRecord(block)) continue;
       if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
         const name = block.name;
+        this.turnTools.add(block.id);
         if (name === "AskUserQuestion" || name === "ExitPlanMode") continue;
         const described = describeTool(name, block.input, this.thread.cwd);
         sink.toolStart({ toolId: block.id, name, tool: toolKind(name), title: described.title, detail: described.detail, input: block.input, paths: described.paths, status: "running", parentToolId: parent });
@@ -903,6 +1018,8 @@ class ClaudeSession implements ProviderSession {
         }
       } else if (parent && block.type === "text" && typeof block.text === "string") {
         sink.text(block.text, parent);
+      } else if (parent && block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+        sink.reasoning(block.thinking, parent);
       }
     }
   }

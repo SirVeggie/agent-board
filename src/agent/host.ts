@@ -50,6 +50,7 @@ import type {
   ThreadScope,
   ThreadView,
   ThreadWorktree,
+  TaskInfo,
   Turn,
   Usage,
 } from "./types.js";
@@ -154,6 +155,30 @@ function promptText(msg: QueuedMessage, thread: Thread): string {
   return origin + contextBlock(msg.context) + files + msg.text;
 }
 
+/**
+ * Approvals the thread's settings answer without asking: Scribe's own board tools, Pages mode's
+ * refusals, and the "full" and "edits" approval levels. Null when the user has to decide.
+ */
+function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<ApprovalDecision> | null {
+  const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
+  const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+  if (req.boardTool && allow) {
+    return Promise.resolve({ optionId: allow.id });
+  }
+  if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
+    // Pages mode never runs file or shell tools, whatever the approval setting.
+    if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
+    return Promise.reject(new Error("Pages mode has no file or shell access."));
+  }
+  if (t?.approval === "full" && allow) {
+    return Promise.resolve({ optionId: allow.id });
+  }
+  if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
+    return Promise.resolve({ optionId: allow.id });
+  }
+  return null;
+}
+
 /** PDFs, for providers that read them as documents beside the text that names them. */
 function pdfs(msg: QueuedMessage): ChatFile[] {
   return msg.files.filter((file) => file.mimeType === "application/pdf");
@@ -236,7 +261,14 @@ export class AgentHost {
     const entry = fileURLToPath(new URL("../index.js", import.meta.url));
     const env: Record<string, string> = { SCRIBE_PORT: String(PORT) };
     if (process.env.SCRIBE_HOME) env.SCRIBE_HOME = process.env.SCRIBE_HOME;
-    this.ctx = { boardMcp: { command: process.execPath, args: [entry], env }, scratchDir, limits: (provider, info) => this.recordLimits(provider, info) };
+    this.ctx = {
+      boardMcp: { command: process.execPath, args: [entry], env },
+      scratchDir,
+      limits: (provider, info) => this.recordLimits(provider, info),
+      task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
+      followUp: (threadId, id) => this.followUp(threadId, id),
+      approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
+    };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
   }
 
@@ -596,6 +628,7 @@ export class AgentHost {
       status: this.status.get(thread.id) ?? "idle",
       unread: this.unread.has(thread.id),
       queued: this.queues.get(thread.id)?.length ?? 0,
+      background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
     };
   }
@@ -611,6 +644,12 @@ export class AgentHost {
       items = this.db.listItems(id);
       this.items.set(id, items);
       this.seq.set(id, items.length ? items[items.length - 1].seq : 0);
+      // Loaded once per daemon run, before any session exists: tasks still marked running died with the last one.
+      const stale = items.filter((item) => item.kind === "tool" && item.task?.status === "running");
+      for (const item of stale) {
+        if (item.kind === "tool" && item.task) item.task = { ...item.task, status: "stopped", summary: "Stopped: Scribe restarted", endedAt: item.task.endedAt ?? Date.now() };
+      }
+      if (stale.length) this.db.saveItems(stale);
     }
     return items;
   }
@@ -860,6 +899,76 @@ export class AgentHost {
     await this.cancel(threadId, { keepQueue: true });
   }
 
+  /**
+   * A background agent asked for approval between turns. The thread's own rules still apply; past
+   * those, nobody is there to answer, so it is refused with a note the agent can act on.
+   */
+  private approveBetweenTurns(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision> {
+    const auto = autoApproval(this.threads.get(threadId), req);
+    if (auto) return auto;
+    const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+    const note = "The user was not asked: this ran in the background after the turn ended. Leave it out, and mention it in your result.";
+    return reject ? Promise.resolve({ optionId: reject.id, note }) : Promise.reject(new Error(note));
+  }
+
+  /** A subagent or background command changed; its tool item can be from an earlier turn. */
+  private patchTask(threadId: string, toolId: string, patch: Partial<TaskInfo>): void {
+    if (!this.threads.has(threadId)) return;
+    const items = this.loadItems(threadId);
+    let item: Item | undefined;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "tool" && it.toolId === toolId) {
+        item = it;
+        break;
+      }
+    }
+    if (!item || item.kind !== "tool") return;
+    // A finished task stays finished: late progress frames do not bring it back.
+    if (item.task && item.task.status !== "running" && patch.status === undefined) return;
+    item.task = { id: "", type: "agent", status: "running", ...item.task, ...patch };
+    this.touch(item);
+    this.emitThread(threadId);
+  }
+
+  /** Background tasks still working in this thread. */
+  backgroundTasks(threadId: string): number {
+    const items = this.items.get(threadId);
+    if (!items) return 0;
+    return items.filter((it) => it.kind === "tool" && it.task?.status === "running" && (it.task.background || it.turnId !== this.runs.get(threadId)?.turn.id)).length;
+  }
+
+  private taskItem(threadId: string, itemId: string): Item & { kind: "tool" } {
+    const item = this.loadItems(threadId).find((it) => it.id === itemId);
+    if (!item || item.kind !== "tool" || !item.task) throw new Error("Task not found");
+    return item;
+  }
+
+  async stopTask(threadId: string, itemId: string): Promise<void> {
+    const item = this.taskItem(threadId, itemId);
+    if (item.task!.status !== "running") return;
+    const session = this.sessions.get(threadId);
+    if (!session?.stopTask) throw new Error("This agent cannot stop a single task");
+    await session.stopTask(item.task!.id);
+  }
+
+  async backgroundTask(threadId: string, itemId: string): Promise<{ moved: boolean }> {
+    const item = this.taskItem(threadId, itemId);
+    const session = this.sessions.get(threadId);
+    if (!session?.backgroundTask) throw new Error("This agent cannot move a task to the background");
+    return { moved: await session.backgroundTask(item.toolId) };
+  }
+
+  /**
+   * The agent started a turn of its own (a background agent finished and it reacts). Runs it as a
+   * turn with no user message, unless one of the user's is running or about to.
+   */
+  private followUp(threadId: string, id: string): boolean {
+    if (!this.threads.has(threadId) || this.runs.has(threadId) || this.queues.get(threadId)?.length) return false;
+    void this.runTurn(threadId, null, null, { adopt: id });
+    return true;
+  }
+
   async cancel(threadId: string, { keepQueue = false }: { keepQueue?: boolean } = {}): Promise<void> {
     const run = this.runs.get(threadId);
     if (!keepQueue && run?.steer) {
@@ -904,7 +1013,8 @@ export class AgentHost {
     return session;
   }
 
-  private async runTurn(threadId: string, msg: QueuedMessage, userItem: Item, opts?: { adopt?: string }): Promise<void> {
+  /** Run one turn. Without msg and userItem it is a turn the agent started itself (see followUp). */
+  private async runTurn(threadId: string, msg: QueuedMessage | null, userItem: Item | null, opts?: { adopt?: string }): Promise<void> {
     let thread = this.requireThread(threadId);
     const turns = this.loadTurns(threadId);
     const turn: Turn = {
@@ -918,15 +1028,19 @@ export class AgentHost {
       startedAt: Date.now(),
     };
     turns.push(turn);
-    userItem.turnId = turn.id;
-    if (userItem.kind === "user") delete userItem.steer;
-    this.touch(userItem);
+    if (userItem) {
+      userItem.turnId = turn.id;
+      if (userItem.kind === "user") delete userItem.steer;
+      this.touch(userItem);
+    } else {
+      this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
+    }
     const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
     thread.activityAt = Date.now();
-    if (!thread.titleLocked && thread.title === "New thread") {
+    if (msg && !thread.titleLocked && thread.title === "New thread") {
       thread.title = titleFrom(msg.text);
     }
     this.db.saveThread(thread);
@@ -934,7 +1048,7 @@ export class AgentHost {
     this.emitThread(threadId);
 
     // Checkpoint the page this turn is about, so an agent edit to it can be reverted.
-    const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg.context.find((c) => c.kind === "page")?.id;
+    const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg?.context.find((c) => c.kind === "page")?.id;
     const pageTab = pageId ? store.get(pageId, "agent") : undefined;
     if (pageTab && !pageTab.templateId) {
       turn.page = { id: pageTab.id, title: pageTab.title, before: pageTab.revision };
@@ -969,9 +1083,9 @@ export class AgentHost {
         session.update(thread);
         result = await session.run(
           {
-            text: promptText(msg, thread),
-            images: msg.images,
-            documents: pdfs(msg),
+            text: msg ? promptText(msg, thread) : "",
+            images: msg?.images ?? [],
+            documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
           },
           sink,
@@ -1142,11 +1256,8 @@ export class AgentHost {
       text(delta, parentToolId) {
         if (!delta) return;
         if (parentToolId) {
-          const tool = run.tools.get(parentToolId);
-          if (tool && tool.kind === "tool") {
-            tool.output = ((tool.output ?? "") + delta).slice(-MAX_TOOL_OUTPUT);
-            host.touch(tool);
-          }
+          // A subagent's message, whole: one nested item each, shown under the tool call that started it.
+          if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "text", text: delta, parentToolId });
           return;
         }
         if (run.reasoningItem) {
@@ -1159,8 +1270,13 @@ export class AgentHost {
         }
         host.appendText(run.textItem as Item & { text: string }, delta);
       },
-      reasoning(delta) {
+      reasoning(delta, parentToolId) {
         if (!delta) return;
+        if (parentToolId) {
+          const now = Date.now();
+          if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "reasoning", text: delta, startedAt: now, endedAt: now, parentToolId });
+          return;
+        }
         if (run.textItem) {
           host.flushDelta(run.textItem.id);
           run.textItem = null;
@@ -1222,23 +1338,8 @@ export class AgentHost {
         await host.rememberBefore(run, thread(), file, true);
       },
       approval(req: ApprovalRequest, signal) {
-        const t = thread();
-        const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
-        const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
-        if (req.boardTool && allow) {
-          return Promise.resolve({ optionId: allow.id });
-        }
-        if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
-          // Pages mode never runs file or shell tools, whatever the approval setting.
-          if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
-          return Promise.reject(new Error("Pages mode has no file or shell access."));
-        }
-        if (t?.approval === "full" && allow) {
-          return Promise.resolve({ optionId: allow.id });
-        }
-        if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
-          return Promise.resolve({ optionId: allow.id });
-        }
+        const auto = autoApproval(thread(), req);
+        if (auto) return auto;
         const item = host.addItem(threadId, turnId, {
           kind: "approval",
           requestId: "",

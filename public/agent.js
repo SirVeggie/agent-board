@@ -96,6 +96,13 @@
     app()?.showNotice?.(text);
   }
 
+  /** "working" / "in background" / "done" / "failed" / "stopped" for a task badge. */
+  function taskStatusLabel(task) {
+    if (task.status === "running") return task.background ? "in background" : "working";
+    if (task.status === "error") return "failed";
+    return task.status;
+  }
+
   /* ----- attached files ----- */
 
   /** Same limits as src/agent/attachments.ts, checked here first so a file is refused before it is read. */
@@ -1502,10 +1509,14 @@
 
     renderTool(it, byParent) {
       const key = `t:${it.id}`;
-      const node = el("div", `ag-tool k-${it.tool} s-${it.status}${this.expanded.has(key) ? " open" : ""}`);
+      const task = it.task;
+      const node = el("div", `ag-tool k-${it.tool} s-${it.status}${task ? ` has-task ts-${task.status}` : ""}${this.expanded.has(key) ? " open" : ""}`);
       node.dataset.itemId = it.id;
       const head = button("", "ag-tool-head", () => this.toggle(key, node));
-      const status = it.status === "running" || it.status === "pending" ? el("span", "ag-spin") : it.status === "error" ? icon("cross", "ag-ico ag-st-err") : icon(it.tool, "ag-ico");
+      // A task outlives its tool call: a background agent is still working after the call returned.
+      const busy = task ? task.status === "running" : it.status === "running" || it.status === "pending";
+      const failed = task ? task.status === "error" : it.status === "error";
+      const status = busy ? el("span", "ag-spin") : failed ? icon("cross", "ag-ico ag-st-err") : icon(it.tool, "ag-ico");
       head.append(status);
       const label = el("span", "ag-tool-label");
       if ((it.tool === "edit" || it.tool === "delete") && (it.files?.length || it.paths?.length)) {
@@ -1526,13 +1537,15 @@
         label.append(el("span", "ag-tool-title", it.title));
       }
       head.append(label);
+      if (task) head.append(el("span", `ag-task-badge ts-${task.status}`, taskStatusLabel(task)));
       if (it.exitCode !== undefined && it.tool === "execute") head.append(el("span", `ag-exit${it.exitCode === 0 ? " ok" : " bad"}`, it.exitCode === 0 ? "exit 0" : `exit ${it.exitCode}`));
       if (it.endedAt && it.startedAt && it.endedAt - it.startedAt > 1500) head.append(el("span", "ag-muted ag-dur", R.duration(it.endedAt - it.startedAt)));
       head.append(icon("chevron", "ag-ico ag-chev"));
       node.append(head);
+      if (task) node.append(this.renderTaskLine(it));
       const body = el("div", "ag-tool-body");
       if (it.detail && it.tool === "execute" && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
-      else if (it.detail && it.tool !== "execute") body.append(el("pre", "ag-pre small", it.detail));
+      else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
       if (it.diff) {
         const files = R.parsePatch(it.diff);
         for (const f of files) {
@@ -1540,10 +1553,19 @@
           fh.append(el("span", "ag-fpath", f.path), R.counts(f.added, f.removed), button("Open", "ag-btn tiny", () => openDiff({ kind: "turn", threadId: it.threadId, turnId: it.turnId, path: f.path })));
           body.append(fh, R.renderDiffFile(f, { collapsedAfter: 160 }));
         }
+      } else if (it.tool === "task" && typeof it.input?.prompt === "string") {
+        // The brief the agent gave its subagent, readable rather than as JSON.
+        const brief = el("div", "ag-task-brief");
+        brief.append(el("div", "ag-task-brief-label", it.input.subagent_type ? `Brief for ${it.input.subagent_type}` : "Brief"));
+        const md = el("div", "ag-md small");
+        R.renderMarkdown(md, it.input.prompt, mdCtx);
+        brief.append(md);
+        body.append(brief);
       } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) {
         body.append(el("pre", "ag-pre small", jsonText(it.input)));
       }
-      if (it.output && !(it.tool === "read")) {
+      // A background task's tool result is only the launch receipt; its outcome is on the task line.
+      if (it.output && it.tool !== "read" && !task?.background) {
         const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
         body.append(out);
       }
@@ -1555,11 +1577,52 @@
           if (n) sub.append(n);
         }
         body.append(sub);
-        head.querySelector(".ag-tool-label")?.append(el("span", "ag-muted", ` · ${children.filter((c) => c.kind === "tool").length} steps`));
+        const steps = children.filter((c) => c.kind === "tool").length;
+        if (steps) head.querySelector(".ag-tool-label")?.append(el("span", "ag-muted", ` · ${steps} ${steps === 1 ? "step" : "steps"}`));
       }
       if (body.childElementCount) node.append(body);
       else node.classList.add("bare");
       return node;
+    }
+
+    /** Under a task's head, always visible: what it is doing now (or how it ended), its usage, and its controls. */
+    renderTaskLine(it) {
+      const task = it.task;
+      const line = el("div", "ag-task-line");
+      const running = task.status === "running";
+      const what = task.summary || (running ? (task.lastTool ? `Using ${task.lastTool}` : "Starting…") : "");
+      // A stopped task reports its own description as the summary; the head already says it.
+      if (what && !(it.title || "").endsWith(what)) {
+        const text = el("span", "ag-task-summary", what);
+        text.title = what;
+        line.append(text);
+      }
+      const usage = [];
+      if (task.toolUses) usage.push(`${task.toolUses} ${task.toolUses === 1 ? "tool use" : "tool uses"}`);
+      if (task.tokens) usage.push(`${task.tokens >= 1000 ? `${Math.round(task.tokens / 1000)}k` : task.tokens} tokens`);
+      if (task.durationMs) usage.push(R.duration(task.durationMs));
+      if (usage.length) line.append(el("span", "ag-task-usage", usage.join(" · ")));
+      if (running) {
+        const actions = el("span", "ag-task-actions");
+        const call = (action, label) =>
+          button(label, "ag-btn tiny", async (event) => {
+            event.stopPropagation();
+            event.currentTarget.disabled = true;
+            try {
+              const result = await api("POST", `/threads/${encodeURIComponent(it.threadId)}/tasks/${encodeURIComponent(it.id)}/${action}`);
+              if (action === "background" && result && result.moved === false) notice("It already finished or is not running in the foreground");
+            } catch (err) {
+              notice(err.message);
+              event.currentTarget.disabled = false;
+            }
+          });
+        // Only a call the turn is still waiting on can move to the background.
+        if (!task.background && (it.status === "running" || it.status === "pending")) actions.append(call("background", "Run in background"));
+        actions.append(call("stop", "Stop"));
+        line.append(actions);
+      }
+      if (!line.childElementCount) line.hidden = true;
+      return line;
     }
 
     renderApproval(it) {
@@ -1768,7 +1831,7 @@
 
     onThread(thread, prev) {
       if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added) this.renderHeader();
-      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns) {
+      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns) {
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
@@ -2104,6 +2167,7 @@
         if (start) this.status.append(setClock(el("span", "ag-clock"), start));
       }
       if (t?.queued) tail.append(el("span", "ag-tag", `${t.queued} queued`));
+      if (t?.background) tail.append(el("span", "ag-tag", `${t.background} in background`));
       const running = t && t.status !== "idle";
       if (running) {
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
@@ -2584,7 +2648,8 @@
 
   function threadRow(t, current, onPick) {
     const row = button("", `ag-row${current ? " on" : ""}${t.unread ? " unread" : ""}`, () => onPick(t.id));
-    const dot = el("span", `ag-dot s-${t.status}`);
+    const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
+    if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
     const title = el("span", "ag-row-title", t.title);
     const meta = el("span", "ag-row-meta");
@@ -3046,7 +3111,7 @@
         return;
       }
       const detail = S.details.get(turn.threadId);
-      const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text") : null;
+      const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId) : null;
       const files = turn.files || [];
       if (files.length) {
         const added = files.reduce((a, f) => a + f.added, 0);
