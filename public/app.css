@@ -537,6 +537,10 @@ button.tab-close:hover {
   padding: 0 12px;
 }
 
+html.hide-clear #clear {
+  display: none;
+}
+
 .icon-btn {
   width: 30px;
   padding: 0;

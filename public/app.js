@@ -52,6 +52,7 @@
   const settingsToggle = document.getElementById("settings-toggle");
   const themeList = document.getElementById("theme-list");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
+  const showClearToggle = document.getElementById("show-clear");
   const tightSmallToggle = document.getElementById("tight-small");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
@@ -81,6 +82,8 @@
   const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "scribe.theme";
   const SMOOTH_SCROLL_KEY = "scribe.smoothScroll";
+  /** Also read by the inline script in index.html so the first paint already hides Clear. */
+  const SHOW_CLEAR_KEY = "scribe.showClear";
   /** What a page link without a mode or modifier does: "tab", "peek", or "split". */
   const LINK_MODE_KEY = "scribe.linkMode";
   const VIEWER_ID_KEY = "scribe.viewerId";
@@ -264,7 +267,9 @@
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme());
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
+  applyFlag(showClearToggle, SHOW_CLEAR_KEY, true);
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
+  document.documentElement.classList.toggle("hide-clear", !flagOn(showClearToggle));
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   renderThemeList();
   renderLinkModes();
@@ -768,6 +773,9 @@
     localStorage.setItem(key, on ? "1" : "0");
     if (el === smoothScrollToggle && !on) {
       stopTabScroll();
+    }
+    if (el === showClearToggle) {
+      document.documentElement.classList.toggle("hide-clear", !on);
     }
     if (el === tightSmallToggle) {
       document.documentElement.classList.toggle("tight-small", on);
@@ -3159,6 +3167,7 @@
     }
   });
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
+  showClearToggle.addEventListener("click", () => toggleFlag(showClearToggle, SHOW_CLEAR_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });

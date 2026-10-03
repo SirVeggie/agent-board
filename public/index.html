@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=53">
+  <link rel="stylesheet" href="/app.css?v=54">
   <link rel="stylesheet" href="/agent.css?v=18">
   <script>
     (() => {
@@ -22,6 +22,9 @@
       }
       if (localStorage.getItem("scribe.tightSmall") !== "0") {
         document.documentElement.classList.add("tight-small");
+      }
+      if (localStorage.getItem("scribe.showClear") === "0") {
+        document.documentElement.classList.add("hide-clear");
       }
       const theme = localStorage.getItem("scribe.theme");
       if (["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(theme)) {
@@ -178,6 +181,10 @@
           <span id="smooth-scroll-label">Smooth scrolling tab strip</span>
           <button type="button" class="pill-toggle" id="smooth-scroll" role="switch" aria-checked="true" aria-labelledby="smooth-scroll-label"></button>
         </div>
+        <div class="setting-row">
+          <span id="show-clear-label">Clear button in the top bar</span>
+          <button type="button" class="pill-toggle" id="show-clear" role="switch" aria-checked="true" aria-labelledby="show-clear-label"></button>
+        </div>
       </section>
       <section class="settings-section">
         <h3>Links</h3>
@@ -309,7 +316,7 @@
   <script src="/views.js?v=4"></script>
   <script src="/preview.js?v=1"></script>
   <script src="/permissions.js?v=1"></script>
-  <script src="/app.js?v=64"></script>
+  <script src="/app.js?v=65"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/agent-render.js?v=5"></script>
