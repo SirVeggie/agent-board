@@ -340,6 +340,8 @@ class ClaudeSession implements ProviderSession {
    * to a subagent from an earlier turn, still working in the background: only its task row updates.
    */
   private turnTools = new Set<string>();
+  /** Tokens in the context after the latest main-thread model call. */
+  private contextTokens = 0;
   /** Live tasks (subagents, background commands) by task id, to the tool call that started them. */
   private tasks = new Map<string, string>();
   /** Background tasks still working; while there are any, the idle timer leaves the process alone. */
@@ -942,7 +944,7 @@ class ClaudeSession implements ProviderSession {
           }),
           { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, contextWindow: 0 }
         );
-        sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined });
+        sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined, ...(this.contextTokens ? { contextTokens: this.contextTokens } : {}) });
         // A steer this turn took in, in case its lifecycle frame went missing.
         for (const id of Array.isArray(m.user_message_uuids) ? (m.user_message_uuids as string[]) : []) {
           if (this.steers.get(id) === "pending") {
@@ -1000,9 +1002,16 @@ class ClaudeSession implements ProviderSession {
     }
   }
 
-  private onAssistant(msg: { message: { content?: unknown[] }; parent_tool_use_id: string | null }): void {
+  private onAssistant(msg: { message: { content?: unknown[]; usage?: unknown }; parent_tool_use_id: string | null }): void {
     const sink = this.sink!;
     const parent = msg.parent_tool_use_id ?? undefined;
+    // The context in use is what the latest main-thread call read and wrote, cache included.
+    const u = msg.message.usage;
+    if (!parent && isPlainRecord(u)) {
+      const n = (key: string) => (typeof u[key] === "number" ? (u[key] as number) : 0);
+      const tokens = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens") + n("output_tokens");
+      if (tokens) this.contextTokens = tokens;
+    }
     for (const block of msg.message.content ?? []) {
       if (!isPlainRecord(block)) continue;
       if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {

@@ -1950,6 +1950,11 @@
     onTurn(turn) {
       this.dirtyTurns.add(turn.id);
       this.schedule();
+      if (turn.usage?.contextWindow && this.ctxMeter?.isConnected) {
+        const next = contextMeter(this);
+        this.ctxMeter.replaceWith(next);
+        this.ctxMeter = next;
+      }
       // The strip's run clock starts from the running turn, which can arrive after the thread's status.
       if (this.status && turn.status === "running" && !this.status.querySelector(".ag-clock")) this.renderComposerBar();
     }
@@ -2214,7 +2219,7 @@
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model");
       model.append(el("span", `ag-prov p-${s.provider}`, s.provider === "claude" ? "C" : "⌘"), el("span", null, info?.label || s.model));
       bar.append(model);
-      const hasEffort = info?.efforts?.length || info?.params?.length;
+      const hasEffort = info?.efforts?.length || info?.params?.some((p) => p.id !== CONTEXT_PARAM);
       if (hasEffort) {
         const effortLabel = s.effort ? info.efforts.find((e) => e.id === s.effort)?.label || s.effort : info.defaultEffort ? `${info.efforts.find((e) => e.id === info.defaultEffort)?.label || info.defaultEffort}` : "Default";
         const fast = info.params?.find((p) => p.id === "fast");
@@ -2224,6 +2229,8 @@
         if (fastOn) eff.append(el("span", "ag-tag tiny", "fast"));
         bar.append(eff);
       }
+      this.ctxMeter = contextMeter(this);
+      bar.append(this.ctxMeter);
       const mode = MODES.find((m) => m.id === s.mode) || MODES[0];
       const modeBtn = button("", `ag-pill mode-${mode.id}`, (event) => this.modeMenu(event.currentTarget), mode.detail);
       modeBtn.append(el("span", null, mode.label));
@@ -2319,6 +2326,7 @@
         for (const e of info.efforts) items.push({ label: e.label, checked: s.effort === e.id, run: () => this.updateSettings({ effort: e.id }) });
       }
       for (const param of info.params || []) {
+        if (param.id === CONTEXT_PARAM) continue;
         items.push({ header: param.label });
         const cur = s.modelParams?.[param.id] ?? param.default;
         for (const o of param.options) {
@@ -3447,6 +3455,109 @@
     const left = Math.min(Math.max(8, rect.right - tw), window.innerWidth - tw - 8);
     tip.style.top = `${Math.max(8, top)}px`;
     tip.style.left = `${left}px`;
+    usageTipEl = tip;
+  }
+
+  /* ----- context window ----- */
+
+  /** Cursor's model parameter for the context window size ("272k", "1m"). */
+  const CONTEXT_PARAM = "context";
+
+  function tokenCount(n) {
+    if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`;
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return String(n);
+  }
+
+  /** "272k" or "1m" as tokens. */
+  function sizeTokens(value) {
+    const m = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(String(value || "").trim());
+    if (!m) return 0;
+    return Math.round(parseFloat(m[1]) * (m[2]?.toLowerCase() === "m" ? 1_000_000 : m[2] ? 1000 : 1));
+  }
+
+  /** The context of a chat: the latest turn's usage, and the size option when the model has one. */
+  function contextInfo(view) {
+    const s = view.settings();
+    const t = view.thread();
+    const info = modelInfo(s.provider, s.model);
+    const param = info?.params?.find((p) => p.id === CONTEXT_PARAM) || null;
+    const size = param ? (s.modelParams?.[CONTEXT_PARAM] ?? param.default) : null;
+    const turns = t ? [...(S.details.get(t.id)?.turns.values() || [])].sort((a, b) => a.seq - b.seq) : [];
+    const last = [...turns].reverse().find((x) => x.usage?.contextWindow || x.usage?.contextTokens);
+    const usage = last?.usage || null;
+    const window = usage?.contextWindow || sizeTokens(size) || 0;
+    const used = usage?.contextTokens || 0;
+    return { s, param, size, usage, used, window, fraction: window ? Math.min(1, used / window) : 0 };
+  }
+
+  /** A ring that fills as the context does. Click picks the window size where the model has one; hover gives details. */
+  function contextMeter(view) {
+    const ctx = contextInfo(view);
+    const level = usageLevel(ctx.fraction);
+    const meter = button("", `ag-ctx-meter lvl-${level}${ctx.param ? "" : " fixed"}`, (event) => {
+      if (!ctx.param) return;
+      hideUsageTip();
+      const cur = ctx.size;
+      openMenu(
+        event.currentTarget,
+        [
+          { header: "Context window" },
+          ...ctx.param.options.map((o) => ({
+            label: o.label,
+            detail: sizeTokens(o.id) > sizeTokens(ctx.param.default) ? "Uses more credits per message" : undefined,
+            checked: cur === o.id,
+            run: () => view.updateSettings({ modelParams: { ...(ctx.s.modelParams || {}), [CONTEXT_PARAM]: o.id } }),
+          })),
+        ],
+        { width: 240 }
+      );
+    });
+    meter.setAttribute("aria-label", ctx.window ? `Context ${percent(ctx.fraction)} of ${tokenCount(ctx.window)}` : "Context");
+    // Two circles: the track and an arc whose dash length is the share in use.
+    const r = 6;
+    const length = 2 * Math.PI * r;
+    meter.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="${r}" class="ag-ctx-track"/>${ctx.fraction > 0 ? `<circle cx="8" cy="8" r="${r}" class="ag-ctx-fill" stroke-dasharray="${(ctx.fraction * length).toFixed(2)} ${length.toFixed(2)}" transform="rotate(-90 8 8)"/>` : ""}</svg>`;
+    meter.addEventListener("pointerenter", () => {
+      clearTimeout(usageTipTimer);
+      usageTipTimer = setTimeout(() => showContextTip(meter, contextInfo(view)), 160);
+    });
+    meter.addEventListener("pointerleave", () => {
+      clearTimeout(usageTipTimer);
+      usageTipTimer = setTimeout(hideUsageTip, 120);
+    });
+    return meter;
+  }
+
+  function showContextTip(anchor, ctx) {
+    hideUsageTip();
+    const tip = el("div", "ag-usage-tip");
+    tip.append(el("div", "ag-usage-tip-title", "Context"));
+    if (ctx.window && ctx.used) {
+      const row = el("div", `ag-usage-tip-row lvl-${usageLevel(ctx.fraction)}`);
+      const bar = el("div", "ag-meter-bar");
+      const fill = el("div", "ag-meter-fill");
+      fill.style.width = `${Math.round(ctx.fraction * 100)}%`;
+      bar.append(fill);
+      row.append(el("span", "ag-usage-tip-label", `${tokenCount(ctx.used)} of ${tokenCount(ctx.window)}`), bar, el("span", "ag-usage-tip-pct", percent(ctx.fraction)));
+      tip.append(row);
+    } else {
+      tip.append(el("div", "ag-usage-tip-note", ctx.window ? `Window: ${tokenCount(ctx.window)}. Shows how full it is after the first reply.` : "Shows how full the context is after the first reply."));
+    }
+    const u = ctx.usage;
+    if (u && (u.inputTokens || u.outputTokens)) {
+      const parts = [u.inputTokens ? `${tokenCount(u.inputTokens)} in` : "", u.cacheReadTokens ? `${tokenCount(u.cacheReadTokens)} cached` : "", u.outputTokens ? `${tokenCount(u.outputTokens)} out` : ""].filter(Boolean);
+      tip.append(el("div", "ag-usage-tip-note", `Last turn: ${parts.join(" · ")}`));
+    }
+    if (ctx.param) tip.append(el("div", "ag-usage-tip-note", "Click to change the window size. A bigger window costs more credits per message."));
+    document.body.append(tip);
+    const rect = anchor.getBoundingClientRect();
+    const tw = Math.min(260, window.innerWidth - 16);
+    tip.style.width = `${tw}px`;
+    let top = rect.top - tip.offsetHeight - 8;
+    if (top < 8) top = rect.bottom + 8;
+    tip.style.top = `${Math.max(8, top)}px`;
+    tip.style.left = `${Math.min(Math.max(8, rect.left + rect.width / 2 - tw / 2), window.innerWidth - tw - 8)}px`;
     usageTipEl = tip;
   }
 
