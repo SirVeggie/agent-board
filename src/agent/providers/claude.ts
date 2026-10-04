@@ -187,7 +187,7 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   createSession(thread: Thread, ctx: SessionContext): ProviderSession {
-    const spare = thread.nativeId ? null : this.spares.take(claudeSpareKey(thread));
+    const spare = thread.nativeId ? null : this.spares.take(claudeSpareKey(thread), thread.id);
     if (spare) {
       spare.update(thread);
       return spare;

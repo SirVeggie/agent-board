@@ -176,7 +176,7 @@ export interface AgentProvider {
   /** One answer to one prompt, with no tools and no saved session (the summary a fork carries over). */
   complete(prompt: string, model: string, signal?: AbortSignal): Promise<string>;
   createSession(thread: Thread, ctx: SessionContext): ProviderSession;
-  /** Warm a spare session for a thread that does not exist yet; createSession adopts it when the settings match. */
+  /** Warm a spare session for a thread that does not exist yet; createSession adopts it when the settings and thread id match. */
   prewarm(draft: Thread, instructions: string, ctx: SessionContext): void;
   /** Thread id a matching spare's MCP was started with, so createThread can keep claims pointing at a real thread. */
   spareThreadId?(thread: Thread, ctx: SessionContext): string | null;
@@ -187,16 +187,21 @@ const SPARE_TTL_MS = 10 * 60 * 1000;
 const MAX_SPARES = 3;
 
 /** Warmed sessions for threads not created yet, keyed by what a session cannot change later (cwd, mode, ...). */
-export class SparePool<S extends { dispose(): void }> {
+export class SparePool<S extends { dispose(): void; scribeThreadId(): string }> {
   private spares = new Map<string, { session: S; timer: NodeJS.Timeout }>();
 
   get(key: string): S | null {
     return this.spares.get(key)?.session ?? null;
   }
 
-  take(key: string): S | null {
+  /**
+   * Take the spare for `key`. With `threadId`, only if that session was warmed for that thread
+   * (its MCP already started with that id); otherwise leave it for the thread that matches.
+   */
+  take(key: string, threadId?: string): S | null {
     const entry = this.spares.get(key);
     if (!entry) return null;
+    if (threadId !== undefined && entry.session.scribeThreadId() !== threadId) return null;
     clearTimeout(entry.timer);
     this.spares.delete(key);
     return entry.session;
