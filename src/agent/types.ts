@@ -179,6 +179,11 @@ export type Turn = {
   nativeEnd?: string;
   /** The board page this turn could edit, by HTML revision before and after. The old HTML is kept as a checkpoint. */
   page?: { id: string; title: string; before: number; after?: number; reverted?: boolean };
+  /**
+   * Pages this thread last knew, as of the end of this turn (the thread's page and pages it wrote).
+   * The next turn compares live revisions and warns the agent if the user edited one in between.
+   */
+  seenPages?: Array<{ id: string; key: string; title: string; revision: number; stateRevision: number }>;
 };
 
 export type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "fetch" | "think" | "mcp" | "task" | "todo" | "other";

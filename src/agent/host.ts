@@ -10,6 +10,7 @@ import { store } from "../store.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
+import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
@@ -123,7 +124,7 @@ type QueuedMessage = {
 };
 
 /** What the model reads for a message: where it came from, its context chips, the guides of the pages it brings up, its files, then the text. */
-function promptText(msg: QueuedMessage, thread: Thread, guides: string): string {
+function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdits = ""): string {
   const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n" : "";
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" && thread.provider !== "openai" });
   const recap = !thread.rewind?.recap
@@ -131,7 +132,7 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string): string 
     : thread.rewind.migrated
       ? `<earlier_conversation>\nThis conversation moved to a new session, so you don't have its history. This is what was said so far, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
       : `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`;
-  return recap + origin + contextBlock(msg.context) + guides + files + msg.text;
+  return recap + origin + pageEdits + contextBlock(msg.context) + guides + files + msg.text;
 }
 
 /**
@@ -831,6 +832,45 @@ export class AgentHost {
     return guidesBlock(pages);
   }
 
+  /**
+   * When a watched page changed since this thread last saw it, a short note so the next turn
+   * re-reads instead of overwriting the user's edit.
+   */
+  private pageEditPrefix(thread: Thread, currentTurnId: string): string {
+    const prior = this.loadTurns(thread.id).filter((t) => t.id !== currentTurnId);
+    const seen = lastSeenPages(prior);
+    if (!seen.length) return "";
+    return pageEditsBlock(pageEditsSince(seen, this.pageSnapshots(seen.map((page) => page.id))));
+  }
+
+  private pageSnapshots(refs: string[]): PageSnapshot[] {
+    const out: PageSnapshot[] = [];
+    const ids = new Set<string>();
+    for (const ref of refs) {
+      const tab = store.get(ref, "agent");
+      if (!tab || ids.has(tab.id)) continue;
+      ids.add(tab.id);
+      out.push({ id: tab.id, key: tab.key, title: tab.title, revision: tab.revision, stateRevision: tab.stateRevision });
+    }
+    return out;
+  }
+
+  /** Record the thread's page, attached pages, and pages this turn wrote, as of now. */
+  private rememberTurnPages(thread: Thread, msg: QueuedMessage | null, turn: Turn, extraRefs: string[]): void {
+    const prior = this.loadTurns(thread.id).filter((t) => t.id !== turn.id);
+    const watch = [...extraRefs];
+    if (thread.scope.kind === "page" && thread.scope.ref) watch.push(thread.scope.ref);
+    if (msg) {
+      for (const chip of msg.context) {
+        if (chip.kind === "page") watch.push(chip.id);
+      }
+    }
+    watch.push(...writePageRefs(this.loadItems(thread.id).filter((item) => item.turnId === turn.id)));
+    const seen = rememberPages(this.pageSnapshots(watch), this.pageSnapshots(lastSeenPages(prior).map((page) => page.id)));
+    if (seen.length) turn.seenPages = seen;
+    else delete turn.seenPages;
+  }
+
   // ---------- items ----------
 
   private addItem(threadId: string, turnId: string | null, body: ItemBody): Item {
@@ -1253,9 +1293,10 @@ export class AgentHost {
       try {
         const session = this.session(thread);
         session.update(thread);
+        const pageEdits = this.pageEditPrefix(thread, turn.id);
         result = await session.run(
           {
-            text: msg ? earlier + promptText(msg, thread, this.pageGuides(thread, msg)) : "",
+            text: msg ? earlier + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : pageEdits,
             images: msg?.images ?? [],
             documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
@@ -1320,6 +1361,7 @@ export class AgentHost {
         this.db.deleteSetting(`checkpoint:${turn.id}`);
       }
     }
+    this.rememberTurnPages(thread, msg, turn, pageId ? [pageId] : []);
     turn.status = result.status;
     turn.endedAt = Date.now();
     const rewound = this.threads.get(threadId);
