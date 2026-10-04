@@ -275,6 +275,18 @@
     markSeen,
     render: () => render(),
   });
+  const spaces = window.createSpaces({
+    chipSlot: settingsToggle,
+    findAnyTab,
+    folderPath: (id) => library.pathOf(id),
+    showNotice,
+    beforeOpen: () => {
+      closePalette();
+      closeSettings();
+      library.closeMenu();
+      hoverCard.hide?.();
+    },
+  });
   const trash = window.createTrash({
     showNotice,
     confirm: (message, confirmLabel) => confirmDelete(message, confirmLabel),
@@ -364,9 +376,11 @@
       state.templates = Array.isArray(msg.templates) ? msg.templates : [];
       state.builtinTemplates = Array.isArray(msg.builtinTemplates) ? msg.builtinTemplates : [];
       views.prune();
-      const hash = location.hash.replace(/^#/, "");
-      const fromOpen = state.tabs.find((tab) => tab.id === hash || tab.key === hash);
-      const fromClosed = state.closed.find((tab) => tab.id === hash || tab.key === hash);
+      spaces.apply(msg.spaces);
+      // After a space switch the address still names the old space's tab: don't reopen it here.
+      const hash = msg.reset ? "" : location.hash.replace(/^#/, "");
+      const fromOpen = hash ? state.tabs.find((tab) => tab.id === hash || tab.key === hash) : null;
+      const fromClosed = hash ? state.closed.find((tab) => tab.id === hash || tab.key === hash) : null;
       state.activeId = fromOpen ? fromOpen.id : msg.activeId;
       unread.clear();
       unreadLibrary.clear();
@@ -377,6 +391,10 @@
       if (fromClosed && !fromOpen) {
         openPage(fromClosed.id);
       }
+      return;
+    }
+    if (msg.type === "spaces") {
+      spaces.apply(msg.spaces);
       return;
     }
     if (msg.type === "folders") {
@@ -2842,6 +2860,10 @@
       }
     } else if (action === "reopen") {
       undoClose();
+    } else if (action === "spaces") {
+      spaces.toggle();
+    } else if (action === "next-space" || action === "prev-space") {
+      void spaces.cycle(action === "next-space" ? 1 : -1);
     } else if (action.startsWith("agent-")) {
       window.scribeChat?.shortcut(action.slice("agent-".length));
     }
@@ -2860,6 +2882,30 @@
   function onBoardShortcut(event) {
     if (document.querySelector("dialog[open]")) {
       return;
+    }
+    if (spaces.onKey(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (spaces.isOpen() && event.key !== "Escape") {
+      // The board is out of sight: its own shortcuts wait until the overview closes.
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      const spaceAction =
+        event.key.toLowerCase() === "e" && !event.shiftKey
+          ? "spaces"
+          : event.shiftKey && event.key === "PageUp"
+            ? "prev-space"
+            : event.shiftKey && event.key === "PageDown"
+              ? "next-space"
+              : "";
+      if (spaceAction) {
+        event.preventDefault();
+        runShortcut(spaceAction);
+        return;
+      }
     }
     if (event.key === "Escape") {
       if (window.scribeChat?.escape()) {
@@ -3246,7 +3292,7 @@
       return;
     }
     const data = await res.json();
-    applyPaletteHits([...paletteActionRows(parsed.query), ...(data.tabs || [])]);
+    applyPaletteHits([...spaces.search(parsed.query), ...paletteActionRows(parsed.query), ...(data.tabs || [])]);
   }
 
   /** The open page's template agent actions (#152) matching the query, listed above the pages. */
@@ -3311,7 +3357,11 @@
       if (tab.qualityLabel) {
         chips.appendChild(paletteChip(tab.qualityLabel));
       }
-      if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask") {
+      if (tab.kind === "space") {
+        if (tab.open) {
+          chips.appendChild(paletteChip("Current"));
+        }
+      } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask") {
         if (tab.open) {
           chips.appendChild(paletteChip("Open"));
         }
@@ -3394,6 +3444,11 @@
     if (tab.kind === "action") {
       closePalette();
       void window.scribeChat?.runAction(tab.tab, tab.action);
+      return;
+    }
+    if (tab.kind === "space") {
+      closePalette();
+      void spaces.switchTo(tab.spaceId);
       return;
     }
     if (tab.kind === "thread") {
@@ -3491,6 +3546,10 @@
       openWelcome();
     } else if (event.data?.type === "scribe-palette") {
       togglePalette();
+    } else if (event.data?.type === "scribe-shortcut") {
+      if (["spaces", "next-space", "prev-space"].includes(event.data.action)) {
+        runShortcut(event.data.action);
+      }
     } else if (event.data?.type === "scribe-activity") {
       noteEdit();
     } else if (event.data?.type === "scribe-open" || event.data?.type === "scribe-resolve") {

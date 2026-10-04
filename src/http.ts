@@ -1577,6 +1577,16 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
     // Ctrl+J threads, Ctrl+' next favourite model, Ctrl+Alt+' next reasoning level, Ctrl+Shift+' next mode.
     // Pages that use them keep them.
     if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) return;
+    // Spaces: Ctrl+E shows them, Ctrl+Shift+PageUp / PageDown switches to the previous / next one.
+    var spaceAction = event.altKey ? ""
+      : event.key.toLowerCase() === "e" && !event.shiftKey ? "spaces"
+      : event.shiftKey && event.key === "PageUp" ? "prev-space"
+      : event.shiftKey && event.key === "PageDown" ? "next-space" : "";
+    if (spaceAction) {
+      event.preventDefault();
+      parent.postMessage({ type: "scribe-shortcut", action: spaceAction }, "*");
+      return;
+    }
     var chatKey = event.key.toLowerCase();
     // The apostrophe key: by character (" with Shift), or by position on Nordic layouts (the '* key next to Enter).
     var quote = event.key === "'" || event.key === '"' || (event.code === "Backslash" && event.key !== "\\\\" && event.key !== "|");

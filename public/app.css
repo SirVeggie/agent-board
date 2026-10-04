@@ -3234,3 +3234,473 @@ body.resizing-split iframe {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ---------- spaces (public/spaces.js) ---------- */
+
+button.space-chip {
+  flex-shrink: 0;
+  gap: 7px;
+  max-width: 160px;
+  height: 26px;
+  margin-right: 8px;
+  padding: 0 9px;
+  border-radius: 13px;
+  color: var(--muted);
+  background: rgba(var(--lift-rgb), 0.04);
+}
+
+button.space-chip:hover,
+button.space-chip[aria-expanded="true"] {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.1);
+}
+
+.space-chip-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--space);
+  box-shadow: 0 0 6px var(--space);
+}
+
+.space-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* The board steps back while the overview is up: chrome contents fade, the workspace recedes. */
+html.spaces-anim .chrome > *,
+html.spaces-anim .workspace {
+  transition: opacity 0.22s var(--ease), transform 0.26s var(--ease), filter 0.26s var(--ease);
+}
+
+html.spaces-open .chrome > :not(.win-controls) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.spaces-open .chrome {
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html.spaces-open .workspace {
+  opacity: 0;
+  transform: scale(0.97);
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+.spaces {
+  position: fixed;
+  inset: 48px 0 0;
+  z-index: 45;
+  overflow: auto;
+  opacity: 0;
+  transition: opacity 0.22s var(--ease);
+}
+
+.spaces[hidden] {
+  display: none;
+}
+
+.spaces.shown {
+  opacity: 1;
+}
+
+.spaces-inner {
+  box-sizing: border-box;
+  min-height: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 6vh 32px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.spaces-head {
+  text-align: center;
+}
+
+.spaces-title {
+  margin: 0;
+  color: var(--heading, var(--text));
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.spaces-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.spaces-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 250px);
+  justify-content: center;
+  gap: 14px;
+}
+
+.space-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 150px;
+  padding: 14px 14px 12px;
+  border-radius: 14px;
+  background:
+    radial-gradient(260px 120px at 0% 0%, color-mix(in srgb, var(--space, transparent) 16%, transparent), transparent 70%),
+    var(--panel);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--border);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  touch-action: none;
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+  transition: transform 0.22s var(--ease), box-shadow 0.15s ease, opacity 0.22s var(--ease);
+}
+
+.spaces.shown .space-card {
+  opacity: 1;
+  transform: none;
+  transition-delay: calc(var(--i, 0) * 25ms);
+}
+
+.spaces.shown .space-card.selected {
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--space, var(--accent)) 70%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--space, var(--accent)) 22%, transparent);
+  transform: translateY(-2px);
+  transition-delay: 0s;
+}
+
+.space-card.active::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--space);
+  box-shadow: 0 0 10px var(--space);
+}
+
+.spaces.shown .space-card.chosen {
+  transform: scale(1.04);
+  box-shadow: 0 0 0 2px var(--space), 0 10px 40px color-mix(in srgb, var(--space) 30%, transparent);
+}
+
+.spaces.shown .space-card.dragging {
+  z-index: 2;
+  transition: box-shadow 0.15s ease;
+  cursor: grabbing;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), inset 0 0 0 1px color-mix(in srgb, var(--space) 70%, transparent);
+}
+
+.spaces-grid.reordering .space-card:not(.dragging) {
+  transition-delay: 0s;
+}
+
+.space-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.space-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--space);
+  box-shadow: 0 0 8px var(--space);
+}
+
+.space-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--heading, var(--text));
+  font-size: 15px;
+  font-weight: 600;
+}
+
+input.space-rename {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(var(--lift-rgb), 0.08);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  outline: 1px solid color-mix(in srgb, var(--space) 60%, transparent);
+}
+
+.space-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--space) 18%, transparent);
+  color: var(--space);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+html[data-theme="cream"] .space-badge {
+  color: var(--text);
+}
+
+button.space-more {
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.space-card:hover button.space-more,
+.space-card.selected button.space-more,
+button.space-more:focus-visible {
+  opacity: 1;
+}
+
+button.space-more:hover {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.08);
+}
+
+.space-strip {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, #000 85%, transparent);
+}
+
+.space-tab {
+  flex: 0 0 auto;
+  max-width: 84px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: rgba(var(--lift-rgb), 0.06);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-tab.pinned {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  min-width: 0;
+  padding: 0;
+  color: rgb(var(--pin-rgb));
+}
+
+.space-tab.focused {
+  background: color-mix(in srgb, var(--space) 22%, transparent);
+  color: var(--text);
+}
+
+.space-tab.more {
+  flex: 0 0 auto;
+  background: transparent;
+}
+
+.space-focus {
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.space-focus.none {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.space-meta {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 18px;
+}
+
+.space-key {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+  opacity: 0.6;
+}
+
+button.space-new {
+  flex-direction: column;
+  gap: 8px;
+  height: auto;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--border);
+  color: var(--muted);
+}
+
+button.space-new:hover,
+button.space-new:focus-visible {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.04);
+  box-shadow: inset 0 0 0 1.5px rgba(var(--lift-rgb), 0.25);
+}
+
+.spaces-deleted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.spaces-deleted[hidden] {
+  display: none;
+}
+
+.spaces-deleted-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+button.spaces-restore {
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--space) 40%, transparent);
+  background: transparent;
+}
+
+button.spaces-restore:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--space) 12%, transparent);
+}
+
+.spaces-keys {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 16px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.spaces-keys kbd {
+  display: inline-block;
+  min-width: 14px;
+  margin: 0 1px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(var(--lift-rgb), 0.08);
+  font: inherit;
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.space-menu {
+  position: fixed;
+  z-index: 46;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4), inset 0 0 0 1px var(--border);
+}
+
+.space-swatches {
+  display: grid;
+  grid-template-columns: repeat(9, 14px);
+  gap: 4px;
+  padding: 4px 4px 8px;
+}
+
+button.space-swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: none;
+}
+
+button.space-swatch:hover {
+  background: var(--swatch);
+  transform: scale(1.2);
+}
+
+button.space-swatch.on {
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--swatch);
+}
+
+button.space-menu-item {
+  justify-content: flex-start;
+  height: 28px;
+  padding: 0 8px;
+  background: transparent;
+  box-shadow: none;
+}
+
+button.space-menu-item:hover {
+  background: rgba(var(--lift-rgb), 0.08);
+}
+
+button.space-menu-item.danger {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.spaces-anim .chrome > *,
+  html.spaces-anim .workspace,
+  .spaces,
+  .space-card {
+    transition: none !important;
+  }
+
+  html.spaces-open .workspace {
+    transform: none;
+    filter: none;
+  }
+}

@@ -46,6 +46,15 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 `npm start` runs the daemon in the foreground. Cursor does not need this: the MCP server starts the daemon on first use. `npm stop` stops a running daemon.
 
+## Spaces
+
+A space is a named set of tabs, such as one for home and one for work, or one per project. The chip beside the logo names the current space; it, or **Ctrl+E**, fades the board away to the space cards (tab strip miniature, focused page, main folders, last used). Pick one (click, Enter, or 1–9) to swap the whole strip: the current tabs close into their space, and the chosen space's tabs open in their saved order with their pins and focused tab. **Ctrl+Shift+PageUp / PageDown** switches to the previous / next space directly, and spaces show up in the Ctrl+D palette by name.
+
+- Pages are shared: a page can be a tab in several spaces, and every page stays in the Library. Opening a page from the Library or an agent's `page_show` puts it in the current space.
+- Cards can be renamed (double-click or F2), recolored (⋯), reordered by dragging, and deleted (Del). Ctrl+Z in the overview, the notice's Undo, or the "Recently deleted" chips bring a space back with its tabs (the last 10).
+- Tabs parked in other spaces are skipped by Ctrl+Z reopen and by Library clean-up (unless it includes open pages).
+- Spaces are stored in `scribe.sqlite` (`meta.spaces`). Agents only see the current strip; the `/api/spaces` routes are for the board UI.
+
 ## Desktop app
 
 `desktop/` is an optional Tauri window over the same daemon and UI, so the browser keeps working as before. It needs a Rust toolchain to build and Node at runtime (it runs this clone's `dist/index.js` to start the daemon; set `SCRIBE_DIR` to point elsewhere).

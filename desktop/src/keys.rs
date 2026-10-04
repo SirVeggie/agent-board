@@ -33,6 +33,8 @@ enum Shortcut {
 }
 
 const VK_TAB: u32 = 0x09;
+const VK_PRIOR: u32 = 0x21;
+const VK_NEXT: u32 = 0x22;
 
 /// The key that types an apostrophe in the current layout (on Nordic layouts the '* key next to
 /// Enter), so the model shortcuts follow the label rather than a US key position.
@@ -64,12 +66,16 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
     if key == VK_TAB {
         return Some(Shortcut::Board(if shift { "prev-tab" } else { "next-tab" }));
     }
+    if shift && (key == VK_PRIOR || key == VK_NEXT) {
+        return Some(Shortcut::Board(if key == VK_PRIOR { "prev-space" } else { "next-space" }));
+    }
     match (u8::try_from(key).ok()?, shift) {
         (b'M', true) => Some(Shortcut::Compact),
         (b'T', true) => Some(Shortcut::Board("reopen")),
         (b'D', false) => Some(Shortcut::Board("palette")),
         (b'S', false) => Some(Shortcut::Board("download")),
         (b'H', false) => Some(Shortcut::Board("help")),
+        (b'E', false) => Some(Shortcut::Board("spaces")),
         (b'W', false) => Some(Shortcut::Board("close-tab")),
         (b'K', false) => Some(Shortcut::Board("agent-dock")),
         (b'K', true) => Some(Shortcut::Board("agent-new")),
