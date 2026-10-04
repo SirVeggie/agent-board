@@ -3322,12 +3322,18 @@
   // code: the worker_step action lets one of them take each step. Anything unexpected (a failed
   // turn, an unfinished card, a merge that doesn't go through) pauses the worker with its reason.
   // "Stop when its card is done" sets stop on the worker (list shows it as stopRequested on the
-  // column) and logs worker_stop.
+  // column) and logs worker_stop. When a plan usage limit stops the agent's turn, the worker keeps
+  // its chat and card (wait.until) and sends it on once the limit has reset.
   var FOLDER_MODES = { code: true, plan: true };
   /** Cards one agent chat may take before the board starts a fresh one. */
   var MAX_CARDS_PER_AGENT = 3;
   /** Matches the worker_step action's lease. */
   var STEP_LEASE_MS = 15 * 60 * 1000;
+  /** How long after a plan limit resets the worker sends its agent on, so the new usage is in. */
+  var RESUME_DELAY_MS = 60 * 1000;
+  /** Limit waits in a row before the worker gives up on a card and pauses. */
+  var MAX_LIMIT_WAITS = 8;
+  var RESUME_PROMPT = "Your plan's usage limit has reset. Go on with your card where you left off: check the card and the work you have done so far, then finish it as before.";
   var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
   var PLAY_SVG = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z"/></svg>';
   var agentOptions = null;
@@ -3337,6 +3343,7 @@
   var advancing = {};
   var workerErrors = {};
   var workersTimer = 0;
+  var waitTimer = 0;
   var workerCol = null;
   var workerHintOpen = false;
   var stopCol = null;
@@ -3371,6 +3378,11 @@
   }
   /** Started and not stopped: working on a card, or waiting for one. */
   function workerOn(w) { return Boolean(w && w.run); }
+  /** Out of plan usage: when the worker sends its agent on, else 0. */
+  function workerWaitUntil(w) { return (w && w.wait && Number(w.wait.until)) || 0; }
+  function limitTime(at) {
+    return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  }
   function saveWorker(colId, patch) {
     var all = Object.assign({}, workers());
     var next = Object.assign({}, all[colId] || {}, patch);
@@ -3401,6 +3413,7 @@
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (!workerReady(w)) parts.push(FOLDER_MODES[mode] && !w.cwd ? "needs a folder" : "needs instructions");
     else if (workerRunning(w)) parts.push(w.stop ? "stopping" : "working");
+    else if (workerWaitUntil(w)) parts.push("out of usage until " + limitTime(workerWaitUntil(w)));
     else if (workerOn(w)) parts.push("waiting for cards");
     return parts.join(" · ");
   }
@@ -3488,10 +3501,17 @@
   /** Move on any running worker whose agent is done, or that waits and has a card to take. */
   function advanceWorkers() {
     if (!AGENT_MODE || !hasWorkerApi()) return;
+    clearTimeout(waitTimer);
+    var soonest = 0;
     Object.keys(workers()).forEach(function (colId) {
       var col = column(colId), w = worker(colId);
       if (!col || col.role !== "agent" || !workerOn(w) || advancing[colId] || launching[colId]) return;
       if (w.step && Number(w.step.at) > Date.now() - STEP_LEASE_MS) return;
+      var due = workerWaitUntil(w) ? workerWaitUntil(w) + RESUME_DELAY_MS : 0;
+      if (due > Date.now()) {
+        if (!soonest || due < soonest) soonest = due;
+        return;
+      }
       if (w.threadId) {
         var t = threadStatus[w.threadId];
         if (!t || t.unknown || t.status !== "idle" || t.queued > 0) return;
@@ -3500,6 +3520,8 @@
       }
       stepWorker(colId, false);
     });
+    // Come back when a limit wait is over; at most an hour at a time, so a sleeping machine catches up.
+    if (soonest) waitTimer = setTimeout(scheduleWorkers, Math.min(Math.max(soonest - Date.now(), 1000), 60 * 60 * 1000));
   }
 
   /** One step, held through worker_step: wrap up the last agent (check, merge), then start the next card, wait, or stop. */
@@ -3508,10 +3530,12 @@
     var from = str(w && w.threadId) || null;
     // A click goes on from a pause; it only wraps up a chat whose merge didn't go through.
     var wrap = Boolean(from && (!start || w.merge === from));
+    var resume = Boolean(from && !start && workerWaitUntil(w));
     advancing[colId] = true;
     var since = start ? Date.now() : Number(w.run.since) || Date.now();
     return scribe.action("worker_step", { column: colId, from: from, token: newId("st"), start: Boolean(start) }).then(
       function (r) {
+        if (resume) return resumeAgent(colId, from);
         return (wrap ? wrapUp(colId, from, start ? null : r) : Promise.resolve(true)).then(function (ok) {
           if (ok) return nextStep(colId, since, start);
         });
@@ -3535,6 +3559,15 @@
     var w = worker(colId), run = w.run || {};
     if (r) {
       var turn = r.lastTurn;
+      if (turn && turn.status === "error" && turn.limitResetsAt) {
+        var waits = (Number(w.wait && w.wait.count) || 0) + 1;
+        if (waits > MAX_LIMIT_WAITS) {
+          endRun(colId, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true);
+        } else {
+          patchWorker(colId, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
+        }
+        return Promise.resolve(false);
+      }
       if (turn && (turn.status === "error" || turn.status === "cancelled")) {
         endRun(colId, "The agent's turn " + (turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped") + ". Its chat is kept; press ▶ to go on with the next card.", true);
         return Promise.resolve(false);
@@ -3559,6 +3592,19 @@
     });
   }
 
+  /** A plan limit stopped the agent and has reset since: send its chat on, keeping its card. */
+  function resumeAgent(colId, threadId) {
+    var w = worker(colId);
+    return scribe.agent.send(threadId, RESUME_PROMPT).then(function (r) {
+      if (!r || !r.ok) {
+        endRun(colId, "Could not send the agent on after its usage limit reset: " + launchError(r).replace(/^Could not launch: /, ""), false);
+        return;
+      }
+      threadStatus[threadId] = { status: "running", queued: 0 };
+      patchWorker(colId, { step: null, wait: { count: Number(w && w.wait && w.wait.count) || 1 } });
+    });
+  }
+
   /** start: the step began with a click, which already cleared stop in the daemon (this window may not have that yet). */
   function nextStep(colId, since, start) {
     var w = worker(colId);
@@ -3566,7 +3612,7 @@
     if (w.stop && !start) { endRun(colId, null, true); return; }
     var c = nextCard(colId);
     if (!c) {
-      patchWorker(colId, { threadId: null, step: null, merge: null, run: { since: since } });
+      patchWorker(colId, { threadId: null, step: null, merge: null, wait: null, run: { since: since } });
       return;
     }
     return startCard(colId, c, since);
@@ -3592,14 +3638,14 @@
         return;
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
-      patchWorker(colId, { threadId: r.threadId, step: null, merge: null, run: { since: since, card: c.num, startedAt: startedAt } });
+      patchWorker(colId, { threadId: r.threadId, step: null, merge: null, wait: null, run: { since: since, card: c.num, startedAt: startedAt } });
     });
   }
 
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
   function endRun(colId, error, clearThread) {
     var w = worker(colId);
-    var patch = { run: null, step: null, stop: null, error: error || null, merge: null };
+    var patch = { run: null, step: null, stop: null, error: error || null, merge: null, wait: null };
     if (clearThread) patch.threadId = null;
     else if (w && w.threadId) patch.merge = w.threadId;
     patchWorker(colId, patch);
@@ -3630,8 +3676,10 @@
     } else if (workerOn(w)) {
       btn.classList.add("waiting");
       btn.appendChild(el("span", "pulse"));
-      btn.appendChild(document.createTextNode(w.stop ? "Stopping" : "Waiting"));
-      btn.title = str(w.name || "The agent") + " starts on the next card that comes in. Click to stop.";
+      btn.appendChild(document.createTextNode(w.stop ? "Stopping" : workerWaitUntil(w) ? "Out of usage" : "Waiting"));
+      btn.title = workerWaitUntil(w)
+        ? str(w.name || "The agent") + " ran out of plan usage and goes on with its card after the limit resets (" + limitTime(workerWaitUntil(w)) + "). Click to stop."
+        : str(w.name || "The agent") + " starts on the next card that comes in. Click to stop.";
     } else {
       btn.innerHTML = PLAY_SVG;
       btn.appendChild(document.createTextNode(str(w.name) || "Start"));

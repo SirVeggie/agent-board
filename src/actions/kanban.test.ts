@@ -322,3 +322,39 @@ test("sweep falls back to the first agent column when the origin column is gone"
   })!;
   assert.equal(card(applyStateOps(gone, lost.ops), 1).col, "claude");
 });
+
+test("the sweep keeps a running worker's card claimed while its chat waits out a plan limit", () => {
+  const resetsAt = 50_000;
+  const limited: ThreadRunInfo = { exists: true, running: false, title: "W", lastTurn: { status: "error", endedAt: 2000, error: "You've hit your limit", limitResetsAt: resetsAt } };
+  const claimed = run(board(), "claim", { card: 1 }, agent({ session: undefined, thread: "th_w" })).state;
+  const withWorker = (w: Record<string, unknown>) => ({ ...claimed, settings: { workers: { ready: { threadId: "th_w", ...w } } } });
+  const ctx = (now: number): SweepContext => ({ now, thread: () => limited, sessionSeenAt: () => undefined });
+
+  const waiting = kanbanActions.sweep!(withWorker({ run: { since: 1 } }), ctx(3000))!;
+  const state = applyStateOps(withWorker({ run: { since: 1 } }), waiting.ops);
+  assert.equal(card(state, 1).col, "work");
+  assert.ok(card(state, 1).claim);
+  assert.equal((card(state, 1).status as { kind: string }).kind, "info");
+  assert.match((card(state, 1).status as { text: string }).text, /Out of plan usage/);
+  assert.equal(waiting.events?.length, 0);
+  // The status is set once, not on every sweep.
+  assert.equal(kanbanActions.sweep!(state, ctx(4000)), null);
+
+  // Long after the reset, with no one picking it up, the claim goes stale.
+  const late = kanbanActions.sweep!(state, ctx(resetsAt + 31 * 60 * 1000))!;
+  assert.deepEqual(late.events?.map((e) => e.name), ["claim_stale"]);
+
+  // A stopped worker (or a chat no worker runs) loses the card as before.
+  const stopped = kanbanActions.sweep!(withWorker({}), ctx(3000))!;
+  assert.deepEqual(stopped.events?.map((e) => e.name), ["claim_lost"]);
+});
+
+test("worker_step passes on when a plan limit resets", () => {
+  const threads: Record<string, ThreadRunInfo> = {
+    limited: { exists: true, running: false, title: "L", lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } },
+  };
+  const page: ActionContext = { caller: { by: "user", label: "user" }, now: 1000, values: {}, thread: (id) => threads[id] ?? { exists: false } };
+  const state = { ...board(), settings: { workers: { ready: { threadId: "limited", run: { since: 1 } } } } };
+  const r = run(state, "worker_step", { column: "ready", from: "limited", token: "a" }, page);
+  assert.deepEqual(r.result, { ok: true, lastTurn: { status: "error", error: "limit", limitResetsAt: 5000 } });
+});

@@ -7,6 +7,8 @@ import {
   parseResetsAt,
   planLimitsFromRateLimitInfo,
   planLimitsFromUsageReport,
+  UNKNOWN_RESET_RETRY_MS,
+  usageLimitResetsAt,
 } from "./planLimits.js";
 
 test("rate_limit_event unifiedWindows keeps utilization 0–1 and resetsAt in ms", () => {
@@ -104,4 +106,25 @@ test("nextResetAfter walks forward in window-sized steps", () => {
   assert.equal(nextResetAfter("five_hour", start, start), start + 5 * 60 * 60 * 1000);
   assert.equal(nextResetAfter("seven_day_opus", start, start + 8 * 24 * 60 * 60 * 1000), start + 14 * 24 * 60 * 60 * 1000);
   assert.equal(nextResetAfter("overage", start, start), undefined);
+});
+
+test("usageLimitResetsAt tells a plan limit from other failures and finds when it resets", () => {
+  const limits = {
+    at: 1500,
+    status: "rejected",
+    windows: [
+      { id: "five_hour", label: "5-hour", utilization: 1, resetsAt: 9000 },
+      { id: "seven_day", label: "Weekly", utilization: 0.4, resetsAt: 7000 },
+    ],
+  };
+  assert.equal(usageLimitResetsAt("Claude AI usage limit reached|1759339200", undefined, 1000, 2000), 1759339200 * 1000);
+  // The exhausted window's reset, not the soonest one.
+  assert.equal(usageLimitResetsAt("You've hit your limit · resets 3pm", limits, 1000, 2000), 9000);
+  // A rejected rate_limit_event during the turn is enough, whatever the error says.
+  assert.equal(usageLimitResetsAt("Claude reported an error", limits, 1000, 2000), 9000);
+  // ...but not one from an earlier turn.
+  assert.equal(usageLimitResetsAt("Claude reported an error", limits, 1600, 2000), undefined);
+  assert.equal(usageLimitResetsAt("credit balance too low", { ...limits, status: "allowed" }, 1000, 2000), undefined);
+  // A limit with no known reset tries again later.
+  assert.equal(usageLimitResetsAt("5-hour limit reached ∙ resets 2am", undefined, 1000, 2000), 2000 + UNKNOWN_RESET_RETRY_MS);
 });

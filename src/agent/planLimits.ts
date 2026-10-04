@@ -136,6 +136,28 @@ export function nextRefreshAt(limits: PlanLimits | undefined): number | null {
   return Math.min(...times);
 }
 
+/** Claude's wording when a plan limit stops a turn ("Claude AI usage limit reached|<unix>", "5-hour limit reached ∙ resets 2am", "You've hit your limit · resets 9pm"). */
+const LIMIT_ERROR = /usage limit|limit reached|hit your( usage)? limit|out of (extra )?usage/i;
+/** How long to wait before trying again when a limit stopped a turn but no reset time is known. */
+export const UNKNOWN_RESET_RETRY_MS = 30 * 60 * 1000;
+
+/**
+ * When a turn that a plan usage limit stopped may go again, or undefined when the turn failed for
+ * another reason. Uses the reset the error names, else the soonest exhausted window's (plan usage
+ * the turn itself reported as rejected counts as the sign too), else a retry a while later.
+ */
+export function usageLimitResetsAt(error: string | undefined, limits: PlanLimits | undefined, turnStartedAt: number, endedAt: number): number | undefined {
+  const text = error ?? "";
+  const stamp = /limit reached\|(\d{9,13})/i.exec(text);
+  if (stamp) return parseResetsAt(Number(stamp[1]));
+  const rejected = limits?.status === "rejected" && limits.at >= turnStartedAt;
+  if (!rejected && !LIMIT_ERROR.test(text)) return undefined;
+  const ahead = (limits?.windows ?? []).filter((w) => typeof w.resetsAt === "number" && w.resetsAt > endedAt);
+  const full = ahead.filter((w) => w.utilization >= 1);
+  const times = (full.length ? full : ahead).map((w) => w.resetsAt as number);
+  return times.length ? Math.min(...times) : endedAt + UNKNOWN_RESET_RETRY_MS;
+}
+
 export function livePlanLimits(limits: PlanLimits, now = Date.now()): PlanLimits {
   return applyExpiredWindows(limits, now);
 }

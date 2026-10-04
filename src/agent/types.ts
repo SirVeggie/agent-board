@@ -164,6 +164,8 @@ export type Turn = {
   files?: FileChange[];
   usage?: Usage;
   error?: string;
+  /** The turn failed on a plan usage limit: when the plan should let it go again. */
+  limitResetsAt?: number;
   reverted?: boolean;
   /** This turn's last entry in the provider's own transcript (Claude's chain uuid): where a rewind to after this turn forks. */
   nativeEnd?: string;

@@ -118,6 +118,16 @@ function workerColumnForThread(state: BoardState, threadId: string): Column | un
   return columns(state).find((c) => workers[c.id]?.threadId === threadId);
 }
 
+/** The thread is a running worker's chat, which the board resumes after a plan limit resets. */
+function workerWaits(state: BoardState, threadId: string): boolean {
+  const col = workerColumnForThread(state, threadId);
+  return Boolean(col && worker(state, col.id)?.run);
+}
+
+function resetTime(at: number): string {
+  return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+}
+
 /** Where a stopped or released card goes: the inbox it came from, else that thread's worker, else the first agent column. */
 function returnColumn(state: BoardState, card: Card): Column | undefined {
   const origin = columnById(state, card.claim?.from) ?? columnById(state, card.from);
@@ -471,12 +481,13 @@ export const kanbanActions: ActionSet = {
           if (!w.run) throw new ActionError("the worker is not running");
           if (w.step && w.step.token !== token && w.step.at > ctx.now - STEP_LEASE_MS) throw new ActionError("another window is on it");
         }
-        let lastTurn: { status: string; error?: string } | null = null;
+        let lastTurn: { status: string; error?: string; limitResetsAt?: number } | null = null;
         if (w.threadId && ctx.thread) {
           const info = ctx.thread(w.threadId);
           if (info.exists) {
             if (info.running || !info.lastTurn || info.lastTurn.status === "running") throw new ActionError("the agent is still working");
-            lastTurn = { status: info.lastTurn.status, ...(info.lastTurn.error ? { error: info.lastTurn.error } : {}) };
+            const { status, error, limitResetsAt } = info.lastTurn;
+            lastTurn = { status, ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}) };
           }
         }
         const value: Record<string, unknown> = { step: { token, at: ctx.now } };
@@ -505,6 +516,15 @@ export const kanbanActions: ActionSet = {
             /* still live */
           } else {
             release = "The chat thread working on this card was deleted.";
+          }
+        } else if (!info.running && info.lastTurn?.limitResetsAt && workerWaits(state, claim.thread)) {
+          // A plan limit stopped the turn; the worker goes on in the same chat once the limit resets.
+          const resetsAt = info.lastTurn.limitResetsAt;
+          if (resetsAt < ctx.now - THREAD_STALE_MS) {
+            stale = "The agent ran out of plan usage, and its worker didn't pick it up again after the limit reset.";
+          } else {
+            const text = `Out of plan usage. The worker goes on after the limit resets (${resetTime(resetsAt)}).`;
+            if (card.status?.text !== text) ops.push({ op: "merge", path: cardPath(card), value: { status: { kind: "info", text } } });
           }
         } else if (!info.running && info.lastTurn && (info.lastTurn.status === "error" || info.lastTurn.status === "cancelled")) {
           const how = info.lastTurn.status === "error" ? `failed${info.lastTurn.error ? `: ${info.lastTurn.error}` : ""}` : "was stopped";

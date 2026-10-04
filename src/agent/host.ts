@@ -33,7 +33,7 @@ import type {
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
-import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromRateLimitInfo, planLimitsFromUsageReport } from "./planLimits.js";
+import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import type {
   AgentEvent,
@@ -439,7 +439,7 @@ export class AgentHost {
       exists: true,
       running: status !== "idle",
       title: thread.title,
-      ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}) } } : {}),
+      ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}) } } : {}),
     };
   }
 
@@ -1267,6 +1267,10 @@ export class AgentHost {
     }
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
+    if (result.status === "error") {
+      const resetsAt = usageLimitResetsAt(result.error, this.planLimits[thread.provider], turn.startedAt, turn.endedAt);
+      if (resetsAt) turn.limitResetsAt = resetsAt;
+    }
     this.saveTurn(turn);
     this.flushNow();
     this.runs.delete(threadId);
