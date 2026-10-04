@@ -32,6 +32,8 @@ type Card = {
   blockedBy?: string[];
   status?: { kind: string; text: string };
   claim?: Claim;
+  /** Last in-app agent thread that claimed the card; kept after the claim ends. */
+  thread?: string;
   /** Last agent column this card entered; sweep/release/changes return it there. */
   from?: string;
   archived?: boolean;
@@ -419,6 +421,7 @@ export const kanbanActions: ActionSet = {
               assignee: claimAssignee(args, ctx),
               status: { kind: "working", text: str(args.text) || "Working on it" },
               claim: claimFor(ctx, ctx.now, from),
+              ...(ctx.caller.thread ? { thread: ctx.caller.thread } : {}),
               ...(from ? { from } : {}),
             },
           },

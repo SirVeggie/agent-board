@@ -1058,6 +1058,17 @@ export const BOARD_BRIDGE_JS = `
       opts = opts || {};
       return agentCall({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) }, AGENT_ASK_MS);
     },
+    /**
+     * Open a thread in Scribe's chat (needs a click): { ok }. Any thread the user has, not only this
+     * page's, e.g. the one that last claimed a card; the page learns nothing about it. opts: { where: "sidebar" | "dock" }.
+     */
+    show: function (threadId, opts) {
+      if (!hasGesture()) {
+        console.warn("[scribe] scribe.agent.show needs a click or key press; ignored");
+        return Promise.resolve({ ok: false, error: "no_gesture" });
+      }
+      return agentCall({ op: "show", threadId: agentText(threadId), where: agentText(opts && opts.where) });
+    },
     /** Stop the thread's current turn and drop its queued messages: { ok }. */
     stop: function (threadId) {
       return agentCall({ op: "stop", threadId: agentText(threadId) }, AGENT_ASK_MS);

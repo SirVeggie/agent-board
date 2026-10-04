@@ -71,6 +71,15 @@ test("finish comments, clears the claim, and hands the card to review", () => {
   assert.equal((c.comments as Array<{ by: string }>).at(-1)?.by, "agent");
 });
 
+test("a thread's claim records it on the card, and finish keeps it", () => {
+  const ctx = agent({ thread: "th_1" });
+  const claimed = run(board(), "claim", { card: 1 }, ctx).state;
+  assert.equal(card(claimed, 1).thread, "th_1");
+  const { state } = run(claimed, "finish", { card: 1, summary: "Done." }, ctx);
+  assert.equal(card(state, 1).thread, "th_1");
+  assert.equal(card(run(board(), "claim", { card: 1 }, agent({ thread: undefined })).state, 1).thread, undefined);
+});
+
 test("finish without a summary hands in the comment posted since the claim, and never doubles it", () => {
   const claimed = run(board(), "claim", { card: 1 }, agent({ session: "s1" }));
   // A comment from before this claim does not count as the hand-in.

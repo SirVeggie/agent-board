@@ -4800,6 +4800,12 @@
         const after = S.threads.get(now.id);
         return after ? { ...result, thread: pageBrief(after) } : { ok: false, error: "not_found" };
       }
+      case "show":
+        // Only opens it for the user; nothing about the thread goes back to the page.
+        if (!activated) return { ok: false, error: "no_gesture" };
+        if (!thread || thread.archived) return { ok: false, error: "not_found" };
+        showPageThread(thread.id, data.where === "dock" ? "dock" : "sidebar");
+        return { ok: true };
       case "options":
         return pageOptions();
       case "pickFolder": {

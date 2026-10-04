@@ -113,7 +113,7 @@ scribe.action("move", { card: 12, to: "done" })  // run one of the template's ac
 
 A submit button can log the same event without extra script: `data-scribe-signal="submitted"`. The agent then calls `page_wait` with that event name.
 
-Pages can also use Scribe's agent chat with `scribe.agent`: `start(prompt, opts)` makes a thread for the page, `send(threadId, prompt)` continues it, `stop(threadId)` stops it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. `options()` lists the providers, models, modes, and approval policies `start` can pick, and `pickFolder()` lets the user choose a folder. A page only reaches its own threads.
+Pages can also use Scribe's agent chat with `scribe.agent`: `start(prompt, opts)` makes a thread for the page, `send(threadId, prompt)` continues it, `stop(threadId)` stops it, `wait(threadId)` resolves with the reply, and `threads()` / `get()` / `onChange()` read it. `options()` lists the providers, models, modes, and approval policies `start` can pick, and `pickFolder()` lets the user choose a folder. A page only reaches its own threads; `show(threadId)` (on a click) is the exception: it opens any thread in the chat without telling the page anything about it.
 
 What else a page may do is up to the user, per page (tab menu → **Permissions…**):
 

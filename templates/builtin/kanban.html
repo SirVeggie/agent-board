@@ -2874,6 +2874,14 @@
     closeMenu();
     menuEl = el("div", "menu card-menu");
     menuButton(menuEl, "Open", function () { openCard(id); });
+    var thread = c.thread || (c.claim && c.claim.thread);
+    if (thread && scribe.agent && typeof scribe.agent.show === "function") {
+      menuButton(menuEl, "Open thread", function () {
+        scribe.agent.show(thread, { where: "sidebar" }).then(function (r) {
+          if (!r || !r.ok) setHint(r && r.error === "not_found" ? "That thread is gone." : "Couldn't open the thread.");
+        });
+      });
+    }
     var sub = el("div", "menu-sub");
     var subBtn = el("button", null);
     subBtn.type = "button";
