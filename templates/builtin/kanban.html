@@ -939,7 +939,7 @@
       <h3 id="workerTitle">Agent worker</h3>
       <p id="workerIntro">Takes this column's cards one by one, following your instructions, and waits for more.</p>
       <div class="worker-form" id="workerForm"></div>
-      <p class="worker-note" id="workerNote"></p>
+      <p class="worker-note hidden" id="workerNote"></p>
       <div class="confirm-row">
         <button class="ghost" id="workerRemove" type="button">Remove worker</button>
         <span class="spacer"></span>
@@ -3962,6 +3962,8 @@
     $("workerTitle").textContent = "Agent worker · " + col.title;
     workerForm.replaceChildren(el("p", "worker-note", hasWorkerApi() ? "Loading…" : "Restart Scribe to set up agent workers."));
     $("workerNote").textContent = "";
+    $("workerNote").classList.add("hidden");
+    $("workerNote").classList.remove("warn");
     $("workerRemove").classList.toggle("hidden", !worker(colId));
     workerBack.classList.remove("hidden");
     $("workerClose").focus();
@@ -4130,13 +4132,15 @@
   function renderWorkerNote(colId) {
     var w = worker(colId);
     var note = $("workerNote");
-    var ready = workerReady(w);
-    note.classList.toggle("warn", !ready);
-    note.textContent = ready
-      ? "The column's header has a button to start it. Changes apply to the next agent it starts. The board starts those itself, so keep it open while the worker runs (Scribe asks once before it may)."
-      : FOLDER_MODES[workerMode(w)] && w && str(w.instructions).trim()
+    var text = "";
+    if (!workerReady(w)) {
+      text = FOLDER_MODES[workerMode(w)] && w && str(w.instructions).trim()
         ? "Pick a folder to show the start button."
         : "Write instructions to show the start button on the column.";
+    }
+    note.classList.toggle("warn", Boolean(text));
+    note.classList.toggle("hidden", !text);
+    note.textContent = text;
   }
   $("workerClose").addEventListener("click", closeWorker);
   workerBack.addEventListener("pointerdown", function (e) { if (e.target === workerBack) closeWorker(); });
