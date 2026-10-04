@@ -111,6 +111,8 @@
   }
 
   function notice(text) {
+    // The toast sits on the floating chat. Skip it when that chat is the one in use.
+    if (S.dockShown && !S.fullOpen && (dockFocused() || !S.sideOpen)) return;
     app()?.showNotice?.(text);
   }
 
@@ -2512,7 +2514,7 @@
       web.append(icon("fetch"), el("span", null, "Web"));
       if (this.variant !== "dock") bar.append(web);
       if (this.variant === "dock") {
-        const meter = usageChip(s.provider);
+        const meter = usageChip(s.provider, true);
         if (meter) bar.append(meter);
       }
       this.ctxMeter = contextMeter(this);
@@ -3324,8 +3326,7 @@
       S.fullOpen = true;
       this.root.hidden = false;
       document.body.classList.add("agent-full-open");
-      const id = threadId || (S.current && S.threads.has(S.current) ? S.current : null);
-      if (id) this.view.setThread(id);
+      if (threadId) this.view.setThread(threadId);
       else this.view.startDraft(draft?.scope || defaultScope(), draft?.settings || {});
       this.renderList();
       setTimeout(() => this.view.focus(), 50);
@@ -4058,19 +4059,36 @@
     return tip;
   }
 
-  /** Compact "5h 84% · wk 76%" for the chat's settings bar; nothing until the provider has reported. */
-  function usageChip(provider) {
+  /** Windows the full chip lists: Cursor's Included is Auto + API, on-demand only once used. */
+  function chipWindows(limits) {
+    return limits.windows.filter((w) => w.id !== "cursor_included" && (w.id !== "cursor_on_demand" || w.utilization > 0));
+  }
+
+  /** Compact chip: Claude's 5-hour, Cursor's Included, else the fullest listed window. */
+  function compactWindow(limits) {
+    const listed = chipWindows(limits);
+    return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "cursor_included") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
+  }
+
+  /** Plan usage in the header as "5h 84% · wk 76%", or one percent in the floating chat. Nothing until the provider has reported. */
+  function usageChip(provider, compact = false) {
     const limits = planLimits(provider);
     if (!limits) return null;
-    // Cursor's Included pool is Auto + API, so the chip shows the two parts (and on-demand once it is used).
-    const shown = limits.windows.filter((w) => w.id !== "cursor_included" && (w.id !== "cursor_on_demand" || w.utilization > 0));
-    const top = Math.max(...limits.windows.map((w) => w.utilization));
+    const listed = chipWindows(limits);
+    const one = compact ? compactWindow(limits) : null;
+    if (!(compact ? one : listed.length)) return null;
+    const top = one ? one.utilization : Math.max(...limits.windows.map((w) => w.utilization));
     const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => {
       hideUsageTip();
       agentSettings.open();
     }, "");
-    chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
-    for (const w of shown) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${percent(w.utilization)}`));
+    if (compact) {
+      chip.append(el("span", `ag-usage-w lvl-${usageLevel(one.utilization)}`, percent(one.utilization)));
+      chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage ${percent(one.utilization)} of ${one.label}`);
+    } else {
+      chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
+      for (const w of listed) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${percent(w.utilization)}`));
+    }
     bindHoverTip(chip, () => usageTip(provider));
     return chip;
   }
@@ -4910,7 +4928,10 @@
   function enterFull(from) {
     fullFrom = from;
     const view = from === "dock" ? dock.view : sidebar.view;
-    full.open(view.threadId, view.draft);
+    // From the floating chat, keep its thread or its empty draft — don't open the sidebar's thread.
+    const threadId = view.threadId || (from !== "dock" && S.current && S.threads.has(S.current) ? S.current : null);
+    const draft = threadId ? view.draft : { scope: view.draft?.scope || defaultScope(), settings: inheritSettings(view) };
+    full.open(threadId, draft);
   }
 
   /** Close the full window into the chat it was opened from: the floating chat, else the sidebar. */

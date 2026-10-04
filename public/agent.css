@@ -2589,6 +2589,10 @@ button.dock-orb,
   opacity: 0.75;
 }
 
+.agent-dock .dock-status.s-idle {
+  display: none;
+}
+
 .dock-status.s-running .dock-dot {
   background: var(--ag-live);
   box-shadow: 0 0 8px var(--ag-live);
