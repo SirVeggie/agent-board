@@ -57,6 +57,11 @@
     { id: "limited", label: "Web: limited", detail: "Only the domains on the web allowlist, without asking (Claude)" },
     { id: "off", label: "Web off", detail: "No web search or fetch" },
   ];
+  /** Providers that actually apply Limited and Off. Cursor over ACP can't turn its web tools off (#140). */
+  function webEnforced(provider) {
+    return provider === "claude";
+  }
+  const WEB_UNENFORCED = "Not enforced on Cursor yet: its own web search and fetch stay on. Use a Claude thread when web must be off.";
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
   const SCOPE_SLASH = [
@@ -2523,14 +2528,24 @@
         bindHoverTip(wtBtn, () => worktreePendingTip(s.useWorktree));
         bar.append(wtBtn);
       }
-      const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
-      const web = button("", `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}`, (event) => this.webMenu(event.currentTarget), wm.detail);
-      web.append(icon("fetch"));
-      // The floating chat is narrow: the icon alone, with the mode in its tooltip and style.
-      if (this.variant !== "dock") web.append(el("span", null, wm.id === "limited" ? "Limited" : "Web"));
-      else web.classList.add("ag-web-icon");
-      web.setAttribute("aria-label", `${wm.label}: ${wm.detail}`);
-      bar.append(web);
+      // OpenAI-compatible threads have no web tools, so there is nothing to set.
+      if (s.provider !== "openai") {
+        const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
+        const unenforced = wm.id !== "on" && !webEnforced(s.provider);
+        const detail = unenforced ? WEB_UNENFORCED : wm.detail;
+        const web = button(
+          "",
+          `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}${unenforced ? " web-unenforced" : ""}`,
+          (event) => this.webMenu(event.currentTarget),
+          detail
+        );
+        web.append(icon("fetch"));
+        // The floating chat is narrow: the icon alone, with the mode in its tooltip and style.
+        if (this.variant !== "dock") web.append(el("span", null, wm.id === "limited" ? "Limited" : "Web"));
+        else web.classList.add("ag-web-icon");
+        web.setAttribute("aria-label", `${wm.label}: ${detail}`);
+        bar.append(web);
+      }
       if (this.variant === "dock") {
         const meter = usageChip(s.provider, true);
         if (meter) bar.append(meter);
@@ -2685,7 +2700,7 @@
       const cur = webMode(s.web);
       const items = WEB_MODES.map((w) => ({
         label: w.label,
-        detail: w.id === "limited" && s.provider !== "claude" ? "Claude only; other providers keep their own web tools" : w.detail,
+        detail: w.id !== "on" && !webEnforced(s.provider) ? "Claude only for now: Cursor keeps its own web tools" : w.detail,
         checked: cur === w.id,
         run: () => this.updateSettings({ web: w.id }),
       }));

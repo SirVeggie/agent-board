@@ -1813,6 +1813,12 @@ button.ag-pill.web-limited {
   color: #e8c27a;
 }
 
+/* Off or Limited on a provider that can't apply it: the setting is only a wish. */
+button.ag-pill.web-unenforced {
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
 button.ag-pill.ag-web-icon {
   width: 24px;
   padding: 0;
