@@ -670,6 +670,13 @@
   .comment .who { font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
   .comment .body { word-break: break-word; }
   .comment .body.md-preview { min-height: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; cursor: auto; }
+  .comment.folded { cursor: pointer; }
+  .comment.folded .body.md-preview {
+    max-height: 140px; overflow: hidden; cursor: pointer;
+    -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent);
+    mask-image: linear-gradient(to bottom, #000 45%, transparent);
+  }
+  .comment.folded:hover .body.md-preview { -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent); mask-image: linear-gradient(to bottom, #000 60%, transparent); }
   .comment-box { width: 100%; min-height: 58px; resize: vertical; }
   .m-status { padding: 8px 10px; border-radius: 10px; background: rgba(224, 179, 74, .08); color: var(--agent); display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .m-status.blocked { background: rgba(255, 107, 122, .1); color: var(--danger); }
@@ -1030,6 +1037,9 @@
 
   // ---------- local UI state (not shared) ----------
   var openId = null;
+  // Comments opened from their folded preview, for the card that is open (reset when it closes).
+  var expandedFor = null, expandedComments = {};
+  var COMMENT_FOLD_PX = 220;
   var composerCol = null;
   var composerText = "";
   var focusComposerNext = false;
@@ -2272,6 +2282,7 @@
     if (editingDesc) saveDescription();
     if (editingTitle) saveTitle();
     openId = null;
+    expandedFor = null;
     overlay.classList.add("hidden");
     render();
   }
@@ -2380,8 +2391,9 @@
     galleryEl.appendChild(addImg);
 
     // comments
+    if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; }
     commentsEl.replaceChildren();
-    c.comments.forEach(function (cm) {
+    c.comments.forEach(function (cm, i) {
       var box = el("div", "comment" + (cm.by === "agent" ? " agent" : ""));
       box.appendChild(el("div", "who", (cm.by === "agent" ? "🤖 Agent" : "You") + " · " + ago(cm.at)));
       // Markdown, like the description: #12 card links, [[page]] links and the card's images work too.
@@ -2389,6 +2401,14 @@
       body.innerHTML = renderMarkdown(cm.text, c.images);
       box.appendChild(body);
       commentsEl.appendChild(box);
+      // Long comments other than the latest fold to a faded preview; a click opens one until the card closes.
+      if (i < c.comments.length - 1 && !expandedComments[cm.id]) {
+        box.setAttribute("data-comment", cm.id);
+        foldComment(box);
+        body.querySelectorAll("img").forEach(function (img) {
+          img.addEventListener("load", function () { foldComment(box); });
+        });
+      }
     });
     if (!c.comments.length) commentsEl.appendChild(el("div", "who", "No comments yet."));
 
@@ -3236,7 +3256,24 @@
     var a = e.target.closest && e.target.closest("a[data-card]");
     if (a) { e.preventDefault(); e.stopPropagation(); openCard(a.getAttribute("data-card")); }
   }, true);
+  function foldComment(box) {
+    if (expandedComments[box.getAttribute("data-comment")]) return;
+    var body = box.querySelector(".body");
+    box.classList.remove("folded");
+    if (body.scrollHeight > COMMENT_FOLD_PX) {
+      box.classList.add("folded");
+      box.title = "Click to show the whole comment";
+    } else box.removeAttribute("title");
+  }
   commentsEl.addEventListener("click", function (e) {
+    var folded = e.target.closest && e.target.closest(".comment.folded");
+    if (folded) {
+      e.preventDefault();
+      expandedComments[folded.getAttribute("data-comment")] = true;
+      folded.classList.remove("folded");
+      folded.removeAttribute("title");
+      return;
+    }
     var a = e.target.closest && e.target.closest("a[data-card]");
     if (a) { e.preventDefault(); openCard(a.getAttribute("data-card")); return; }
     if (e.target.tagName === "IMG") showLightbox(e.target.src);
