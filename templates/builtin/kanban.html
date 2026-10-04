@@ -409,6 +409,19 @@
   .menu .check-mark { width: 14px; color: var(--accent); }
   .menu input[type=number] { width: 70px; }
   .menu .note { color: var(--muted); font-size: 11.5px; padding: 0 9px 6px; }
+  .menu .menu-sub { position: relative; }
+  .menu .menu-sub > button { display: flex; width: 100%; align-items: center; gap: 8px; text-align: left; padding: 7px 9px; border-radius: 8px; }
+  .menu .menu-sub:hover > button { background: rgba(255, 255, 255, .07); }
+  .menu .sub-arrow { margin-left: auto; color: var(--muted); }
+  .menu .submenu { display: none; position: absolute; top: -6px; left: 100%; min-width: 150px; }
+  .menu .menu-sub:hover > .submenu, .menu .menu-sub:focus-within > .submenu { display: block; }
+  .menu .menu-sub.flip > .submenu { left: auto; right: 100%; }
+  .menu .prio-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .35; }
+  .menu .prio-dot.p1 { background: #6b7a93; opacity: 1; }
+  .menu .prio-dot.p2 { background: var(--accent); opacity: 1; }
+  .menu .prio-dot.p3 { background: var(--warn); opacity: 1; }
+  .menu .prio-dot.p4 { background: var(--danger); opacity: 1; }
+  .menu > button.danger-item { color: var(--danger); }
 
   .overlay {
     position: fixed;
@@ -1763,6 +1776,11 @@
       li.appendChild(row);
     }
     li.addEventListener("pointerdown", function (e) { startCardDrag(e, c.id, li); });
+    li.addEventListener("contextmenu", function (e) {
+      if (isInteractive(e.target) || e.target.closest("a")) return;
+      e.preventDefault();
+      openCardMenu(c.id, e.clientX, e.clientY);
+    });
     return li;
   }
 
@@ -2800,8 +2818,8 @@
     updateCard(openId, function (x) { x.blockedBy = x.blockedBy.concat([bid]); return x; });
   });
 
-  $("mDup").addEventListener("click", function () {
-    var c = card(openId);
+  function duplicateCard(id, open) {
+    var c = card(id);
     if (!c) return;
     var now = Date.now();
     var num = Math.max(1, Math.floor(Number(scribe.state.nextNum) || 1));
@@ -2817,35 +2835,73 @@
     var cards = allCards().slice();
     cards.splice(cards.findIndex(function (x) { return x.id === c.id; }) + 1, 0, copy);
     scribe.set({ cards: cards, nextNum: num + 1 });
-    openCard(copy.id);
+    if (open) openCard(copy.id);
     render();
     setHint("Duplicated as #" + num + ".");
-  });
-  $("mArchive").addEventListener("click", function () {
-    var c = card(openId);
+  }
+  function toggleArchive(id) {
+    var c = card(id);
     if (!c) return;
     if (c.archived) {
       updateCard(c.id, function (x) { delete x.archived; delete x.archivedAt; return x; });
       setHint("Restored.");
       return;
     }
-    var id = c.id;
-    closeCard();
+    if (openId === id) closeCard();
     updateCard(id, function (x) { x.archived = true; x.archivedAt = Date.now(); return x; });
-  });
-  $("mDelete").addEventListener("click", function () {
-    var c = card(openId);
+    setHint("#" + c.num + " archived.");
+  }
+  function askDeleteCard(id) {
+    var c = card(id);
     if (!c) return;
-    var id = c.id;
     askConfirm({
       title: "Delete #" + c.num + "?",
-      text: "\u201c" + plainLinks(c.title) + "\u201d will be gone for good, with its comments and images. Archive keeps it instead."
+      text: "“" + plainLinks(c.title) + "” will be gone for good, with its comments and images. Archive keeps it instead."
     }).then(function (ok) {
       if (!ok) return;
       if (openId === id) closeCard();
       deleteCard(id);
     });
-  });
+  }
+  $("mDup").addEventListener("click", function () { duplicateCard(openId, true); });
+  $("mArchive").addEventListener("click", function () { toggleArchive(openId); });
+  $("mDelete").addEventListener("click", function () { askDeleteCard(openId); });
+
+  // ---------- card context menu ----------
+  function openCardMenu(id, x, y) {
+    var c = card(id);
+    if (!c) return;
+    closeMenu();
+    menuEl = el("div", "menu card-menu");
+    menuButton(menuEl, "Open", function () { openCard(id); });
+    var sub = el("div", "menu-sub");
+    var subBtn = el("button", null);
+    subBtn.type = "button";
+    subBtn.appendChild(el("span", null, "Priority"));
+    subBtn.appendChild(el("span", "sub-arrow", "›"));
+    sub.appendChild(subBtn);
+    var list = el("div", "menu submenu");
+    PRIORITIES.forEach(function (p, i) {
+      var b = menuButton(list, "", function () { updateCard(id, function (x) { x.priority = i; return x; }); });
+      b.appendChild(el("span", "check-mark", c.priority === i ? "✓" : ""));
+      b.appendChild(el("span", "prio-dot p" + i));
+      b.appendChild(el("span", null, p));
+    });
+    sub.appendChild(list);
+    menuEl.appendChild(sub);
+    menuButton(menuEl, "Duplicate", function () { duplicateCard(id, false); });
+    menuEl.appendChild(el("div", "sep"));
+    menuButton(menuEl, c.archived ? "Restore" : "Archive", function () { toggleArchive(id); });
+    menuButton(menuEl, "Delete…", function () { askDeleteCard(id); }).classList.add("danger-item");
+    document.body.appendChild(menuEl);
+    var w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+    var left = clamp(x, 8, window.innerWidth - w - 8);
+    menuEl.style.left = left + "px";
+    menuEl.style.top = clamp(y, 8, window.innerHeight - h - 8) + "px";
+    // Open the submenu toward whichever side has room.
+    if (left + w + list.offsetWidth + 8 > window.innerWidth) sub.classList.add("flip");
+  }
+
   function deleteCard(id) {
     setCards(allCards().filter(function (x) { return x.id !== id; }).map(function (x) {
       return x.blockedBy.indexOf(id) === -1 ? x : Object.assign({}, x, { blockedBy: x.blockedBy.filter(function (y) { return y !== id; }) });
