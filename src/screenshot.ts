@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
-import { contentBaseUrl } from "./config.js";
+import { MAX_LOCAL_STATE_BYTES, contentBaseUrl } from "./config.js";
+import { embedUrlFromHtml } from "./embed.js";
 import { log } from "./log.js";
 import { store } from "./store.js";
+import { isPlainObject, type BoardState } from "./types.js";
 
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 800;
@@ -15,6 +18,11 @@ const MAX_PNG_BYTES = 1_500_000;
 const IDLE_CLOSE_MS = 30_000;
 const NAV_TIMEOUT_MS = 20_000;
 const JPEG_QUALITY = 82;
+const CAPTURE_BOOT_TTL_MS = 60_000;
+const FRAME_WAIT_MS = 5_000;
+const SHOT_ID = /^[a-f0-9]{12}$/;
+
+const captureBoots = new Map<string, { local: BoardState; at: number }>();
 
 const LAUNCH_ARGS = ["--hide-scrollbars", "--mute-audio"];
 const CHANNELS = ["msedge", "chrome"] as const;
@@ -31,6 +39,12 @@ export type ScreenshotRequest = {
   fullPage?: boolean;
   width?: number;
   height?: number;
+  /** Seeded into `scribe.local` for this capture only; not saved as a viewer. */
+  local?: unknown;
+  /** Start from the most recently written viewer local, then overlay `local`. */
+  fromViewer?: boolean;
+  /** CSS selector to click after load, before capture. */
+  click?: string;
 };
 
 export type ScreenshotResult = {
@@ -40,6 +54,10 @@ export type ScreenshotResult = {
   height: number;
   fullPage: boolean;
   selector?: string;
+  click?: string;
+  fromViewer?: boolean;
+  local?: boolean;
+  embed?: boolean;
   id: string;
   key: string;
   title: string;
@@ -60,41 +78,66 @@ export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotRe
   const width = clamp(input.width ?? DEFAULT_WIDTH, MIN_VIEWPORT, MAX_VIEWPORT);
   const height = clamp(input.height ?? DEFAULT_HEIGHT, MIN_VIEWPORT, MAX_VIEWPORT);
   const selector = input.selector?.trim() || undefined;
+  const click = input.click?.trim() || undefined;
   const fullPage = Boolean(input.fullPage) && !selector;
+  const fromViewer = input.fromViewer === true;
+  const overlay = parseScreenshotLocal(input.local);
+  const embedUrl = embedUrlFromHtml(tab.html);
+  if (embedUrl && (fromViewer || overlay)) {
+    throw new Error("local and fromViewer do not apply to embed pages; the capture loads the embedded URL directly");
+  }
+  const seeded = captureLocal(tab.id, fromViewer, overlay);
+  const shotId = seeded && Object.keys(seeded).length ? beginCaptureBoot(seeded) : undefined;
+  const url = screenshotUrl(tab, shotId);
 
-  return withBrowser(async (opened) => {
-    const page = await opened.newPage({
-      viewport: { width, height },
-      deviceScaleFactor: 1,
-    });
-    try {
-      await page.goto(`${contentBaseUrl()}/view/${encodeURIComponent(tab.id)}`, {
-        waitUntil: "load",
-        timeout: NAV_TIMEOUT_MS,
+  try {
+    return await withBrowser(async (opened) => {
+      const page = await opened.newPage({
+        viewport: { width, height },
+        deviceScaleFactor: 1,
       });
-      await page.evaluate(() => document.fonts.ready);
-      await sleep(100);
+      try {
+        await page.goto(url, {
+          waitUntil: "load",
+          timeout: NAV_TIMEOUT_MS,
+        });
+        await page.evaluate(() => document.fonts.ready);
+        await waitForChildFrames(page);
+        if (click) {
+          await clickSelector(page, click);
+          await page.evaluate(() => document.fonts.ready);
+        }
+        await sleep(100);
 
-      const shot = selector
-        ? await captureSelector(page, selector)
-        : await capturePage(page, width, height, fullPage);
+        const shot = selector
+          ? await captureSelector(page, selector)
+          : await capturePage(page, width, height, fullPage);
 
-      return {
-        mimeType: shot.mimeType,
-        data: shot.buffer.toString("base64"),
-        width: shot.width,
-        height: shot.height,
-        fullPage,
-        selector,
-        id: tab.id,
-        key: tab.key,
-        title: tab.title,
-        bytes: shot.buffer.length,
-      };
-    } finally {
-      await page.close();
+        return {
+          mimeType: shot.mimeType,
+          data: shot.buffer.toString("base64"),
+          width: shot.width,
+          height: shot.height,
+          fullPage,
+          selector,
+          ...(click ? { click } : {}),
+          ...(fromViewer ? { fromViewer: true } : {}),
+          ...(shotId ? { local: true } : {}),
+          ...(embedUrl ? { embed: true } : {}),
+          id: tab.id,
+          key: tab.key,
+          title: tab.title,
+          bytes: shot.buffer.length,
+        };
+      } finally {
+        await page.close();
+      }
+    });
+  } finally {
+    if (shotId) {
+      endCaptureBoot(shotId);
     }
-  });
+  }
 }
 
 export async function closeScreenshotBrowser(): Promise<void> {
@@ -119,7 +162,14 @@ export function screenshotHttpStatus(message: string): number {
   if (message.startsWith("tab not found")) {
     return 404;
   }
-  if (message.startsWith("selector not found") || message.startsWith("selector is not visible")) {
+  if (
+    message.startsWith("selector not found") ||
+    message.startsWith("selector is not visible") ||
+    message.startsWith("click selector not found") ||
+    message.startsWith("click selector is not visible") ||
+    message.startsWith("local ") ||
+    message.startsWith("local and fromViewer")
+  ) {
     return 400;
   }
   if (message.includes("Could not launch")) {
@@ -129,6 +179,90 @@ export function screenshotHttpStatus(message: string): number {
     return 504;
   }
   return 500;
+}
+
+export function parseScreenshotLocal(value: unknown): BoardState | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isPlainObject(value)) {
+    throw new Error("local must be a JSON object");
+  }
+  const text = JSON.stringify(value);
+  if (Buffer.byteLength(text, "utf8") > MAX_LOCAL_STATE_BYTES) {
+    throw new Error(`local is too large (max ${MAX_LOCAL_STATE_BYTES} bytes)`);
+  }
+  return value;
+}
+
+/** URL the headless browser loads: the embed target when the page is an embed, otherwise /view/:id. */
+export function screenshotUrl(tab: { id: string; html: string }, shotId?: string): string {
+  const embed = embedUrlFromHtml(tab.html);
+  if (embed) {
+    return embed;
+  }
+  const view = `${contentBaseUrl()}/view/${encodeURIComponent(tab.id)}`;
+  return shotId ? `${view}?shot=${shotId}` : view;
+}
+
+export function beginCaptureBoot(local: BoardState): string {
+  sweepCaptureBoots();
+  const id = randomBytes(6).toString("hex");
+  captureBoots.set(id, { local, at: Date.now() });
+  return id;
+}
+
+export function readCaptureBoot(id: string): { local: BoardState } | undefined {
+  sweepCaptureBoots();
+  if (!SHOT_ID.test(id)) {
+    return undefined;
+  }
+  const boot = captureBoots.get(id);
+  return boot ? { local: boot.local } : undefined;
+}
+
+export function endCaptureBoot(id: string): void {
+  captureBoots.delete(id);
+}
+
+export function captureBootOf(value: unknown): { local: BoardState } | undefined {
+  return typeof value === "string" ? readCaptureBoot(value) : undefined;
+}
+
+function captureLocal(tabId: string, fromViewer: boolean, overlay: BoardState | undefined): BoardState | undefined {
+  if (!fromViewer && !overlay) {
+    return undefined;
+  }
+  const base = fromViewer ? store.latestLocal(tabId) : {};
+  return { ...base, ...(overlay ?? {}) };
+}
+
+function sweepCaptureBoots(): void {
+  const cutoff = Date.now() - CAPTURE_BOOT_TTL_MS;
+  for (const [id, boot] of captureBoots) {
+    if (boot.at < cutoff) {
+      captureBoots.delete(id);
+    }
+  }
+}
+
+async function clickSelector(page: Page, selector: string): Promise<void> {
+  const loc = page.locator(selector).first();
+  if ((await loc.count()) === 0) {
+    throw new Error(`click selector not found: ${selector}`);
+  }
+  try {
+    await loc.waitFor({ state: "visible", timeout: 5_000 });
+  } catch {
+    throw new Error(`click selector is not visible: ${selector}`);
+  }
+  await loc.click({ timeout: 5_000 });
+}
+
+async function waitForChildFrames(page: Page): Promise<void> {
+  await Promise.all(
+    page.frames().map((frame) => frame.waitForLoadState("load", { timeout: FRAME_WAIT_MS }).catch(() => undefined))
+  );
 }
 
 async function captureSelector(page: Page, selector: string): Promise<Shot> {

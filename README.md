@@ -66,7 +66,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | --- | --- |
 | `page_show` | Create or replace a page (`key` + `title` + `html`, optional `state`, `assets`, and `folder` for new pages). Default focuses the tab (and opens it if it was closed). Pass `background: true` to skip focus: a new page is created in the Library (not on the strip); an open tab gets an unread blip; a closed page stays closed with a Library blip. Returns `titleKept: true` when the user renamed the page in the last 24h and the new title was ignored. |
 | `page_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`), or replace the whole HTML from a checked-out file (`htmlPath`). Optional `expectedRevision` refuses the change if the page moved. Same background/focus rules as show. Does not create a tab or change state or events. |
-| `page_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
+| `page_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. Optional `local` seeds `scribe.local` for that capture only; `fromViewer` starts from the user's last local; `click` clicks a selector after load. Embed pages are captured at the embedded URL. |
 | `page_list` | List open tabs (`id`, `key`, `title`, `folder`, …) plus `closedCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |
 | `library_search` | Page the whole Library in the user's order (default 20, max 50), or search every page with `query` over title, key, page text, and JSON state. `folder` limits it to one folder and its subfolders. |
 | `library_folders` | List Library folders as paths (`"CLIMS/Releases"`) in the user's order, each with its direct page count, so an agent can file a new page in a matching folder via `page_show`'s `folder`. |
@@ -95,6 +95,10 @@ Reuse the same `key` when updating a topic. Pass a full HTML document, or a frag
 png, jpg, gif, webp, svg, ico, and avif. 8 MB per file, 16 files / 32 MB per tab. These do not count toward the 2 MB HTML cap. Re-showing a key without `assets` keeps files already attached. Workspace-relative `<img src>` and `file://` URLs do not work — tab pages are served from `http://127.0.0.2` and cannot see the disk.
 
 `page_screenshot` loads the tab's content page in a headless Chromium browser (Edge, Chrome, or Brave — not the Scribe UI) and returns an image. Pair it with `page_show(..., background: true)` so a design loop does not steal window focus. Default viewport is 1280×800; pass `selector` for one element or `fullPage` for a tall page.
+
+Pass `local: { … }` to seed `scribe.local` for that capture only (view switchers, open panels) without editing the page or saving a viewer. `fromViewer: true` starts from the most recently written viewer local (what the user last had in the desktop app or a browser); combine with `local` to overlay fields. `click` is a CSS selector clicked after load — prefer `local` when the view lives in `scribe.local`, because a click that calls `scribe.set` will persist shared state.
+
+Pages from the embed template (`<meta name="scribe-embed">`) are captured at the embedded URL, not the placeholder HTML. The capture is still a canonical viewport, not the user's live window (scroll, hover, size).
 
 ## Interactive pages
 

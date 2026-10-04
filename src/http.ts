@@ -18,9 +18,9 @@ import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
-import { isPlainObject, toMeta, type BoardEvent, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
-import { captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
+import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
@@ -555,6 +555,9 @@ export async function startHttp(): Promise<http.Server> {
       fullPage: req.body?.fullPage === true,
       width: optionalNumber(req.body?.width),
       height: optionalNumber(req.body?.height),
+      local: req.body?.local,
+      fromViewer: req.body?.fromViewer === true,
+      click: optionalString(req.body?.click),
     })
       .then((shot) => {
         if (!res.writableEnded) {
@@ -933,7 +936,8 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     res.setHeader("Cache-Control", "no-store");
-    res.type("html").send(injectBoardRuntime(tab, viewerIdOf(req.query.viewer)));
+    const capture = captureBootOf(req.query.shot);
+    res.type("html").send(injectBoardRuntime(tab, capture ? null : viewerIdOf(req.query.viewer), capture?.local));
   });
 
   app.get("/download/:id", (req, res) => {
@@ -1415,17 +1419,18 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
 })();
 </script>`;
 
-function injectBoardRuntime(tab: Tab, viewer: string | null): string {
+function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: BoardState): string {
   const html = injectBoardKeys(rewriteAssetRefs(tab.html, tab.id));
   if (html.includes("data-scribe-bridge")) {
     return html;
   }
+  const capturing = captureLocal !== undefined;
   const boot = jsonForScript({
     id: tab.id,
     state: tab.state,
     stateRevision: tab.stateRevision,
-    viewer,
-    local: viewer ? store.getLocal(tab.id, viewer) : {},
+    viewer: capturing ? null : viewer,
+    local: capturing ? captureLocal : viewer ? store.getLocal(tab.id, viewer) : {},
     template: tab.templateId
       ? {
           id: tab.templateId,

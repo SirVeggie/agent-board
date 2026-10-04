@@ -379,6 +379,14 @@ export class BoardDb {
     return row?.state;
   }
 
+  /** The most recently written viewer local for this page, if any. */
+  readLatestLocal(tabId: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT state FROM page_local WHERE tab_id = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(tabId) as { state: string } | undefined;
+    return row?.state;
+  }
+
   writeLocal(tabId: string, viewer: string, state: string | null): void {
     if (state === null) {
       this.db.prepare("DELETE FROM page_local WHERE tab_id = ? AND viewer = ?").run(tabId, viewer);

@@ -1240,6 +1240,7 @@ test("local state is kept per viewer and goes with the page", () => {
   const store = loaded();
   const { tab } = store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
   store.setLocal("page", "desktop", { filter: "mine" });
+  assert.deepEqual(store.latestLocal("page"), { filter: "mine" });
   store.setLocal("page", "browser", { filter: "all" });
   assert.deepEqual(store.getLocal("page", "desktop"), { filter: "mine" });
   assert.deepEqual(store.getLocal("scribe:page", "browser"), { filter: "all" });
@@ -1247,6 +1248,9 @@ test("local state is kept per viewer and goes with the page", () => {
   assert.throws(() => store.setLocal("page", "desktop", { big: "x".repeat(70 * 1024) }), /too large/);
   store.setLocal("page", "desktop", {});
   assert.deepEqual(store.getLocal("page", "desktop"), {});
+  assert.deepEqual(store.latestLocal("page"), { filter: "all" });
+  store.setLocal("page", "browser", {});
+  assert.deepEqual(store.latestLocal("page"), {});
   store.deletePermanent(tab.id);
   store.closeDb();
 });

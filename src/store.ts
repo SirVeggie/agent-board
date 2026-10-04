@@ -1301,6 +1301,20 @@ export class BoardStore extends EventEmitter {
     }
   }
 
+  /** The most recently written `scribe.local` for this page, across desktop and browser viewers. */
+  latestLocal(idOrKey: string): BoardState {
+    const tab = this.locate(idOrKey)?.tab;
+    if (!tab || !this.db) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(this.db.readLatestLocal(tab.id) ?? "{}") as unknown;
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
   setLocal(idOrKey: string, viewer: string, state: unknown): void {
     const tab = this.locate(idOrKey)?.tab;
     if (!tab) {

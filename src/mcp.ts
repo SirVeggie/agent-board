@@ -27,6 +27,10 @@ type ScreenshotPayload = {
   height: number;
   fullPage: boolean;
   selector?: string;
+  click?: string;
+  fromViewer?: boolean;
+  local?: boolean;
+  embed?: boolean;
   id: string;
   key: string;
   title: string;
@@ -545,7 +549,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_screenshot",
-    "Capture a screenshot of a page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
+    "Capture a screenshot of a page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Pass local to seed scribe.local for this capture only (view switchers, open panels), fromViewer to start from the user's last local, or click a selector after load. Embed-template pages are captured at the embedded URL. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -565,9 +569,27 @@ export async function startMcp(): Promise<void> {
         .number()
         .optional()
         .describe("Viewport height in CSS pixels. Default 800. Clamped 320–1600."),
+      local: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe(
+          "Seeded into scribe.local for this capture only, so you can screenshot a view switcher or open panel without editing the page. Not saved as a viewer. Overlay on fromViewer when both are set. Ignored (refused) on embed-template pages."
+        ),
+      fromViewer: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, start from the most recently written viewer local for this page (what the user last had in the desktop app or a browser). Combine with local to overlay fields. Does not use the live window's scroll, hover, or size."
+        ),
+      click: z
+        .string()
+        .optional()
+        .describe(
+          "CSS selector to click after load, before capture. First match, must be visible. Prefer local when the view lives in scribe.local — a click that calls scribe.set will persist shared state."
+        ),
     },
     { readOnlyHint: true },
-    async ({ id, key, selector, fullPage, width, height }) => {
+    async ({ id, key, selector, fullPage, width, height, local, fromViewer, click }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -576,7 +598,7 @@ export async function startMcp(): Promise<void> {
         const { status, data } = await api(
           "POST",
           `/api/tabs/${encodeURIComponent(which)}/screenshot`,
-          { selector, fullPage, width, height },
+          { selector, fullPage, width, height, local, fromViewer, click },
           { timeoutMs: 45_000 }
         );
         if (status >= 400) {
@@ -602,6 +624,10 @@ export async function startMcp(): Promise<void> {
                   bytes: shot.bytes,
                   fullPage: shot.fullPage,
                   selector: shot.selector ?? null,
+                  click: shot.click ?? null,
+                  fromViewer: shot.fromViewer ?? false,
+                  local: shot.local ?? false,
+                  embed: shot.embed ?? false,
                 },
                 null,
                 2
