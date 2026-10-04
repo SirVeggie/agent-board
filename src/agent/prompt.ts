@@ -77,6 +77,12 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       lines.push(
         `This is a git worktree of its own for this thread, on branch ${wt.branch} (from ${wt.base ?? "a detached HEAD"}). The main checkout is ${wt.repo}; do not edit files there. Commit your work on this branch as you go, in small commits with clear messages. The user merges the branch from Scribe when it is done. Never remove a Scribe worktree with \`git worktree remove\` or by deleting its folder: linked folders such as node_modules are junctions to the main checkout, and removing the worktree that way deletes through them. Scribe removes the worktree when the branch is merged or left.`
       );
+      if (wt.links.includes("node_modules")) {
+        // A plain npm install here writes into the main checkout's node_modules, which a running app there uses (#145).
+        lines.push(
+          "node_modules here is the main checkout's, so never run npm install, ci, update or uninstall with it linked. To add or change a dependency, edit package.json and run `npm install --package-lock-only` (it only rewrites package-lock.json); Scribe installs the change in the main checkout when the branch is merged. To build or test against the new dependency before that, give the worktree its own node_modules: remove only the link (`cmd /c rmdir node_modules` on Windows, `rm node_modules` elsewhere; never a recursive delete), then run `npm ci`."
+        );
+      }
     }
   }
   return lines.join("\n");

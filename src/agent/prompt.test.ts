@@ -43,6 +43,13 @@ test("threads with a workspace are told their shell already starts there", () =>
   assert.doesNotMatch(threadInstructions(thread({ mode: "board" }), {}), /Shell commands/);
 });
 
+test("worktree threads with a linked node_modules are told how to change dependencies", () => {
+  const wt = (links: string[]) =>
+    ({ provider: "claude", mode: "code", cwd: "/wt", scope: { kind: "global", ref: null }, worktree: { home: "/repo", repo: "/repo", path: "/wt", branch: "agent/x", base: "master", baseCommit: "abc", links, createdAt: 0 } }) as Thread;
+  assert.match(threadInstructions(wt(["node_modules"]), {}), /npm install --package-lock-only/);
+  assert.doesNotMatch(threadInstructions(wt([]), {}), /package-lock-only/);
+});
+
 test("threadInstructions includes folder instruction pages, parents first", () => {
   const thread = {
     provider: "claude",
