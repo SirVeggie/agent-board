@@ -670,7 +670,12 @@
   .comment .who { font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
   .comment .body { word-break: break-word; }
   .comment .body.md-preview { min-height: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; cursor: auto; }
-  .comment.folded { cursor: pointer; }
+  .comment.folded { position: relative; cursor: pointer; }
+  .comment.folded::after {
+    content: "Click to show"; position: absolute; left: 0; right: 0; bottom: 6px;
+    text-align: center; font-size: 11.5px; color: var(--muted); pointer-events: none;
+  }
+  .comment.folded:hover::after { color: var(--text); }
   .comment.folded .body.md-preview {
     max-height: 140px; overflow: hidden; cursor: pointer;
     -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent);
@@ -3364,10 +3369,7 @@
     if (expandedComments[box.getAttribute("data-comment")]) return;
     var body = box.querySelector(".body");
     box.classList.remove("folded");
-    if (body.scrollHeight > COMMENT_FOLD_PX) {
-      box.classList.add("folded");
-      box.title = "Click to show the whole comment";
-    } else box.removeAttribute("title");
+    if (body.scrollHeight > COMMENT_FOLD_PX) box.classList.add("folded");
   }
   commentsEl.addEventListener("click", function (e) {
     var folded = e.target.closest && e.target.closest(".comment.folded");
@@ -3375,7 +3377,6 @@
       e.preventDefault();
       expandedComments[folded.getAttribute("data-comment")] = true;
       folded.classList.remove("folded");
-      folded.removeAttribute("title");
       return;
     }
     var a = e.target.closest && e.target.closest("a[data-card]");
