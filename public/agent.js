@@ -6971,7 +6971,7 @@
       if (id) setCurrent(id);
       sidebar.renderList();
     };
-    Promise.all([loadConfig(), loadThreads()]).then(() => {
+    Promise.all([loadConfig(), loadThreads(), loadBrowsers()]).then(() => {
       if (S.sideOpen) sidebar.ensureThread();
       dock.syncThread();
       renderAll();
