@@ -82,20 +82,27 @@ function findCard(state: BoardState, ref: unknown): Card {
   return found;
 }
 
-/** A column by role (agent, working, review, done), id, or title. */
-function findColumn(state: BoardState, ref: unknown): Column {
+/** Columns matching a role (all of them), else one by id or title. */
+function matchColumns(state: BoardState, ref: unknown): Column[] {
   const text = str(ref).trim();
   const cols = columns(state);
   const lower = text.toLowerCase();
-  const found =
-    cols.find((c) => c.role === lower) ??
-    cols.find((c) => c.id === text) ??
-    cols.find((c) => c.title.trim().toLowerCase() === lower);
-  if (!found) {
-    const known = cols.map((c) => (c.role ? `${c.title} (${c.role})` : c.title)).join(", ");
-    throw new ActionError(`no column "${text}". Columns: ${known}`);
+  const byRole = cols.filter((c) => c.role === lower);
+  if (byRole.length) return byRole;
+  const one = cols.find((c) => c.id === text) ?? cols.find((c) => c.title.trim().toLowerCase() === lower);
+  if (one) return [one];
+  const known = cols.map((c) => (c.role ? `${c.title} (${c.role})` : c.title)).join(", ");
+  throw new ActionError(`no column "${text}". Columns: ${known}`);
+}
+
+/** One column by role, id, or title. A shared role (two agent inboxes) is not a destination. */
+function findColumn(state: BoardState, ref: unknown): Column {
+  const found = matchColumns(state, ref);
+  if (found.length > 1) {
+    const names = found.map((c) => c.title).join(", ");
+    throw new ActionError(`column "${str(ref).trim()}" matches more than one column: ${names}. Use a column id or title.`);
   }
-  return found;
+  return found[0];
 }
 
 function roleColumn(state: BoardState, role: string): Column | undefined {
@@ -263,13 +270,13 @@ export const kanbanActions: ActionSet = {
   actions: {
     list: {
       description:
-        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role, id or title), label, assignee, or q (words in title or description). Archived cards only with archived: true.",
+        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title or description). Archived cards only with archived: true.",
       args: "{ column?, label?, assignee?, q?, archived?, limit? }",
       run(state, args) {
         let list = cards(state).filter((c) => (args.archived ? c.archived : !c.archived));
         if (args.column !== undefined) {
-          const col = findColumn(state, args.column);
-          list = list.filter((c) => c.col === col.id);
+          const ids = new Set(matchColumns(state, args.column).map((c) => c.id));
+          list = list.filter((c) => ids.has(c.col));
         }
         if (args.label !== undefined) {
           const [id] = labelIds(state, [args.label]);
@@ -389,7 +396,7 @@ export const kanbanActions: ActionSet = {
     },
     move: {
       description:
-        "Move a card to a column (role agent | working | review | done, a column id, or its title). Sets the move and done times. position top or bottom; a done column puts it on top.",
+        "Move a card to a column (unique role agent | working | review | done, a column id, or its title). Sets the move and done times. position top or bottom; a done column puts it on top.",
       args: "{ card, to, position? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);

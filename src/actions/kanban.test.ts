@@ -148,6 +148,43 @@ test("list gives compact rows and column counts", () => {
   assert.equal((result.columns as Array<{ stopRequested?: boolean }>)[1].stopRequested, undefined);
 });
 
+const twoAgents = () => ({
+  columns: [
+    { id: "claude", title: "claude", role: "agent" },
+    { id: "grok", title: "grok", role: "agent" },
+    { id: "work", title: "Agent working", role: "working" },
+    { id: "done", title: "Done", role: "done" },
+  ],
+  labels: [],
+  cards: [
+    { id: "c1", num: 1, col: "claude", title: "Claude job", comments: [], createdAt: 1, movedAt: 1 },
+    { id: "c2", num: 2, col: "grok", title: "Grok job", comments: [], createdAt: 1, movedAt: 1 },
+  ],
+  nextNum: 3,
+});
+
+test("list by a shared role includes every matching column; id or title still picks one", () => {
+  const { result } = run(twoAgents(), "list", { column: "agent" });
+  assert.deepEqual((result.cards as Array<{ num: number }>).map((c) => c.num), [1, 2]);
+  assert.deepEqual(
+    (run(twoAgents(), "list", { column: "grok" }).result.cards as Array<{ num: number }>).map((c) => c.num),
+    [2]
+  );
+  assert.deepEqual(
+    (run(twoAgents(), "list", { column: "claude" }).result.cards as Array<{ num: number }>).map((c) => c.num),
+    [1]
+  );
+});
+
+test("create and move refuse a shared role and still accept a unique role, id, or title", () => {
+  assert.throws(() => run(twoAgents(), "create", { title: "New", column: "agent" }), /matches more than one column: claude, grok/);
+  assert.throws(() => run(twoAgents(), "move", { card: 1, to: "agent" }), /matches more than one column/);
+  const created = run(twoAgents(), "create", { title: "New", column: "grok" });
+  assert.equal(card(created.state, 3).col, "grok");
+  assert.equal(card(run(twoAgents(), "move", { card: 1, to: "working" }).state, 1).col, "work");
+  assert.equal(card(run(twoAgents(), "move", { card: 2, to: "claude" }).state, 2).col, "claude");
+});
+
 test("list marks a column whose agent worker was asked to stop", () => {
   const state = { ...board(), settings: { workers: { ready: { name: "Opus", stop: true }, in: { name: "Other" } } } };
   const cols = run(state, "list", {}).result.columns as Array<{ id: string; stopRequested?: boolean }>;
