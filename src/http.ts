@@ -18,7 +18,7 @@ import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
-import { isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import {
@@ -212,6 +212,7 @@ export async function startHttp(): Promise<http.Server> {
         assets: assets.length ? assets : undefined,
         folder: optionalString(req.body?.folder),
         viewer: viewerOf(req),
+        actor: actorOf(req),
       });
       if (!created) {
         agentRewrote(req, tab.id);
@@ -230,6 +231,7 @@ export async function startHttp(): Promise<http.Server> {
         pin: typeof req.body?.pin === "boolean" ? req.body.pin : undefined,
         activate: req.body?.activate,
         viewer: viewerOf(req),
+        actor: actorOf(req),
       });
       if (optionalString(req.body?.html) !== undefined) {
         agentRewrote(req, tab.id);
@@ -280,6 +282,7 @@ export async function startHttp(): Promise<http.Server> {
           activate: req.body?.activate,
           expectedRevision,
           viewer: viewerOf(req),
+          actor: actorOf(req),
         });
         res.json({ applied: 0, closed: store.isClosed(tab.id), titleKept, tab: libraryMeta(tab) });
         return;
@@ -291,6 +294,7 @@ export async function startHttp(): Promise<http.Server> {
         activate: req.body?.activate,
         expectedRevision,
         viewer: viewerOf(req),
+        actor: actorOf(req),
       });
       agentRewrote(req, tab.id);
       res.json({ applied, closed, titleKept, tab: libraryMeta(tab) });
@@ -360,6 +364,7 @@ export async function startHttp(): Promise<http.Server> {
         ops: Array.isArray(req.body?.ops) ? req.body.ops : undefined,
         client: optionalString(req.body?.client),
         writeId: optionalString(req.body?.writeId),
+        actor: actorOf(req),
       });
       res.json({
         event,
@@ -405,6 +410,7 @@ export async function startHttp(): Promise<http.Server> {
         client: optionalString(req.body?.client),
         writeId: optionalString(req.body?.writeId),
         resolveIncompatibility: req.body?.resolveIncompatibility === true,
+        actor: actorOf(req),
       });
       if (!result.ok) {
         res.status(409).json({ error: "stale expectedRevision", conflict: true, stateRevision: result.stateRevision });
@@ -953,6 +959,7 @@ export async function startHttp(): Promise<http.Server> {
       const { tab, template, copiedBuiltin } = store.openFromTemplate(req.params.id, req.body?.values ?? {}, {
         activate: req.body?.activate !== false,
         agentHidden: viewerOf(req) === "user" && req.body?.agentHidden === true,
+        actor: actorOf(req),
       });
       res.status(201).json({ tab: toMeta(tab), template: { id: template.id, key: template.key }, copiedBuiltin });
     } catch (err) {
@@ -964,7 +971,7 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/tabs/:id/template-values", (req, res) => {
     try {
-      const tab = store.setTemplateValues(req.params.id, req.body?.values ?? {});
+      const tab = store.setTemplateValues(req.params.id, req.body?.values ?? {}, actorOf(req));
       res.json({ tab: toMeta(tab) });
     } catch (err) {
       const message = (err as Error).message;
@@ -1321,6 +1328,16 @@ function callerOf(req: express.Request): ActionCaller {
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const label = chat ? `Scribe chat: ${chat.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
   return { by: "agent", label, ...(chat?.provider ? { provider: chat.provider } : {}), ...(session ? { session } : {}), ...(thread ? { thread } : {}) };
+}
+
+function actorOf(req: express.Request): PageActor | undefined {
+  if (isContentHost(req) || viewerOf(req) !== "agent") {
+    return undefined;
+  }
+  const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+  const chat = thread && agentHost ? agentHost.getThread(thread) : null;
+  const title = chat?.title?.trim().slice(0, 120);
+  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}) };
 }
 
 let sweepQueued: NodeJS.Timeout | null = null;

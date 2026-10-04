@@ -1,5 +1,15 @@
 # Migrations
 
+## `tabs.provenance` column (additive, schema still 3)
+
+- **What changed:** Agent page writes record who created the page and who last changed it (`provenance` on the tab: `{ created?, changed? }`, each `{ thread?, title?, at }`). In-app chats send `x-scribe-thread`; external MCP clients have no thread. Library rows and hovercards show it. Stored as `tabs.provenance TEXT` (JSON, nullable). Export files carry optional `provenance`.
+- **Why no version bump:** Existing rows are unchanged (null). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureProvenanceColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`. Older pages stay blank until an agent writes them.
+- **Export format:** No transform. Older exports have no `provenance` and import as unset. `EXPORT_VERSION` stays `1`.
+- **Protocol:** additive field on tab meta; `VERSION` stays `3.0.0`.
+- **Where:** `src/schema.ts` (`TABS_TABLE_SQL`), `src/dbMigrate.ts` (`ensureProvenanceColumn`), `src/types.ts` (`PageActor`, `noteAgentWrite`), `src/store.ts`, `src/http.ts` (`actorOf`), `public/library.js` / `public/hovercard.js` / `public/agent.js`.
+- **How to verify:** `agent page writes record created-by and last-changed-by`, `user writes leave provenance alone; external agents have no thread`, and `page provenance persists, exports, and migrates a missing column` in `src/store.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.folder_instructions` column (additive, schema still 3)
 
 - **What changed:** A page can be marked as its Library folder's standing agent instructions (`folderInstructions` on the tab, tab menu **Use as folder instructions**). Stored as `tabs.folder_instructions INTEGER NOT NULL DEFAULT 0`. A page titled `Instructions` counts even without the flag. Export files carry optional `folderInstructions: true`.

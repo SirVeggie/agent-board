@@ -175,3 +175,15 @@ export function ensureFolderInstructionsColumn(db: DatabaseSync): void {
   }
   db.exec("ALTER TABLE tabs ADD COLUMN folder_instructions INTEGER NOT NULL DEFAULT 0");
 }
+
+/**
+ * Boards created before page provenance have no tabs.provenance.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureProvenanceColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "provenance")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN provenance TEXT");
+}

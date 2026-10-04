@@ -3,11 +3,12 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
   isPlainObject,
+  normalizeProvenance,
   type BoardState,
   type Folder,
   type Tab,
@@ -107,6 +108,7 @@ type TabRow = {
   lib_pos: number;
   deleted_batch: string | null;
   user_title_at: number | null;
+  provenance: string | null;
 };
 
 type LegacyPersisted = {
@@ -156,12 +158,12 @@ INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
   revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
-  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at
+  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?
+  ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -186,7 +188,8 @@ ON CONFLICT(id) DO UPDATE SET
   folder_id = excluded.folder_id,
   lib_pos = excluded.lib_pos,
   deleted_batch = excluded.deleted_batch,
-  user_title_at = excluded.user_title_at
+  user_title_at = excluded.user_title_at,
+  provenance = excluded.provenance
 `;
 
 const INSERT_FOLDER_SQL = `
@@ -273,6 +276,7 @@ export class BoardDb {
       ensurePageLocalSchema(db);
       ensurePagePermissionSchema(db);
       ensureFolderInstructionsColumn(db);
+      ensureProvenanceColumn(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -597,6 +601,7 @@ export class BoardDb {
       ensurePageLocalSchema(db);
       ensurePagePermissionSchema(db);
       ensureFolderInstructionsColumn(db);
+      ensureProvenanceColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -685,6 +690,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.libPos,
     status === "deleted" ? (deletedBatch ?? null) : null,
     tab.userTitleAt ?? null,
+    tab.provenance ? JSON.stringify(tab.provenance) : null,
   ];
 }
 
@@ -771,6 +777,16 @@ function rowToStored(row: TabRow): StoredTab {
   }
   if (row.user_title_at) {
     tab.userTitleAt = row.user_title_at;
+  }
+  if (row.provenance) {
+    try {
+      const provenance = normalizeProvenance(JSON.parse(row.provenance) as unknown);
+      if (provenance) {
+        tab.provenance = provenance;
+      }
+    } catch {
+      /* ignore */
+    }
   }
   if (row.status === "closed") {
     tab.closedAt = row.closed_at ?? row.updated_at;

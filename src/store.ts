@@ -52,6 +52,7 @@ import {
   isFolderInstructionTitle,
   isPlainObject,
   isTemplateBound,
+  noteAgentWrite,
   toMeta,
   toTemplateMeta,
   visibleTo,
@@ -62,6 +63,7 @@ import {
   type ImportDestination,
   type RestorePlacement,
   type EventInput,
+  type PageActor,
   type PageEvent,
   type StateWriteInput,
   type StateWriteResult,
@@ -490,7 +492,7 @@ export class BoardStore extends EventEmitter {
       ...(thread ? { thread } : {}),
     });
     if (outcome.ops.length) {
-      const write = this.writeState(tab.id, { ops: outcome.ops });
+      const write = this.writeState(tab.id, { ops: outcome.ops, actor: actorFromCaller(caller) });
       if (!write.ok) {
         throw new Error("the page changed while the action ran; try again");
       }
@@ -663,7 +665,7 @@ export class BoardStore extends EventEmitter {
   openFromTemplate(
     idOrKey: string,
     values: unknown,
-    opts?: { activate?: boolean; agentHidden?: boolean }
+    opts?: { activate?: boolean; agentHidden?: boolean; actor?: PageActor }
   ): { tab: Tab; created: boolean; template: Template; copiedBuiltin: boolean } {
     const found = this.findTemplate(idOrKey);
     if (!found) {
@@ -682,6 +684,7 @@ export class BoardStore extends EventEmitter {
       pin: true,
       activate: opts?.activate !== false,
       state: template.initialState,
+      actor: opts?.actor,
     });
     if (opts?.agentHidden) {
       tab.agentHidden = true;
@@ -697,7 +700,7 @@ export class BoardStore extends EventEmitter {
     return { tab, created: true, template, copiedBuiltin: Boolean(copy?.created) };
   }
 
-  setTemplateValues(idOrKey: string, values: unknown): Tab {
+  setTemplateValues(idOrKey: string, values: unknown, actor?: PageActor): Tab {
     const tab = this.requireAny(idOrKey);
     if (!tab.templateId) {
       throw new Error("this page is not bound to a template");
@@ -705,6 +708,7 @@ export class BoardStore extends EventEmitter {
     const template = this.requireTemplate(tab.templateId);
     const parsed = parseTemplateValues(template.fields, values);
     this.applyTemplateRender(tab, template, parsed, tab.templateCompatible !== false);
+    noteAgentWrite(tab, actor);
     this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, {
@@ -922,6 +926,7 @@ export class BoardStore extends EventEmitter {
       if (input.pin !== undefined) {
         tab.pinned = input.pin;
       }
+      noteAgentWrite(tab, input.actor);
       this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), undefined, {
@@ -949,6 +954,7 @@ export class BoardStore extends EventEmitter {
       if (input.activate !== false) {
         this.activeId = tab.id;
       }
+      noteAgentWrite(tab, input.actor);
       this.markDirty(tab.id);
       this.persistSoon();
       this.emit("tab_upserted", toMeta(tab), pinIndex, {
@@ -991,6 +997,7 @@ export class BoardStore extends EventEmitter {
       assets,
     };
     seedState(tab, input.state);
+    noteAgentWrite(tab, input.actor, true);
     const activate = input.activate !== false;
     if (activate) {
       this.tabs.set(id, tab);
@@ -1026,6 +1033,7 @@ export class BoardStore extends EventEmitter {
       activate?: boolean;
       expectedRevision?: number;
       viewer?: Viewer;
+      actor?: PageActor;
     }
   ): { tab: Tab; applied: number; closed: boolean; titleKept?: string } {
     const located = this.locate(idOrKey);
@@ -1076,6 +1084,7 @@ export class BoardStore extends EventEmitter {
     tab.html = result.html;
     tab.updatedAt = Date.now();
     tab.revision += 1;
+    noteAgentWrite(tab, input.actor);
     if (found.where === "closed") {
       this.markDirty(tab.id);
       this.persistSoon();
@@ -1106,6 +1115,7 @@ export class BoardStore extends EventEmitter {
       activate?: boolean;
       expectedRevision?: number;
       viewer?: Viewer;
+      actor?: PageActor;
     }
   ): { tab: Tab; titleKept?: string } {
     const located = this.locate(idOrKey);
@@ -1158,6 +1168,7 @@ export class BoardStore extends EventEmitter {
     if (structural) {
       tab.updatedAt = Date.now();
       tab.revision += 1;
+      noteAgentWrite(tab, patch.actor);
     }
     const keptField = kept ? { titleKept: kept } : {};
     if (found.where === "closed") {
@@ -1327,10 +1338,11 @@ export class BoardStore extends EventEmitter {
     tab.state = result.state;
     tab.stateRevision += 1;
     tab.stateUpdatedAt = Date.now();
+    noteAgentWrite(tab, input.actor);
     this.markDirty(tab.id);
     this.persistSoon();
     this.emit("tab_state", tab, { fromRevision, ops: result.applied, client: input.client, writeId: input.writeId });
-    if (located.where === "closed" || resolved) {
+    if (located.where === "closed" || resolved || input.actor) {
       this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     }
     return { ok: true, tab, fromRevision, applied: result.applied, skipped: result.skipped, ...(assets ? { assets } : {}) };
@@ -1487,7 +1499,7 @@ export class BoardStore extends EventEmitter {
       data = JSON.parse(text);
     }
     const write = input.ops?.length
-      ? this.writeState(located.tab.id, { ops: input.ops, lenient: true, client: input.client, writeId: input.writeId })
+      ? this.writeState(located.tab.id, { ops: input.ops, lenient: true, client: input.client, writeId: input.writeId, actor: input.actor })
       : undefined;
     const tab = located.tab;
     tab.eventSeq += 1;
@@ -2174,6 +2186,7 @@ export class BoardStore extends EventEmitter {
       assets,
       ...(page.agentHidden ? { agentHidden: true } : {}),
       ...(page.folderInstructions ? { folderInstructions: true } : {}),
+      ...(page.provenance ? { provenance: page.provenance } : {}),
     };
     seedState(tab, pageState);
     if (pageAssets.length) {
@@ -3283,6 +3296,20 @@ function seedState(tab: Tab, state: BoardState | undefined): void {
   tab.state = { ...state };
   tab.stateRevision = 1;
   tab.stateUpdatedAt = Date.now();
+}
+
+function actorFromCaller(caller: ActionCaller): PageActor | undefined {
+  if (caller.by !== "agent") {
+    return undefined;
+  }
+  const raw = caller.label?.trim() ?? "";
+  const title =
+    raw && raw !== "agent" && raw !== "user" ? raw.replace(/^Scribe chat:\s*/, "").slice(0, 120) : undefined;
+  return {
+    at: Date.now(),
+    ...(caller.thread ? { thread: caller.thread } : {}),
+    ...(title ? { title } : {}),
+  };
 }
 
 function normalizeKey(value: string): string {

@@ -23,7 +23,8 @@ CREATE TABLE tabs (
   folder_id TEXT,
   lib_pos REAL NOT NULL DEFAULT 0,
   deleted_batch TEXT,
-  user_title_at INTEGER
+  user_title_at INTEGER,
+  provenance TEXT
 );
 CREATE INDEX idx_tabs_status_closed ON tabs(status, closed_at DESC);
 CREATE INDEX idx_tabs_status_deleted ON tabs(status, deleted_at DESC);

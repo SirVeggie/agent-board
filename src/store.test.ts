@@ -874,6 +874,78 @@ test("folder instructions persist, export, and use markdown-note text", () => {
   again.closeDb();
 });
 
+test("agent page writes record created-by and last-changed-by", () => {
+  const store = loaded();
+  const actor = { thread: "th_abc", title: "Fix provenance", at: 1_700_000_000_000 };
+  const { tab } = store.upsert({
+    key: "notes",
+    title: "Notes",
+    html: "<p>a</p>",
+    viewer: "agent",
+    actor,
+  });
+  assert.equal(tab.provenance?.created?.thread, "th_abc");
+  assert.equal(tab.provenance?.created?.title, "Fix provenance");
+  assert.equal(tab.provenance?.changed?.thread, "th_abc");
+  assert.equal(toMeta(tab).provenance?.created?.thread, "th_abc");
+
+  const later = { thread: "th_def", title: "Follow-up", at: 1_700_000_100_000 };
+  store.upsert({ key: "notes", title: "Notes", html: "<p>hello</p>", viewer: "agent", actor: later });
+  const updated = store.get("notes")!;
+  assert.equal(updated.provenance?.created?.thread, "th_abc");
+  assert.equal(updated.provenance?.changed?.thread, "th_def");
+  assert.equal(updated.provenance?.changed?.title, "Follow-up");
+
+  store.patchHtml("notes", { edits: [{ oldString: "<p>hello</p>", newString: "<p>patched</p>" }], viewer: "agent", actor: { thread: "th_ghi", title: "Patch", at: 1_700_000_200_000 } });
+  assert.equal(store.get("notes")?.provenance?.changed?.thread, "th_ghi");
+
+  store.writeState("notes", { ops: [{ op: "set", path: "n", value: 1 }], actor: { thread: "th_jkl", title: "State", at: 1_700_000_300_000 } });
+  assert.equal(store.get("notes")?.provenance?.changed?.thread, "th_jkl");
+  store.closeDb();
+});
+
+test("user writes leave provenance alone; external agents have no thread", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  assert.equal(store.get("page")?.provenance, undefined);
+
+  store.upsert({ key: "page", title: "Page", html: "<p>b</p>", viewer: "agent", actor: { at: 1_700_000_000_000 } });
+  const tab = store.get("page")!;
+  assert.equal(tab.provenance?.created, undefined);
+  assert.equal(tab.provenance?.changed?.thread, undefined);
+  assert.ok(tab.provenance?.changed?.at);
+
+  store.update("page", { title: "Renamed", viewer: "user" });
+  assert.equal(store.get("page")?.provenance?.changed?.thread, undefined);
+  store.update("page", { pin: true, activate: false, actor: { thread: "th_nope", title: "Pin", at: 1 } });
+  assert.equal(store.get("page")?.provenance?.changed?.thread, undefined);
+  store.closeDb();
+});
+
+test("page provenance persists, exports, and migrates a missing column", () => {
+  const store = loaded();
+  const actor = { thread: "th_abc", title: "Maker", at: 1_700_000_000_000 };
+  const { tab } = store.upsert({ key: "made", title: "Made", html: "<p>a</p>", viewer: "agent", actor });
+  store.closeDb();
+
+  const again = loaded();
+  assert.equal(again.get(tab.id)?.provenance?.created?.thread, "th_abc");
+  assert.equal(again.get(tab.id)?.provenance?.created?.title, "Maker");
+  const parsed = parseImport(serializeExport(again.exportFile({ id: tab.id })));
+  const copy = again.importBoard(parsed, "meta");
+  assert.equal(copy.tabs[0].provenance?.created?.thread, "th_abc");
+  again.closeDb();
+
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
+  db.exec("ALTER TABLE tabs DROP COLUMN provenance");
+  db.close();
+  const migrated = loaded();
+  assert.equal(migrated.get(tab.id)?.provenance, undefined);
+  migrated.upsert({ key: "made", title: "Made", html: "<p>b</p>", viewer: "agent", actor: { thread: "th_new", title: "After", at: 2 } });
+  assert.equal(migrated.get("made")?.provenance?.changed?.thread, "th_new");
+  migrated.closeDb();
+});
+
 const V1_SCHEMA = `
 CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE tabs (

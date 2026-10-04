@@ -12,7 +12,9 @@ import {
 import { normalizeTemplateInput } from "./templates.js";
 import {
   isPlainObject,
+  normalizeProvenance,
   type BoardState,
+  type PageProvenance,
   type PreparedAsset,
   type Tab,
   type Template,
@@ -59,6 +61,7 @@ export type BoardExportPage = {
   template?: PageTemplateBinding;
   agentHidden?: boolean;
   folderInstructions?: boolean;
+  provenance?: PageProvenance;
 };
 
 export type BoardExportFile = {
@@ -85,6 +88,7 @@ export type ImportPageInput = {
   template?: PageTemplateBinding;
   agentHidden?: boolean;
   folderInstructions?: boolean;
+  provenance?: PageProvenance;
 };
 
 export type ParsedImport = {
@@ -132,6 +136,7 @@ export function buildExport(
         : {}),
       ...(tab.agentHidden ? { agentHidden: true } : {}),
       ...(tab.folderInstructions ? { folderInstructions: true } : {}),
+      ...(tab.provenance ? { provenance: tab.provenance } : {}),
       ...(tab.templateId && included.has(tab.templateId)
         ? {
             template: {
@@ -315,6 +320,7 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
   if (!html.trim()) {
     throw new Error(`pages[${index}] is missing html`);
   }
+  const provenance = normalizeProvenance(page.provenance);
   return {
     key: typeof page.key === "string" ? page.key : undefined,
     title,
@@ -331,6 +337,7 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
     template: bindingFromExport(page.template, index, templateIds),
     ...(page.agentHidden === true ? { agentHidden: true } : {}),
     ...(page.folderInstructions === true ? { folderInstructions: true } : {}),
+    ...(provenance ? { provenance } : {}),
   };
 }
 

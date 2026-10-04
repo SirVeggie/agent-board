@@ -152,6 +152,24 @@ export type Tab = {
   agentHidden?: boolean;
   /** This page is the standing agent instructions for its Library folder. */
   folderInstructions?: boolean;
+  /** Which in-app agent created the page and last changed it. Omitted until an agent writes. */
+  provenance?: PageProvenance;
+};
+
+/** An in-app chat thread, or an external MCP client with no thread. */
+export type PageActor = {
+  /** Scribe chat thread id. Omitted for external MCP clients. */
+  thread?: string;
+  /** Thread title at write time, so Library still has a label if the thread is gone. */
+  title?: string;
+  at: number;
+};
+
+export type PageProvenance = {
+  /** Set once, when an agent creates the page. User-created pages leave this unset. */
+  created?: PageActor;
+  /** Last agent write (HTML, title, template values, or state). */
+  changed?: PageActor;
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "events" | "eventSeq" | "stripSeq"> & {
@@ -268,6 +286,8 @@ export type UpsertInput = {
   folder?: string;
   /** An agent writing a key owned by a hidden tab gets a new tab instead. */
   viewer?: Viewer;
+  /** In-app or external agent that made this write. User writes leave it unset. */
+  actor?: PageActor;
 };
 
 export type StateWriteInput = {
@@ -282,6 +302,8 @@ export type StateWriteInput = {
   resolveIncompatibility?: boolean;
   /** Local files to store as page assets; op values `asset:<name>` become their URLs. */
   assets?: PageAssetFile[];
+  /** In-app or external agent that made this write. User writes leave it unset. */
+  actor?: PageActor;
 };
 
 export type EventInput = {
@@ -292,6 +314,7 @@ export type EventInput = {
   ops?: unknown[];
   client?: string;
   writeId?: string;
+  actor?: PageActor;
 };
 
 export type RestorePlacement = "append" | "index";
@@ -324,6 +347,7 @@ export function toMeta(tab: Tab): TabMeta {
     assets: tab.assets,
     ...(tab.agentHidden ? { agentHidden: true } : {}),
     ...(tab.folderInstructions ? { folderInstructions: true } : {}),
+    ...(tab.provenance ? { provenance: tab.provenance } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(tab.templateId
       ? {
@@ -364,4 +388,46 @@ export function isTemplateBound(tab: { templateId?: string }): boolean {
 
 export function isPlainObject(value: unknown): value is BoardState {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const ACTOR_THREAD_MAX = 60;
+const ACTOR_TITLE_MAX = 120;
+
+export function normalizeActor(value: unknown): PageActor | undefined {
+  if (!isPlainObject(value) || typeof value.at !== "number" || !Number.isFinite(value.at)) {
+    return undefined;
+  }
+  const actor: PageActor = { at: value.at };
+  if (typeof value.thread === "string" && value.thread.trim()) {
+    actor.thread = value.thread.trim().slice(0, ACTOR_THREAD_MAX);
+  }
+  if (typeof value.title === "string" && value.title.trim()) {
+    actor.title = value.title.trim().slice(0, ACTOR_TITLE_MAX);
+  }
+  return actor;
+}
+
+export function normalizeProvenance(value: unknown): PageProvenance | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  const created = normalizeActor(value.created);
+  const changed = normalizeActor(value.changed);
+  if (!created && !changed) {
+    return undefined;
+  }
+  return { ...(created ? { created } : {}), ...(changed ? { changed } : {}) };
+}
+
+/** Record an agent write on a page. `created` is only set when this call creates the page. */
+export function noteAgentWrite(tab: Tab, actor: PageActor | undefined, created = false): void {
+  const stamped = actor ? normalizeActor(actor) : undefined;
+  if (!stamped) {
+    return;
+  }
+  const provenance: PageProvenance = { ...(tab.provenance ?? {}), changed: stamped };
+  if (created && !provenance.created) {
+    provenance.created = stamped;
+  }
+  tab.provenance = provenance;
 }

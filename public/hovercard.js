@@ -1,9 +1,10 @@
 /**
  * Shared hover card for strip tabs, Library rows, and templates.
- * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder? }` or null,
+ * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder?, madeBy?, changedBy? }` or null,
  * or `{ title, description, note: true }` for a short explanation shown under a small anchor.
+ * `madeBy` / `changedBy`: `{ text, threadId?, at? }`. `openThread(id)` runs on a click.
  */
-window.createHoverCard = function createHoverCard({ describe }) {
+window.createHoverCard = function createHoverCard({ describe, openThread }) {
   const card = document.createElement("div");
   card.id = "hover-card";
   card.className = "hover-card";
@@ -30,14 +31,37 @@ window.createHoverCard = function createHoverCard({ describe }) {
       }
       showTimer = window.setTimeout(() => show(el), delay);
     });
-    el.addEventListener("pointerleave", () => {
+    el.addEventListener("pointerleave", (event) => {
       clearTimeout(showTimer);
-      if (anchor === el) {
+      if (anchor === el && !card.contains(event.relatedTarget)) {
         hideTimer = window.setTimeout(hide, 80);
       }
     });
-    el.addEventListener("pointerdown", hide);
+    el.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("a, button")) {
+        return;
+      }
+      hide();
+    });
   }
+
+  card.addEventListener("pointerenter", () => clearTimeout(hideTimer));
+  card.addEventListener("pointerleave", () => {
+    hideTimer = window.setTimeout(hide, 80);
+  });
+  card.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-thread]");
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const id = link.dataset.thread;
+    if (id && openThread && openThread(id) === false) {
+      window.scribeApp?.showNotice?.("That thread is gone.");
+    }
+    hide();
+  });
 
   function show(el) {
     if (!el.isConnected || suppressed) {
@@ -105,6 +129,10 @@ window.createHoverCard = function createHoverCard({ describe }) {
     rows.className = "hover-card-rows";
     addRow(rows, "Created", info.createdAt);
     addRow(rows, "Updated", info.updatedAt);
+    addActorRow(rows, "Made by", info.madeBy);
+    if (!sameActor(info.madeBy, info.changedBy)) {
+      addActorRow(rows, "Changed by", info.changedBy);
+    }
     card.appendChild(rows);
     if (info.folder) {
       const folder = document.createElement("div");
@@ -134,6 +162,42 @@ window.createHoverCard = function createHoverCard({ describe }) {
     });
     dd.append(rel, abs);
     rows.append(dt, dd);
+  }
+
+  function addActorRow(rows, label, actor) {
+    if (!actor) {
+      return;
+    }
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    if (actor.threadId) {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "hover-card-thread";
+      link.dataset.thread = actor.threadId;
+      link.textContent = actor.text;
+      link.title = "Open thread";
+      dd.appendChild(link);
+    } else {
+      const text = document.createElement("span");
+      text.textContent = actor.text;
+      dd.appendChild(text);
+    }
+    if (actor.at) {
+      const abs = document.createElement("span");
+      abs.className = "hover-card-abs";
+      abs.textContent = relative(actor.at);
+      dd.appendChild(abs);
+    }
+    rows.append(dt, dd);
+  }
+
+  function sameActor(a, b) {
+    if (!a || !b) {
+      return !a && !b;
+    }
+    return a.threadId === b.threadId && a.at === b.at && a.text === b.text;
   }
 
   function place(el, below) {

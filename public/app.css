@@ -194,6 +194,7 @@ html[data-theme="cream"] button.pill-toggle::after {
 
 /* Opacity dimming tuned for dark themes washes out on cream; keep secondary details legible. */
 html[data-theme="cream"] .lib-path,
+html[data-theme="cream"] .lib-by,
 html[data-theme="cream"] .hover-card-id {
   opacity: 1;
 }
@@ -893,6 +894,33 @@ body.resizing-side .side-pane {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lib-by {
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+button.lib-by-link {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.lib-by-link:hover {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 .lib-page .fileicon {
@@ -2414,6 +2442,23 @@ kbd {
 
 .hover-card-abs {
   color: var(--muted);
+}
+
+.hover-card-thread {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.hover-card-thread:hover {
+  color: var(--heading, var(--text));
 }
 
 .hover-card-folder {

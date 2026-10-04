@@ -5165,6 +5165,18 @@
     }
   }
 
+  function openThread(id) {
+    const thread = S.threads.get(id);
+    if (!thread || thread.archived) return false;
+    showPageThread(id, "sidebar");
+    return true;
+  }
+
+  function threadTitle(id) {
+    const thread = S.threads.get(id);
+    return thread && !thread.archived ? thread.title : null;
+  }
+
   /** Tell the page about its thread's status changes, and settle board.agent.wait calls once it is idle. */
   function pageThreadChanged(t, prev) {
     if (t.scope.kind !== "page" || !t.scope.ref) return;
@@ -5673,7 +5685,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask };
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, threadTitle };
 
   /* ---------- boot ---------- */
 
@@ -5695,6 +5707,7 @@
       if (S.sideOpen) sidebar.ensureThread();
       dock.syncThread();
       renderAll();
+      window.dispatchEvent(new Event("scribe:threads-ready"));
     });
   }
 
