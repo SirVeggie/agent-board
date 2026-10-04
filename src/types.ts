@@ -1,3 +1,4 @@
+import type { SpacesView } from "./spaces.js";
 import { embedUrlFromHtml } from "./embed.js";
 import type { SkippedOp, StateOp } from "./stateOps.js";
 import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
@@ -296,7 +297,11 @@ export type BoardEvent =
       templates: TemplateMeta[];
       builtinTemplates: BuiltinTemplateMeta[];
       persistError: string | null;
+      spaces: SpacesView;
+      /** Sent to every viewer after a space switch replaced the strip. */
+      reset?: boolean;
     }
+  | { type: "spaces"; spaces: SpacesView }
   | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean }
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }

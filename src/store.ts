@@ -79,6 +79,20 @@ import {
   type UpsertInput,
   type Viewer,
 } from "./types.js";
+import {
+  SPACE_UNDO_MAX,
+  cleanSpaceName,
+  emptySpaces,
+  isSpaceColor,
+  newSpaceId,
+  nextSpaceColor,
+  nextSpaceName,
+  parseSpaces,
+  type Space,
+  type SpacesData,
+  type SpacesView,
+  type SpaceTab,
+} from "./spaces.js";
 import { applyEdits, assertRevision, type HtmlEdit, type HtmlEditResult } from "./htmlEdit.js";
 import {
   mergeTemplateValues,
@@ -117,6 +131,8 @@ export class BoardStore extends EventEmitter {
   private folders = new Map<string, Folder>();
   private deleted: DeletedBatch[] = [];
   private activeId: string | null = null;
+  private spaces: SpacesData = emptySpaces();
+  private spacesDirty = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private trashTimer: ReturnType<typeof setInterval> | null = null;
@@ -223,6 +239,7 @@ export class BoardStore extends EventEmitter {
     );
     this.activeId =
       snapshot.activeId && this.tabs.has(snapshot.activeId) ? snapshot.activeId : (this.order[0] ?? null);
+    this.spaces = parseSpaces(snapshot.spaces);
     this.pageAssetTotals = this.db.pageAssetTotals();
     this.sweepAssets();
     this.assetSweepTimer = setInterval(() => this.sweepAssets(), ASSET_SWEEP_INTERVAL_MS);
@@ -241,6 +258,7 @@ export class BoardStore extends EventEmitter {
     templates: TemplateMeta[];
     builtinTemplates: BuiltinTemplateMeta[];
     persistError: string | null;
+    spaces: SpacesView;
   } {
     return {
       tabs: this.order.map((id) => toMeta(this.tabs.get(id)!)),
@@ -250,6 +268,7 @@ export class BoardStore extends EventEmitter {
       templates: this.listTemplates(),
       builtinTemplates: this.listBuiltinTemplates(),
       persistError: this.persistError,
+      spaces: this.spacesView(),
     };
   }
 
@@ -1642,8 +1661,11 @@ export class BoardStore extends EventEmitter {
     }
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
     const pool = includeOpen ? [...this.tabs.values(), ...this.closed.values()] : [...this.closed.values()];
+    // A tab in another space counts as open: it is only parked until the user switches back.
+    const parked = this.parkedTabs();
     return pool.filter((tab) => {
-      if (isAppTab(tab) || (tab.pinned && !includePinned)) {
+      const parkedTab = parked.get(tab.id);
+      if (isAppTab(tab) || (parkedTab && !includeOpen) || ((tab.pinned || parkedTab?.pinned) && !includePinned)) {
         return false;
       }
       const at = cleanupDate(tab, basis);
@@ -1689,7 +1711,11 @@ export class BoardStore extends EventEmitter {
   /** Ctrl+Z: the newer of the last delete batch and the last closed page. */
   restoreLast(): { tab: Tab | null } {
     let newestClosed: Tab | undefined;
+    const parked = this.parkedTabs();
     for (const tab of this.closed.values()) {
+      if (parked.has(tab.id)) {
+        continue;
+      }
       if (!newestClosed || (tab.closedAt ?? 0) > (newestClosed.closedAt ?? 0)) {
         newestClosed = tab;
       }
@@ -1705,6 +1731,243 @@ export class BoardStore extends EventEmitter {
       return { tab };
     }
     return { tab: this.restoreTab(newestClosed!, "index", true) };
+  }
+
+  /* ---------- Spaces ---------- */
+
+  spacesView(): SpacesView {
+    const live = this.liveStrip();
+    return {
+      spaces: this.spaces.list.map((space) => {
+        const active = space.id === this.spaces.activeId;
+        return {
+          ...space,
+          tabs: active ? live : space.tabs.filter((entry) => this.locate(entry.id)),
+          activeId: active ? this.activeId : space.activeId,
+          active,
+        };
+      }),
+      activeId: this.spaces.activeId,
+      deleted: [...this.spaces.deleted].reverse().map(({ space, deletedAt }) => ({
+        id: space.id,
+        name: space.name,
+        color: space.color,
+        tabs: space.tabs.length,
+        deletedAt,
+      })),
+    };
+  }
+
+  /** The first use turns the current strip into a space, so nothing is lost. */
+  ensureSpaces(): void {
+    if (this.spaces.list.length) {
+      return;
+    }
+    const now = Date.now();
+    const first: Space = {
+      id: newSpaceId(),
+      name: "Main",
+      color: nextSpaceColor([]),
+      tabs: this.liveStrip(),
+      activeId: this.activeId,
+      createdAt: now,
+      usedAt: now,
+    };
+    this.spaces.list = [first];
+    this.spaces.activeId = first.id;
+    this.spacesDirty = true;
+  }
+
+  private liveStrip(): SpaceTab[] {
+    return this.order
+      .map((id) => this.tabs.get(id)!)
+      .filter((tab) => !isAppTab(tab))
+      .map((tab) => ({ id: tab.id, pinned: tab.pinned }));
+  }
+
+  /** Closed pages that are tabs in a space other than the active one, by id. */
+  private parkedTabs(): Map<string, SpaceTab> {
+    const parked = new Map<string, SpaceTab>();
+    for (const space of this.spaces.list) {
+      if (space.id === this.spaces.activeId) {
+        continue;
+      }
+      for (const entry of space.tabs) {
+        if (this.closed.has(entry.id) && !parked.get(entry.id)?.pinned) {
+          parked.set(entry.id, entry);
+        }
+      }
+    }
+    return parked;
+  }
+
+  private requireSpace(id: string): Space {
+    const space = this.spaces.list.find((item) => item.id === id);
+    if (!space) {
+      throw new Error(`space not found: ${id}`);
+    }
+    return space;
+  }
+
+  private spacesChanged(): void {
+    this.spacesDirty = true;
+    this.persistSoon();
+    this.emit("spaces", this.spacesView());
+  }
+
+  /** A new space, empty or with a copy of the current tabs, at the end of the list. */
+  createSpace(input: { name?: unknown; color?: unknown; copyTabs?: boolean; activate?: boolean } = {}): Space {
+    this.ensureSpaces();
+    const now = Date.now();
+    const space: Space = {
+      id: newSpaceId(),
+      name: cleanSpaceName(input.name, nextSpaceName(this.spaces.list)),
+      color: isSpaceColor(input.color) ? input.color : nextSpaceColor(this.spaces.list),
+      tabs: input.copyTabs ? this.liveStrip() : [],
+      activeId: input.copyTabs ? this.activeId : null,
+      createdAt: now,
+      usedAt: now,
+    };
+    this.spaces.list.push(space);
+    if (input.activate) {
+      this.switchSpace(space.id);
+    } else {
+      this.spacesChanged();
+    }
+    return space;
+  }
+
+  updateSpace(id: string, patch: { name?: unknown; color?: unknown }): Space {
+    this.ensureSpaces();
+    const space = this.requireSpace(id);
+    if (patch.name !== undefined) {
+      space.name = cleanSpaceName(patch.name, space.name);
+    }
+    if (patch.color !== undefined) {
+      if (!isSpaceColor(patch.color)) {
+        throw new Error(`unknown space color: ${String(patch.color)}`);
+      }
+      space.color = patch.color;
+    }
+    this.spacesChanged();
+    return space;
+  }
+
+  moveSpace(id: string, index: number): Space {
+    this.ensureSpaces();
+    const space = this.requireSpace(id);
+    const list = this.spaces.list.filter((item) => item.id !== id);
+    const at = Math.max(0, Math.min(Number.isFinite(index) ? Math.floor(index) : list.length, list.length));
+    list.splice(at, 0, space);
+    this.spaces.list = list;
+    this.spacesChanged();
+    return space;
+  }
+
+  /**
+   * Remove a space. Its pages stay in the Library, and undo brings the space back with its tabs.
+   * Deleting the active space switches to its neighbor first. The last space can't be deleted.
+   */
+  deleteSpace(id: string): Space {
+    this.ensureSpaces();
+    const space = this.requireSpace(id);
+    if (this.spaces.list.length <= 1) {
+      throw new Error("the last space can't be deleted");
+    }
+    let index = this.spaces.list.indexOf(space);
+    if (space.id === this.spaces.activeId) {
+      const next = this.spaces.list[index + 1] ?? this.spaces.list[index - 1];
+      this.switchSpace(next.id);
+      index = this.spaces.list.indexOf(space);
+    }
+    this.spaces.list.splice(index, 1);
+    this.spaces.deleted.push({ space, index, deletedAt: Date.now() });
+    this.spaces.deleted = this.spaces.deleted.slice(-SPACE_UNDO_MAX);
+    this.spacesChanged();
+    return space;
+  }
+
+  /** Bring back a deleted space (the newest when no id) where it was. */
+  restoreSpace(id?: string): Space {
+    const at = id
+      ? this.spaces.deleted.findIndex((entry) => entry.space.id === id)
+      : this.spaces.deleted.length - 1;
+    if (at < 0) {
+      throw new Error(id ? `deleted space not found: ${id}` : "no deleted space to restore");
+    }
+    const [entry] = this.spaces.deleted.splice(at, 1);
+    const index = Math.max(0, Math.min(entry.index, this.spaces.list.length));
+    this.spaces.list.splice(index, 0, entry.space);
+    this.spacesChanged();
+    return entry.space;
+  }
+
+  /**
+   * Make a space the live strip: the current tabs go back into the current space (closed in the
+   * Library), and the target's tabs open in their saved order with their pins and focused tab.
+   * Viewers get a fresh snapshot ("reset") instead of a close and an open per tab.
+   */
+  switchSpace(id: string): Space {
+    this.ensureSpaces();
+    const target = this.requireSpace(id);
+    if (target.id === this.spaces.activeId) {
+      return target;
+    }
+    const now = Date.now();
+    const current = this.spaces.list.find((space) => space.id === this.spaces.activeId);
+    if (current) {
+      current.tabs = this.liveStrip();
+      current.activeId = this.activeId;
+      current.usedAt = now;
+    }
+    const want = target.tabs.filter((entry) => this.locate(entry.id));
+    const wantIds = new Set(want.map((entry) => entry.id));
+    for (const tabId of [...this.order]) {
+      const tab = this.tabs.get(tabId)!;
+      if (isAppTab(tab)) {
+        this.tabs.delete(tabId);
+        this.removed.add(tabId);
+        this.dirty.delete(tabId);
+        deleteTabAssets(tabId);
+        continue;
+      }
+      if (!wantIds.has(tabId)) {
+        this.tabs.delete(tabId);
+        tab.closedAt = this.stamp();
+        this.closed.set(tabId, tab);
+        this.markDirty(tabId);
+      }
+    }
+    for (const entry of want) {
+      let tab = this.tabs.get(entry.id);
+      if (!tab) {
+        tab = this.closed.get(entry.id)!;
+        this.closed.delete(tab.id);
+        this.claimKey(tab);
+        delete tab.closedAt;
+        this.tabs.set(tab.id, tab);
+      }
+      tab.pinned = entry.pinned;
+      tab.stripSeq = this.nextSeq();
+      this.markDirty(tab.id);
+    }
+    this.rebuildOrder();
+    this.activeId = target.activeId && this.tabs.has(target.activeId) ? target.activeId : (this.order[0] ?? null);
+    target.tabs = this.liveStrip();
+    target.usedAt = now;
+    this.spaces.activeId = target.id;
+    this.spacesChanged();
+    this.emit("reset");
+    return target;
+  }
+
+  /** The next or previous space in list order, wrapping. */
+  cycleSpace(step: number): Space {
+    this.ensureSpaces();
+    const list = this.spaces.list;
+    const at = Math.max(0, list.findIndex((space) => space.id === this.spaces.activeId));
+    const next = list[(at + (step < 0 ? list.length - 1 : 1)) % list.length];
+    return this.switchSpace(next.id);
   }
 
   /** Deleted batches, newest first. */
@@ -1984,7 +2247,9 @@ export class BoardStore extends EventEmitter {
         removedTemplateIds: [...this.removedTemplates],
         bindings: this.collectBindings(),
         replaceBindings: true,
+        ...(this.spacesDirty ? { spaces: JSON.stringify(this.spaces) } : {}),
       });
+      this.spacesDirty = false;
       this.dirty.clear();
       this.removed.clear();
       this.removedTemplates.clear();

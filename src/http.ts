@@ -19,6 +19,7 @@ import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
 import { isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import type { SpacesView } from "./spaces.js";
 import { ViewerHub } from "./viewers.js";
 import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
 import {
@@ -686,6 +687,43 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  /** Spaces belong to the user: the board UI manages them, agents only see the strip. */
+  const spaceRoute =
+    (run: (req: express.Request) => unknown) => (req: express.Request, res: express.Response) => {
+      if (viewerOf(req) === "agent") {
+        res.status(403).json({ error: "Only the board UI can change spaces" });
+        return;
+      }
+      try {
+        run(req);
+        res.json(store.spacesView());
+      } catch (err) {
+        const message = (err as Error).message;
+        res.status(/not found|no deleted/.test(message) ? 404 : 400).json({ error: message });
+      }
+    };
+
+  app.get("/api/spaces", (_req, res) => res.json(store.spacesView()));
+  app.post("/api/spaces", spaceRoute((req) =>
+    store.createSpace({
+      name: req.body?.name,
+      color: req.body?.color,
+      copyTabs: req.body?.copyTabs === true,
+      activate: req.body?.activate === true,
+    })
+  ));
+  app.post("/api/spaces/ensure", spaceRoute(() => store.ensureSpaces()));
+  app.post("/api/spaces/cycle", spaceRoute((req) => store.cycleSpace(Number(req.body?.step) || 1)));
+  app.post("/api/spaces/restore", spaceRoute((req) =>
+    store.restoreSpace(typeof req.body?.id === "string" ? req.body.id : undefined)
+  ));
+  app.patch("/api/spaces/:sid", spaceRoute((req) =>
+    store.updateSpace(req.params.sid, { name: req.body?.name, color: req.body?.color })
+  ));
+  app.post("/api/spaces/:sid/switch", spaceRoute((req) => store.switchSpace(req.params.sid)));
+  app.post("/api/spaces/:sid/move", spaceRoute((req) => store.moveSpace(req.params.sid, Number(req.body?.index))));
+  app.delete("/api/spaces/:sid", spaceRoute((req) => store.deleteSpace(req.params.sid)));
+
   app.post("/api/tabs/:id/open", (req, res) => {
     try {
       const rawBefore = req.body?.before;
@@ -1190,6 +1228,9 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
   store.on("tab_deleted", (id: string) => broadcast({ type: "tab_deleted", id }));
+  store.on("spaces", (spaces: SpacesView) => broadcast({ type: "spaces", spaces }));
+  // A space switch swaps the whole strip: one fresh snapshot instead of a close and an open per tab.
+  store.on("reset", () => broadcast({ type: "snapshot", version: VERSION, reset: true, ...store.snapshot() }));
   store.on("folders", (folders: Folder[]) => broadcast({ type: "folders", folders }));
   store.on("trash", () => broadcast({ type: "trash" }));
   store.on("tab_state", (tab: Tab, delta: { fromRevision: number; ops: StateOp[]; client?: string; writeId?: string }) =>

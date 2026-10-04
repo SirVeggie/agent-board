@@ -302,6 +302,8 @@ export class BoardDb {
 
   load(): {
     activeId: string | null;
+    /** The spaces JSON from meta, if any (src/spaces.ts parses it). */
+    spaces: string | null;
     rows: StoredTab[];
     folders: StoredFolder[];
     templates: Template[];
@@ -310,12 +312,14 @@ export class BoardDb {
     const active = this.db.prepare("SELECT v FROM meta WHERE k = ?").get("active_id") as
       | { v: string }
       | undefined;
+    const spaces = this.db.prepare("SELECT v FROM meta WHERE k = ?").get("spaces") as { v: string } | undefined;
     const rows = this.db.prepare("SELECT * FROM tabs").all() as TabRow[];
     const folders = (this.db.prepare("SELECT * FROM folders").all() as FolderRow[]).map(rowToFolder);
     const templates = (this.db.prepare("SELECT * FROM templates").all() as TemplateRow[]).map(rowToTemplate);
     const bindings = (this.db.prepare("SELECT * FROM template_bindings").all() as BindingRow[]).map(rowToBinding);
     return {
       activeId: active?.v ?? null,
+      spaces: spaces?.v ?? null,
       rows: rows.map(rowToStored),
       folders,
       templates,
@@ -333,6 +337,8 @@ export class BoardDb {
     removedTemplateIds?: string[];
     bindings?: TemplateBinding[];
     replaceBindings?: boolean;
+    /** The spaces JSON; written when present. */
+    spaces?: string;
   }): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -366,6 +372,9 @@ export class BoardDb {
         }
       }
       this.metaStmt.run("active_id", input.activeId ?? "");
+      if (input.spaces !== undefined) {
+        this.metaStmt.run("spaces", input.spaces);
+      }
       this.db.exec("COMMIT");
     } catch (err) {
       try {
