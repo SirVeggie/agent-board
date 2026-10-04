@@ -1113,6 +1113,34 @@ export const BOARD_BRIDGE_JS = `
     options: function () {
       return agentCall({ op: "options" });
     },
+    /**
+     * The template's agent actions for the page's right-click menu, so a page that draws its own menu
+     * can offer them: { ok, actions: [{ id, label, description, selection, context: [names] }] }.
+     * context lists the placeholders the page must supply to runAction, e.g. ["card"].
+     */
+    actions: function () {
+      return agentCall({ op: "actions" });
+    },
+    /**
+     * Run one of those actions as if chosen from Scribe's menu (needs a click): { ok }, or
+     * { ok: false, error: "missing_context" | "needs_selection" | "not_found" }. opts: { context:
+     * { name: text }, e.g. { card: "#12 Fix login" }, selection }.
+     */
+    runAction: function (id, opts) {
+      if (!hasGesture()) {
+        console.warn("[scribe] scribe.agent.runAction needs a click or key press; ignored");
+        return Promise.resolve({ ok: false, error: "no_gesture" });
+      }
+      opts = opts || {};
+      var context = {};
+      if (opts.context && typeof opts.context === "object") {
+        Object.keys(opts.context).forEach(function (name) {
+          var value = opts.context[name];
+          if (typeof value === "string" || typeof value === "number") context[name] = String(value);
+        });
+      }
+      return agentCall({ op: "runAction", action: agentText(id), context: context, selection: agentText(opts.selection) }, AGENT_ASK_MS);
+    },
     /** Let the user pick a folder for Code and Plan threads (needs a click): { ok, path } or { ok: false, error: "cancelled" }. */
     pickFolder: function (opts) {
       if (!hasGesture()) {

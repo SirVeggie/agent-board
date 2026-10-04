@@ -80,7 +80,8 @@ export type AgentActionPlace = (typeof AGENT_ACTION_PLACES)[number];
 /**
  * One template-declared agent action. The prompt's placeholders are filled in when it runs:
  * {{selection}} (text selected on the page), {{input}} (text after the slash command),
- * {{page.title}}, {{page.key}}; {{#name}}…{{/name}} keeps its text only when name is not empty.
+ * {{page.title}}, {{page.key}}, and the names in `context`; {{#name}}…{{/name}} keeps its text only when
+ * name is not empty.
  */
 export type AgentAction = {
   /** Slash command name, unique in the template. */
@@ -92,6 +93,12 @@ export type AgentAction = {
   where: AgentActionPlace[];
   /** required: only offered with text selected; none: only without. Default: either. */
   selection?: "required" | "none";
+  /**
+   * Placeholders the page supplies for what the user right-clicked, e.g. ["card"] for {{card}}: from the
+   * data-scribe-context attributes under the cursor, or from scribe.agent.runAction. The action is
+   * offered only where the page supplies all of them, so only in a right-click menu.
+   */
+  context?: string[];
   /** new (default): a new thread on the page with the thread settings; chat: sent in the chat at hand. */
   run?: "new" | "chat";
   /** Settings for a new thread; unset ones follow the user's defaults. */

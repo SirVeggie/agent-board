@@ -156,6 +156,8 @@ const MAX_AGENT_ACTIONS = 16;
 const MAX_ACTION_PROMPT = 8000;
 const ACTION_ID = /^[a-z][a-z0-9-]{0,39}$/;
 const ACTION_PLACEHOLDERS = new Set(["selection", "input", "page.title", "page.key"]);
+const ACTION_CONTEXT_NAME = /^[a-z][a-z_]{0,29}$/;
+const MAX_ACTION_CONTEXT = 4;
 const ACTION_TAG = /\{\{\s*([#/]?)\s*([a-zA-Z_.]+)\s*\}\}/g;
 const ACTION_MODES = ["board", "ask"] as const;
 const ACTION_WEB = ["on", "limited", "off"] as const;
@@ -193,8 +195,12 @@ export function parseAgentActions(raw: unknown): AgentAction[] {
     if (!prompt || prompt.length > MAX_ACTION_PROMPT) {
       throw new Error(`${at}.prompt is required (max ${MAX_ACTION_PROMPT} characters)`);
     }
-    assertActionPlaceholders(prompt, `${at}.prompt`);
+    const context = parseActionContext(item.context, `${at}.context`);
+    assertActionPlaceholders(prompt, `${at}.prompt`, context);
     const action: AgentAction = { id, label, prompt, where: [...AGENT_ACTION_PLACES] };
+    if (context.length) {
+      action.context = context;
+    }
     const description = typeof item.description === "string" ? item.description.trim() : "";
     if (description) {
       action.description = description.slice(0, 200);
@@ -219,7 +225,7 @@ export function parseAgentActions(raw: unknown): AgentAction[] {
       action.run = "chat";
     }
     if (item.thread !== undefined) {
-      const thread = parseActionThread(item.thread, `${at}.thread`);
+      const thread = parseActionThread(item.thread, `${at}.thread`, context);
       if (Object.keys(thread).length) {
         action.thread = thread;
       }
@@ -228,7 +234,31 @@ export function parseAgentActions(raw: unknown): AgentAction[] {
   });
 }
 
-function parseActionThread(raw: unknown, at: string): AgentActionThread {
+/** The page-supplied placeholder names an action declares: lowercase words, not the built-in ones. */
+function parseActionContext(raw: unknown, at: string): string[] {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  const names = Array.isArray(raw) ? raw : [raw];
+  if (names.length > MAX_ACTION_CONTEXT) {
+    throw new Error(`${at} is too long (max ${MAX_ACTION_CONTEXT} names)`);
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    if (typeof name !== "string" || !ACTION_CONTEXT_NAME.test(name)) {
+      throw new Error(`${at} names must be lowercase letters and underscores, starting with a letter, e.g. card`);
+    }
+    if (ACTION_PLACEHOLDERS.has(name)) {
+      throw new Error(`${at}: "${name}" is a built-in placeholder`);
+    }
+    if (!out.includes(name)) {
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+function parseActionThread(raw: unknown, at: string, context: string[] = []): AgentActionThread {
   if (!isPlainObject(raw)) {
     throw new Error(`${at} must be an object`);
   }
@@ -271,19 +301,21 @@ function parseActionThread(raw: unknown, at: string): AgentActionThread {
     }
     const title = raw.title.trim().slice(0, 120);
     if (title) {
-      assertActionPlaceholders(title, `${at}.title`);
+      assertActionPlaceholders(title, `${at}.title`, context);
       thread.title = title;
     }
   }
   return thread;
 }
 
-function assertActionPlaceholders(source: string, where: string): void {
+function assertActionPlaceholders(source: string, where: string, context: string[] = []): void {
   const open: string[] = [];
   for (const match of source.matchAll(ACTION_TAG)) {
     const [, mark, name] = match;
-    if (!ACTION_PLACEHOLDERS.has(name)) {
-      throw new Error(`${where} uses unknown placeholder "${name}" (use ${[...ACTION_PLACEHOLDERS].join(", ")})`);
+    if (!ACTION_PLACEHOLDERS.has(name) && !context.includes(name)) {
+      throw new Error(
+        `${where} uses unknown placeholder "${name}" (use ${[...ACTION_PLACEHOLDERS, ...context].join(", ")}, or declare it in context)`
+      );
     }
     if (mark === "#") {
       open.push(name);

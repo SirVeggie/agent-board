@@ -435,6 +435,8 @@ await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban 
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
 const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, approvals, defaults }
 const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)
+const { actions } = await scribe.agent.actions();         // the template's right-click agent actions: [{ id, label, description, selection, context }]
+await scribe.agent.runAction("triage-card", { context: { card: "#12 Fix login" } }); // run one from the page's own menu (inside a click)
 await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
 ```
 

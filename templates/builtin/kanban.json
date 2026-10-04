@@ -39,6 +39,28 @@
       "thread": {
         "title": "Triage: {{page.title}}"
       }
+    },
+    {
+      "id": "triage-card",
+      "label": "Triage this card",
+      "description": "Label, prioritise and tidy one card",
+      "context": ["card"],
+      "where": ["menu"],
+      "prompt": "Triage card {{card}} on the board {{page.title}} ({{page.key}}): add labels and a priority, tidy its title and description, and comment with questions if it is unclear. Don't move it into an agent column or start work on it.",
+      "thread": {
+        "title": "Triage {{card}}"
+      }
+    },
+    {
+      "id": "break-down-card",
+      "label": "Break this card down",
+      "description": "Turn the card into checklist steps",
+      "context": ["card"],
+      "where": ["menu"],
+      "prompt": "Break down card {{card}} on the board {{page.title}} ({{page.key}}): read it and write its checklist as small, concrete steps. If it is really several pieces of work, say so in a comment and suggest the cards to split it into. Don't move it or start work on it.",
+      "thread": {
+        "title": "Break down {{card}}"
+      }
     }
   ],
   "titleTemplate": "{{title}}",

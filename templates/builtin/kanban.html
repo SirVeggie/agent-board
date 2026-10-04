@@ -3010,6 +3010,20 @@
         });
       });
     }
+    // The template's agent actions about one card (context: ["card"]), e.g. Triage this card.
+    var cardActions = templateActions.filter(function (a) {
+      return a.context.length === 1 && a.context[0] === "card" && a.selection !== "required";
+    });
+    cardActions.forEach(function (a) {
+      var b = menuButton(menuEl, a.label, function () {
+        scribe.agent.runAction(a.id, { context: { card: "#" + c.num + " " + plainLinks(c.title) } }).then(function (r) {
+          if (!r || !r.ok) setHint("Couldn't run " + a.label + (r && r.error ? " (" + r.error.replace(/_/g, " ") + ")" : "") + ".");
+        });
+      });
+      if (a.description) b.title = a.description;
+    });
+    loadTemplateActions();
+    if (cardActions.length) menuEl.appendChild(el("div", "sep"));
     var sub = el("div", "menu-sub");
     var subBtn = el("button", null);
     subBtn.type = "button";
@@ -3037,6 +3051,17 @@
     // Open the submenu toward whichever side has room.
     if (left + w + list.offsetWidth + 8 > window.innerWidth) sub.classList.add("flip");
   }
+
+  // Declared in the template (agentActions with context: ["card"]); refreshed each time the card menu
+  // opens, so an edited template shows up from the next menu on.
+  var templateActions = [];
+  function loadTemplateActions() {
+    if (!scribe.agent || typeof scribe.agent.actions !== "function") return;
+    scribe.agent.actions().then(function (r) {
+      if (r && r.ok && Array.isArray(r.actions)) templateActions = r.actions;
+    });
+  }
+  loadTemplateActions();
 
   function deleteCard(id) {
     setCards(allCards().filter(function (x) { return x.id !== id; }).map(function (x) {

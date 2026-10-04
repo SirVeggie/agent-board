@@ -6275,6 +6275,29 @@
         return { ok: true };
       case "options":
         return pageOptions();
+      case "actions":
+        // The template's right-click actions, for a page that draws its own menu (#161).
+        return {
+          ok: true,
+          actions: declaredActions(tab, "menu").map((a) => ({
+            id: a.id,
+            label: a.label,
+            ...(a.description ? { description: a.description } : {}),
+            ...(a.selection ? { selection: a.selection } : {}),
+            context: a.context || [],
+          })),
+        };
+      case "runAction": {
+        if (!activated) return { ok: false, error: "no_gesture" };
+        const action = declaredActions(tab, "menu").find((a) => a.id === data.action);
+        if (!action) return { ok: false, error: "not_found" };
+        const context = data.context && typeof data.context === "object" && !Array.isArray(data.context) ? data.context : {};
+        if (!hasContext(action, context)) return { ok: false, error: "missing_context" };
+        const selection = typeof data.selection === "string" ? data.selection.trim().slice(0, 20000) : "";
+        if (action.selection === "required" && !selection) return { ok: false, error: "needs_selection" };
+        await runAction(tab, action, { selection: action.selection === "none" ? "" : selection, context });
+        return { ok: true };
+      }
       case "pickFolder": {
         if (!activated) return { ok: false, error: "no_gesture" };
         const picked = await pickWorkspace(typeof data.initial === "string" ? data.initial : "");
@@ -6606,9 +6629,28 @@
   /* ---------- template agent actions (#152) ---------- */
 
   /** The page's template actions offered at `place` (menu, palette, slash). */
-  function pageActions(tab, place) {
+  function pageActions(tab, place, context = null) {
+    return declaredActions(tab, place).filter((a) => hasContext(a, context));
+  }
+
+  function declaredActions(tab, place) {
     const actions = (tab && app()?.templateActions?.(tab)) || [];
     return actions.filter((a) => a && a.id && a.prompt && (a.where || []).includes(place));
+  }
+
+  /** An action with page-supplied placeholders (#161) is offered only where the page supplies them all. */
+  function hasContext(action, context) {
+    return (action.context || []).every((name) => context && String(context[name] ?? "").trim());
+  }
+
+  /** The values a page supplied for an action's declared context names; anything else is dropped. */
+  function contextValues(action, context) {
+    const out = {};
+    for (const name of action.context || []) {
+      const value = context?.[name];
+      if (typeof value === "string" || typeof value === "number") out[name] = String(value).trim().slice(0, 2000);
+    }
+    return out;
   }
 
   /** Fill in an action's prompt or title; the same rules as renderAgentActionText in src/templates.ts. */
@@ -6649,9 +6691,15 @@
    * Run a template action on `tab`: a new thread on the page with the action's settings, or with run: "chat",
    * a message in the chat at hand. `view` is the chat it was typed in (slash menu).
    */
-  async function runAction(tab, action, { selection = "", input = "", view = null } = {}) {
+  async function runAction(tab, action, { selection = "", input = "", context = null, view = null } = {}) {
     if (!tab || !action) return;
-    const values = { selection: String(selection || "").trim(), input: String(input || "").trim(), "page.title": tab.title || "", "page.key": tab.key || "" };
+    const values = {
+      ...contextValues(action, context),
+      selection: String(selection || "").trim(),
+      input: String(input || "").trim(),
+      "page.title": tab.title || "",
+      "page.key": tab.key || "",
+    };
     const prompt = actionText(action.prompt, values).slice(0, PAGE_PROMPT_MAX);
     if (!prompt) return;
     // A selection the prompt does not quote still goes along, as a chip.

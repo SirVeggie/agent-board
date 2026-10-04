@@ -1177,13 +1177,19 @@ export async function startMcp(): Promise<void> {
             prompt: z
               .string()
               .describe(
-                "The message sent to the agent. Placeholders: {{selection}} (text selected on the page), {{input}} (text typed after the slash command), {{page.title}}, {{page.key}}. {{#selection}}…{{/selection}} keeps its text only when there is a selection (same for the others). The page and its guide are attached for the agent anyway."
+                "The message sent to the agent. Placeholders: {{selection}} (text selected on the page), {{input}} (text typed after the slash command), {{page.title}}, {{page.key}}, and the names in context. {{#selection}}…{{/selection}} keeps its text only when there is a selection (same for the others). The page and its guide are attached for the agent anyway."
               ),
             where: z
               .array(z.enum(["menu", "palette", "slash"]))
               .optional()
               .describe("Page right-click menu, Ctrl+P palette while the page is open, chat slash menu. Default: all three."),
             selection: z.enum(["required", "optional", "none"]).optional().describe("Offer it only with text selected (required), only without (none), or either (default)."),
+            context: z
+              .array(z.string())
+              .optional()
+              .describe(
+                "Placeholders the page supplies for what the user right-clicked, e.g. [\"card\"] for {{card}}. The page sets them with data-scribe-context='{\"card\":\"#12 Fix login\"}' on an element (the nearest one under the cursor wins per name), or passes them to scribe.agent.runAction from its own menu. The action shows only in a right-click menu where all of them are supplied."
+              ),
             run: z
               .enum(["new", "chat"])
               .optional()

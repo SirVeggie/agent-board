@@ -53,6 +53,18 @@
       "thread": {
         "title": "Break down: {{page.title}}"
       }
+    },
+    {
+      "id": "break-down-item",
+      "label": "Break this item down",
+      "description": "Split the item under the cursor into smaller steps",
+      "context": ["item"],
+      "where": ["menu"],
+      "selection": "none",
+      "prompt": "Break the item \"{{item}}\" on {{page.title}} ({{page.key}}) into smaller, concrete steps and add them as new items right after it, in the same column.",
+      "thread": {
+        "title": "Break down: {{item}}"
+      }
     }
   ],
   "titleTemplate": "{{title}}",

@@ -107,6 +107,20 @@ test("parseAgentActions rejects bad ids, placeholders, sections and modes", () =
   assert.throws(() => parseAgentActions([{ ...base, where: ["toolbar"] }]), /where must list/);
 });
 
+test("parseAgentActions takes page-supplied context placeholders", () => {
+  const [action] = parseAgentActions([
+    { id: "triage-card", label: "Triage this card", prompt: "Triage {{card}} on {{page.title}}", context: ["card", "card"], thread: { title: "Triage {{card}}" } },
+  ]);
+  assert.deepEqual(action.context, ["card"]);
+  assert.equal(action.thread?.title, "Triage {{card}}");
+  assert.equal(renderAgentActionText(action.prompt, { card: "#12 Fix login", "page.title": "Board" }), "Triage #12 Fix login on Board");
+  const base = { id: "go", label: "Go", prompt: "Go {{card}}" };
+  assert.throws(() => parseAgentActions([{ ...base, context: ["item"] }]), /unknown placeholder "card"/);
+  assert.throws(() => parseAgentActions([{ ...base, context: ["Card"] }]), /lowercase letters/);
+  assert.throws(() => parseAgentActions([{ ...base, context: ["selection"] }]), /built-in placeholder/);
+  assert.equal(parseAgentActions([{ id: "go", label: "Go", prompt: "Go" }])[0].context, undefined);
+});
+
 test("normalizeTemplateInput keeps agentActions unset when omitted", () => {
   assert.equal(normalizeTemplateInput({ title: "T", html: "<p>x</p>" }).agentActions, undefined);
   assert.deepEqual(normalizeTemplateInput({ title: "T", html: "<p>x</p>", agentActions: [] }).agentActions, []);

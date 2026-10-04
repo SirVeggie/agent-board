@@ -1636,8 +1636,25 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
     var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
     var href = link ? link.href : "";
     menuOpen = true;
-    parent.postMessage({ type: "scribe-context-menu", x: event.clientX, y: event.clientY, selection: selectedText(), link: /^https?:/i.test(href) ? href : "" }, "*");
+    parent.postMessage({ type: "scribe-context-menu", x: event.clientX, y: event.clientY, selection: selectedText(), link: /^https?:/i.test(href) ? href : "", context: menuContext(event.target) }, "*");
   });
+  // What the page says is under the cursor, for template agent actions' placeholders: the
+  // data-scribe-context JSON objects on the element and its ancestors, the nearest one winning per name.
+  function menuContext(node) {
+    var out = {};
+    for (var el = node && node.nodeType === 1 ? node : node && node.parentElement; el; el = el.parentElement) {
+      var raw = el.getAttribute && el.getAttribute("data-scribe-context");
+      if (!raw) continue;
+      var data = null;
+      try { data = JSON.parse(raw); } catch (err) {}
+      if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+      Object.keys(data).forEach(function (name) {
+        var value = data[name];
+        if (!(name in out) && /^[a-z][a-z_]{0,29}$/.test(name) && (typeof value === "string" || typeof value === "number")) out[name] = String(value).slice(0, 2000);
+      });
+    }
+    return out;
+  }
   // The menu lives in the board; a click, key or scroll in here closes it. Esc closes only the menu.
   function closeMenu(event) {
     if (!menuOpen) return;

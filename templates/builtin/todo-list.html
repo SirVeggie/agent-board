@@ -784,6 +784,8 @@
     var li = document.createElement("li");
     li.className = CHECKS && item.done ? "item done" : "item";
     li.setAttribute("data-id", item.id);
+    // The item under the cursor for template agent actions with context: ["item"] (Scribe's right-click menu).
+    li.setAttribute("data-scribe-context", JSON.stringify({ item: item.text || "" }));
 
     var check = document.createElement("input");
     check.type = "checkbox";

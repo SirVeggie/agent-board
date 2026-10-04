@@ -3106,10 +3106,12 @@
     const point = { x: box.left + (Number(data.x) || 0) * scale, y: box.top + (Number(data.y) || 0) * scale };
     const selection = typeof data.selection === "string" ? data.selection : "";
     const link = typeof data.link === "string" && /^https?:/i.test(data.link) ? data.link : "";
+    // What the page marked under the cursor (data-scribe-context), for actions' own placeholders (#161).
+    const context = data.context && typeof data.context === "object" && !Array.isArray(data.context) ? data.context : {};
     // The template's own agent actions (#152), for this selection or the whole page.
-    const actions = (window.scribeChat?.pageActions?.(tab, "menu") || [])
+    const actions = (window.scribeChat?.pageActions?.(tab, "menu", context) || [])
       .filter((action) => (selection ? action.selection !== "none" : action.selection !== "required"))
-      .map((action) => ({ label: action.label, action: () => window.scribeChat?.runAction(tab, action, { selection }) }));
+      .map((action) => ({ label: action.label, action: () => window.scribeChat?.runAction(tab, action, { selection, context }) }));
     library.openMenu(point, [
       selection && { label: "Ask agent", action: () => window.scribeChat?.ask(selection, tab) },
       selection && { label: "Copy", action: () => copyText(selection, "Copied selection") },
