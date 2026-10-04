@@ -630,6 +630,52 @@ export async function startHttp(): Promise<http.Server> {
       });
   });
 
+  /** page_ask from a Scribe chat's MCP: the thread's turn shows the page as a question and waits on its submit event. */
+  app.post("/api/ask", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "page_ask only works in Scribe chat threads. Use page_wait instead." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    let names: string[];
+    try {
+      names = parseEventNames(body.events ?? "submit");
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    const page = typeof body.page === "string" ? body.page : "";
+    if (!page) {
+      res.status(400).json({ error: "page is required" });
+      return;
+    }
+    const timeoutMs = clampWaitMs(body.timeoutMs);
+    req.setTimeout(timeoutMs + 10_000);
+    res.setTimeout(timeoutMs + 10_000);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .askPage(thread, {
+        page,
+        ...(typeof body.prompt === "string" && body.prompt.trim() ? { prompt: body.prompt.trim() } : {}),
+        events: names.length ? names : ["submit"],
+        after: parseCursor(body.after),
+        timeoutMs,
+        signal: abort.signal,
+      })
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(err.message.startsWith("tab not found") ? 404 : 400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
   app.post("/api/undo", (_req, res) => {
     try {
       const { tab } = store.restoreLast();

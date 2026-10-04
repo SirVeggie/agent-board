@@ -2130,6 +2130,7 @@
     }
 
     renderQuestion(it) {
+      if (it.page) return this.renderPageQuestion(it);
       const node = el("div", `ag-card ag-question s-${it.status}`);
       node.dataset.itemId = it.id;
       if (it.status !== "pending") {
@@ -2195,6 +2196,48 @@
         })
       );
       node.append(actions);
+      return node;
+    }
+
+    /** page_ask: the user answers on a form page; its submit event resumes the turn. */
+    renderPageQuestion(it) {
+      const node = el("div", `ag-card ag-question ag-page-ask s-${it.status}`);
+      node.dataset.itemId = it.id;
+      const pageTitle = app()?.resolvePages?.([it.page.key])?.[it.page.key]?.title || it.page.title;
+      const open = (event) => app()?.openLink(it.page.key, event, { mode: "peek" });
+      const pageLink = el("a", "ag-board-link", pageTitle);
+      pageLink.tabIndex = 0;
+      pageLink.title = `Scribe page · ${it.page.key} (Ctrl navigate, Shift split; opens as a peek)`;
+      pageLink.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        open(event);
+      });
+      if (it.status !== "pending") {
+        node.classList.add("done");
+        const answered = it.status === "answered";
+        const text = answered ? "Answered on " : it.status === "skipped" ? "Skipped · " : "Not answered · ";
+        const line = el("span", "ag-card-line");
+        line.append(text, pageLink);
+        node.append(icon(answered ? "check" : "cross", `ag-ico ${answered ? "ag-st-ok" : "ag-st-err"}`), line);
+        return node;
+      }
+      const head = el("div", "ag-card-head");
+      head.append(icon("question"), el("span", "ag-card-title", it.title || "The agent needs your answer"));
+      node.append(head);
+      const body = el("div", "ag-q-prompt");
+      body.append("Answer on ", pageLink, ". The agent carries on when you submit it.");
+      node.append(body);
+      const note = el("input", "ag-input small");
+      note.placeholder = "Note for the agent (for Skip)";
+      const actions = el("div", "ag-card-actions");
+      actions.append(
+        button("Open", "ag-btn small primary", (event) => open(event)),
+        button("Skip", "ag-btn small", async () => {
+          await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { skip: true, reason: note.value.trim() || undefined }).catch((err) => notice(err.message));
+        })
+      );
+      node.append(note, actions);
       return node;
     }
 

@@ -3397,7 +3397,7 @@
     closed: () => state.closed,
     folders: () => state.folders,
     connected: () => state.connected,
-    openLink: (target, event, { anchor = "" } = {}) => views.open(target, views.modeFromEvent(event), { anchor }),
+    openLink: (target, event, { anchor = "", mode = null } = {}) => views.open(target, views.modeFromEvent(event) || mode, { anchor }),
     resolvePages: (targets) => views.resolve(targets),
     showNotice,
     confirm: confirmDelete,

@@ -1132,14 +1132,72 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  // The agent browser is for Scribe chat threads only; other MCP clients have their own.
+  // The agent browser and page_ask are for Scribe chat threads only; other MCP clients have their own.
   if (process.env.SCRIBE_THREAD) {
     registerBrowserTools(server);
+    registerAsk(server);
   }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`MCP connected; board at ${baseUrl()}`);
+}
+
+/**
+ * page_ask: the chat's own way to ask the user with a page. The turn shows the page as a question
+ * card and waits for its submit event, like page_wait, but the chat counts it as waiting for the user.
+ */
+function registerAsk(server: McpServer): void {
+  server.tool(
+    "page_ask",
+    "Ask the user with a page and wait for their answer. Build the form page first with page_show (background: true is fine): it should explain what you need, include a freeform text field, and call scribe.signal(\"submit\") when the user submits. page_ask shows it in the chat as a question card the user opens, marks this turn as waiting for the user, and returns when the page sends one of events: answered, the page's events and its state after the answer. Also returns when the user skips it in the chat (skipped, with their note), closes or deletes the page, or the wait times out. Use this instead of page_wait whenever you need the user's input to carry on.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Page key, e.g. scribe:deploy-options."),
+      prompt: z.string().optional().describe("One line on what you are asking, shown on the chat's question card, e.g. \"Which deploy target should I use?\""),
+      events: z.string().optional().describe("Event names that answer it, comma-separated. Default submit."),
+      after: z.number().optional().describe("Event cursor (eventCursor from page_state): count events after it, e.g. a submit that came in before this call. Default: only events from now on."),
+      timeoutMs: z.number().optional().describe("How long to wait, in milliseconds. Default 7200000 (2 hours)."),
+    },
+    { readOnlyHint: true },
+    async ({ id, key, prompt, events, after, timeoutMs }, extra) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const waitMs = clampWaitMs(timeoutMs);
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({
+                  method: "notifications/progress",
+                  params: { progressToken, progress: seconds, message: `Waiting for the user's answer (${seconds}s)` },
+                })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api(
+          "POST",
+          "/api/ask",
+          { page: which, events: events ?? "submit", ...(prompt ? { prompt } : {}), ...(after !== undefined ? { after } : {}), timeoutMs: waitMs },
+          { timeoutMs: waitMs + 15_000, signal: extra.signal }
+        );
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "page_ask failed");
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
+  );
 }
 
 const targetShape = {

@@ -542,6 +542,8 @@ page_update({ key: "sprint-board", ops: [
 
 If the page asks the user to do something you must continue from — submit, choose, confirm, finish a checklist — call `page_wait` **next, in the same turn**, with the same event name the page logs. Do not poll `page_state`.
 
+In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the page instead of `page_wait`: the chat shows it as a question, the turn counts as waiting for the user, and the call returns the answering events and the page's state. The page should still log `submit` (or the event you pass) when the user is done.
+
 ## Pin, open, close
 
 - `page_pin` / `page_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `page_show` `pin`.

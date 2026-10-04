@@ -298,6 +298,10 @@ export type ItemBody =
       status: "pending" | "answered" | "skipped" | "expired";
       answers?: Record<string, string[]>;
       notes?: Record<string, string>;
+      /** Asked with a page (page_ask): the user answers on the page; its event resumes the turn. */
+      page?: { id: string; key: string; title: string };
+      /** The page event that answered it. */
+      event?: string;
     }
   | {
       kind: "plan";

@@ -7,6 +7,8 @@ import { PORT, dataDir } from "../config.js";
 import { closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
 import { store } from "../store.js";
+import { waitForEvents } from "../wait.js";
+import type { PageEvent } from "../types.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
@@ -195,6 +197,13 @@ type RunState = {
   /** Stops the summary a fork's first turn waits for. */
   abort?: AbortController;
 };
+
+/** What page_ask hands back to the agent. */
+export type PageAskResult =
+  | { answered: true; page: { id: string; key: string }; events: PageEvent[]; cursor: number; state: unknown; stateRevision: number }
+  | { answered: false; page: { id: string; key: string }; cursor: number; closed: boolean; deleted: boolean; timedOut: boolean }
+  | { skipped: true; note?: string; page: { id: string; key: string } }
+  | { cancelled: true; page: { id: string; key: string } };
 
 export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" };
 
@@ -1451,28 +1460,85 @@ export class AgentHost {
     }
   }
 
+  /** Wait for the user to answer an interaction item; the thread shows as waiting meanwhile. */
+  private waitPending<T>(threadId: string, run: RunState, kind: Pending["kind"], itemId: string, signal?: AbortSignal): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const requestId = itemId;
+      this.pending.set(requestId, { kind, threadId, itemId, resolve: resolve as never, reject } as Pending);
+      this.setStatus(threadId, "waiting");
+      const onAbort = () => {
+        const pending = this.pending.get(requestId);
+        if (pending) {
+          this.pending.delete(requestId);
+          this.expireInteraction(pending);
+          reject(new Error("aborted"));
+        }
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort);
+    }).finally(() => {
+      if (this.runs.get(threadId) === run && ![...this.pending.values()].some((p) => p.threadId === threadId)) {
+        this.setStatus(threadId, "running");
+      }
+    });
+  }
+
+  /**
+   * page_ask: show a page as a question in the thread's running turn and wait until the page logs
+   * one of `events` (its submit), the user skips it in the chat, or the turn ends. Returns what the
+   * agent needs to carry on, including the page's state after the answer.
+   */
+  async askPage(threadId: string, opts: { page: string; prompt?: string; events: string[]; after?: number; timeoutMs: number; signal: AbortSignal }): Promise<PageAskResult> {
+    const run = this.runs.get(threadId);
+    if (!run) throw new Error("page_ask only works while this chat thread has a turn running.");
+    const tab = store.get(opts.page, "agent");
+    if (!tab) throw new Error(`tab not found: ${opts.page}`);
+    const after = typeof opts.after === "number" && opts.after >= 0 ? Math.floor(opts.after) : tab.eventSeq;
+    this.closeBlocks(run);
+    const item = this.addItem(threadId, run.turn.id, {
+      kind: "question",
+      requestId: "",
+      ...(opts.prompt ? { title: opts.prompt.slice(0, 300) } : {}),
+      questions: [],
+      page: { id: tab.id, key: tab.key, title: tab.title },
+      status: "pending",
+    });
+    const stop = new AbortController();
+    const signal = AbortSignal.any([stop.signal, opts.signal]);
+    const chat = this.waitPending<QuestionAnswer>(threadId, run, "question", item.id, signal);
+    chat.catch(() => {});
+    const page = waitForEvents({ idOrKey: tab.id, names: opts.events, after, timeoutMs: opts.timeoutMs, viewer: "agent", abort: signal });
+    try {
+      const first = await Promise.race([chat.then((answer) => ({ answer }) as const), page.then((wait) => ({ wait }) as const)]);
+      if ("answer" in first) {
+        const reason = "skipped" in first.answer ? first.answer.reason : undefined;
+        return { skipped: true, ...(reason ? { note: reason } : {}), page: { id: tab.id, key: tab.key } };
+      }
+      const wait = first.wait;
+      const base = { page: { id: wait.id, key: wait.key }, cursor: wait.cursor };
+      if (!wait.events.length) {
+        // Closed, deleted, timed out, or the call was cancelled; the abort below expires the card.
+        return { ...base, answered: false, closed: wait.closed, deleted: wait.deleted, timedOut: wait.timedOut && !opts.signal.aborted };
+      }
+      if (this.pending.has(item.id)) this.resolveQuestion(item.id, { answers: {} });
+      if (item.kind === "question") {
+        item.event = wait.events[wait.events.length - 1].name;
+        this.touch(item);
+      }
+      const now = store.get(tab.id, "agent");
+      return { ...base, answered: true, events: wait.events, stateRevision: now?.stateRevision ?? wait.stateRevision, state: now?.state ?? null };
+    } catch {
+      return { cancelled: true, page: { id: tab.id, key: tab.key } };
+    } finally {
+      stop.abort();
+    }
+  }
+
   private makeSink(threadId: string, run: RunState): RunSink {
     const turnId = run.turn.id;
     const host = this;
     const thread = () => host.threads.get(threadId);
-    const waitFor = <T>(kind: Pending["kind"], itemId: string, signal?: AbortSignal): Promise<T> =>
-      new Promise<T>((resolve, reject) => {
-        const requestId = itemId;
-        host.pending.set(requestId, { kind, threadId, itemId, resolve: resolve as never, reject } as Pending);
-        host.setStatus(threadId, "waiting");
-        signal?.addEventListener("abort", () => {
-          const pending = host.pending.get(requestId);
-          if (pending) {
-            host.pending.delete(requestId);
-            host.expireInteraction(pending);
-            reject(new Error("aborted"));
-          }
-        });
-      }).finally(() => {
-        if (host.runs.get(threadId) === run && ![...host.pending.values()].some((p) => p.threadId === threadId)) {
-          host.setStatus(threadId, "running");
-        }
-      });
+    const waitFor = <T>(kind: Pending["kind"], itemId: string, signal?: AbortSignal): Promise<T> => host.waitPending<T>(threadId, run, kind, itemId, signal);
 
     return {
       nativeId(id) {
