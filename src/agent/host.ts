@@ -541,7 +541,8 @@ export class AgentHost {
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
     const spareId = this.providers[thread.provider].spareThreadId?.(thread, this.ctx);
-    if (spareId) thread.id = spareId;
+    // The spare is taken on the first message; a second thread made before that gets its own id.
+    if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     this.threads.set(thread.id, thread);
     this.items.set(thread.id, []);
     this.turns.set(thread.id, []);

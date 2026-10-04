@@ -29,7 +29,7 @@ test("a new turn with no steps yet reads as working, not the last turn's step", 
 });
 
 test("an unread idle thread says its reply is ready and keeps a long message short", () => {
-  const act = threadActivity([it({ kind: "text", text: "x".repeat(400) })], "idle", true);
+  const act = threadActivity([it({ kind: "user", text: "q" }), it({ kind: "text", text: "x".repeat(400) })], "idle", true);
   assert.equal(act?.line, "Reply ready");
   assert.equal(act?.lastText?.length, 240);
   assert.ok(act?.lastText?.endsWith("…"));

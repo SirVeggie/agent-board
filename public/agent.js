@@ -3877,6 +3877,7 @@
       const toggle = () => button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)");
       this.orb = button("", "dock-orb", (event) => view.modelMenu(event.currentTarget), "Model");
       const input = el("div", "dock-input");
+      flyout.bind(this.orb, "orb");
       input.append(this.orb, view.composer, toggle(), view.sendSlot);
       // Bar: status, thread and scope on the left; settings and window tools on the right.
       this.status = el("span", "dock-status");
@@ -4190,6 +4191,8 @@
       lastAsks = asks;
       window.dispatchEvent(new Event("scribe:agent-status"));
     }
+    flyout.render();
+    toasts.update();
   }
 
   /**
@@ -4239,6 +4242,378 @@
     requestAnimationFrame(reveal);
     return true;
   }
+
+  /* ---------- activity flyout and needs-you toasts ---------- */
+
+  const FLYOUT_CAP = 8;
+  const TOAST_CAP = 3;
+  const FINISH_TOAST_MS = 8000;
+
+  /** Waiting, then running, then user-level unread threads, each newest first. */
+  function activeThreads() {
+    const all = [...S.threads.values()].filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
+    return [
+      ...all.filter((t) => t.status === "waiting"),
+      ...all.filter((t) => t.status === "running"),
+      ...all.filter((t) => t.status === "idle" && t.unread && !t.fromPage),
+    ];
+  }
+
+  /** The thread is open in the dock, the sidebar or the full window. */
+  function threadOnScreen(id) {
+    return (S.dockShown && dock.view.threadId === id) || (S.sideOpen && sidebar.view.threadId === id) || (S.fullOpen && full.view.threadId === id);
+  }
+
+  /** Allow / Deny for a waiting approval, through the same route as the transcript card. */
+  function approvalButtons(t, onDone) {
+    const ask = t.asking;
+    const options = ask?.kind === "approval" ? ask.options || [] : [];
+    const allow = options.find((o) => o.kind === "allow_once") || options.find((o) => o.kind.startsWith("allow"));
+    const deny = options.find((o) => o.kind === "reject_once") || options.find((o) => o.kind.startsWith("reject"));
+    const box = el("span", "ag-act-btns");
+    if (!allow || !deny) return box;
+    for (const [opt, label, cls] of [[allow, "Allow", " primary"], [deny, "Deny", " danger"]]) {
+      box.append(
+        button(label, `ag-btn tiny${cls}`, async (event) => {
+          event.stopPropagation();
+          for (const b of box.querySelectorAll("button")) b.disabled = true;
+          try {
+            await api("POST", `/approvals/${encodeURIComponent(ask.itemId)}`, { optionId: opt.id });
+            onDone?.();
+          } catch (err) {
+            notice(err.message);
+            for (const b of box.querySelectorAll("button")) b.disabled = false;
+          }
+        }, opt.label)
+      );
+    }
+    return box;
+  }
+
+  /** One line on what the thread is doing, for flyout rows. */
+  function activityLine(t) {
+    if (t.status === "waiting") {
+      const kind = { approval: "Approve", question: "Question", plan: "Plan" }[t.asking?.kind] || "Waiting";
+      return t.asking ? `${kind}: ${t.asking.title}` : "Needs your answer";
+    }
+    return t.activity?.line || (t.status === "running" ? "Working…" : "Reply ready");
+  }
+
+  /**
+   * Hover the island orb or the top-bar agent button: every waiting, running and unread thread.
+   * The anchor, the panel and its peek are one hover group, so the pointer can move onto the list.
+   */
+  const flyout = {
+    node: null,
+    peek: null,
+    anchor: null,
+    from: null,
+    showTimer: 0,
+    hideTimer: 0,
+    peekTimer: 0,
+    peekId: null,
+    bind(anchor, from) {
+      anchor.addEventListener("pointerenter", (event) => {
+        if (event.pointerType !== "mouse" || event.buttons) return;
+        clearTimeout(this.hideTimer);
+        if (this.node && this.anchor === anchor) return;
+        clearTimeout(this.showTimer);
+        this.showTimer = setTimeout(() => this.open(anchor, from), 180);
+      });
+      anchor.addEventListener("pointerleave", () => {
+        clearTimeout(this.showTimer);
+        this.hideSoon();
+      });
+      // A click keeps its own job (model menu, sidebar).
+      anchor.addEventListener("pointerdown", () => {
+        clearTimeout(this.showTimer);
+        this.close();
+      });
+    },
+    hold(node) {
+      node.addEventListener("pointerenter", () => clearTimeout(this.hideTimer));
+      node.addEventListener("pointerleave", () => this.hideSoon());
+    },
+    hideSoon() {
+      clearTimeout(this.hideTimer);
+      this.hideTimer = setTimeout(() => this.close(), 200);
+    },
+    open(anchor, from) {
+      if (openMenuEl || !anchor.isConnected || anchor.offsetParent === null) return;
+      if (!activeThreads().length) return;
+      this.close();
+      this.anchor = anchor;
+      this.from = from;
+      // The native title would sit on top of the panel.
+      anchor.dataset.flyTitle = anchor.title;
+      anchor.removeAttribute("title");
+      hideHoverTip();
+      this.node = el("div", `ag-fly from-${from}`);
+      this.hold(this.node);
+      document.body.append(this.node);
+      this.render();
+    },
+    close() {
+      clearTimeout(this.hideTimer);
+      clearTimeout(this.peekTimer);
+      this.node?.remove();
+      this.peek?.remove();
+      this.node = this.peek = this.peekId = this.sig = null;
+      if (this.anchor && this.anchor.dataset.flyTitle !== undefined) {
+        this.anchor.title = this.anchor.dataset.flyTitle;
+        delete this.anchor.dataset.flyTitle;
+      }
+      this.anchor = null;
+    },
+    render() {
+      if (!this.node) return;
+      const threads = activeThreads();
+      if (!threads.length) return this.close();
+      // Running threads resend every second or so; rebuild only when a row would change.
+      const sig = JSON.stringify(threads.slice(0, FLYOUT_CAP + 1).map((t) => [t.id, t.status, t.title, activityLine(t), t.activity?.lastText, t.asking?.detail]));
+      if (sig === this.sig && this.node.childElementCount) return;
+      this.sig = sig;
+      const waiting = threads.filter((t) => t.status === "waiting").length;
+      const running = threads.filter((t) => t.status === "running").length;
+      const ready = threads.length - waiting - running;
+      const counts = [];
+      if (waiting) counts.push(`${waiting} need${waiting === 1 ? "s" : ""} you`);
+      if (running) counts.push(`${running} running`);
+      if (ready) counts.push(`${ready} ready`);
+      const head = el("div", "ag-fly-head");
+      head.append(el("b", null, "Active"), el("span", null, counts.join(" · ")));
+      this.node.replaceChildren(head);
+      for (const t of threads.slice(0, FLYOUT_CAP)) this.node.append(this.row(t));
+      if (threads.length > FLYOUT_CAP) {
+        this.node.append(
+          button(`+${threads.length - FLYOUT_CAP} in the sidebar`, "ag-fly-more", () => {
+            this.close();
+            sidebar.setOpen(true);
+            if (!sidebar.listOpen) sidebar.toggleList();
+          })
+        );
+      }
+      this.place();
+      if (this.peekId) {
+        const t = S.threads.get(this.peekId);
+        const rowEl = this.node.querySelector(`[data-thread="${CSS.escape(this.peekId)}"]`);
+        if (t && rowEl) this.showPeek(t, rowEl);
+        else this.hidePeek();
+      }
+    },
+    row(t) {
+      const row = el("div", `ag-fly-row s-${t.status}`);
+      row.dataset.thread = t.id;
+      row.tabIndex = 0;
+      row.role = "button";
+      const meta = el("span", "ag-fly-meta");
+      meta.append(el("span", "ag-fly-title", t.title), el("span", "ag-fly-line", activityLine(t)));
+      row.append(el("span", `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
+      if (t.status === "waiting" && t.asking?.kind === "approval") row.append(approvalButtons(t));
+      else if (t.status === "waiting") {
+        row.append(
+          button("Open", "ag-btn tiny", (event) => {
+            event.stopPropagation();
+            this.go(t);
+          })
+        );
+      }
+      row.addEventListener("click", () => this.go(t));
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") this.go(t);
+      });
+      row.addEventListener("pointerenter", () => {
+        clearTimeout(this.peekTimer);
+        this.peekTimer = setTimeout(() => this.showPeek(S.threads.get(t.id) || t, row), this.peek ? 60 : 220);
+      });
+      return row;
+    },
+    /** Row click: the island orb switches the dock to it; the agent button too while the dock is up, else the sidebar. */
+    go(t) {
+      const inDock = this.from === "orb" || S.dockShown;
+      this.close();
+      openActive(t, inDock);
+    },
+    showPeek(t, rowEl) {
+      if (!this.node) return;
+      this.peekId = t.id;
+      for (const r of this.node.querySelectorAll(".ag-fly-row")) r.classList.toggle("on", r === rowEl);
+      const peek = el("div", "ag-fly-peek");
+      const state = t.status === "waiting" ? "Waiting" : t.status === "running" ? "Running" : "Reply ready";
+      peek.append(el("p", "ag-fly-peek-head", `${state} · ${t.title}`));
+      if (t.status === "waiting" && t.asking) {
+        peek.append(el("p", "ag-fly-peek-title", t.asking.title));
+        if (t.asking.detail) peek.append(el("pre", "ag-pre small", t.asking.detail));
+      } else if (t.status === "running" && t.activity?.line) {
+        peek.append(el("p", "ag-fly-peek-title", t.activity.line));
+      }
+      if (t.activity?.lastText) peek.append(el("p", "ag-fly-peek-quote", t.activity.lastText));
+      if (t.status === "waiting" && t.asking?.kind === "approval") peek.append(approvalButtons(t));
+      this.hold(peek);
+      this.peek?.remove();
+      this.peek = peek;
+      document.body.append(peek);
+      // Beside the panel, level with the row; on the other side when there is no room.
+      const box = this.node.getBoundingClientRect();
+      const r = rowEl.getBoundingClientRect();
+      const w = Math.min(300, window.innerWidth - 16);
+      peek.style.width = `${w}px`;
+      let left = box.right + 8;
+      if (left + w > window.innerWidth - 8) left = box.left - w - 8;
+      const top = Math.min(r.top, window.innerHeight - peek.offsetHeight - 8);
+      peek.style.left = `${Math.max(8, left)}px`;
+      peek.style.top = `${Math.max(8, top)}px`;
+    },
+    hidePeek() {
+      this.peek?.remove();
+      this.peek = this.peekId = null;
+    },
+    place() {
+      const rect = this.anchor.getBoundingClientRect();
+      const w = Math.min(340, window.innerWidth - 16);
+      this.node.style.width = `${w}px`;
+      if (this.from === "orb") {
+        this.node.style.left = `${Math.min(Math.max(8, rect.left - 8), window.innerWidth - w - 8)}px`;
+        this.node.style.bottom = `${window.innerHeight - rect.top + 10}px`;
+      } else {
+        this.node.style.left = `${Math.min(Math.max(8, rect.right - w), window.innerWidth - w - 8)}px`;
+        this.node.style.top = `${rect.bottom + 8}px`;
+      }
+    },
+    /** From a toast's "+N more": at the orb while the island shows it, else at the agent button. */
+    openAnywhere() {
+      const orb = dock.orb;
+      if (orb && orb.offsetParent !== null && getComputedStyle(orb).display !== "none") this.open(orb, "orb");
+      else {
+        const btn = document.getElementById("agent-toggle");
+        if (btn) this.open(btn, "button");
+      }
+    },
+  };
+
+  /** Open a thread from the flyout or a toast: in the dock (expanded), else in the sidebar at its question. */
+  function openActive(t, inDock) {
+    if (inDock) {
+      showPageThread(t.id, "dock");
+      dock.setExpanded(true);
+    } else if (t.status === "waiting" && t.asking) openAsk(t.id, t.asking.itemId);
+    else openThread(t.id);
+  }
+
+  /**
+   * Needs-you toasts: a thread starts waiting, or a user-level thread finishes, while it is not on
+   * screen. × snoozes that request (or that finish); a new request toasts again.
+   */
+  const toasts = {
+    box: null,
+    shown: new Map(),
+    snoozed: new Set(),
+    seen: new Map(),
+    mount() {
+      const main = document.querySelector(".workspace main");
+      if (!main) return;
+      this.box = el("div", "ag-toasts");
+      main.append(this.box);
+    },
+    update() {
+      if (!this.box) return;
+      const live = new Set();
+      for (const t of S.threads.values()) {
+        const prev = this.seen.get(t.id);
+        const ask = t.status === "waiting" && t.asking ? t.asking.itemId : null;
+        this.seen.set(t.id, { ask, finishedAt: t.finishedAt || 0 });
+        if (t.archived) continue;
+        // Threads seen for the first time (the list loading) do not toast.
+        if (ask) {
+          const key = `ask:${ask}`;
+          live.add(key);
+          if (prev && prev.ask !== ask && !threadOnScreen(t.id) && !this.snoozed.has(key)) this.add(key, t, "ask");
+        }
+        if (t.status === "idle" && t.unread && !t.fromPage && t.finishedAt) {
+          const key = `fin:${t.id}:${t.finishedAt}`;
+          live.add(key);
+          if (prev && prev.finishedAt !== t.finishedAt && !threadOnScreen(t.id)) this.add(key, t, "finish");
+        }
+      }
+      for (const id of this.seen.keys()) if (!S.threads.has(id)) this.seen.delete(id);
+      // Answered, opened or gone: drop its toast. A snooze ends with its request.
+      for (const [key, entry] of this.shown) {
+        if (!live.has(key) || threadOnScreen(entry.threadId)) this.drop(key);
+      }
+      for (const key of this.snoozed) if (!live.has(key)) this.snoozed.delete(key);
+      if (this.signature() !== this.sig) this.render();
+    },
+    add(key, t, kind) {
+      if (this.shown.has(key)) return;
+      const entry = { key, threadId: t.id, kind, at: Date.now() };
+      if (kind === "finish") entry.timer = setTimeout(() => this.remove(key), FINISH_TOAST_MS);
+      this.shown.set(key, entry);
+    },
+    drop(key) {
+      clearTimeout(this.shown.get(key)?.timer);
+      this.shown.delete(key);
+    },
+    remove(key) {
+      if (!this.shown.has(key)) return;
+      this.drop(key);
+      this.render();
+    },
+    /** What the toasts show; the thread list resends running threads often, and most resends change nothing here. */
+    signature() {
+      return JSON.stringify(
+        [...this.shown.values()].map((e) => {
+          const t = S.threads.get(e.threadId);
+          return [e.key, t?.title, t?.asking?.title, t?.activity?.lastText];
+        })
+      );
+    },
+    dismiss(key) {
+      if (key.startsWith("ask:")) this.snoozed.add(key);
+      this.remove(key);
+    },
+    render() {
+      if (!this.box) return;
+      this.sig = this.signature();
+      // Waiting before finished, newest first.
+      const entries = [...this.shown.values()].sort((a, b) => (a.kind === b.kind ? b.at - a.at : a.kind === "ask" ? -1 : 1));
+      this.box.replaceChildren();
+      for (const entry of entries.slice(0, TOAST_CAP)) {
+        const t = S.threads.get(entry.threadId);
+        if (t) this.box.append(this.toast(entry, t));
+      }
+      if (entries.length > TOAST_CAP) {
+        this.box.append(button(`+${entries.length - TOAST_CAP} more`, "ag-toast-more", () => flyout.openAnywhere()));
+      }
+    },
+    toast(entry, t) {
+      const node = el("div", `ag-toast k-${entry.kind}`);
+      const body = el("div", "ag-toast-body");
+      const title = el("b", null, t.title);
+      const actions = el("div", "ag-toast-actions");
+      if (entry.kind === "ask") {
+        const what = { approval: "wants to:", question: "asks:", plan: "has a plan:" }[t.asking?.kind] || "needs you";
+        body.append(title, ` ${what} `, el("span", "ag-toast-what", t.asking?.title || ""));
+        if (t.asking?.detail) body.append(el("code", "ag-toast-detail", t.asking.detail));
+        if (t.asking?.kind === "approval") actions.append(approvalButtons(t, () => this.remove(entry.key)));
+      } else {
+        body.append(title, " finished");
+        if (t.activity?.lastText) body.append(el("span", "ag-toast-text", t.activity.lastText));
+      }
+      actions.append(
+        button("Open", "ag-btn tiny", () => {
+          this.remove(entry.key);
+          openActive(t, S.dockShown);
+        })
+      );
+      body.append(actions);
+      node.append(
+        el("span", `ag-dot s-${entry.kind === "ask" ? "waiting" : "ready"}`),
+        body,
+        button(icon("close"), "ag-icon-btn small ag-toast-x", () => this.dismiss(entry.key), entry.kind === "ask" ? "Dismiss for now (it stays in the orb's list)" : "Dismiss")
+      );
+      return node;
+    },
+  };
 
   function views() {
     return [sidebar.view, full.view, dock.view];
@@ -5935,7 +6310,10 @@
     agentSettings.mount();
     allowlists.mount();
     applyButton();
-    document.getElementById("agent-toggle")?.addEventListener("click", () => shortcut("side"));
+    toasts.mount();
+    const toggleBtn = document.getElementById("agent-toggle");
+    toggleBtn?.addEventListener("click", () => shortcut("side"));
+    if (toggleBtn) flyout.bind(toggleBtn, "button");
     const origSetThread = sidebar.view.setThread.bind(sidebar.view);
     sidebar.view.setThread = (id) => {
       origSetThread(id);

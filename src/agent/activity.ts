@@ -48,7 +48,7 @@ export function threadActivity(items: Item[], status: RunStatus, unread: boolean
     if ("parentToolId" in item && item.parentToolId) continue;
     if (line === null && status !== "idle") line = stepLine(item);
     if (lastText === undefined && item.kind === "text" && item.text.trim()) lastText = clip(plainText(item.text), TEXT_MAX);
-    if (item.kind === "user" && !item.steer && line === null) line = "Working…";
+    if (item.kind === "user" && !item.steer && line === null && status !== "idle") line = "Working…";
   }
   if (line === null) line = status === "idle" ? "Reply ready" : "Working…";
   return { line, ...(lastText ? { lastText } : {}) };
