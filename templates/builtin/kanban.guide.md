@@ -53,7 +53,7 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
 nextNum: number
 settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave them alone
             workers?: { [columnId]: { name?, instructions, context?, provider?, model?, effort?, fast?, mode?,
-                                      cwd?, approval?, worktree?, show?,
+                                      cwd?, approval?, worktree?, web?, show?,
                                       threadId?, run?, step?, stop?, merge?, error?, solo? } } }  // run..solo: the page's
 ```
 

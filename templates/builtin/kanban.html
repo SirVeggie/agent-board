@@ -3480,6 +3480,8 @@
     var mode = workerMode(w);
     var parts = [str(w.name) || "Agent", MODE_LABELS[mode] || mode];
     if (w.fast === "true") parts.push("fast");
+    if (w.web === "limited") parts.push("web limited");
+    else if (w.web === "off") parts.push("no web");
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (!workerReady(w)) parts.push(FOLDER_MODES[mode] && !w.cwd ? "needs a folder" : "needs instructions");
     else if (workerRunning(w)) parts.push(w.stop ? "stopping" : "working");
@@ -3697,7 +3699,7 @@
     var col = column(colId), w = worker(colId);
     var mode = workerMode(w);
     var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
-    ["provider", "model", "effort", "show"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    ["provider", "model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
     if (w.fast === "true") opts.fast = true;
     else if (w.fast === "false") opts.fast = false;
     else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
@@ -3734,7 +3736,7 @@
     var col = colOf(c), w = worker(col.id);
     var mode = workerMode(w);
     var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
-    ["provider", "model", "effort", "show"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    ["provider", "model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
     if (w.fast === "true") opts.fast = true;
     else if (w.fast === "false") opts.fast = false;
     else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
@@ -4094,6 +4096,10 @@
       wt.appendChild(document.createTextNode("Give each agent a git worktree of its own"));
       row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through pauses the worker.");
     }
+    var webModes = { on: "On", limited: "Limited", off: "Off" };
+    var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (id) { return [id, webModes[id]]; }));
+    row("Web", enhanced(workerSelect(webOptions, str(w.web), "Web", function (v) { set({ web: v }); })),
+      "Web search and fetch. Limited keeps Claude agents to the web allowlist in Agent settings. Default follows your chat settings.");
     row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
     renderWorkerNote(colId);
   }
