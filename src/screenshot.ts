@@ -1,11 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright-core";
+import type { Browser, Page } from "playwright-core";
+import { launchChromium } from "./chromium.js";
 import { MAX_LOCAL_STATE_BYTES, contentBaseUrl } from "./config.js";
 import { embedUrlFromHtml } from "./embed.js";
-import { log } from "./log.js";
 import { store } from "./store.js";
 import { isPlainObject, type BoardState } from "./types.js";
 
@@ -25,13 +22,6 @@ const SHOT_ID = /^[a-f0-9]{12}$/;
 const captureBoots = new Map<string, { local: BoardState; at: number }>();
 
 const LAUNCH_ARGS = ["--hide-scrollbars", "--mute-audio"];
-const CHANNELS = ["msedge", "chrome"] as const;
-const CHROMIUM_EXES = ["msedge.exe", "chrome.exe", "brave.exe"] as const;
-const CHROMIUM_RELS = [
-  path.join("Microsoft", "Edge", "Application", "msedge.exe"),
-  path.join("Google", "Chrome", "Application", "chrome.exe"),
-  path.join("BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-];
 
 export type ScreenshotRequest = {
   idOrKey: string;
@@ -375,66 +365,8 @@ async function ensureBrowser(): Promise<Browser> {
   return launching;
 }
 
-async function launchBrowser(): Promise<Browser> {
-  const errors: string[] = [];
-  for (const channel of CHANNELS) {
-    try {
-      const opened = await chromium.launch({ channel, headless: true, args: LAUNCH_ARGS });
-      log(`Screenshot browser launched (${channel})`);
-      return opened;
-    } catch (err) {
-      errors.push(`${channel}: ${(err as Error).message}`);
-    }
-  }
-  for (const executablePath of chromiumExecutables()) {
-    try {
-      const opened = await chromium.launch({ executablePath, headless: true, args: LAUNCH_ARGS });
-      log(`Screenshot browser launched (${executablePath})`);
-      return opened;
-    } catch (err) {
-      errors.push(`${executablePath}: ${(err as Error).message}`);
-    }
-  }
-  throw new Error(
-    `Could not launch a Chromium browser for screenshots. Install Microsoft Edge, Google Chrome, or Brave. ${errors.join("; ")}`
-  );
-}
-
-function chromiumExecutables(): string[] {
-  const found = new Set<string>();
-  const roots = [process.env.LOCALAPPDATA, process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"]].filter(
-    (value): value is string => Boolean(value)
-  );
-  for (const root of roots) {
-    for (const rel of CHROMIUM_RELS) {
-      const candidate = path.join(root, rel);
-      if (fs.existsSync(candidate)) {
-        found.add(candidate);
-      }
-    }
-  }
-  for (const exe of CHROMIUM_EXES) {
-    const fromReg = appPath(exe);
-    if (fromReg && fs.existsSync(fromReg)) {
-      found.add(fromReg);
-    }
-  }
-  return [...found];
-}
-
-function appPath(exe: string): string | undefined {
-  const keys = [
-    `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`,
-    `HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`,
-  ];
-  for (const key of keys) {
-    const result = spawnSync("reg", ["query", key, "/ve"], { encoding: "utf8", windowsHide: true });
-    const match = result.stdout?.match(/REG_SZ\s+(.+\.exe)/i);
-    if (match) {
-      return match[1].trim().replace(/^"|"$/g, "");
-    }
-  }
-  return undefined;
+function launchBrowser(): Promise<Browser> {
+  return launchChromium({ headless: true, args: LAUNCH_ARGS, purpose: "Screenshot" });
 }
 
 function clamp(value: number, min: number, max: number): number {
