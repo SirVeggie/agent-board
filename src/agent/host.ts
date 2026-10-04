@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PORT, dataDir } from "../config.js";
+import { closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
 import { store } from "../store.js";
 import { AgentDb } from "./db.js";
@@ -607,6 +608,8 @@ export class AgentHost {
     if (patch.scope) next.scope = patch.scope;
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
     if (typeof patch.archived === "boolean") next.archived = patch.archived;
+    // An archived thread is done with its agent browser.
+    if (next.archived && !thread.archived) void closeThreadBrowser(id);
     next.updatedAt = Date.now();
     this.threads.set(id, next);
     this.db.saveThread(next);
@@ -629,6 +632,7 @@ export class AgentHost {
     this.sessions.get(id)?.dispose();
     this.sessions.delete(id);
     forgetGuides(id);
+    void closeThreadBrowser(id);
     const wt = openWorktree(thread);
     // A fork shares its worktree: the folder stays while another thread still works in it.
     if (wt && !this.sharers(id, wt).length) {

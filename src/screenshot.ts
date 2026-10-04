@@ -298,7 +298,7 @@ async function capturePage(page: Page, width: number, height: number, fullPage: 
   };
 }
 
-type ImageType = "png" | "jpeg";
+export type ImageType = "png" | "jpeg";
 
 type Shot = {
   buffer: Buffer;
@@ -307,13 +307,13 @@ type Shot = {
   height: number;
 };
 
-function shotOptions(type: ImageType) {
+export function shotOptions(type: ImageType) {
   return type === "jpeg"
     ? { type: "jpeg" as const, quality: JPEG_QUALITY, animations: "disabled" as const }
     : { type: "png" as const, animations: "disabled" as const };
 }
 
-async function pngOrJpeg(take: (type: ImageType) => Promise<Buffer>): Promise<{
+export async function pngOrJpeg(take: (type: ImageType) => Promise<Buffer>): Promise<{
   buffer: Buffer;
   mimeType: "image/png" | "image/jpeg";
 }> {

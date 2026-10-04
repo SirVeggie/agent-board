@@ -236,7 +236,25 @@ When you are done iterating and the user should see the result, `page_show` or `
 
 ## Testing interactions
 
-Scribe shows each page in an iframe that browser tools cannot reach. To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `page_show`, `page_patch`, and `page_read`) directly in the browser tool. There, the page runs on its own with a live `window.scribe`.
+Scribe shows each page in an iframe that browser tools cannot reach. To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `page_show`, `page_patch`, and `page_read`) directly in a browser. There, the page runs on its own with a live `window.scribe`.
+
+In a Scribe chat thread you have your own browser: the `browser_*` tools (other MCP clients don't get them; use your host's browser tool there). It is a real window on the user's desktop, with your thread's own cookies and storage, kept between turns and closed when the thread is archived. It opens loopback addresses (`localhost`, `127.x.x.x`, `*.localhost`) and Scribe pages only, so start dev servers with Keeper first.
+
+```
+browser_open({ key: "scribe:hero" })            // a Scribe page's viewUrl; or { url: "localhost:5173" }
+// → { tab: "b1", url, title } and a snapshot:  - button "Add one" [ref=e3]
+browser_act({ action: "click", ref: "e3" })      // also fill, type, press, select, check, scroll, drag, back, reload
+browser_act({ action: "fill", ref: "e5", value: "Ada" })
+browser_console({ level: "error" })              // check before you call it done
+browser_network({ failedOnly: true })
+browser_screenshot({})                           // or { ref }, { selector }, { fullPage: true }
+browser_viewport({ width: 390, height: 844, colorScheme: "dark" })
+browser_eval({ script: "document.title" })       // inspect only; act with browser_act
+browser_tabs({ closeAll: true })                 // when you are done testing
+```
+
+- Act on refs from the **latest** snapshot. `browser_act` returns a fresh one and the console errors the action caused; pass `snapshot: false` to skip it.
+- `selector` or `text` work as targets when a ref is not handy. Pass `selector` to `browser_snapshot` to read one region of a large page.
 
 - Writes and signals from that page go to the **real page**. Do not test destructive interactions on a page the user relies on (their todo list). Show a copy under a temp key with `background: true`, test its `viewUrl`, then delete it with `page_close({ key, permanent: true })`.
 - Looking without changing anything (snapshot, reading the DOM, a script that only reads) is fine on the real page.

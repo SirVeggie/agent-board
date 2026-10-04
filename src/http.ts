@@ -21,6 +21,19 @@ import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } 
 import { isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import { ViewerHub } from "./viewers.js";
 import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
+import {
+  browserAct,
+  browserConsole,
+  browserEval,
+  browserHttpStatus,
+  browserNetwork,
+  browserOpen,
+  browserScreenshot,
+  browserSnapshot,
+  browserTabs,
+  browserViewport,
+  closeAgentBrowser,
+} from "./browser.js";
 import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
@@ -572,6 +585,45 @@ export async function startHttp(): Promise<http.Server> {
       });
   });
 
+  /**
+   * The agent browser, for the browser_* MCP tools. Only Scribe chat threads get one: the MCP
+   * marks their requests with the thread id, and each thread drives its own browser context.
+   */
+  const browserOps: Record<string, (threadId: string, body: any) => Promise<unknown>> = {
+    open: browserOpen,
+    snapshot: browserSnapshot,
+    act: browserAct,
+    screenshot: browserScreenshot,
+    eval: browserEval,
+    console: browserConsole,
+    network: browserNetwork,
+    viewport: browserViewport,
+    tabs: browserTabs,
+  };
+  app.post("/api/browser/:op", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread) {
+      res.status(403).json({ error: "The agent browser is only available in Scribe chat threads." });
+      return;
+    }
+    const op = Object.hasOwn(browserOps, req.params.op) ? browserOps[req.params.op] : undefined;
+    if (!op) {
+      res.status(404).json({ error: `unknown browser op: ${req.params.op}` });
+      return;
+    }
+    op(thread, isPlainObject(req.body) ? req.body : {})
+      .then((result) => {
+        if (!res.writableEnded) {
+          res.json(result);
+        }
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) {
+          res.status(browserHttpStatus(err.message)).json({ error: err.message.split("\n")[0] });
+        }
+      });
+  });
+
   app.post("/api/undo", (_req, res) => {
     try {
       const { tab } = store.restoreLast();
@@ -1020,7 +1072,7 @@ export async function startHttp(): Promise<http.Server> {
     } catch {
       /* already logged */
     }
-    void closeScreenshotBrowser().finally(() => process.exit(0));
+    void Promise.all([closeScreenshotBrowser(), closeAgentBrowser()]).finally(() => process.exit(0));
   });
 
   const server = http.createServer(app);
