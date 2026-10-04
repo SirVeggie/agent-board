@@ -3059,6 +3059,10 @@
     const point = { x: box.left + (Number(data.x) || 0) * scale, y: box.top + (Number(data.y) || 0) * scale };
     const selection = typeof data.selection === "string" ? data.selection : "";
     const link = typeof data.link === "string" && /^https?:/i.test(data.link) ? data.link : "";
+    // The template's own agent actions (#152), for this selection or the whole page.
+    const actions = (window.scribeChat?.pageActions?.(tab, "menu") || [])
+      .filter((action) => (selection ? action.selection !== "none" : action.selection !== "required"))
+      .map((action) => ({ label: action.label, action: () => window.scribeChat?.runAction(tab, action, { selection }) }));
     library.openMenu(point, [
       selection && { label: "Ask agent", action: () => window.scribeChat?.ask(selection, tab) },
       selection && { label: "Copy", action: () => copyText(selection, "Copied selection") },
@@ -3071,9 +3075,21 @@
         },
       },
       "sep",
+      ...actions,
+      "sep",
       !selection && { label: "Ask agent about this page", action: () => window.scribeChat?.ask("", tab) },
       { label: "Copy page key", action: () => copyTabKey(id) },
     ]);
+  }
+
+  /** The agent actions declared by a page's template (template metadata resolves a built-in copy's). */
+  function templateActions(tab) {
+    if (!tab?.templateId) {
+      return [];
+    }
+    const template =
+      state.templates.find((item) => item.id === tab.templateId) || state.builtinTemplates.find((item) => item.id === tab.templateId);
+    return Array.isArray(template?.agentActions) ? template.agentActions : [];
   }
 
   async function copyText(text, done) {
@@ -3178,6 +3194,7 @@
     updatePaletteChrome({ id: "pages", query: "" });
     const recentClosed = [...state.closed].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0)).slice(0, 15);
     paletteHits = [
+      ...paletteActionRows(""),
       ...state.tabs.map((tab) => ({ ...tab, open: true })),
       ...recentClosed.map((tab) => ({ ...tab, open: false })),
     ];
@@ -3227,7 +3244,26 @@
       return;
     }
     const data = await res.json();
-    applyPaletteHits(data.tabs || []);
+    applyPaletteHits([...paletteActionRows(parsed.query), ...(data.tabs || [])]);
+  }
+
+  /** The open page's template agent actions (#152) matching the query, listed above the pages. */
+  function paletteActionRows(query) {
+    const tab = activeTab();
+    const q = query.trim().toLowerCase();
+    return (window.scribeChat?.pageActions?.(tab, "palette") || [])
+      .filter((action) => action.selection !== "required")
+      .filter((action) => !q || `${action.label} ${action.description || ""}`.toLowerCase().includes(q))
+      .map((action) => ({
+        kind: "action",
+        id: `action:${action.id}`,
+        title: action.label,
+        snippet: action.description || "",
+        locationLabel: "Agent action",
+        location: "action",
+        tab,
+        action,
+      }));
   }
 
   function renderPalette() {
@@ -3273,7 +3309,7 @@
       if (tab.qualityLabel) {
         chips.appendChild(paletteChip(tab.qualityLabel));
       }
-      if (tab.kind === "thread") {
+      if (tab.kind === "thread" || tab.kind === "action") {
         if (tab.open) {
           chips.appendChild(paletteChip("Open"));
         }
@@ -3337,6 +3373,11 @@
     if (!tab) {
       return;
     }
+    if (tab.kind === "action") {
+      closePalette();
+      void window.scribeChat?.runAction(tab.tab, tab.action);
+      return;
+    }
     if (tab.kind === "thread") {
       closePalette();
       if (!window.scribeChat?.openThread?.(tab.id)) {
@@ -3391,6 +3432,7 @@
   window.scribeShortcut = runShortcut;
   /** What the agent chat (agent.js) needs from the shell. */
   window.scribeApp = {
+    templateActions,
     activeTab,
     findAnyTab,
     tabs: () => state.tabs,

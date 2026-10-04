@@ -3016,8 +3016,14 @@
       if (!/^\/([\w:.-]*)$/.exec(this.input.value)) return;
       const q = typed.toLowerCase();
       const local = SCOPE_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
-      const remote = (list || []).filter((c) => c.name.toLowerCase().includes(q) && !SCOPE_SLASH.some((s) => s.name === c.name.toLowerCase()));
-      const hits = [...local, ...remote].slice(0, 40);
+      // The open page's template actions (#152): /<id>, with any text after it as {{input}}.
+      const page = pageActions(activeTab(), "slash")
+        .filter((a) => !SCOPE_SLASH.some((c) => c.name === a.id) && (a.id.includes(q) || a.label.toLowerCase().includes(q)))
+        .map((a) => ({ name: a.id, description: a.description ? `${a.label}: ${a.description}` : a.label }));
+      const remote = (list || []).filter(
+        (c) => c.name.toLowerCase().includes(q) && !SCOPE_SLASH.some((s) => s.name === c.name.toLowerCase()) && !page.some((a) => a.name === c.name.toLowerCase())
+      );
+      const hits = [...local, ...page, ...remote].slice(0, 40);
       this.slash.replaceChildren();
       if (!hits.length) {
         this.slash.hidden = true;
@@ -3243,6 +3249,27 @@
         this.hidePicker();
         this.autosize();
         await this.applyScopeSlash(scopeCmd[1].toLowerCase());
+        return;
+      }
+      const actionCmd = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
+      const actionTab = actionCmd ? activeTab() : null;
+      const action = actionTab ? pageActions(actionTab, "slash").find((a) => a.id === actionCmd[1]) : null;
+      if (action) {
+        // A selection attached from the page (Ask agent) becomes the action's {{selection}}.
+        const selection = this.mentions
+          .filter((c) => c.kind === "selection")
+          .map((c) => c.text)
+          .join("\n\n");
+        if (action.selection === "required" && !selection) {
+          notice(`${action.label}: select text on the page first`);
+          return;
+        }
+        this.input.value = "";
+        this.hidePicker();
+        this.autosize();
+        if (action.selection !== "none") this.mentions = this.mentions.filter((c) => c.kind !== "selection");
+        this.renderContext();
+        await runAction(actionTab, action, { selection: action.selection === "none" ? "" : selection, input: actionCmd[2] || "", view: this });
         return;
       }
       if (!text && !this.attachments.length) return;
@@ -5735,6 +5762,95 @@
     }
   });
 
+  /* ---------- template agent actions (#152) ---------- */
+
+  /** The page's template actions offered at `place` (menu, palette, slash). */
+  function pageActions(tab, place) {
+    const actions = (tab && app()?.templateActions?.(tab)) || [];
+    return actions.filter((a) => a && a.id && a.prompt && (a.where || []).includes(place));
+  }
+
+  /** Fill in an action's prompt or title; the same rules as renderAgentActionText in src/templates.ts. */
+  function actionText(source, values) {
+    const sections = /\{\{\s*#\s*([a-zA-Z_.]+)\s*\}\}([\s\S]*?)\{\{\s*\/\s*\1\s*\}\}/g;
+    let text = String(source || "");
+    for (let pass = 0; pass < 4; pass += 1) {
+      const next = text.replace(sections, (_m, name, inner) => ((values[name] ?? "").trim() ? inner : ""));
+      if (next === text) break;
+      text = next;
+    }
+    return text.replace(/\{\{\s*([#/]?)\s*([a-zA-Z_.]+)\s*\}\}/g, (_m, mark, name) => (mark ? "" : values[name] ?? "")).trim();
+  }
+
+  /** The chat an action from the page menu or palette goes to: the one the user has open, else the floating chat. */
+  function actionView() {
+    if (S.fullOpen) return full.view;
+    if (S.sideOpen && !S.dockShown) return sidebar.view;
+    if (!S.dockShown) dock.setShown(true);
+    return dock.view;
+  }
+
+  function showInView(view, id) {
+    if (view === full.view) {
+      setCurrent(id);
+      full.view.setThread(id);
+      full.renderList();
+    } else if (view === sidebar.view) {
+      if (!S.sideOpen) sidebar.setOpen(true);
+      sidebar.view.setThread(id);
+    } else {
+      if (id !== dock.view.threadId) dock.pick(id);
+      if (!S.dockShown) dock.setShown(true);
+    }
+  }
+
+  /**
+   * Run a template action on `tab`: a new thread on the page with the action's settings, or with run: "chat",
+   * a message in the chat at hand. `view` is the chat it was typed in (slash menu).
+   */
+  async function runAction(tab, action, { selection = "", input = "", view = null } = {}) {
+    if (!tab || !action) return;
+    const values = { selection: String(selection || "").trim(), input: String(input || "").trim(), "page.title": tab.title || "", "page.key": tab.key || "" };
+    const prompt = actionText(action.prompt, values).slice(0, PAGE_PROMPT_MAX);
+    if (!prompt) return;
+    // A selection the prompt does not quote still goes along, as a chip.
+    const chips =
+      values.selection && !/\{\{\s*selection\s*\}\}/.test(action.prompt)
+        ? [{ kind: "selection", text: values.selection, source: `"${tab.title}" (key: ${tab.key})` }]
+        : [];
+    const target = view || actionView();
+    if (action.run === "chat") {
+      const draft = target.input.value;
+      target.mentions.push(...chips);
+      const shown = (target.contextOn && activeTab()?.id === tab.id) || target.pageInThread(tab);
+      if (!shown && !target.mentions.some((c) => c.kind === "page" && c.id === tab.id)) {
+        target.mentions.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
+      }
+      target.input.value = prompt;
+      await target.send();
+      if (draft && !target.input.value) {
+        target.input.value = draft;
+        target.autosize();
+      }
+      return;
+    }
+    const settings = pageThreadSettings({ ...(action.thread || {}), mode: action.thread?.mode || "board" });
+    if (settings.error) {
+      notice(`${action.label}: ${settings.error.replace(/_/g, " ")}`);
+      return;
+    }
+    const title = (action.thread?.title ? actionText(action.thread.title, values) : "") || action.label;
+    try {
+      const { thread } = await api("POST", "/threads", { ...settings, scope: { kind: "page", ref: tab.id }, title: title.slice(0, 120) });
+      S.threads.set(thread.id, thread);
+      S.details.set(thread.id, { items: [], byId: new Map(), turns: new Map() });
+      showInView(target, thread.id);
+      await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, context: chips });
+    } catch (err) {
+      notice(`${action.label}: ${err.message}`);
+    }
+  }
+
   /**
    * Ask about a page: attach a selection from it (or the page itself, with no text) to a chat and focus
    * its input. target "dock" or "side" picks that chat (Ctrl+K / Ctrl+L); otherwise the open one.
@@ -5761,7 +5877,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, searchThreads, threadTitle };
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, searchThreads, threadTitle, pageActions, runAction };
 
   /* ---------- boot ---------- */
 

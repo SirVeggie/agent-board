@@ -1684,7 +1684,8 @@ kbd {
   color: var(--muted);
 }
 
-.palette-chip.location-thread {
+.palette-chip.location-thread,
+.palette-chip.location-action {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), 0.3);
 }
