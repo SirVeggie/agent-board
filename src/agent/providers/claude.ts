@@ -448,7 +448,7 @@ class ClaudeSession implements ProviderSession {
 
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, this.instructions]);
+    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, this.instructions, this.ctx.claudeHooks?.() ?? false]);
   }
 
   update(thread: Thread): void {
@@ -513,6 +513,10 @@ class ClaudeSession implements ProviderSession {
       perTaskStopAffordance: true,
       mcpServers: { [BOARD_SERVER]: { type: "stdio", command, args, env } },
       settingSources: board ? ["user"] : ["user", "project", "local"],
+      // Hooks from settings files and plugins are written for the user's own Claude Code sessions; a
+      // fail-closed one (a plugin posting to a sidecar) denies every tool here for reasons the chat never
+      // shows. Off unless the user turns them on. Scribe's own hooks below are callbacks and still run.
+      ...(this.ctx.claudeHooks?.() ? {} : { settings: { disableAllHooks: true } }),
       systemPrompt: { type: "preset", preset: "claude_code", append: this.instructions },
       permissionMode,
       ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),

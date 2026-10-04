@@ -4247,6 +4247,7 @@
       const title = el("h2", "settings-title", "Allowlists");
       title.id = "ag-perm-title";
       this.web = el("section", "settings-section ag-web-allow");
+      this.hooks = el("section", "settings-section");
       const commands = el("section", "settings-section");
       const intro = el(
         "p",
@@ -4265,7 +4266,7 @@
       pick.append(label, this.picker);
       commands.append(el("h3", null, "Commands"), intro, pick);
       this.body = el("div", "ag-perm-body");
-      panel.append(title, this.web, commands, this.body);
+      panel.append(title, this.web, this.hooks, commands, this.body);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -4284,6 +4285,7 @@
       this.picker.value = this.cwd || "";
       this.pickerWrap?.syncSelect?.();
       this.renderWeb();
+      this.renderHooks();
       this.root.hidden = false;
       void this.load();
     },
@@ -4315,6 +4317,31 @@
         ),
         rows,
         actions
+      );
+    },
+    /** Whether Claude threads run the hooks from Claude Code's settings files and plugins (prefs). */
+    renderHooks() {
+      const label = el("label", "ag-check");
+      const box = el("input");
+      box.type = "checkbox";
+      box.checked = Boolean(prefs().claudeHooks);
+      box.addEventListener("change", async () => {
+        try {
+          S.config.prefs = await api("PUT", "/prefs", { claudeHooks: box.checked });
+        } catch (err) {
+          box.checked = !box.checked;
+          notice(err.message);
+        }
+      });
+      label.append(box, el("span", null, "Run Claude Code hooks in Claude threads"));
+      this.hooks.replaceChildren(
+        el("h3", null, "Hooks"),
+        el(
+          "p",
+          "settings-hint",
+          "Hooks from your Claude Code settings files and plugins are written for your own terminal sessions. One that fails closed, such as a plugin that checks each tool call with a local service, can deny every tool in Scribe without saying why. Off by default; Scribe's own checks run either way. Applies from a thread's next message."
+        ),
+        label
       );
     },
     async saveWeb(list) {

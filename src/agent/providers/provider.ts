@@ -145,6 +145,8 @@ export type SessionContext = {
   scratchDir: string;
   /** Domains a thread with limited web access may reach. Read on each call, so edits apply at once. */
   webAllowlist(): string[];
+  /** Whether Claude threads run the hooks from Claude Code's settings files and plugins. Read when a session starts. */
+  claudeHooks?(): boolean;
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
   /**
