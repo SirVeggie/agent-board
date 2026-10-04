@@ -415,6 +415,8 @@ const { thread, reply: last } = await scribe.agent.get(threadId);
 scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
 await scribe.agent.stop(threadId);                         // stop the turn and drop queued messages
 await scribe.agent.merge(threadId);                        // idle Code thread: merge its worktree branch back, close the worktree
+await scribe.agent.card(threadId, { card: 12, title, text }); // Kanban: a card comment into the running turn (steered, else queued); { delivered: null } when idle
+await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban Continue: the thread reads the card again and goes on (other pages' threads need a click)
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
 const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, approvals, defaults }
 const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)

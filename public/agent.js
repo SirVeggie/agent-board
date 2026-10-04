@@ -1818,7 +1818,8 @@
         bubble.append(chips);
       }
       bubble.append(el("div", "ag-user-text", item.text));
-      if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
+      if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
+      else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
@@ -6318,6 +6319,38 @@
         const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page" });
         showPageThread(thread.id, data.show, { reveal: activated });
         return { ok: true, queued: Boolean(sent.queued) };
+      }
+      case "card": {
+        // A card comment for the thread working on the card (steered into its turn, or queued), or
+        // Continue for the one that worked on it. The thread may be any of the user's (one that
+        // claimed the card from its own chat), so other pages' threads need the click; the daemon
+        // words the message, so it reads as the board's, not the user's in the chat.
+        if (!thread || thread.archived) return { ok: false, error: "not_found" };
+        const num = Number(data.card);
+        if (!Number.isInteger(num) || num < 1) return { ok: false, error: "bad_card" };
+        const resume = data.resume === true;
+        if (!resume && !prompt) return { ok: false, error: "empty_prompt" };
+        if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
+        const own = ownedBy(tab, thread);
+        if (!own && !activated) return { ok: false, error: "no_gesture" };
+        const may = await pageMayWrite(tab, activated);
+        if (!may.ok) return may;
+        if (own && FOLDER_MODES.has(thread.mode)) {
+          const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
+          if (!folder.ok) return folder;
+        }
+        await ensureDetail(thread.id);
+        const title = typeof data.title === "string" ? data.title.trim().slice(0, 200) : "";
+        const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/card-message`, {
+          num,
+          text: resume ? "" : prompt,
+          resume,
+          title,
+          board: tab.title || "Kanban board",
+          boardKey: tab.key || "",
+        });
+        if (sent.delivered && own) pageSentAt.set(thread.id, Date.now());
+        return { ok: true, delivered: sent.delivered || null };
       }
       case "stop": {
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };

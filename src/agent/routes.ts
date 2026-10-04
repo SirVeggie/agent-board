@@ -205,6 +205,21 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // A Kanban board's card comment for the thread working on the card, or Continue for the one that worked on it.
+  router.post(
+    "/threads/:id/card-message",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const num = Number(body.num);
+      const board = String(body.board ?? "").trim();
+      if (!Number.isInteger(num) || num < 1 || !board) throw new Error("A card number and board are required");
+      const title = String(body.title ?? "").trim().slice(0, 200);
+      const boardKey = String(body.boardKey ?? "").trim();
+      const card = { num, board: board.slice(0, 200), ...(title ? { title } : {}), ...(boardKey ? { boardKey } : {}), ...(body.resume === true ? { resume: true } : {}) };
+      return host.cardMessage(req.params.id, card, String(body.text ?? ""));
+    })
+  );
+
   // A file sent with a message, for the chat's previews. Shown inline; download is the viewer's choice.
   router.get(
     "/threads/:id/files/:fileId",

@@ -268,6 +268,8 @@ export type ItemBody =
       steer?: "waiting" | "folded";
       /** Sent by the code of the thread's page (board.agent), not typed by the user. */
       from?: "page";
+      /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
+      card?: { num: number; title?: string; resume?: boolean };
     }
   | { kind: "text"; text: string; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }

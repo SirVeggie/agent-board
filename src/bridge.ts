@@ -1070,6 +1070,21 @@ export const BOARD_BRIDGE_JS = `
       }
       return agentCall({ op: "show", threadId: agentText(threadId), where: agentText(opts && opts.where) });
     },
+    /**
+     * About a Kanban card: { ok, delivered: "steered" | "queued" | "started" | null }. With text, a
+     * comment for the thread working on the card: steered into its running turn, or queued behind it
+     * when the provider cannot steer; not sent (delivered null) when the thread is idle. With
+     * resume: true, Continue: the thread is told to read the card again and go on. Any of the user's
+     * threads, e.g. the one that claimed the card; one that isn't this page's needs a click.
+     * opts: { card: number, title, text, resume }.
+     */
+    card: function (threadId, opts) {
+      opts = opts || {};
+      return agentCall(
+        { op: "card", threadId: agentText(threadId), card: Number(opts.card), title: agentText(opts.title), prompt: agentText(opts.text), resume: opts.resume === true },
+        AGENT_ASK_MS
+      );
+    },
     /** Stop the thread's current turn and drop its queued messages: { ok }. */
     stop: function (threadId) {
       return agentCall({ op: "stop", threadId: agentText(threadId) }, AGENT_ASK_MS);

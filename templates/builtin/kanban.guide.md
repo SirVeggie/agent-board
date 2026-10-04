@@ -13,6 +13,7 @@ Columns are named by role (`agent`, `working`, `review`, `done`), id, or title. 
 1. Find work: `list` with `column: "agent"` (every agent inbox), then `get` the card you take. To stay in one inbox, pass its id or title.
 2. `claim` it with a short status text. That moves it to the working column and records you as its holder. Another agent's claim makes yours fail: pick a different card.
 3. Report progress or ask questions with `comment`. If you are stuck, `update` its `status` to `{ kind: "blocked", text: "<why>" }` and wait for a `comment` event.
+   In a Scribe chat, the user's new comments on a card you hold also come into your chat as a `<card_comment>` message, mid-turn when the provider can steer, else right after it. Answer them on the card. On a card whose chat has finished, a comment offers the user **Continue**, which sends that chat a note to get the card again and go on (claim it again while you work).
 4. Done: `finish` with a summary (what changed, what to check). The summary is posted as the card's hand-in comment, so do not also `comment` the same wrap-up. If you already did, call `finish` without `summary` and that comment is the hand-in. It moves the card to review, or to done when the board has no review column.
 5. Giving up or handing back: `release` with a note.
 

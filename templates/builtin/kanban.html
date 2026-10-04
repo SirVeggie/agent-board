@@ -677,6 +677,11 @@
     mask-image: linear-gradient(to bottom, #000 45%, transparent);
   }
   .comment.folded:hover .body.md-preview { -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent); mask-image: linear-gradient(to bottom, #000 60%, transparent); }
+  .comment-follow { display: flex; gap: 6px; margin-top: 6px; }
+  .comment-follow button { background: rgba(255, 255, 255, .06); padding: 4px 10px; font-size: 12.5px; }
+  .comment-follow button:hover { background: rgba(255, 255, 255, .12); }
+  .comment-follow button.primary { background: rgba(224, 179, 74, .16); color: var(--agent); }
+  .comment-follow button.primary:hover { background: rgba(224, 179, 74, .26); }
   .comment-box { width: 100%; min-height: 58px; resize: vertical; }
   .m-status { padding: 8px 10px; border-radius: 10px; background: rgba(224, 179, 74, .08); color: var(--agent); display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .m-status.blocked { background: rgba(255, 107, 122, .1); color: var(--danger); }
@@ -1174,7 +1179,11 @@
       return { id: it.id || newId("ck"), text: str(it.text), done: Boolean(it.done) };
     });
     out.comments = arr(out.comments).filter(Boolean).map(function (cm) {
-      return { id: cm.id || newId("cm"), by: cm.by === "agent" ? "agent" : "user", at: Number(cm.at) || Date.now(), text: str(cm.text) };
+      var out = { id: cm.id || newId("cm"), by: cm.by === "agent" ? "agent" : "user", at: Number(cm.at) || Date.now(), text: str(cm.text) };
+      // Card comment hand-off (#182): sent to the working agent, or Continue offered to the last one.
+      if (cm.sent === "steered" || cm.sent === "queued") out.sent = cm.sent;
+      if (cm.followUp === "offer" || cm.followUp === "continued" || cm.followUp === "dismissed") out.followUp = cm.followUp;
+      return out;
     });
     out.images = arr(out.images).filter(function (im) { return im && im.data; }).map(function (im) {
       return { id: im.id || newId("im"), name: str(im.name), data: str(im.data) };
@@ -2395,12 +2404,13 @@
     commentsEl.replaceChildren();
     c.comments.forEach(function (cm, i) {
       var box = el("div", "comment" + (cm.by === "agent" ? " agent" : ""));
-      box.appendChild(el("div", "who", (cm.by === "agent" ? "🤖 Agent" : "You") + " · " + ago(cm.at)));
+      box.appendChild(el("div", "who", (cm.by === "agent" ? "🤖 Agent" : "You") + " · " + ago(cm.at) + commentFate(cm)));
       // Markdown, like the description: #12 card links, [[page]] links and the card's images work too.
       var body = el("div", "body md-preview");
       body.innerHTML = renderMarkdown(cm.text, c.images);
       box.appendChild(body);
       commentsEl.appendChild(box);
+      if (i === c.comments.length - 1 && cm.by === "user" && cm.followUp === "offer" && c.thread) box.appendChild(followUpButtons(c, cm));
       // Long comments other than the latest fold to a faded preview; a click opens one until the card closes.
       if (i < c.comments.length - 1 && !expandedComments[cm.id]) {
         box.setAttribute("data-comment", cm.id);
@@ -2600,15 +2610,84 @@
     var text = commentBox.value.trim();
     if (!text || !openId) return false;
     commentBox.value = "";
+    var cmId = newId("cm");
     updateCard(openId, function (x) {
-      x.comments = x.comments.concat([{ id: newId("cm"), by: "user", at: Date.now(), text: text }]);
+      x.comments = x.comments.concat([{ id: cmId, by: "user", at: Date.now(), text: text }]);
       return x;
     });
     if (AGENT_MODE) {
       var commented = card(openId);
       scribe.signal("comment", { card: openId, num: commented ? commented.num : null });
+      if (commented) handOffComment(commented, cmId, text);
     }
     return true;
+  }
+
+  // ---------- comments to agent chats (#182) ----------
+  // A comment on a card an agent chat holds goes into that chat's running turn (steered in, or queued
+  // behind it when its provider can't steer). On a card whose chat has finished, the comment offers
+  // Continue: that chat reads the card again and goes on, since it already has the context.
+  function hasCardApi() {
+    return Boolean(scribe.agent && typeof scribe.agent.card === "function");
+  }
+  function setComment(cardId, cmId, fields) {
+    updateCard(cardId, function (x) {
+      x.comments = x.comments.map(function (cm) { return cm.id === cmId ? Object.assign({}, cm, fields) : cm; });
+      return x;
+    });
+  }
+  function handOffComment(c, cmId, text) {
+    if (!hasCardApi()) return;
+    var holder = c.claim && !c.claim.stale && c.claim.thread;
+    if (!holder) {
+      if (c.thread) setComment(c.id, cmId, { followUp: "offer" });
+      return;
+    }
+    scribe.agent.card(holder, { card: c.num, title: plainLinks(c.title), text: text }).then(function (r) {
+      if (r && r.ok && r.delivered) {
+        setComment(c.id, cmId, { sent: r.delivered === "steered" ? "steered" : "queued" });
+        setHint(r.delivered === "steered" ? "Sent to the agent working on #" + c.num + "." : "Queued for the agent working on #" + c.num + ".");
+      } else if (c.thread) {
+        // The holder's chat is idle (or gone): offer Continue instead.
+        setComment(c.id, cmId, { followUp: "offer" });
+        if (r && !r.ok && r.error !== "not_found") setHint("Could not pass the comment to the agent (" + r.error + ").", true);
+      }
+    });
+  }
+  function commentFate(cm) {
+    if (cm.sent === "steered") return " · sent to the agent";
+    if (cm.sent === "queued") return " · queued for the agent";
+    if (cm.followUp === "continued") return " · agent continued";
+    return "";
+  }
+  function followUpButtons(c, cm) {
+    var row = el("div", "comment-follow");
+    var go = el("button", "primary", "Continue");
+    go.type = "button";
+    go.title = "Send the agent chat that last worked on this card back to it. It reads the card again (description, checklist, and comments, since you may have changed them) and goes on with the work; this comment is not sent to it as a message.";
+    var skip = el("button", "", "Dismiss");
+    skip.type = "button";
+    skip.title = "Keep the comment on the card without waking the agent.";
+    go.addEventListener("click", function (e) {
+      e.stopPropagation();
+      go.disabled = skip.disabled = true;
+      scribe.agent.card(c.thread, { card: c.num, title: plainLinks(c.title), resume: true }).then(function (r) {
+        if (r && r.ok && r.delivered) {
+          setComment(c.id, cm.id, { followUp: "continued" });
+          setHint((r.delivered === "queued" ? "Queued #" : "Sent #") + c.num + " back to its agent.");
+        } else {
+          go.disabled = skip.disabled = false;
+          setHint(r && r.error === "not_found" ? "The chat that worked on #" + c.num + " is gone." : "Could not continue the agent (" + (r && r.error) + ").", true);
+        }
+      });
+    });
+    skip.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setComment(c.id, cm.id, { followUp: "dismissed" });
+    });
+    row.appendChild(go);
+    row.appendChild(skip);
+    return row;
   }
   $("commentPost").addEventListener("click", postComment);
   commentBox.addEventListener("keydown", function (e) {

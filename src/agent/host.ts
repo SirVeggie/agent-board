@@ -126,18 +126,38 @@ type QueuedMessage = {
   saved: { images: FileRef[]; files: FileRef[] };
   context: ContextChip[];
   from?: "page";
+  /** A Kanban card the board sent this about (a comment on it, or Continue). */
+  card?: CardRef;
 };
+
+/** The Kanban card a board message is about: its number and the board page it is on. */
+export type CardRef = { num: number; title?: string; board: string; boardKey?: string; resume?: boolean };
+
+/** Where a board message about a card came from; the host words it, so a page cannot pass one off as the user's. */
+function cardOrigin(card: CardRef): string {
+  const board = `the Kanban board "${card.board}"${card.boardKey ? ` (${card.boardKey})` : ""}`;
+  const name = `card #${card.num}${card.title ? ` "${card.title}"` : ""}`;
+  const why = card.resume
+    ? `The user pressed Continue on ${name} of ${board}, which you worked on before. The board sent this, not the user in this chat.`
+    : `A new comment on ${name} of ${board}, which you are working on. The board passed it on: it was posted on the card, not typed in this chat. Take it into account in your work on the card, and answer it on the card if it asks something.`;
+  return `<context>\n${why}\n</context>\n\n`;
+}
 
 /** What the model reads for a message: where it came from, its context chips, the guides of the pages it brings up, its files, then the text. */
 function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdits = ""): string {
-  const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n" : "";
+  const origin = msg.card
+    ? cardOrigin(msg.card)
+    : msg.from === "page"
+      ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n"
+      : "";
+  const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" && thread.provider !== "openai" });
   const recap = !thread.rewind?.recap
     ? ""
     : thread.rewind.migrated
       ? `<earlier_conversation>\nThis conversation moved to a new session, so you don't have its history. This is what was said so far, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
       : `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`;
-  return recap + origin + pageEdits + contextBlock(msg.context) + guides + files + msg.text;
+  return recap + origin + pageEdits + contextBlock(msg.context) + guides + files + text;
 }
 
 /**
@@ -182,6 +202,7 @@ function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
     ...(msg.saved.files.length ? { files: msg.saved.files.map(fileEntry) } : {}),
     ...(msg.context.length ? { context: msg.context } : {}),
     ...(msg.from ? { from: msg.from } : {}),
+    ...(msg.card ? { card: { num: msg.card.num, ...(msg.card.title ? { title: msg.card.title } : {}), ...(msg.card.resume ? { resume: true } : {}) } } : {}),
   };
 }
 
@@ -208,7 +229,7 @@ export type PageAskResult =
   | { skipped: true; note?: string; page: { id: string; key: string } }
   | { cancelled: true; page: { id: string; key: string } };
 
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page"; card?: CardRef };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -1052,6 +1073,7 @@ export class AgentHost {
       saved: { images: saveFiles(threadId, images), files: saveFiles(threadId, files) },
       context,
       ...(input.from === "page" ? { from: "page" as const } : {}),
+      ...(input.card ? { card: input.card } : {}),
     };
     if (this.runs.has(threadId)) {
       const queue = this.queues.get(threadId) ?? [];
@@ -1085,6 +1107,37 @@ export class AgentHost {
       return { steered: false };
     }
     if (!queue?.length) throw new Error("Nothing is queued");
+    this.steerFirst(threadId);
+    return { steered: true };
+  }
+
+  /**
+   * A Kanban card's board sends a comment to the thread working on the card, or Continue to the one
+   * that worked on it before. A comment goes into the running turn (steered in, or queued behind it
+   * when the provider cannot steer) and is not sent when the thread is idle: the board offers
+   * Continue instead. Continue sends the host's own note telling the agent to read the card again.
+   */
+  cardMessage(threadId: string, card: CardRef, text: string): { delivered: "steered" | "queued" | "started" | null } {
+    if (!card.resume) {
+      if (!this.runs.has(threadId)) return { delivered: null };
+      if (!text.trim()) throw new Error("Empty comment");
+    }
+    const body = card.resume
+      ? `Continue the work on card #${card.num}. Its description, checklist, or comments may have changed since you last worked on it: get the card again and read it in full before you go on. Claim it again while you work on it, and finish it when you are done.`
+      : text;
+    const { queued } = this.send(threadId, { text: body, from: "page", card });
+    if (!queued) return { delivered: "started" };
+    // Steer only when it is the one queued message: steering takes the queue's first.
+    if (!card.resume && this.queues.get(threadId)?.length === 1 && this.steerFirst(threadId)) return { delivered: "steered" };
+    return { delivered: "queued" };
+  }
+
+  /** Hand the first queued message to the running turn. False when there is nothing to hand, or the provider cannot take it now. */
+  private steerFirst(threadId: string): boolean {
+    const run = this.runs.get(threadId);
+    const queue = this.queues.get(threadId);
+    const session = this.sessions.get(threadId);
+    if (!run || run.steer || !session?.steer || !queue?.length) return false;
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
     const item = this.queuedItems(threadId)[0];
@@ -1096,7 +1149,7 @@ export class AgentHost {
       this.touch(item);
     }
     this.emitThread(threadId);
-    return { steered: true };
+    return true;
   }
 
   /**
