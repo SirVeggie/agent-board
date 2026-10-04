@@ -4160,7 +4160,7 @@
       out.append(history, this.feed, el("span", "dock-sweep"));
       // Input: composer and send. The island style also shows the model orb and the conversation toggle here.
       const toggle = () => button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)");
-      this.orb = button("", "dock-orb", (event) => view.modelMenu(event.currentTarget), "Model");
+      this.orb = button("", "dock-orb", (event) => view.modelMenu(event.currentTarget));
       const input = el("div", "dock-input");
       flyout.bind(this.orb, "orb");
       input.append(this.orb, view.composer, toggle(), view.sendSlot);
@@ -4265,7 +4265,8 @@
       this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
       this.scopeBtn.title = "Page, folder, or workspace this thread belongs to";
       this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
-      this.orb.title = `Model: ${modelLabel(s.provider, s.model)}`;
+      // No native title: hovering the orb opens the threads flyout, and a tooltip would sit on top of it.
+      this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
     },
     /** When the thread's current run started: its running turn, else when the dock first saw it running. */
