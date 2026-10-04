@@ -148,6 +148,57 @@ test("list gives compact rows and column counts", () => {
   assert.equal((result.columns as Array<{ stopRequested?: boolean }>)[1].stopRequested, undefined);
 });
 
+const nums = (result: Record<string, unknown>) => (result.cards as Array<{ num: number }>).map((c) => c.num);
+
+test("list with no column omits done-role cards and follows board order", () => {
+  const scrambled = {
+    ...board(),
+    cards: [
+      { id: "c3", num: 3, col: "done", title: "Done first in array shared-token", comments: [], createdAt: 1, movedAt: 1, doneAt: 1 },
+      { id: "c2", num: 2, col: "ready", title: "Agent", comments: [], createdAt: 1, movedAt: 1 },
+      { id: "c1", num: 1, col: "in", title: "Inbox shared-token", comments: [], createdAt: 1, movedAt: 1 },
+      { id: "c4", num: 4, col: "work", title: "Working", comments: [], createdAt: 1, movedAt: 1 },
+    ],
+    nextNum: 5,
+  };
+  assert.deepEqual(nums(run(scrambled, "list", {}).result), [1, 2, 4]);
+  assert.deepEqual(nums(run(scrambled, "list", { done: true }).result), [3]);
+  assert.deepEqual(nums(run(scrambled, "list", { column: "done" }).result), [3]);
+  assert.deepEqual(nums(run(scrambled, "list", { q: "Done first" }).result), [3]);
+  assert.deepEqual(nums(run(scrambled, "list", { q: "Agent" }).result), [2]);
+  const mixed = run(scrambled, "list", { q: "shared-token" }).result;
+  assert.deepEqual(nums(mixed), [1, 3]);
+  const capped = run(scrambled, "list", { done: true, limit: 1 }).result;
+  assert.deepEqual(nums(capped), [3]);
+  assert.equal(capped.more, undefined);
+});
+
+test("list with no column does not count omitted done cards as more", () => {
+  const manyDone = {
+    ...board(),
+    cards: [
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `d${i}`,
+        num: 10 + i,
+        col: "done",
+        title: `Done ${i}`,
+        comments: [],
+        createdAt: 1,
+        movedAt: 1,
+        doneAt: 1,
+      })),
+      { id: "c1", num: 1, col: "ready", title: "Open", comments: [], createdAt: 1, movedAt: 1 },
+    ],
+    nextNum: 20,
+  };
+  const { result } = run(manyDone, "list", { limit: 10 });
+  assert.deepEqual(nums(result), [1]);
+  assert.equal(result.more, undefined);
+  const allDone = run(manyDone, "list", { done: true, limit: 2 }).result;
+  assert.deepEqual(nums(allDone), [10, 11]);
+  assert.equal(allDone.more, 3);
+});
+
 test("list q matches title, description, comments, and checklist", () => {
   const state = {
     ...board(),

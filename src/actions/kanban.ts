@@ -147,6 +147,16 @@ function columnById(state: BoardState, id: string | undefined): Column | undefin
   return id ? columns(state).find((c) => c.id === id) : undefined;
 }
 
+function inDoneColumn(state: BoardState, card: Card): boolean {
+  return columnById(state, card.col)?.role === "done";
+}
+
+/** Left-to-right on the board; cards in the same column keep their current order. */
+function byBoardOrder(state: BoardState, list: Card[]): Card[] {
+  const index = new Map(columns(state).map((c, i) => [c.id, i]));
+  return [...list].sort((a, b) => (index.get(a.col) ?? 9999) - (index.get(b.col) ?? 9999));
+}
+
 /** Agent column the card was in (or last came from) when this claim started. */
 function claimFrom(state: BoardState, card: Card): string | undefined {
   const current = columnById(state, card.col);
@@ -304,13 +314,19 @@ export const kanbanActions: ActionSet = {
   actions: {
     list: {
       description:
-        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Archived cards only with archived: true.",
-      args: "{ column?, label?, assignee?, q?, archived?, limit? }",
+        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Rows follow board column order. With no column, done-role cards are omitted unless done: true (only that role) or q (search still finds them). Archived cards only with archived: true.",
+      args: "{ column?, label?, assignee?, q?, archived?, done?, limit? }",
       run(state, args) {
         let list = cards(state).filter((c) => (args.archived ? c.archived : !c.archived));
         if (args.column !== undefined) {
           const ids = new Set(matchColumns(state, args.column).map((c) => c.id));
           list = list.filter((c) => ids.has(c.col));
+        } else if (!args.archived) {
+          if (args.done) {
+            list = list.filter((c) => inDoneColumn(state, c));
+          } else if (args.q === undefined) {
+            list = list.filter((c) => !inDoneColumn(state, c));
+          }
         }
         if (args.label !== undefined) {
           const [id] = labelIds(state, [args.label]);
@@ -322,6 +338,7 @@ export const kanbanActions: ActionSet = {
         if (args.q !== undefined) {
           list = list.filter((c) => matchesQuery(c, args.q));
         }
+        list = byBoardOrder(state, list);
         const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 200;
         return {
           ops: [],
