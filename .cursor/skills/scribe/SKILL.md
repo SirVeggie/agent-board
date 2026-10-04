@@ -268,6 +268,17 @@ scribe.open("scribe:key", { mode })  // open a page or URL as "tab", "peek", or 
 scribe.agent.start(prompt)        // start an agent chat thread for this page; see Pages that use the agent
 ```
 
+Less common:
+
+```js
+scribe.id                         // this page's tab id (t_…)
+scribe.revision                   // the state revision this page has seen
+scribe.template                   // { id, values, revision, compatible } on a template page, else null
+scribe.flush()                    // send pending writes now (Scribe already does on hide and unload)
+scribe.ops.get(state, "todos/t_1")   // the state-op engine: get(state, path), diff(before, after, keys), apply(state, ops)
+scribe.reportIncompatible(reason) // template pages: this state is not one the HTML can show; see TEMPLATES.md
+```
+
 Writes apply on the page at once and reach the daemon as small item-level changes. When an agent (or another window) changes a different item at the same time, both changes survive. The same field written by two people at once: the later write wins.
 
 Declarative events (do **not** also call `scribe.signal` in the same click):

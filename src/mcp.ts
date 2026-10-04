@@ -13,6 +13,7 @@ import { openBoard } from "./openBoard.js";
 import { clampWaitMs, parseEventNames } from "./signal.js";
 import { STATE_OP_NAMES, filterItems, getAt } from "./stateOps.js";
 import { clampLibraryPage } from "./librarySearch.js";
+import { skillDocs } from "./skillDocs.js";
 import { withAgentDates } from "./dates.js";
 import type { PageAssetUsage } from "./pageAssets.js";
 import { MAX_INLINE_PAGE_IMAGES, collectStateImages, mcpImageMime } from "./mcpImages.js";
@@ -81,7 +82,7 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
 const INSTRUCTIONS = [
   "Scribe is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms, kanban boards). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
   "Also use it whenever the user refers to something in Scribe: a page title, a pasted page key (keys look like scribe:some-page; pass it as key to page_read / page_patch / page_state as is), or their todo list or kanban.",
-  "If the scribe skill is available, load it before building or changing pages; it has the full rules.",
+  "If the scribe skill is available, load it before building or changing pages; it has the full rules. Without the skill, call scribe_docs: it serves the same rules and the page API (window.scribe in a page: state, signals, assets, links, scribe.preview, scribe.agent) for this Scribe version, a section at a time.",
   "Show a page once with page_show and a stable key; for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key. Pass background: true when creating a page the user will open from a link (a form, investigation, or evidence) rather than look at now — a new background page stays in the Library, not the tab strip.",
   "Find pages by title with page_list (open tabs), then library_search (every page). Never guess a key.",
   "Pages keep user data in page state (scribe.state / scribe.update / scribe.bind in the page). Read it with page_state (pass path to read one part), change it with page_update ops, or with page_action when the page's template has actions (its guide lists them). Never use localStorage in a page.",
@@ -444,6 +445,19 @@ export async function startMcp(): Promise<void> {
         folders: folders.map(({ path, pages }) => ({ path, pages })),
         note: folders.length ? `${folders.length} folders.` : "The Library has no folders; new pages go to the root.",
       });
+    }
+  );
+
+  server.tool(
+    "scribe_docs",
+    "The scribe skill for this Scribe version: rules for building and changing pages, and the page API pages use (window.scribe: state and ops, signals, actions, assets, links, scribe.preview, scribe.agent, permissions). Use it when the scribe skill is not loaded, or to check an API the skill you have does not mention. No topic: overview and table of contents. topic: a heading or part of one (e.g. \"Interactive pages\", \"Waiting\", \"Previewing files\"), \"templates\" for Scribe templates, or \"all\".",
+    {
+      topic: z.string().optional().describe("Heading (or part of one) to read, \"templates\", or \"all\". Omit for the contents."),
+    },
+    { readOnlyHint: true },
+    async ({ topic }) => {
+      const { text, error } = skillDocs(topic);
+      return error ? errorResult(text) : { content: [{ type: "text" as const, text }] };
     }
   );
 

@@ -37,7 +37,10 @@ Then two copies outside the repo:
 
 ```bat
 mklink /J %USERPROFILE%\.cursor\skills\scribe C:\path\to\scribe\.cursor\skills\scribe
+mklink /J %USERPROFILE%\.claude\skills\scribe C:\path\to\scribe\.cursor\skills\scribe
 ```
+
+The skill is optional: clients without it (or with an old copy) can read the same text from the MCP's `scribe_docs` tool, which serves this clone's `.cursor/skills/scribe`. A test (`src/skillDocs.test.ts`) fails when `window.scribe` in `src/bridge.ts` gains a member the skill doesn't mention.
 
 Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 or ask the agent to present something visually.
 
