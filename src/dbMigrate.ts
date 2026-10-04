@@ -163,3 +163,15 @@ export function ensurePageLocalSchema(db: DatabaseSync): void {
 export function ensurePagePermissionSchema(db: DatabaseSync): void {
   db.exec(PAGE_PERMISSIONS_TABLE_SQL);
 }
+
+/**
+ * Boards created before folder instruction pages have no tabs.folder_instructions.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureFolderInstructionsColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "folder_instructions")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN folder_instructions INTEGER NOT NULL DEFAULT 0");
+}

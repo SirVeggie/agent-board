@@ -15,6 +15,8 @@ If you only see `board_*` tools, or `page_list` exists but `page_action` does no
 
 The **Library** holds every page in Scribe, organized by the user into folders and a manual order. The tab strip is just the pages that are currently **open**. Closing a tab keeps the page in the Library; only a delete removes it. The user owns the organization: never move pages between folders or reorder them.
 
+A page titled **Instructions**, or marked **Use as folder instructions** in its tab menu, is standing instructions for agent threads scoped to that folder or to a page in it (parent folders too). Edits apply on the next turn. Global and workspace threads do not get them.
+
 ## When to use it
 
 Use Scribe for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Put those pages up and stop — do not screenshot them to tweak layout or type.

@@ -809,6 +809,23 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.post("/api/tabs/:id/folder-instructions", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the board UI can change folder instructions" });
+      return;
+    }
+    if (typeof req.body?.on !== "boolean") {
+      res.status(400).json({ error: "on must be true or false" });
+      return;
+    }
+    try {
+      const tab = store.setFolderInstructions(req.params.id, req.body.on);
+      res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
   // Page permissions are the user's: agents can neither read nor change them, and tab pages
   // can't reach these routes (contentOriginGate). The board UI asks and checks for the page.
   app.get("/api/tabs/:id/permissions", (req, res) => {

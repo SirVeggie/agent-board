@@ -1,15 +1,18 @@
 import { BOARD_MCP } from "./providers/cursor.js";
+import type { FolderInstructionPage } from "../types.js";
 import type { ContextChip, Thread } from "./types.js";
 
 /** Scope details the host resolves from the board for a thread's instructions. */
 export type ScopeInfo = {
   page?: { id: string; key: string; title: string; folder: string | null } | null;
   folder?: { id: string; path: string } | null;
+  folderInstructions?: FolderInstructionPage[];
 };
 
 /**
- * Extra system instructions for every thread. Kept stable for a thread (they only depend on its
- * scope and mode), because Claude restarts its process when they change.
+ * Extra system instructions for every thread. Folder instruction pages are re-read each turn, so an
+ * edit applies on the next message (Claude restarts its process when they change; Cursor re-sends
+ * the instructions block). Other lines only depend on the thread's scope and mode.
  */
 export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   const lines = [
@@ -52,6 +55,17 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     );
   } else if (thread.scope.kind === "folder" && scope.folder) {
     lines.push("", `This thread belongs to the Library folder "${scope.folder.path}". Pages in it can be listed with library_search({ folder: "${scope.folder.path}" }).`);
+  }
+  if (scope.folderInstructions?.length) {
+    lines.push(
+      "",
+      "Folder instructions (Library pages for this folder and its parents). Follow them as standing instructions for this thread. The user can edit those pages; changes apply on the next turn."
+    );
+    for (const page of scope.folderInstructions) {
+      const folder = page.folder ?? "Library root";
+      const body = page.text.replaceAll("</folder_instructions>", "</ folder_instructions>");
+      lines.push("", `<folder_instructions folder="${folder}" page="${page.key}">`, body, "</folder_instructions>");
+    }
   }
   if (thread.cwd && thread.mode !== "board" && !pagesOnly) {
     lines.push("", `Workspace: ${thread.cwd}`);

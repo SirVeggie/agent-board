@@ -43,6 +43,29 @@ test("threads with a workspace are told their shell already starts there", () =>
   assert.doesNotMatch(threadInstructions(thread({ mode: "board" }), {}), /Shell commands/);
 });
 
+test("threadInstructions includes folder instruction pages, parents first", () => {
+  const thread = {
+    provider: "claude",
+    mode: "board",
+    cwd: null,
+    scope: { kind: "page", ref: "t1" },
+  } as Thread;
+  const text = threadInstructions(thread, {
+    page: { id: "t1", key: "scribe:notes", title: "Notes", folder: "Work/Releases" },
+    folderInstructions: [
+      { folder: null, key: "scribe:root-instructions", title: "Instructions", text: "Root rule." },
+      { folder: "Work/Releases", key: "scribe:release-rules", title: "Rules", text: "Release rule." },
+    ],
+  });
+  assert.match(text, /Folder instructions \(Library pages for this folder and its parents\)/);
+  const rootAt = text.indexOf('folder="Library root"');
+  const nestedAt = text.indexOf('folder="Work/Releases"');
+  assert.ok(rootAt >= 0 && nestedAt > rootAt);
+  assert.match(text, /Root rule\./);
+  assert.match(text, /Release rule\./);
+  assert.doesNotMatch(threadInstructions(thread, { page: { id: "t1", key: "scribe:notes", title: "Notes", folder: "Work" } }), /Folder instructions/);
+});
+
 test("guidesBlock sends each guide once, naming every page it covers", () => {
   const kanban = { id: "tpl_kanban", title: "Kanban board", text: "Use page_action." };
   const todo = { id: "tpl_todo", title: "Todo list", text: "Items live in todos." };

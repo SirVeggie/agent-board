@@ -1,5 +1,15 @@
 # Migrations
 
+## `tabs.folder_instructions` column (additive, schema still 3)
+
+- **What changed:** A page can be marked as its Library folder's standing agent instructions (`folderInstructions` on the tab, tab menu **Use as folder instructions**). Stored as `tabs.folder_instructions INTEGER NOT NULL DEFAULT 0`. A page titled `Instructions` counts even without the flag. Export files carry optional `folderInstructions: true`.
+- **Why no version bump:** Existing rows are unchanged (default 0). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureFolderInstructionsColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`.
+- **Export format:** No transform. Older exports have no `folderInstructions` and import as unset. `EXPORT_VERSION` stays `1`.
+- **Protocol:** additive route only (`POST /api/tabs/:id/folder-instructions`), refused for agents. `VERSION` stays `3.0.0`.
+- **Where:** `src/schema.ts` (`TABS_TABLE_SQL`), `src/dbMigrate.ts` (`ensureFolderInstructionsColumn`), `src/store.ts` (`setFolderInstructions`, `folderInstructionsFor`), `src/agent/prompt.ts`.
+- **How to verify:** `folder instruction pages walk parent folders and prefer a flag over the title` and the persist/export test in `src/store.test.ts`; `threadInstructions includes folder instruction pages` in `src/agent/prompt.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `page_permissions` table (additive, schema still 3)
 
 - **What changed:** What the user lets a page's own code do (`agent.chat`, `agent.unattended`, `agent.workspace`; plugins will add `plugin.<id>` ids) is stored in a new `page_permissions` table: `tab_id REFERENCES tabs(id) ON DELETE CASCADE`, `perm`, `value` (`allow` / `deny` / `ask`), `data` (JSON, `{ folders: [{ path, approval }] }` for per-folder permissions), `updated_at`. No row means the permission's default (`src/pagePermissions.ts`).

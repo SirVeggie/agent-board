@@ -19,6 +19,7 @@ CREATE TABLE tabs (
   events TEXT NOT NULL DEFAULT '[]',
   assets TEXT NOT NULL DEFAULT '[]',
   agent_hidden INTEGER NOT NULL DEFAULT 0,
+  folder_instructions INTEGER NOT NULL DEFAULT 0,
   folder_id TEXT,
   lib_pos REAL NOT NULL DEFAULT 0,
   deleted_batch TEXT,

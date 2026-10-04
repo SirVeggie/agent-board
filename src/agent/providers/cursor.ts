@@ -472,7 +472,7 @@ class CursorSession implements ProviderSession {
   private sink: RunSink | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private cancelled = false;
-  private sentInstructions = false;
+  private lastInstructions = "";
   private warming: Promise<void> | null = null;
   private steers = new Map<string, Steer>();
   /** Steered message the last turn did not take in; the host adopts it as the next turn. */
@@ -578,7 +578,7 @@ class CursorSession implements ProviderSession {
     if (this.agentId) {
       try {
         agent = await Agent.resume(this.agentId, options);
-        this.sentInstructions = true;
+        this.lastInstructions = "";
       } catch (err) {
         log(`Cursor agent resume failed, starting a new agent: ${errorText(err)}`);
         this.sink?.notice("warn", "Could not resume the Cursor agent; this turn starts a new one without the earlier conversation.");
@@ -590,7 +590,7 @@ class CursorSession implements ProviderSession {
         throw new Error(errorText(err));
       });
       this.agentId = agent.agentId;
-      this.sentInstructions = false;
+      this.lastInstructions = "";
     }
     this.agent = agent;
     this.agentKey = key;
@@ -685,7 +685,8 @@ class CursorSession implements ProviderSession {
       sink.nativeId(agent.agentId);
       this.reported = agent.agentId;
       if (this.cancelled) return this.endTurn({ status: "cancelled" });
-      const text = !this.sentInstructions && input.instructions ? `<instructions>\n${input.instructions}\n</instructions>\n\n${input.text}` : input.text;
+      const sendInstructions = Boolean(input.instructions && input.instructions !== this.lastInstructions);
+      const text = sendInstructions ? `<instructions>\n${input.instructions}\n</instructions>\n\n${input.text}` : input.text;
       const models = this.provider.cachedModels();
       const run = await agent.send(
         { text, images: input.images.map((image) => ({ data: image.data, mimeType: image.mimeType })) },
@@ -696,7 +697,7 @@ class CursorSession implements ProviderSession {
         }
       );
       this.current = run;
-      this.sentInstructions = true;
+      this.lastInstructions = input.instructions;
       for (const id of this.steers.keys()) this.sendSteer(id);
       if (this.cancelled) await run.cancel().catch(() => undefined);
       const result = await run.wait();

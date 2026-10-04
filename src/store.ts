@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
 import { buildExport, type BoardExportFile, type ImportPageInput } from "./boardExport.js";
 import { BUILTIN_ID_PREFIX, isBuiltinId, loadBuiltinTemplates } from "./builtinTemplates.js";
-import { searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
+import { htmlToText, searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
 import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
 import {
   ASSET_SWEEP_INTERVAL_MS,
@@ -49,6 +49,7 @@ import {
   PAGE_KEY_PREFIX,
   WELCOME_KEY,
   isAppTab,
+  isFolderInstructionTitle,
   isPlainObject,
   isTemplateBound,
   toMeta,
@@ -57,6 +58,7 @@ import {
   type BoardState,
   type DeletedBatch,
   type Folder,
+  type FolderInstructionPage,
   type ImportDestination,
   type RestorePlacement,
   type EventInput,
@@ -103,6 +105,8 @@ export type CleanupOptions = {
 };
 
 const FOLDER_NAME_MAX = 120;
+/** Cap so a huge HTML page cannot blow the agent context. */
+const MAX_FOLDER_INSTRUCTION_CHARS = 16_000;
 
 export class BoardStore extends EventEmitter {
   private tabs = new Map<string, Tab>();
@@ -361,6 +365,51 @@ export class BoardStore extends EventEmitter {
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     return tab;
+  }
+
+  /**
+   * Mark (or unmark) a page as its folder's agent instructions. One flagged page per folder:
+   * turning this on clears the flag on siblings. Title "Instructions" still counts without a flag.
+   */
+  setFolderInstructions(idOrKey: string, on: boolean): Tab {
+    const tab = this.requireAny(idOrKey);
+    if (isAppTab(tab)) {
+      throw new Error("the help page cannot be folder instructions");
+    }
+    if (Boolean(tab.folderInstructions) === on) {
+      return tab;
+    }
+    if (on) {
+      tab.folderInstructions = true;
+      this.clearSiblingFolderInstructions(tab);
+    } else {
+      delete tab.folderInstructions;
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
+  }
+
+  /**
+   * Instruction pages for a Library folder and its parents (root first, nearest last).
+   * A flagged page in a folder wins over a page titled "Instructions". Empty pages are skipped.
+   */
+  folderInstructionsFor(folderId: string | null): FolderInstructionPage[] {
+    const out: FolderInstructionPage[] = [];
+    for (const id of this.folderAncestors(folderId)) {
+      const page = this.instructionPageIn(id);
+      if (!page) continue;
+      const text = this.instructionText(page);
+      if (!text) continue;
+      out.push({
+        folder: this.folderPath(id),
+        key: page.key,
+        title: page.title,
+        text,
+      });
+    }
+    return out;
   }
 
   /** Template metadata, flagging a built-in's copy that fell behind its built-in. */
@@ -1748,6 +1797,9 @@ export class BoardStore extends EventEmitter {
     } else {
       delete tab.folderId;
     }
+    if (tab.folderInstructions) {
+      this.clearSiblingFolderInstructions(tab);
+    }
     this.markDirty(tab.id);
     this.persistSoon();
     if (opts.close && located.where === "open") {
@@ -2121,6 +2173,7 @@ export class BoardStore extends EventEmitter {
       events: [],
       assets,
       ...(page.agentHidden ? { agentHidden: true } : {}),
+      ...(page.folderInstructions ? { folderInstructions: true } : {}),
     };
     seedState(tab, pageState);
     if (pageAssets.length) {
@@ -2432,6 +2485,54 @@ export class BoardStore extends EventEmitter {
     return this.libraryTabs()
       .filter((tab) => (tab.folderId ?? null) === folderId && tab.id !== exceptId)
       .sort(byLibPos);
+  }
+
+  /** Root first, then each child down to `folderId`. */
+  private folderAncestors(folderId: string | null): Array<string | null> {
+    const chain: Array<string | null> = [];
+    if (folderId) {
+      const seen = new Set<string>();
+      let at: string | undefined = folderId;
+      while (at && !seen.has(at)) {
+        seen.add(at);
+        chain.push(at);
+        at = this.folders.get(at)?.parentId ?? undefined;
+      }
+    }
+    chain.push(null);
+    chain.reverse();
+    return chain;
+  }
+
+  private instructionPageIn(folderId: string | null): Tab | undefined {
+    const pages = this.pagesIn(folderId);
+    return pages.find((tab) => tab.folderInstructions) ?? pages.find((tab) => isFolderInstructionTitle(tab.title));
+  }
+
+  private instructionText(tab: Tab): string {
+    const template = tab.templateId ? this.templates.get(tab.templateId) : undefined;
+    const builtin = template?.source?.builtin ?? (template && isBuiltinId(template.id) ? template.key : undefined);
+    const raw =
+      builtin === "markdown-note"
+        ? typeof tab.state.text === "string"
+          ? tab.state.text.trim()
+          : ""
+        : htmlToText(tab.html);
+    if (!raw) {
+      return "";
+    }
+    return raw.length > MAX_FOLDER_INSTRUCTION_CHARS
+      ? `${raw.slice(0, MAX_FOLDER_INSTRUCTION_CHARS)}\n… (truncated)`
+      : raw;
+  }
+
+  private clearSiblingFolderInstructions(tab: Tab): void {
+    for (const other of this.pagesIn(tab.folderId ?? null, tab.id)) {
+      if (!other.folderInstructions) continue;
+      delete other.folderInstructions;
+      this.markDirty(other.id);
+      this.emit("tab_upserted", toMeta(other), undefined, { activate: false, structural: false });
+    }
   }
 
   private foldersIn(parentId: string | null, exceptId?: string): Folder[] {

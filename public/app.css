@@ -498,7 +498,8 @@ body.dragging-tab iframe {
   align-items: center;
 }
 
-.tab-agent-hidden {
+.tab-agent-hidden,
+.tab-folder-instructions {
   color: var(--muted);
   display: inline-flex;
   flex: 0 0 auto;

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
@@ -102,6 +102,7 @@ type TabRow = {
   events: string | null;
   assets: string;
   agent_hidden: number;
+  folder_instructions: number;
   folder_id: string | null;
   lib_pos: number;
   deleted_batch: string | null;
@@ -155,11 +156,11 @@ INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
   revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
-  folder_id, lib_pos, deleted_batch, user_title_at
+  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -181,6 +182,7 @@ ON CONFLICT(id) DO UPDATE SET
   events = excluded.events,
   assets = excluded.assets,
   agent_hidden = excluded.agent_hidden,
+  folder_instructions = excluded.folder_instructions,
   folder_id = excluded.folder_id,
   lib_pos = excluded.lib_pos,
   deleted_batch = excluded.deleted_batch,
@@ -270,6 +272,7 @@ export class BoardDb {
       ensurePageAssetSchema(db);
       ensurePageLocalSchema(db);
       ensurePagePermissionSchema(db);
+      ensureFolderInstructionsColumn(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -593,6 +596,7 @@ export class BoardDb {
       ensurePageAssetSchema(db);
       ensurePageLocalSchema(db);
       ensurePagePermissionSchema(db);
+      ensureFolderInstructionsColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -676,6 +680,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     JSON.stringify(tab.events ?? []),
     JSON.stringify(tab.assets ?? []),
     tab.agentHidden ? 1 : 0,
+    tab.folderInstructions ? 1 : 0,
     tab.folderId ?? null,
     tab.libPos,
     status === "deleted" ? (deletedBatch ?? null) : null,
@@ -757,6 +762,9 @@ function rowToStored(row: TabRow): StoredTab {
   };
   if (row.agent_hidden) {
     tab.agentHidden = true;
+  }
+  if (row.folder_instructions) {
+    tab.folderInstructions = true;
   }
   if (row.folder_id) {
     tab.folderId = row.folder_id;

@@ -782,11 +782,19 @@ export class AgentHost {
   private scopeInfo(thread: Thread): ScopeInfo {
     if (thread.scope.kind === "page" && thread.scope.ref) {
       const tab = store.get(thread.scope.ref, "agent");
-      return tab ? { page: { id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId) } } : { page: null };
+      if (!tab) return { page: null };
+      return {
+        page: { id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId) },
+        folderInstructions: store.folderInstructionsFor(tab.folderId ?? null),
+      };
     }
     if (thread.scope.kind === "folder" && thread.scope.ref) {
       const folderPath = store.folderPath(thread.scope.ref);
-      return folderPath ? { folder: { id: thread.scope.ref, path: folderPath } } : { folder: null };
+      if (!folderPath) return { folder: null };
+      return {
+        folder: { id: thread.scope.ref, path: folderPath },
+        folderInstructions: store.folderInstructionsFor(thread.scope.ref),
+      };
     }
     return {};
   }

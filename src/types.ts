@@ -150,6 +150,8 @@ export type Tab = {
   templateIncompatibleReason?: string;
   /** Only the board UI can set this. Agent requests treat the tab as nonexistent. */
   agentHidden?: boolean;
+  /** This page is the standing agent instructions for its Library folder. */
+  folderInstructions?: boolean;
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "events" | "eventSeq" | "stripSeq"> & {
@@ -189,8 +191,22 @@ export function isAppTab(tab: { key: string }): boolean {
   return tab.key === WELCOME_KEY;
 }
 
+/** A page titled "Instructions" is that folder's agent instructions unless another page is flagged. */
+export function isFolderInstructionTitle(title: string): boolean {
+  return title.trim().toLowerCase() === "instructions";
+}
+
 /** Who is asking: the board UI (and tab pages), or an agent through the MCP. */
 export type Viewer = "user" | "agent";
+
+/** A Library page used as standing agent instructions for a folder. */
+export type FolderInstructionPage = {
+  /** Library path, or null for the root. */
+  folder: string | null;
+  key: string;
+  title: string;
+  text: string;
+};
 
 export function visibleTo(tab: { agentHidden?: boolean }, viewer: Viewer): boolean {
   switch (viewer) {
@@ -307,6 +323,7 @@ export function toMeta(tab: Tab): TabMeta {
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
     assets: tab.assets,
     ...(tab.agentHidden ? { agentHidden: true } : {}),
+    ...(tab.folderInstructions ? { folderInstructions: true } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(tab.templateId
       ? {

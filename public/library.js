@@ -267,9 +267,12 @@ window.createLibrary = function createLibrary(host) {
 
     const icon = document.createElement("span");
     icon.className = "fileicon";
-    icon.innerHTML = page.agentHidden ? host.icons.agentHidden : host.icons.file;
+    const instruction = page.folderInstructions || (page.title || "").trim().toLowerCase() === "instructions";
+    icon.innerHTML = page.agentHidden ? host.icons.agentHidden : instruction ? host.icons.folderInstructions : host.icons.file;
     if (page.agentHidden) {
       icon.title = host.icons.agentHiddenTitle;
+    } else if (instruction) {
+      icon.title = host.icons.folderInstructionsTitle;
     }
     el.appendChild(icon);
 
@@ -998,6 +1001,10 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
       { label: tab.agentHidden ? "Show to agent" : "Hide from agent", action: () => host.setAgentHidden(id, !tab.agentHidden) },
+      {
+        label: tab.folderInstructions ? "Stop using as folder instructions" : "Use as folder instructions",
+        action: () => host.setFolderInstructions(id, !tab.folderInstructions),
+      },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
       "sep",

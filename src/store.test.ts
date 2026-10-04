@@ -813,6 +813,67 @@ test("hide-from-agent persists and survives export and import", () => {
   again.closeDb();
 });
 
+test("a page titled Instructions is that folder's agent instructions", () => {
+  const store = loaded();
+  store.upsert({ title: "Instructions", html: "<p>Root rules</p>" });
+  store.upsert({ title: "Notes", html: "<p>child</p>", folder: "Work/Releases" });
+  const nested = store.get("notes")!;
+  const pages = store.folderInstructionsFor(nested.folderId!);
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].folder, null);
+  assert.match(pages[0].text, /Root rules/);
+  store.closeDb();
+});
+
+test("folder instruction pages walk parent folders and prefer a flag over the title", () => {
+  const store = loaded();
+  store.upsert({ title: "Instructions", html: "<p>Work rules</p>", folder: "Work" });
+  const named = store.upsert({ title: "Instructions", html: "<p>By name</p>", folder: "Work/Releases" }).tab;
+  const flagged = store.upsert({ title: "Rules", html: "<p>By flag</p>", folder: "Work/Releases" }).tab;
+  store.setFolderInstructions(flagged.id, true);
+  const pages = store.folderInstructionsFor(flagged.folderId!);
+  assert.equal(pages.length, 2);
+  assert.equal(pages[0].folder, "Work");
+  assert.match(pages[0].text, /Work rules/);
+  assert.equal(pages[1].key, flagged.key);
+  assert.match(pages[1].text, /By flag/);
+  store.setFolderInstructions(flagged.id, false);
+  const after = store.folderInstructionsFor(named.folderId!);
+  assert.equal(after.at(-1)?.key, named.key);
+  store.closeDb();
+});
+
+test("flagging a folder instruction page clears the sibling flag", () => {
+  const store = loaded();
+  const a = store.upsert({ title: "A", html: "<p>aaa</p>", folder: "Work" }).tab;
+  const b = store.upsert({ title: "B", html: "<p>bbb</p>", folder: "Work" }).tab;
+  store.setFolderInstructions(a.id, true);
+  store.setFolderInstructions(b.id, true);
+  assert.equal(store.get(a.id)?.folderInstructions, undefined);
+  assert.equal(store.get(b.id)?.folderInstructions, true);
+  store.closeDb();
+});
+
+test("folder instructions persist, export, and use markdown-note text", () => {
+  const store = loaded();
+  const work = store.createFolder({ name: "Work" });
+  const { tab } = store.openFromTemplate("builtin:markdown-note", { title: "Guide" });
+  store.movePage(tab.id, work.id, 0);
+  store.setFolderInstructions(tab.id, true);
+  store.writeState(tab.id, { ops: [{ op: "set", path: "text", value: "Always lint." }] });
+  store.closeDb();
+
+  const again = loaded();
+  assert.equal(again.get(tab.id)?.folderInstructions, true);
+  const pages = again.folderInstructionsFor(work.id);
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].text, "Always lint.");
+  const parsed = parseImport(serializeExport(again.exportFile({ id: tab.id })));
+  const copy = again.importBoard(parsed, "meta");
+  assert.equal(copy.tabs[0].folderInstructions, true);
+  again.closeDb();
+});
+
 const V1_SCHEMA = `
 CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE tabs (

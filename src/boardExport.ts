@@ -58,6 +58,7 @@ export type BoardExportPage = {
   pageAssets?: BoardExportPageAsset[];
   template?: PageTemplateBinding;
   agentHidden?: boolean;
+  folderInstructions?: boolean;
 };
 
 export type BoardExportFile = {
@@ -83,6 +84,7 @@ export type ImportPageInput = {
   pageAssets?: PageAssetDraft[];
   template?: PageTemplateBinding;
   agentHidden?: boolean;
+  folderInstructions?: boolean;
 };
 
 export type ParsedImport = {
@@ -129,6 +131,7 @@ export function buildExport(
           }
         : {}),
       ...(tab.agentHidden ? { agentHidden: true } : {}),
+      ...(tab.folderInstructions ? { folderInstructions: true } : {}),
       ...(tab.templateId && included.has(tab.templateId)
         ? {
             template: {
@@ -327,6 +330,7 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
     pageAssets: pageAssetsFromExport(page.pageAssets, index),
     template: bindingFromExport(page.template, index, templateIds),
     ...(page.agentHidden === true ? { agentHidden: true } : {}),
+    ...(page.folderInstructions === true ? { folderInstructions: true } : {}),
   };
 }
 
