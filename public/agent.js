@@ -302,6 +302,7 @@
       if (!S.threads.has(id)) continue;
       ensureDetail(id).then(() => {
         for (const view of views()) if (view.threadId === id) view.renderAll();
+        if (dock.view.threadId === id) dock.bindFeed(true);
       });
     }
   }
@@ -1277,12 +1278,14 @@
       if (id) this.draft = null;
       this.expanded.clear();
       this.restoreDraftText();
+      if (this.variant === "dock") dock.invalidateFeed();
       this.renderAll();
       if (id) {
         ensureDetail(id).then(() => {
           if (this.threadId === id) {
             this.stick = true;
             this.renderAll();
+            if (this.variant === "dock") dock.bindFeed();
             const t = S.threads.get(id);
             if (t?.unread && this.visible()) api("POST", `/threads/${encodeURIComponent(id)}/read`).catch(() => undefined);
           }
@@ -1303,6 +1306,7 @@
       this.draft = { scope, settings };
       this.restoreDraftText();
       this.renderAll();
+      if (this.variant === "dock") dock.bindFeed();
       setTimeout(() => this.focus(), 0);
     }
 
@@ -4211,16 +4215,19 @@
       localStorage.setItem(LS.dock, shown ? "1" : "0");
       if (shown) this.syncThread();
       this.apply();
-      if (shown) setTimeout(() => this.view.focus(), 60);
-      else this.view.input.blur();
+      if (shown) {
+        this.bindFeed();
+        setTimeout(() => this.view.focus(), 60);
+      } else this.view.input.blur();
     },
     setExpanded(expanded) {
       S.dockExpanded = expanded;
       this.apply();
       if (expanded) {
-        this.feed.replaceChildren();
-        this.feedLines.clear();
+        this.clearFeedLines();
         this.view.renderTranscript();
+      } else {
+        this.bindFeed();
       }
     },
     remember(id) {
@@ -4238,11 +4245,7 @@
         id = [...S.threads.values()].filter((t) => !t.archived && t.scope.kind === "page" && t.scope.ref === tab.id).sort((a, b) => b.activityAt - a.activityAt)[0]?.id || null;
       }
       if (id) {
-        if (this.view.threadId !== id) {
-          this.view.setThread(id);
-          this.feed.replaceChildren();
-          this.feedLines.clear();
-        }
+        if (this.view.threadId !== id) this.view.setThread(id);
       } else {
         const scope = tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null };
         if (this.view.threadId || !sameScope(this.view.draft?.scope, scope)) this.view.startDraft(scope);
@@ -4331,15 +4334,91 @@
     pick(id) {
       this.remember(id);
       this.view.setThread(id);
-      this.feed.replaceChildren();
-      this.feedLines.clear();
       this.renderTitle();
       // The picker is a popover: closing it drops the focused search field, and focus would
       // land on the title button. Put it in the composer, as the sidebar and full window do.
       if (S.dockShown) setTimeout(() => this.view.focus(), 0);
     },
-    /* Transient progress lines while the conversation is collapsed. The latest agent
-       message stays; tool steps cap at 4 while the agent works, then fade once it stops. */
+    /* Collapsed feed is bound to the composer thread: that thread's latest reply, or empty
+       when none is selected. Live steps cap at 4 while it runs, then fade once it stops. */
+    clearFeedLines() {
+      clearTimeout(this._settle);
+      for (const node of this.feed.children) clearTimeout(node._fade);
+      this.feed.replaceChildren();
+      this.feedLines.clear();
+      this.feed.classList.remove("deep");
+    },
+    /** Drop feed lines and live-handle text so another thread cannot leak into this one. */
+    resetFeed() {
+      this.clearFeedLines();
+      this.live = null;
+    },
+    /** Clear now and drop any in-flight paint, so a switch never keeps the previous thread's reply. */
+    invalidateFeed() {
+      this.resetFeed();
+      this.feedPainted = null;
+      this.feedSeq = (this.feedSeq || 0) + 1;
+      this.renderHandle();
+    },
+    /**
+     * Paint the collapsed feed for the thread in the composer, or clear it when there is none.
+     * A generation counter drops a paint that started before a later bind (switch, show, collapse).
+     */
+    bindFeed(force) {
+      const id = this.view.threadId || null;
+      if (!force && id && this.feedPainted === id && S.dockShown && !S.dockExpanded && this.feed.childElementCount) return;
+      this.invalidateFeed();
+      const seq = this.feedSeq;
+      if (!id || S.dockExpanded || !S.dockShown) return;
+      const paint = () => {
+        if (seq !== this.feedSeq || this.view.threadId !== id) return;
+        this.resetFeed();
+        this.paintFeed(id);
+        if (S.details.has(id)) this.feedPainted = id;
+        this.renderHandle();
+      };
+      if (S.details.has(id)) paint();
+      else ensureDetail(id).then(paint);
+    },
+    paintFeed(id) {
+      const detail = S.details.get(id);
+      const t = S.threads.get(id);
+      if (!detail || !t) return;
+      this.feedQuiet = true;
+      try {
+        if (t.status === "running") {
+          const turn = [...detail.turns.values()].find((x) => x.status === "running");
+          if (!turn) return;
+          for (const item of detail.items) {
+            if (item.turnId === turn.id && !item.parentToolId) this.paintLiveItem(item);
+          }
+          return;
+        }
+        const lastText = [...detail.items].reverse().find((it) => it.kind === "text" && !it.parentToolId && String(it.text || "").trim());
+        if (lastText) {
+          this.line(`${lastText.turnId || lastText.id}:done`, "check", plain(lastText.text).slice(0, 220), { cls: "text done" });
+          return;
+        }
+        const lastTurn = [...detail.turns.values()].sort((a, b) => b.seq - a.seq)[0];
+        if (lastTurn?.status === "error") {
+          this.line(`${lastTurn.id}:err`, "cross", lastTurn.error || "The turn failed", { cls: "error", keep: true });
+        }
+      } finally {
+        this.feedQuiet = false;
+      }
+    },
+    paintLiveItem(item) {
+      if (item.kind === "tool") {
+        const label = item.tool === "edit" && item.files?.length ? `Edited ${item.files.map((f) => `${R.basename(f.path)} +${f.added} −${f.removed}`).join(", ")}` : item.detail && item.tool === "execute" ? `$ ${item.detail}` : item.title;
+        this.line(item.id, item.tool, label, { cls: `k-${item.tool}` });
+      } else if (item.kind === "notice") {
+        this.line(item.id, "other", item.text, { cls: item.level });
+      } else if (item.kind === "reasoning") {
+        this.line(item.id, "think", lastLine(item.text) || "Thinking…", { cls: "reason" });
+      } else if (item.kind === "text") {
+        this.line(item.id, "sparkle", lastLine(item.text), { cls: "text" });
+      }
+    },
     line(key, _icon, text, { cls = "", keep = false } = {}) {
       if (!this.root) return;
       const hold = keep || /\btext\b/.test(cls);
@@ -4355,8 +4434,10 @@
         const before = [...this.feed.children];
         this.feed.append(line);
         this.feedLines.set(key, line);
-        const lift = line.offsetHeight + 2;
-        for (const node of before) if (node.isConnected) node.animate([{ transform: `translateY(${lift}px)` }, { transform: "none" }], { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" });
+        if (!this.feedQuiet) {
+          const lift = line.offsetHeight + 2;
+          for (const node of before) if (node.isConnected) node.animate([{ transform: `translateY(${lift}px)` }, { transform: "none" }], { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" });
+        }
       }
       line.className = `dock-line ${cls}${hold ? " keep" : ""}`;
       line.querySelector(".dock-line-text").textContent = text;
@@ -4398,18 +4479,12 @@
         this.setExpanded(true);
         return;
       }
-      if (item.kind === "tool") {
-        const label = item.tool === "edit" && item.files?.length ? `Edited ${item.files.map((f) => `${R.basename(f.path)} +${f.added} −${f.removed}`).join(", ")}` : item.detail && item.tool === "execute" ? `$ ${item.detail}` : item.title;
-        this.line(item.id, item.tool, label, { cls: `k-${item.tool}` });
-      } else if (item.kind === "notice") {
-        this.line(item.id, "other", item.text, { cls: item.level });
-      }
+      this.paintLiveItem(item);
       this.renderHandle();
     },
     onDelta(item) {
       if (item.threadId !== this.view.threadId) return;
-      if (item.kind === "reasoning") this.line(item.id, "think", lastLine(item.text) || "Thinking…", { cls: "reason" });
-      else if (item.kind === "text") this.line(item.id, "sparkle", lastLine(item.text), { cls: "text" });
+      this.paintLiveItem(item);
     },
     onTurn(turn) {
       if (turn.threadId !== this.view.threadId) return;
