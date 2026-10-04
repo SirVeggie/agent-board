@@ -2874,6 +2874,10 @@
     closeMenu();
     menuEl = el("div", "menu card-menu");
     menuButton(menuEl, "Open", function () { openCard(id); });
+    if (canRunSolo(c)) {
+      var runner = str(worker(colOf(c).id).name);
+      menuButton(menuEl, "Run " + (runner || "agent") + " on this card", function () { runSolo(id); });
+    }
     var thread = c.thread || (c.claim && c.claim.thread);
     if (thread && scribe.agent && typeof scribe.agent.show === "function") {
       menuButton(menuEl, "Open thread", function () {
@@ -3405,6 +3409,8 @@
   var threadStatus = {};
   var launching = {};
   var advancing = {};
+  var soloStarting = {};
+  var soloMerging = {};
   var workerErrors = {};
   var workersTimer = 0;
   var waitTimer = 0;
@@ -3486,13 +3492,15 @@
   function refreshWorkerThreads() {
     if (!hasWorkerApi()) return;
     Object.keys(workers()).forEach(function (colId) {
-      var id = worker(colId).threadId;
-      if (!id || threadStatus[id]) return;
-      threadStatus[id] = { status: "idle", queued: 0, unknown: true };
-      scribe.agent.get(id).then(function (r) {
-        if (r && r.ok && r.thread) threadStatus[id] = { status: r.thread.status, queued: r.thread.queued || 0 };
-        else if (r && r.error === "not_found") threadStatus[id] = { status: "idle", queued: 0 };
-        render();
+      var w = worker(colId);
+      [w.threadId].concat(Object.keys(soloRuns(w))).forEach(function (id) {
+        if (!id || threadStatus[id]) return;
+        threadStatus[id] = { status: "idle", queued: 0, unknown: true };
+        scribe.agent.get(id).then(function (r) {
+          if (r && r.ok && r.thread) threadStatus[id] = { status: r.thread.status, queued: r.thread.queued || 0 };
+          else if (r && r.error === "not_found") threadStatus[id] = { status: "idle", queued: 0 };
+          render();
+        });
       });
     });
   }
@@ -3507,7 +3515,7 @@
     var h = document.querySelector("h1");
     return h ? h.textContent.trim() : "Board";
   }
-  function workerPrompt(col, w, c, fallbackInstructions) {
+  function workerPrompt(col, w, c, fallbackInstructions, solo) {
     var name = str(w.name).trim();
     var colRef = JSON.stringify(col.id);
     var lines = [
@@ -3525,7 +3533,9 @@
     if (FOLDER_MODES[workerMode(w)] && w.worktree) {
       lines.push("- You work in a git worktree, on a branch of your own. Commit your work. Before you end your turn, rebase onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list) and resolve any conflicts, so it merges cleanly. When your turn ends, the board merges your branch, and the next agent starts from there.");
     }
-    if (w.context === "fresh") {
+    if (solo) {
+      lines.push("- This is a one-off run for this card only. Don't take other cards; when it is finished, end your turn.");
+    } else if (w.context === "fresh") {
       lines.push("- Work on this card only, then end your turn. The board starts a fresh agent for the next card.");
     } else {
       lines.push("- When it is finished, list the column (list { column: " + colRef + " }). If the column shows stopRequested: true, end your turn. If one of its cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way, up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
@@ -3545,7 +3555,7 @@
   /** The column's next card for a worker: top first, skipping held ones, blocked ones the user hasn't answered, and ones waiting on unfinished cards. */
   function nextCard(colId) {
     return cardsIn(colId).filter(function (c) {
-      if (c.claim && !c.claim.stale) return false;
+      if ((c.claim && !c.claim.stale) || soloStarting[c.id]) return false;
       if (c.status && c.status.kind === "blocked") {
         var last = c.comments[c.comments.length - 1];
         if (!last || last.by !== "user") return false;
@@ -3567,6 +3577,7 @@
     if (!AGENT_MODE || !hasWorkerApi()) return;
     clearTimeout(waitTimer);
     var soonest = 0;
+    Object.keys(workers()).forEach(wrapUpSolos);
     Object.keys(workers()).forEach(function (colId) {
       var col = column(colId), w = worker(colId);
       if (!col || col.role !== "agent" || !workerOn(w) || advancing[colId] || launching[colId]) return;
@@ -3703,6 +3714,96 @@
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
       patchWorker(colId, { threadId: r.threadId, step: null, merge: null, wait: null, run: { since: since, card: c.num, startedAt: startedAt } });
+    });
+  }
+
+  // ---------- one-card runs ----------
+  // Started from a card's menu with the column worker's settings, beside its own run: the worker
+  // doesn't wait on them, and they don't take other cards. settings.workers[col].solo keeps the
+  // ones still going ({ [threadId]: { card, at } }) so any window can merge them once they end.
+  function soloRuns(w) {
+    return w && w.solo && typeof w.solo === "object" ? w.solo : {};
+  }
+  function canRunSolo(c) {
+    var col = colOf(c), w = col && worker(col.id);
+    return Boolean(AGENT_MODE && hasWorkerApi() && col && col.role === "agent" && workerReady(w) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]);
+  }
+  function runSolo(id) {
+    var c = card(id);
+    if (!c || !canRunSolo(c)) return;
+    var col = colOf(c), w = worker(col.id);
+    var mode = workerMode(w);
+    var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
+    ["provider", "model", "effort", "show"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    if (w.fast === "true") opts.fast = true;
+    else if (w.fast === "false") opts.fast = false;
+    else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
+    if (FOLDER_MODES[mode]) {
+      opts.cwd = w.cwd;
+      if (w.approval) opts.approval = w.approval;
+      if (w.worktree) opts.worktree = true;
+    }
+    soloStarting[id] = true;
+    setHint("Starting an agent on #" + c.num + "…");
+    scribe.agent.start(workerPrompt(col, w, c, null, true), opts).then(function (r) {
+      delete soloStarting[id];
+      if (!r || !r.ok) {
+        setHint(launchError(r));
+        render();
+        return;
+      }
+      threadStatus[r.threadId] = { status: "running", queued: 0 };
+      var now = Date.now();
+      var latest = card(id);
+      // Hold the card for the new chat at once, so the column's worker doesn't take it before the agent claims it.
+      if (latest && !(latest.claim && !latest.claim.stale)) {
+        scribe.update([{ op: "merge", path: "cards/id=" + id, value: {
+          claim: { holder: str(w.name) || "agent", thread: r.threadId, at: now, seenAt: now, from: col.id },
+          status: { kind: "working", text: "Agent starting" }
+        } }]);
+      }
+      var entry = { card: c.num, at: now };
+      var cur = worker(col.id);
+      if (cur && cur.solo && typeof cur.solo === "object") {
+        var add = {};
+        add[r.threadId] = entry;
+        scribe.update([{ op: "merge", path: "settings/workers/" + col.id + "/solo", value: add }]);
+      } else {
+        var solo = {};
+        solo[r.threadId] = entry;
+        patchWorker(col.id, { solo: solo });
+      }
+      setHint("Agent started on #" + c.num + ".");
+      render();
+    });
+    render();
+  }
+  /** Merge each finished one-card run's worktree and forget it; a failed merge shows on the column. */
+  function wrapUpSolos(colId) {
+    var w = worker(colId), runs = soloRuns(w);
+    Object.keys(runs).forEach(function (tid) {
+      var t = threadStatus[tid];
+      if (soloMerging[tid] || !t || t.unknown || t.status !== "idle" || t.queued > 0) return;
+      soloMerging[tid] = true;
+      var done = function (error) {
+        var left = Object.keys(soloRuns(worker(colId))).filter(function (k) { return k !== tid; });
+        if (!left.length) patchWorker(colId, { solo: null });
+        else {
+          var gone = {};
+          gone[tid] = null;
+          scribe.update([{ op: "merge", path: "settings/workers/" + colId + "/solo", value: gone }]);
+        }
+        if (error) patchWorker(colId, { error: error });
+        delete soloMerging[tid];
+        render();
+      };
+      if (!FOLDER_MODES[workerMode(w)]) { done(null); return; }
+      scribe.agent.merge(tid).then(function (m) {
+        if (m && (m.ok || m.error === "not_found")) { done(null); return; }
+        if (m && m.error === "busy") { delete soloMerging[tid]; return; }
+        var why = m && m.error === "merge_failed" ? m.message : launchError(m);
+        done("Could not merge the branch of the agent run on #" + runs[tid].card + ": " + why + " Sort it out from its chat's branch menu.");
+      });
     });
   }
 

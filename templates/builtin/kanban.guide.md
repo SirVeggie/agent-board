@@ -22,6 +22,8 @@ If your thread fails or is stopped, Scribe moves your card back to the column it
 
 The user can set up a worker for an agent column (its header's start button). While it runs, the board starts a fresh agent chat for each card, with the user's instructions and the card to take, so no chat carries the whole run's context. Its prompt says when it may take a closely related card in the same chat; otherwise it ends its turn and the board starts the next agent, or waits for cards itself. In a worktree, the agent commits and rebases onto the branch it came from before it ends; the board then merges the branch, so the next agent starts from the latest work. If a plan usage limit stops your turn, your card stays yours and the board sends you on in the same chat once the limit resets: check the card and your work so far, then finish it. When the user asks it to stop after its card, `list` shows `stopRequested: true` on the column and the page logs `worker_stop`: take no more cards and end your turn. `worker_step` is the page's own bookkeeping; don't call it.
 
+The user can also run the column's worker on one card from the card's right-click menu. That chat is separate from the column's run: it takes only its card, and the board holds the card for it (a claim with the new thread) until it claims it itself.
+
 ## Events
 
 Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothing is missed or seen twice. Each event's `data` names the card: `{ card: "<id>", num: 12, column: "<title>", columnId, role }`. Pass `where` to match fields on that data (compared as text), e.g. `{ column: "grok issues" }`, so another agent column does not wake you.
@@ -52,7 +54,7 @@ nextNum: number
 settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave them alone
             workers?: { [columnId]: { name?, instructions, context?, provider?, model?, effort?, fast?, mode?,
                                       cwd?, approval?, worktree?, show?,
-                                      threadId?, run?, step?, stop?, merge?, error? } } }  // run..error: the page's
+                                      threadId?, run?, step?, stop?, merge?, error?, solo? } } }  // run..solo: the page's
 ```
 
 - `description` and comments are markdown. `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.
