@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=55">
+  <link rel="stylesheet" href="/app.css?v=56">
   <link rel="stylesheet" href="/agent.css?v=18">
   <script>
     (() => {
@@ -96,7 +96,7 @@
         <h1>Waiting for a page</h1>
         <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
         <ul class="shortcuts">
-          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>D</kbd></span><span>searches every page in the Library</span></li>
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>D</kbd></span><span>searches every page, or threads with <kbd>=</kbd></span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML (markup only)</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>Z</kbd></span><span>reopens the last closed tab or restores the last delete</span></li>
@@ -195,6 +195,11 @@
         <p class="settings-hint settings-hint-after">For links to Scribe pages that don't choose for themselves. Hold <kbd>Ctrl</kbd> to navigate, <kbd>Shift</kbd> to split, or <kbd>Alt</kbd> to peek, on links, in the Library, and in search. Web links open in your browser unless the page or a modifier says otherwise.</p>
       </section>
       <section class="settings-section">
+        <h3>Palette prefixes</h3>
+        <p class="settings-hint">In Ctrl+D search, a prefix switches what you are looking through. Pages have none.</p>
+        <div id="palette-prefix-list"></div>
+      </section>
+      <section class="settings-section">
         <h3>Layout</h3>
         <div class="setting-row">
           <span id="tight-small-label">No spacing around panels in small windows</span>
@@ -225,10 +230,11 @@
       <div id="palette-empty" class="palette-empty" hidden>No matching pages</div>
       <div class="palette-hint">
         <span><kbd>↑</kbd> <kbd>↓</kbd> move</span>
-        <span><kbd>Enter</kbd> open</span>
-        <span><kbd>Shift</kbd> split</span>
-        <span><kbd>Alt</kbd> peek</span>
+        <span><kbd>Enter</kbd> <span id="palette-enter-hint">open</span></span>
+        <span data-palette-page><kbd>Shift</kbd> split</span>
+        <span data-palette-page><kbd>Alt</kbd> peek</span>
         <span><kbd>Esc</kbd> close</span>
+        <span id="palette-prefix-hint"></span>
       </div>
     </div>
   </div>
@@ -316,11 +322,11 @@
   <script src="/views.js?v=4"></script>
   <script src="/preview.js?v=1"></script>
   <script src="/permissions.js?v=1"></script>
-  <script src="/app.js?v=66"></script>
+  <script src="/app.js?v=67"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/agent-render.js?v=5"></script>
-  <script src="/agent.js?v=25"></script>
+  <script src="/agent.js?v=26"></script>
   <script src="/desktop.js?v=5"></script>
 </body>
 </html>

@@ -1684,6 +1684,11 @@ kbd {
   color: var(--muted);
 }
 
+.palette-chip.location-thread {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.3);
+}
+
 .palette-snippet {
   color: var(--muted);
   font-size: 11px;
@@ -1717,6 +1722,31 @@ kbd {
 .palette-hint kbd {
   font-size: 10px;
   padding: 0 4px;
+}
+
+.palette-hint [hidden] {
+  display: none;
+}
+
+.palette-prefix-input {
+  width: 72px;
+  height: 28px;
+  text-align: center;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 14px;
+  border: 0;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+}
+
+.palette-prefix-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent-ring);
+}
+
+.palette-prefix-input.dup {
+  box-shadow: 0 0 0 1px rgba(255, 143, 143, 0.7);
 }
 
 .settings {

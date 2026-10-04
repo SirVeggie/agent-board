@@ -47,6 +47,9 @@
   const paletteInput = document.getElementById("palette-input");
   const paletteList = document.getElementById("palette-list");
   const paletteEmpty = document.getElementById("palette-empty");
+  const paletteEnterHint = document.getElementById("palette-enter-hint");
+  const palettePrefixHint = document.getElementById("palette-prefix-hint");
+  const palettePrefixListEl = document.getElementById("palette-prefix-list");
   const settingsEl = document.getElementById("settings");
   const settingsBackdrop = document.getElementById("settings-backdrop");
   const settingsToggle = document.getElementById("settings-toggle");
@@ -92,6 +95,10 @@
     { id: "peek", name: "Peek" },
     { id: "split", name: "Split" },
   ];
+  /** Keep in sync with src/palettePrefixes.ts. Add a row when a new prefix ships (AI `?`/`>` is #14). */
+  const PALETTE_PREFIX_KEY = "scribe.palettePrefixes";
+  const PALETTE_PREFIXES = [{ id: "threads", label: "Threads", default: "=" }];
+  const PREFIX_MAX = 8;
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "scribe.tightSmall";
   const DEFAULT_THEME = "neutral";
@@ -152,6 +159,8 @@
   let viewerHidden = false;
   let paletteTimer = 0;
   let paletteReq = 0;
+  /** "pages" or a prefix id from PALETTE_PREFIXES. */
+  let paletteKind = "pages";
   /** @type {Array<any>} */
   let paletteHits = [];
   let paletteIndex = 0;
@@ -282,6 +291,7 @@
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   renderThemeList();
   renderLinkModes();
+  renderPalettePrefixSettings();
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -2177,6 +2187,156 @@
     }
   }
 
+  /** Keep in sync with src/palettePrefixes.ts. */
+  function normalizePrefix(raw, fallback) {
+    const value = String(raw ?? "").trim();
+    if (!value || value.length > PREFIX_MAX || /\s/.test(value)) {
+      return fallback;
+    }
+    return value;
+  }
+
+  function palettePrefixList(storedJson) {
+    let parsed = {};
+    if (storedJson) {
+      try {
+        const value = JSON.parse(storedJson);
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          parsed = value;
+        }
+      } catch {
+        parsed = {};
+      }
+    }
+    return PALETTE_PREFIXES.map((def) => {
+      const raw = parsed[def.id];
+      return {
+        ...def,
+        prefix: normalizePrefix(typeof raw === "string" ? raw : "", def.default),
+      };
+    });
+  }
+
+  function serializePalettePrefixes(prefixes) {
+    const out = {};
+    for (const item of prefixes) {
+      const value = normalizePrefix(item.prefix, item.default);
+      if (value !== item.default) {
+        out[item.id] = value;
+      }
+    }
+    return JSON.stringify(out);
+  }
+
+  function prefixTakes(text, prefix) {
+    if (!prefix || !text.startsWith(prefix)) {
+      return false;
+    }
+    const next = text[prefix.length];
+    if (next === undefined || /\s/.test(next)) {
+      return true;
+    }
+    return !/[0-9A-Za-z]/.test(prefix[prefix.length - 1]);
+  }
+
+  function parsePaletteQuery(input, prefixes) {
+    const trimmed = String(input ?? "").trim();
+    if (!trimmed) {
+      return { id: "pages", query: "" };
+    }
+    const ranked = prefixes
+      .filter((item) => item.prefix)
+      .slice()
+      .sort((a, b) => b.prefix.length - a.prefix.length);
+    for (const item of ranked) {
+      if (prefixTakes(trimmed, item.prefix)) {
+        return { id: item.id, query: trimmed.slice(item.prefix.length).trim(), prefix: item.prefix };
+      }
+    }
+    return { id: "pages", query: trimmed };
+  }
+
+  function duplicatePrefixIds(prefixes) {
+    const byPrefix = new Map();
+    for (const item of prefixes) {
+      if (!item.prefix) {
+        continue;
+      }
+      const list = byPrefix.get(item.prefix) || [];
+      list.push(item.id);
+      byPrefix.set(item.prefix, list);
+    }
+    const dups = new Set();
+    for (const ids of byPrefix.values()) {
+      if (ids.length > 1) {
+        for (const id of ids) {
+          dups.add(id);
+        }
+      }
+    }
+    return dups;
+  }
+
+  function currentPalettePrefixes() {
+    return palettePrefixList(localStorage.getItem(PALETTE_PREFIX_KEY));
+  }
+
+  function savePalettePrefixes(prefixes) {
+    const json = serializePalettePrefixes(prefixes);
+    if (json === "{}") {
+      localStorage.removeItem(PALETTE_PREFIX_KEY);
+    } else {
+      localStorage.setItem(PALETTE_PREFIX_KEY, json);
+    }
+  }
+
+  function renderPalettePrefixSettings() {
+    if (!palettePrefixListEl) {
+      return;
+    }
+    const prefixes = currentPalettePrefixes();
+    const dups = duplicatePrefixIds(prefixes);
+    palettePrefixListEl.replaceChildren();
+    for (const def of prefixes) {
+      const row = document.createElement("div");
+      row.className = "setting-row";
+      const label = document.createElement("span");
+      label.id = "palette-prefix-" + def.id + "-label";
+      label.textContent = def.label;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "palette-prefix-input" + (dups.has(def.id) ? " dup" : "");
+      input.maxLength = PREFIX_MAX;
+      input.spellcheck = false;
+      input.autocomplete = "off";
+      input.value = def.prefix;
+      input.setAttribute("aria-labelledby", label.id);
+      if (dups.has(def.id)) {
+        input.title = "Same as another prefix; the longer one wins, then list order.";
+      }
+      const commit = (raw) => {
+        const next = currentPalettePrefixes().map((item) =>
+          item.id === def.id ? { ...item, prefix: normalizePrefix(raw, item.default) } : item
+        );
+        savePalettePrefixes(next);
+        renderPalettePrefixSettings();
+        if (isPaletteOpen()) {
+          runPaletteSearch();
+        }
+      };
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          input.blur();
+        }
+      });
+      input.addEventListener("change", () => commit(input.value));
+      input.addEventListener("blur", () => commit(input.value));
+      row.append(label, input);
+      palettePrefixListEl.appendChild(row);
+    }
+  }
+
   function render() {
     renderFrames();
     renderChrome();
@@ -2996,7 +3156,26 @@
     paletteReq += 1;
   }
 
+  function updatePaletteChrome(parsed) {
+    const threads = parsed.id === "threads";
+    paletteKind = parsed.id;
+    paletteInput.placeholder = threads ? "Search threads" : "Search every page";
+    paletteEl.querySelector(".palette-panel")?.setAttribute("aria-label", threads ? "Search threads" : "Search pages");
+    if (paletteEnterHint) {
+      paletteEnterHint.textContent = threads ? "open in chat" : "open";
+    }
+    for (const el of paletteEl.querySelectorAll("[data-palette-page]")) {
+      el.hidden = threads;
+    }
+    if (palettePrefixHint) {
+      const parts = currentPalettePrefixes().map((item) => `${item.prefix} ${item.label.toLowerCase()}`);
+      palettePrefixHint.textContent = parsed.id === "pages" && parts.length ? parts.join(" · ") : "";
+      palettePrefixHint.hidden = !palettePrefixHint.textContent;
+    }
+  }
+
   function showLocalPaletteRows() {
+    updatePaletteChrome({ id: "pages", query: "" });
     const recentClosed = [...state.closed].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0)).slice(0, 15);
     paletteHits = [
       ...state.tabs.map((tab) => ({ ...tab, open: true })),
@@ -3011,14 +3190,36 @@
     paletteTimer = setTimeout(runPaletteSearch, delay);
   }
 
+  function applyPaletteHits(hits) {
+    paletteHits = hits;
+    if (paletteIndex >= paletteHits.length) {
+      paletteIndex = 0;
+    }
+    renderPalette();
+  }
+
+  function runThreadPaletteSearch(query) {
+    const req = ++paletteReq;
+    const hits = window.scribeChat?.searchThreads?.(query) || [];
+    if (req !== paletteReq || !isPaletteOpen()) {
+      return;
+    }
+    applyPaletteHits(hits);
+  }
+
   async function runPaletteSearch() {
-    const query = paletteInput.value.trim();
-    if (!query) {
+    const parsed = parsePaletteQuery(paletteInput.value, currentPalettePrefixes());
+    updatePaletteChrome(parsed);
+    if (parsed.id === "pages" && !parsed.query) {
       showLocalPaletteRows();
       return;
     }
+    if (parsed.id === "threads") {
+      runThreadPaletteSearch(parsed.query);
+      return;
+    }
     const req = ++paletteReq;
-    const res = await fetch(`/api/search?query=${encodeURIComponent(query)}&limit=40`);
+    const res = await fetch(`/api/search?query=${encodeURIComponent(parsed.query)}&limit=40`);
     if (req !== paletteReq || !isPaletteOpen()) {
       return;
     }
@@ -3026,18 +3227,22 @@
       return;
     }
     const data = await res.json();
-    paletteHits = data.tabs || [];
-    if (paletteIndex >= paletteHits.length) {
-      paletteIndex = 0;
-    }
-    renderPalette();
+    applyPaletteHits(data.tabs || []);
   }
 
   function renderPalette() {
     paletteList.replaceChildren();
     const empty = paletteHits.length === 0;
     paletteEmpty.hidden = !empty;
-    paletteEmpty.textContent = paletteInput.value.trim() ? "No matching pages" : "No pages yet";
+    const parsed = parsePaletteQuery(paletteInput.value, currentPalettePrefixes());
+    const threads = paletteKind === "threads";
+    paletteEmpty.textContent = parsed.query
+      ? threads
+        ? "No matching threads"
+        : "No matching pages"
+      : threads
+        ? "No threads yet"
+        : "No pages yet";
     for (let index = 0; index < paletteHits.length; index += 1) {
       const tab = paletteHits[index];
       const el = document.createElement("div");
@@ -3068,7 +3273,11 @@
       if (tab.qualityLabel) {
         chips.appendChild(paletteChip(tab.qualityLabel));
       }
-      if (!tab.open) {
+      if (tab.kind === "thread") {
+        if (tab.open) {
+          chips.appendChild(paletteChip("Open"));
+        }
+      } else if (!tab.open) {
         chips.appendChild(paletteChip("Closed"));
       }
       const folder = tab.folderId ? library.pathOf(tab.folderId) : "";
@@ -3123,9 +3332,16 @@
     highlightPaletteRows();
   }
 
-  /** Enter or a click navigates; Ctrl also navigates, Shift splits, Alt peeks. */
+  /** Enter or a click navigates; Ctrl also navigates, Shift splits, Alt peeks. Threads open in chat. */
   function activatePaletteHit(tab, mode = null) {
     if (!tab) {
+      return;
+    }
+    if (tab.kind === "thread") {
+      closePalette();
+      if (!window.scribeChat?.openThread?.(tab.id)) {
+        showNotice("Could not open that thread");
+      }
       return;
     }
     closePalette();
@@ -3338,6 +3554,11 @@
     if (event.key === "Escape") {
       event.preventDefault();
       closePalette();
+    }
+  });
+  window.addEventListener("scribe:threads-ready", () => {
+    if (isPaletteOpen() && paletteKind === "threads") {
+      runPaletteSearch();
     }
   });
 

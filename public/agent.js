@@ -575,6 +575,17 @@
     return (t.pinned ? 1e15 : 0) + t.activityAt;
   }
 
+  /** Title, scope label, and workspace path — same haystack the thread list search uses. */
+  function threadSearchHaystack(t) {
+    return `${t.title} ${scopeLabel(t.scope).text} ${workspaceDir(t) || ""}`.toLowerCase();
+  }
+
+  function threadMatchesQuery(t, q) {
+    const needle = String(q || "").trim().toLowerCase();
+    if (!needle) return true;
+    return threadSearchHaystack(t).includes(needle);
+  }
+
   /** Keep in sync with src/agent/threadList.ts */
   const LIST_PAGE = 10;
   const LIST_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
@@ -3493,7 +3504,7 @@
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
       if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t));
-      if (q) threads = threads.filter((t) => `${t.title} ${groupTitle(t).text} ${workspaceDir(t) || ""}`.toLowerCase().includes(q));
+      if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
       threads.sort((a, b) => threadRank(b) - threadRank(a));
       if (!threads.length) {
         list.append(
@@ -5172,6 +5183,28 @@
     return true;
   }
 
+  /** Palette (`=` prefix) and anything else that wants the same match as the thread-menu search. */
+  function searchThreads(query, { limit = 40 } = {}) {
+    const q = String(query || "").trim();
+    let threads = [...S.threads.values()].filter((t) => !t.archived);
+    if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
+    threads.sort((a, b) => threadRank(b) - threadRank(a));
+    return threads.slice(0, limit).map((t) => {
+      const scope = scopeLabel(t.scope);
+      const running = t.status === "running" || (t.status === "idle" && t.background);
+      return {
+        kind: "thread",
+        id: t.id,
+        title: t.title,
+        snippet: scope.text && scope.text !== "Global" ? scope.text : "",
+        locationLabel: "Thread",
+        location: "thread",
+        qualityLabel: running ? "Running" : "",
+        open: t.id === S.current,
+      };
+    });
+  }
+
   function threadTitle(id) {
     const thread = S.threads.get(id);
     return thread && !thread.archived ? thread.title : null;
@@ -5685,7 +5718,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, threadTitle };
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, searchThreads, threadTitle };
 
   /* ---------- boot ---------- */
 
