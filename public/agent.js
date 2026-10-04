@@ -3766,7 +3766,8 @@
       container.dataset.activeId = "";
       fill();
     });
-    // Up and Down move a highlight through the rows; Enter opens the highlighted thread.
+    // Up and Down move a highlight through the rows; Enter opens the highlighted thread. The highlight
+    // shows from the first arrow press until the search box next gets the focus.
     const rows = () => [...list.querySelectorAll("button.ag-row")];
     const highlight = (at, scroll = true) => {
       const items = rows();
@@ -3781,6 +3782,15 @@
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const items = rows();
+        if (!container.classList.contains("ag-list-kb")) {
+          container.classList.add("ag-list-kb");
+          // The first press shows the row Enter opens before it moves on.
+          const shown = items.findIndex((row) => row.classList.contains("ag-row-active"));
+          if (shown >= 0) {
+            items[shown].scrollIntoView({ block: "nearest" });
+            return;
+          }
+        }
         const at = items.findIndex((row) => row.classList.contains("ag-row-active"));
         highlight(at < 0 ? (event.key === "ArrowDown" ? 0 : -1) : at + (event.key === "ArrowDown" ? 1 : -1));
       } else if (event.key === "Enter") {
@@ -3909,8 +3919,12 @@
       highlight(Math.max(0, at), false);
     };
     fill();
+    search.addEventListener("focus", () => container.classList.remove("ag-list-kb"));
     if (hadFocus) {
+      // A re-render while typing keeps the highlight shown or hidden.
+      const kb = container.classList.contains("ag-list-kb");
       search.focus();
+      container.classList.toggle("ag-list-kb", kb);
       search.setSelectionRange(caret[0], caret[1]);
     }
   }
