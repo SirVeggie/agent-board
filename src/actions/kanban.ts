@@ -64,6 +64,29 @@ function worker(state: BoardState, columnId: string): Worker | undefined {
   return w && typeof w === "object" ? w : undefined;
 }
 
+/** Title, description, comments, checklist, status, assignee, and card number for `list` q. */
+function searchHay(c: Card): string {
+  const comments = arr<Comment>(c.comments)
+    .map((cm) => str(cm.text))
+    .join("\n");
+  const checks = arr<unknown>(c.checklist)
+    .map((it) => (typeof it === "string" ? it : str((it as { text?: string } | null)?.text)))
+    .join("\n");
+  const status = c.status ? str(c.status.text) : "";
+  return `#${c.num} ${c.num} ${str(c.title)}\n${str(c.description)}\n${comments}\n${checks}\n${status}\n${str(c.assignee)}`.toLowerCase();
+}
+
+function matchesQuery(c: Card, q: unknown): boolean {
+  const words = str(q)
+    .toLowerCase()
+    .replace(/^#/, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return true;
+  const hay = searchHay(c);
+  return words.every((w) => hay.includes(w));
+}
+
 /** The user asked the column's agent worker to stop after its card. */
 function workerStopRequested(state: BoardState, columnId: string): boolean {
   return worker(state, columnId)?.stop === true;
@@ -270,7 +293,7 @@ export const kanbanActions: ActionSet = {
   actions: {
     list: {
       description:
-        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title or description). Archived cards only with archived: true.",
+        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Archived cards only with archived: true.",
       args: "{ column?, label?, assignee?, q?, archived?, limit? }",
       run(state, args) {
         let list = cards(state).filter((c) => (args.archived ? c.archived : !c.archived));
@@ -286,11 +309,7 @@ export const kanbanActions: ActionSet = {
           list = list.filter((c) => str(c.assignee) === str(args.assignee));
         }
         if (args.q !== undefined) {
-          const words = str(args.q).toLowerCase().split(/\s+/).filter(Boolean);
-          list = list.filter((c) => {
-            const hay = `${c.title}\n${str(c.description)}`.toLowerCase();
-            return words.every((w) => hay.includes(w));
-          });
+          list = list.filter((c) => matchesQuery(c, args.q));
         }
         const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 200;
         return {

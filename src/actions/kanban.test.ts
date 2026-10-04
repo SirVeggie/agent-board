@@ -148,6 +148,41 @@ test("list gives compact rows and column counts", () => {
   assert.equal((result.columns as Array<{ stopRequested?: boolean }>)[1].stopRequested, undefined);
 });
 
+test("list q matches title, description, comments, and checklist", () => {
+  const state = {
+    ...board(),
+    cards: [
+      { id: "c1", num: 1, col: "ready", title: "Alpha", description: "unique-desc-word", comments: [], createdAt: 1, movedAt: 1 },
+      {
+        id: "c2",
+        num: 2,
+        col: "ready",
+        title: "Beta",
+        comments: [{ id: "cm1", by: "user", at: 1, text: "unique-comment-word" }],
+        createdAt: 1,
+        movedAt: 1,
+      },
+      {
+        id: "c3",
+        num: 3,
+        col: "ready",
+        title: "Gamma",
+        checklist: [{ id: "ck1", text: "unique-check-word", done: false }],
+        comments: [],
+        createdAt: 1,
+        movedAt: 1,
+      },
+      { id: "c4", num: 4, col: "ready", title: "Delta", comments: [], createdAt: 1, movedAt: 1 },
+    ],
+  };
+  const nums = (q: string) => (run(state, "list", { q }).result.cards as Array<{ num: number }>).map((c) => c.num);
+  assert.deepEqual(nums("unique-desc-word"), [1]);
+  assert.deepEqual(nums("unique-comment-word"), [2]);
+  assert.deepEqual(nums("unique-check-word"), [3]);
+  assert.deepEqual(nums("alpha unique-desc-word"), [1]);
+  assert.deepEqual(nums("nope"), []);
+});
+
 const twoAgents = () => ({
   columns: [
     { id: "claude", title: "claude", role: "agent" },

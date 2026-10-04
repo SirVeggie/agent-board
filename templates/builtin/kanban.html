@@ -1288,12 +1288,18 @@
     var v = view();
     return Boolean(v.q || v.label || v.priority || v.assignee || v.due);
   }
+  function searchHay(c) {
+    var comments = arr(c.comments).map(function (cm) { return str(cm && cm.text); }).join("\n");
+    var checks = arr(c.checklist).map(function (it) { return typeof it === "string" ? it : str(it && it.text); }).join("\n");
+    var status = c.status && typeof c.status === "object" ? str(c.status.text) : "";
+    return ("#" + c.num + " " + c.num + " " + str(c.title) + "\n" + str(c.description) + "\n" + comments + "\n" + checks + "\n" + status + "\n" + str(c.assignee)).toLowerCase();
+  }
   function matches(c) {
     var v = view();
     if (v.q) {
-      var q = str(v.q).toLowerCase().replace(/^#/, "");
-      var hay = ("#" + c.num + " " + c.num + " " + c.title + " " + c.description + " " + str(c.assignee)).toLowerCase();
-      if (hay.indexOf(q) === -1) return false;
+      var words = str(v.q).toLowerCase().replace(/^#/, "").split(/\s+/).filter(Boolean);
+      var hay = searchHay(c);
+      for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) === -1) return false;
     }
     if (v.label && c.labels.indexOf(v.label) === -1) return false;
     if (v.priority !== undefined && v.priority !== "" && v.priority !== null && String(c.priority) !== String(v.priority)) return false;
