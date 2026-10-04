@@ -74,7 +74,8 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 | `library_search` | Page the whole Library in the user's order (default 20, max 50), or search every page with `query` over title, key, page text, and JSON state. `folder` limits it to one folder and its subfolders. |
 | `library_folders` | List Library folders as paths (`"CLIMS/Releases"`) in the user's order, each with its direct page count, so an agent can file a new page in a matching folder via `page_show`'s `folder`. |
 | `page_open` | Open a closed page on the strip |
-| `page_read` | Read a page's HTML so it can be revised (open or closed). `toFile: true` checks it out to a temp file for editing with file tools instead |
+| `page_read` | Read a page's HTML so it can be revised (open or closed). Pages over 24 KB return an outline instead; read a numbered line window with `offset`/`limit`. `toFile: true` checks it out to a temp file for editing with file tools instead |
+| `page_grep` | Find text inside one page: matching lines with line numbers and optional context |
 | `page_state` | Read what the user has actually typed, added, or checked off on an interactive page, plus `stateRevision` and `eventCursor`. `path` / `where` return one part (e.g. one card) |
 | `page_wait` | Block until the page logs a named event (`scribe.signal(name, data)` / `data-scribe-signal`), then return the events after the cursor (`{ events, cursor }`, no state). Optional `where` matches fields on event `data` (e.g. `{ column: "grok issues" }`). Default 2 hours, no maximum. Do not poll `page_state`. |
 | `page_ask` | Scribe chat threads only. Ask the user with a form page: the turn shows it as a question card (Open peeks it, Skip ends it with a note), counts as waiting for the user, and resumes when the page logs `submit` (or the `events` you pass), returning `{ answered, events, state }`. Use it instead of `page_wait` inside a chat. |

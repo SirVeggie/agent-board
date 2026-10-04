@@ -108,9 +108,28 @@ Rules:
 - Same `background` / focus rules as `page_show`. Does not change page state or events.
 - Still `page_show` for a new page, new `assets`, or seeding `state`.
 
-### Large pages: check out to a file
+### Large pages: read a window, grep, patch
 
-When a page is large (tens of KB, like a keep-using app) or you are rewriting a big part of it, do not paste it through tool arguments. Check it out, edit it with your normal file tools, and check it back in:
+`page_read` does not return a page over 24 KB whole. It returns the size, line count and an outline (headings, sections, script/style blocks with line numbers). Work on it like a file:
+
+```
+page_grep({ key: "todo-page", pattern: "renderList", context: 2 })
+  → 412:function renderList(items) {  (with 2 lines either side)
+
+page_read({ key: "todo-page", offset: 400, limit: 60 })
+  → lines 400–459, numbered "412	function renderList(items) {"
+
+page_patch({ key: "todo-page", edits: [{ oldString: "...", newString: "..." }], expectedRevision: 23 })
+```
+
+- Line numbers are a prefix (number, tab), not part of the HTML. Leave them out of `oldString`.
+- `pattern` is a JavaScript regex; pass `literal: true` to search plain text.
+- `full: true` returns the whole page anyway. Use it rarely: it costs the whole page in context.
+- This works in every mode and for every provider. It is the way to edit large pages in Pages mode, which has no file tools.
+
+### Large rewrites with file tools: check out to a file
+
+When you have file tools (Code mode) and are rewriting a big part of a large page, you can instead check it out, edit it with your normal file tools, and check it back in. Not in Pages mode: there are no file tools there, so the file cannot be edited.
 
 ```
 page_read({ key: "todo-page", toFile: true })

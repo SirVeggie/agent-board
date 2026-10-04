@@ -15,6 +15,18 @@ import { clampWaitMs, parseEventNames } from "./signal.js";
 import { STATE_OP_NAMES, filterItems, getAt } from "./stateOps.js";
 import { clampLibraryPage } from "./librarySearch.js";
 import { skillDocs } from "./skillDocs.js";
+import {
+  DEFAULT_GREP_MATCHES,
+  DEFAULT_READ_LINES,
+  FULL_READ_MAX_BYTES,
+  GrepError,
+  type LineWindow,
+  grepLines,
+  numberLines,
+  outline,
+  readWindow,
+  splitLines,
+} from "./pageLines.js";
 import { withAgentDates } from "./dates.js";
 import type { PageAssetUsage } from "./pageAssets.js";
 import { MAX_INLINE_PAGE_IMAGES, collectStateImages, mcpImageMime } from "./mcpImages.js";
@@ -204,7 +216,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_patch",
-    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, check it out with page_read toFile: true, edit that file with your file tools, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
+    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, find the spot with page_grep or a page_read offset/limit window and patch it the same way. With file tools (Code mode) you can instead check it out with page_read toFile: true, edit that file, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -489,19 +501,39 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_read",
-    "Read a page's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. For a large page (tens of KB) or a big rewrite, pass toFile: true instead: the HTML is written to a temp file and only its path and revision are returned. Edit that file with your normal file tools, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file.",
+    `Read a page's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB is not returned whole: you get its size, line count and an outline of headings, sections and script/style blocks with line numbers. Then read a line window with offset/limit (numbered like a file read; leave the line-number prefix out of oldStrings), find text with page_grep, and change it with page_patch edits. Pass full: true only when you really need the whole page. With file tools (Code mode), you can instead pass toFile: true: the HTML is written to a temp file and only its path and revision are returned. Edit that file, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file. In Pages mode there are no file tools, so do not check out.`,
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
+      offset: z
+        .number()
+        .int()
+        .optional()
+        .describe("First line to return, 1-based. Use the line numbers from the outline or page_grep."),
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe(`Number of lines to return from offset. Default ${DEFAULT_READ_LINES} when offset is set.`),
+      numbered: z
+        .boolean()
+        .optional()
+        .describe(
+          "Prefix each line with its number and a tab, like a file read. Default true for a line window, false for the whole page. The prefix is not part of the HTML."
+        ),
+      full: z
+        .boolean()
+        .optional()
+        .describe(`Return the whole HTML even when the page is over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB.`),
       toFile: z
         .boolean()
         .optional()
         .describe(
-          "Check the page out to a temp file instead of returning the HTML. Returns path and revision for page_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
+          "Check the page out to a temp file instead of returning the HTML (needs file tools to edit it). Returns path and revision for page_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
         ),
     },
     { readOnlyHint: true },
-    async ({ id, key, toFile }) => {
+    async ({ id, key, offset, limit, numbered, full, toFile }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -552,13 +584,104 @@ export async function startMcp(): Promise<void> {
           note: `Checked out. Edit the file, then page_patch({ key: "${tab.key}", htmlPath, expectedRevision: ${tab.revision} }).`,
         });
       }
+      const ranged = offset !== undefined || limit !== undefined;
+      let body: string;
+      let extra: Record<string, unknown> = {};
+      if (ranged) {
+        let win: LineWindow;
+        try {
+          win = readWindow(tab.html, { offset, limit, numbered });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+        body = win.text;
+        extra = {
+          lines: { start: win.startLine, end: win.endLine, total: win.totalLines },
+          ...(win.endLine < win.totalLines
+            ? { more: `page_read({ key: "${tab.key}", offset: ${win.endLine + 1} }) for the next lines.` }
+            : {}),
+        };
+      } else if (!full && meta.htmlBytes > FULL_READ_MAX_BYTES) {
+        const { entries, more } = outline(tab.html);
+        const landmarks = entries.map((e) => `${e.line}: ${e.text}`).join("\n") || "(no headings, sections or script/style blocks)";
+        const result: ToolResult = {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  ...meta,
+                  totalLines: splitLines(tab.html).length,
+                  large: `HTML not returned (over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB). Read a window with page_read({ key: "${tab.key}", offset, limit }), find text with page_grep, then change it with page_patch edits. full: true returns everything.`,
+                },
+                null,
+                2
+              ),
+            },
+            { type: "text" as const, text: `Outline (line: landmark)\n${landmarks}${more > 0 ? `\n… ${more} more` : ""}` },
+          ],
+        };
+        return tab.templateId ? withGuide(result, tab.id) : result;
+      } else {
+        body = numbered ? numberLines(splitLines(tab.html), 1) : tab.html;
+      }
       const result: ToolResult = {
         content: [
-          { type: "text" as const, text: JSON.stringify(meta, null, 2) },
-          { type: "text" as const, text: tab.html },
+          { type: "text" as const, text: JSON.stringify({ ...meta, ...extra }, null, 2) },
+          { type: "text" as const, text: body },
         ],
       };
       return tab.templateId ? withGuide(result, tab.id) : result;
+    }
+  );
+
+  server.tool(
+    "page_grep",
+    "Find text inside one page's HTML, like grep -n on a file. Returns matching lines with their line numbers (`12:` a match, `11-` context, `--` between hunks), so you can page_read a window around them with offset/limit or copy an exact oldString for page_patch. Leave the number prefix out of oldStrings. pattern is a JavaScript regex unless literal is true. Works on open and closed pages. To find which page has something, use library_search instead.",
+    {
+      id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
+      key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
+      pattern: z.string().min(1).describe("Regex (JavaScript syntax) matched against each line, or plain text with literal: true."),
+      literal: z.boolean().optional().describe("Match pattern as plain text, not a regex."),
+      ignoreCase: z.boolean().optional().describe("Case-insensitive match."),
+      context: z.number().int().optional().describe("Lines of context before and after each match (0–20). Default 0."),
+      maxMatches: z
+        .number()
+        .int()
+        .optional()
+        .describe(`Show at most this many matches. Default ${DEFAULT_GREP_MATCHES}; the total is still counted.`),
+    },
+    { readOnlyHint: true },
+    async ({ id, key, pattern, literal, ignoreCase, context, maxMatches }) => {
+      const which = id || key;
+      if (!which) {
+        return errorResult("Provide id or key");
+      }
+      const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}`);
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      const tab = data as Tab;
+      let found;
+      try {
+        found = grepLines(tab.html, pattern, { literal, ignoreCase, context, maxMatches });
+      } catch (err) {
+        return errorResult(err instanceof GrepError ? err.message : String(err));
+      }
+      const summary = {
+        id: tab.id,
+        key: tab.key,
+        revision: tab.revision,
+        totalLines: found.totalLines,
+        matches: found.matches,
+        ...(found.omitted > 0 ? { omitted: `${found.omitted} more matches not shown; raise maxMatches or narrow the pattern.` } : {}),
+      };
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(summary, null, 2) },
+          { type: "text" as const, text: found.matches ? found.text : "No matches." },
+        ],
+      };
     }
   );
 

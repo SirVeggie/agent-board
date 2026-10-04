@@ -27,7 +27,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     case "board":
       lines.push(
         "",
-        "Mode: Pages. You have no file or shell access in this thread. Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands."
+        "Mode: Pages. You have no file or shell access in this thread. Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits."
       );
       break;
     case "ask":
