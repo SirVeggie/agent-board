@@ -281,6 +281,7 @@ browser_open({ key: "scribe:hero" })            // a Scribe page's viewUrl; or {
 // → { tab: "b1", url, title } and a snapshot:  - button "Add one" [ref=e3]
 browser_act({ action: "click", ref: "e3" })      // also fill, type, press, select, check, scroll, drag, back, reload
 browser_act({ action: "fill", ref: "e5", value: "Ada" })
+browser_act({ action: "drag", ref: "e3", to: { ref: "e8" } })  // interpolated pointer travel (default 10 steps)
 browser_console({ level: "error" })              // check before you call it done
 browser_network({ failedOnly: true })
 browser_screenshot({})                           // or { ref }, { selector }, { fullPage: true }

@@ -69,10 +69,65 @@ const FIXTURE = `<!DOCTYPE html><html><head><title>Fixture</title></head><body>
 <a href="https://example.com/">Away</a>
 </body></html>`;
 
+// Same pattern as space cards: pointerdown on the item, pointermove must travel past 6px
+// on that item before setPointerCapture, then reorder when the pointer is over another card.
+const DRAG_FIXTURE = `<!DOCTYPE html><html><head><title>Drag</title>
+<style>
+#grid { display: flex; gap: 16px; padding: 24px; }
+.card { width: 120px; height: 80px; border: 1px solid #000; display: flex; align-items: center; justify-content: center; user-select: none; touch-action: none; }
+</style></head><body>
+<div id="grid">
+  <div class="card" id="a">Alpha</div>
+  <div class="card" id="b">Beta</div>
+</div>
+<script>
+let drag = null;
+const grid = document.getElementById("grid");
+for (const item of grid.querySelectorAll(".card")) {
+  item.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    drag = { item, startX: event.clientX, startY: event.clientY, pointerId: event.pointerId, moved: false };
+    item.addEventListener("pointermove", onMove);
+    item.addEventListener("pointerup", onUp);
+  });
+}
+function onMove(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const dx = event.clientX - drag.startX;
+  const dy = event.clientY - drag.startY;
+  if (!drag.moved) {
+    if (Math.hypot(dx, dy) < 6) return;
+    drag.moved = true;
+    drag.item.setPointerCapture(event.pointerId);
+  }
+  const cards = [...grid.querySelectorAll(".card")];
+  const over = cards.find((other) => {
+    if (other === drag.item) return false;
+    const rect = other.getBoundingClientRect();
+    return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+  });
+  if (over) {
+    grid.insertBefore(drag.item, cards.indexOf(over) < cards.indexOf(drag.item) ? over : over.nextSibling);
+  }
+}
+function onUp() {
+  if (!drag) return;
+  drag.item.removeEventListener("pointermove", onMove);
+  drag.item.removeEventListener("pointerup", onUp);
+  drag = null;
+}
+</script>
+</body></html>`;
+
 const server = http.createServer((req, res) => {
   if (req.url === "/") {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(FIXTURE);
+    return;
+  }
+  if (req.url === "/drag") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(DRAG_FIXTURE);
     return;
   }
   res.writeHead(404);
@@ -163,4 +218,25 @@ test("links off loopback are blocked, and threads get their own browser", async 
     browserSessions().map((session) => session.threadId),
     ["thr_a"]
   );
+});
+
+test("drag interpolates pointermove so pointer-capture reorder UIs run", async (t) => {
+  if (!launched) {
+    t.skip("no Chromium browser installed");
+    return;
+  }
+  const order = () =>
+    browserEval("thr_drag", {
+      script: "return [...document.querySelectorAll('.card')].map((el) => el.id).join('')",
+    }).then((r) => r.result);
+
+  await browserOpen("thr_drag", { url: `${base}/drag`, snapshot: false });
+  await browserAct("thr_drag", { action: "drag", selector: "#a", to: { selector: "#b" }, steps: 1, snapshot: false });
+  assert.equal(await order(), '"ab"', "one jump never fires pointermove on the source");
+
+  await browserOpen("thr_drag", { url: `${base}/drag`, snapshot: false });
+  await browserAct("thr_drag", { action: "drag", selector: "#a", to: { selector: "#b" }, snapshot: false });
+  assert.equal(await order(), '"ba"');
+
+  await closeThreadBrowser("thr_drag");
 });

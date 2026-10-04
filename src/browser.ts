@@ -21,6 +21,9 @@ const MAX_VIEWPORT = 2560;
 const NAV_TIMEOUT_MS = 20_000;
 const ACTION_TIMEOUT_MS = 8_000;
 const SETTLE_MS = 2_000;
+/** Playwright dragTo defaults to 1 (one jump). Pointer-event UIs need travel first. */
+const DEFAULT_DRAG_STEPS = 10;
+const MAX_DRAG_STEPS = 50;
 const IDLE_CLOSE_MS = 30 * 60_000;
 const MAX_LOG = 500;
 const DEFAULT_SNAPSHOT_CHARS = 20_000;
@@ -176,6 +179,7 @@ export async function browserAct(
     to?: Target;
     dx?: number;
     dy?: number;
+    steps?: number;
     snapshot?: boolean;
   }
 ) {
@@ -239,7 +243,10 @@ export async function browserAct(
       if (!input.to || !hasTarget(input.to)) {
         throw new Error("drag needs to: { ref | selector | text }");
       }
-      await locate(page, input).dragTo(locate(page, input.to), { timeout: ACTION_TIMEOUT_MS });
+      await locate(page, input).dragTo(locate(page, input.to), {
+        timeout: ACTION_TIMEOUT_MS,
+        steps: clamp(input.steps ?? DEFAULT_DRAG_STEPS, 1, MAX_DRAG_STEPS),
+      });
       break;
     case "back":
       await page.goBack({ timeout: NAV_TIMEOUT_MS });

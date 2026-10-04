@@ -1472,6 +1472,10 @@ function registerBrowserTools(server: McpServer): void {
         .describe("Text for fill and type, or option value(s) for select."),
       keys: z.string().optional().describe("Keys for press, e.g. Enter, Tab, Control+Enter. Without a target they go to the focused element."),
       to: z.object(targetShape).optional().describe("Drop target for drag."),
+      steps: z
+        .number()
+        .optional()
+        .describe("Pointer moves while dragging. Default 10 so pointer-event UIs see travel; 1 jumps in one shot."),
       dx: z.number().optional().describe("Horizontal scroll in pixels."),
       dy: z.number().optional().describe("Vertical scroll in pixels (default 600 when scrolling without a target)."),
       snapshot: z.boolean().optional().describe("Include the snapshot after the action. Default true."),
