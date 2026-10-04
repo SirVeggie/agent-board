@@ -3414,6 +3414,8 @@
   // from the latest work, then starts the next card or waits for one. Every open window runs this
   // code: the worker_step action lets one of them take each step. Anything unexpected (a failed
   // turn, an unfinished card, a merge that doesn't go through) pauses the worker with its reason.
+  // A branch that won't merge first goes back to its agent to rebase and commit (MAX_MERGE_FIXES
+  // times); if it still won't, the cards that chat finished come back to the column, blocked.
   // "Stop when its card is done" sets stop on the worker (list shows it as stopRequested on the
   // column) and logs worker_stop. When a plan usage limit stops the agent's turn, the worker keeps
   // its chat and card (wait.until) and sends it on once the limit has reset.
@@ -3426,7 +3428,10 @@
   var RESUME_DELAY_MS = 60 * 1000;
   /** Limit waits in a row before the worker gives up on a card and pauses. */
   var MAX_LIMIT_WAITS = 8;
-  var RESUME_PROMPT = "Your plan's usage limit has reset. Go on with your card where you left off: check the card and the work you have done so far, then finish it as before.";
+  /** Times the worker asks one agent to fix a branch that won't merge before it pauses. */
+  var MAX_MERGE_FIXES = 2;
+  var MERGE_FIX_PROMPT = "Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes, run the checks, and commit, so the worktree is clean. Don't take another card. Then end your turn with a short summary; the board tries the merge again.";
+  var RESUME_PROMPT ="Your plan's usage limit has reset. Go on with your card where you left off: check the card and the work you have done so far, then finish it as before.";
   var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
   var PLAY_SVG = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z"/></svg>';
   var agentOptions = null;
@@ -3670,6 +3675,12 @@
         }
         return Promise.resolve(false);
       }
+      var fixing = Boolean(w.fix && w.fix.thread === threadId);
+      if (fixing && turn && (turn.status === "error" || turn.status === "cancelled")) {
+        // Its card is finished; only the branch is left, so keep the merge pending.
+        pauseOnMerge(colId, threadId, "the agent's turn to fix it " + (turn.status === "error" ? "failed" + (turn.error ? " (" + turn.error + ")" : "") : "was stopped") + ".");
+        return Promise.resolve(false);
+      }
       if (turn && (turn.status === "error" || turn.status === "cancelled")) {
         endRun(colId, "The agent's turn " + (turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped") + ". Its chat is kept; press ▶ to go on with the next card.", true);
         return Promise.resolve(false);
@@ -3687,11 +3698,86 @@
     }
     if (!FOLDER_MODES[workerMode(w)]) return Promise.resolve(true);
     return scribe.agent.merge(threadId).then(function (m) {
-      if (m && (m.ok || m.error === "not_found")) return true;
+      if (m && (m.ok || m.error === "not_found")) {
+        restoreMergeCards(colId);
+        return true;
+      }
       var why = m && m.error === "merge_failed" ? m.message : launchError(m);
-      endRun(colId, "Could not merge the agent's branch: " + why + " Sort it out from its chat's branch menu, or press ▶ to try again.", false);
+      var cur = worker(colId) || {};
+      var asked = cur.fix && cur.fix.thread === threadId ? Number(cur.fix.count) || 0 : 0;
+      if (m && m.error === "merge_failed" && asked < MAX_MERGE_FIXES && agentCanFixMerge(why)) {
+        return askToFixMerge(colId, threadId, why, asked + 1).then(function () { return false; });
+      }
+      pauseOnMerge(colId, threadId, why);
       return false;
     });
+  }
+
+  /** Whether the agent can sort out a failed merge in its worktree (not the main checkout's branch or a detached HEAD). */
+  function agentCanFixMerge(why) {
+    return !/main checkout is on|detached HEAD/i.test(str(why));
+  }
+  /** The branch didn't merge: send the agent's chat on to rebase and commit; its next idle retries the merge. */
+  function askToFixMerge(colId, threadId, why, count) {
+    var prompt = "The board could not merge your branch: " + why + "\n\n" + MERGE_FIX_PROMPT;
+    return scribe.agent.send(threadId, prompt).then(function (r) {
+      if (!r || !r.ok) {
+        pauseOnMerge(colId, threadId, why);
+        return;
+      }
+      threadStatus[threadId] = { status: "running", queued: 0 };
+      patchWorker(colId, { step: null, fix: { thread: threadId, count: count } });
+    });
+  }
+  /**
+   * Pause on a branch that won't merge. The cards its chat finished go back to this column, blocked,
+   * so it shows which work isn't in; a later ▶ that merges it sends them on to review again.
+   */
+  function pauseOnMerge(colId, threadId, why) {
+    var col = column(colId);
+    var now = Date.now();
+    var ids = [];
+    var nums = [];
+    var cards = allCards().map(function (c) {
+      var at = colOf(c);
+      if (c.archived || c.thread !== threadId || (c.claim && !c.claim.stale) || !at || (at.role !== "review" && at.role !== "done")) return c;
+      ids.push(c.id);
+      nums.push("#" + c.num);
+      var next = Object.assign({}, c);
+      next.comments = next.comments.concat([{ id: newId("cm"), by: "agent", at: now, text: "The board could not merge this card's branch, so its work isn't in yet: " + why }]);
+      next.status = { kind: "blocked", text: "Branch didn't merge" };
+      return enterColumn(next, colId, now);
+    });
+    if (ids.length) {
+      // Keep each column's cards together: the moved ones go to the top of this column.
+      var moved = cards.filter(function (c) { return ids.indexOf(c.id) !== -1; });
+      cards = cards.filter(function (c) { return ids.indexOf(c.id) === -1; });
+      moved.reverse().forEach(function (c) { insertCard(cards, c, colId, null, true); });
+      scribe.set({ cards: cards });
+    }
+    var which = nums.length ? "the branch of " + nums.join(", ") : "the agent's branch";
+    var back = nums.length && col ? " " + nums.join(", ") + (nums.length === 1 ? " is" : " are") + " back in " + col.title + "." : "";
+    endRun(colId, "Could not merge " + which + ": " + why + back + " Sort it out from its chat's branch menu, or press ▶ to try again.", false);
+    if (ids.length) patchWorker(colId, { mergeCards: ids });
+  }
+  /** The branch merged after a pause: send the cards it sent back on to review (or done) again. */
+  function restoreMergeCards(colId) {
+    var w = worker(colId);
+    var ids = w && Array.isArray(w.mergeCards) ? w.mergeCards : [];
+    if (!ids.length) return;
+    var target = firstRole("review") || firstRole("done");
+    var now = Date.now();
+    var moved = [];
+    var cards = allCards().filter(function (c) {
+      if (ids.indexOf(c.id) === -1 || c.col !== colId || (c.claim && !c.claim.stale) || !target) return true;
+      var next = Object.assign({}, c);
+      delete next.status;
+      moved.push(enterColumn(next, target.id, now));
+      return false;
+    });
+    moved.forEach(function (c) { insertCard(cards, c, target.id, null, target.role === "done"); });
+    if (moved.length) scribe.set({ cards: cards });
+    patchWorker(colId, { mergeCards: null });
   }
 
   /** A plan limit stopped the agent and has reset since: send its chat on, keeping its card. */
@@ -3714,7 +3800,7 @@
     if (w.stop && !start) { endRun(colId, null, true); return; }
     var c = nextCard(colId);
     if (!c) {
-      patchWorker(colId, { threadId: null, step: null, merge: null, wait: null, run: { since: since } });
+      patchWorker(colId, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since: since } });
       return;
     }
     return startCard(colId, c, since);
@@ -3740,7 +3826,7 @@
         return;
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
-      patchWorker(colId, { threadId: r.threadId, step: null, merge: null, wait: null, run: { since: since, card: c.num, startedAt: startedAt } });
+      patchWorker(colId, { threadId: r.threadId, step: null, merge: null, wait: null, fix: null, run: { since: since, card: c.num, startedAt: startedAt } });
     });
   }
 
@@ -3837,7 +3923,7 @@
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
   function endRun(colId, error, clearThread) {
     var w = worker(colId);
-    var patch = { run: null, step: null, stop: null, error: error || null, merge: null, wait: null };
+    var patch = { run: null, step: null, stop: null, error: error || null, merge: null, wait: null, fix: null };
     if (clearThread) patch.threadId = null;
     else if (w && w.threadId) patch.merge = w.threadId;
     patchWorker(colId, patch);
@@ -4121,7 +4207,7 @@
       wtBox.addEventListener("change", function () { set({ worktree: wtBox.checked }); });
       wt.appendChild(wtBox);
       wt.appendChild(document.createTextNode("Give each agent a git worktree of its own"));
-      row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through pauses the worker.");
+      row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through goes back to the agent to fix; if it still fails, the worker pauses and the card comes back here, blocked.");
     }
     var webModes = { on: "On", limited: "Limited", off: "Off" };
     var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (id) { return [id, webModes[id]]; }));
