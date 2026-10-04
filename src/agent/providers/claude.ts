@@ -3,6 +3,7 @@ import path from "node:path";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { isPlainRecord } from "../types.js";
+import { webAllowed } from "../webAccess.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -19,6 +20,7 @@ type SDKUserMessage = import("@anthropic-ai/claude-agent-sdk").SDKUserMessage;
 type PermissionResult = import("@anthropic-ai/claude-agent-sdk").PermissionResult;
 type PermissionMode = import("@anthropic-ai/claude-agent-sdk").PermissionMode;
 type EffortLevel = import("@anthropic-ai/claude-agent-sdk").EffortLevel;
+type HookJSONOutput = import("@anthropic-ai/claude-agent-sdk").HookJSONOutput;
 
 let sdkPromise: Promise<Sdk> | null = null;
 function loadSdk(): Promise<Sdk> {
@@ -493,7 +495,7 @@ class ClaudeSession implements ProviderSession {
   private buildOptions(): Options {
     const thread = this.thread;
     const board = thread.mode === "board";
-    const webTools = thread.web ? ["WebSearch", "WebFetch"] : [];
+    const webTools = thread.web !== "off" ? ["WebSearch", "WebFetch"] : [];
     const { command, args } = this.ctx.boardMcp;
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
     const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id };
@@ -530,6 +532,12 @@ class ClaudeSession implements ProviderSession {
               },
             ],
           },
+          {
+            // Limited web access: searches only cover the allowlist and fetches elsewhere are refused.
+            // A hook, so it also holds where tools pass without asking (allowedTools, full access).
+            matcher: "WebSearch|WebFetch",
+            hooks: [async (hookInput) => this.limitWeb(hookInput as { tool_name?: string; tool_input?: unknown })],
+          },
         ],
       },
       env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" },
@@ -550,9 +558,38 @@ class ClaudeSession implements ProviderSession {
       options.tools = { type: "preset", preset: "claude_code" };
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`];
       // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
-      options.disallowedTools = ["EnterWorktree", "ExitWorktree", ...(thread.web ? [] : ["WebSearch", "WebFetch"])];
+      options.disallowedTools = ["EnterWorktree", "ExitWorktree", ...(thread.web !== "off" ? [] : ["WebSearch", "WebFetch"])];
     }
     return options;
+  }
+
+  /** PreToolUse for web tools. The allowlist is the user's approval, so calls on it run without asking. */
+  private limitWeb(inp: { tool_name?: string; tool_input?: unknown }): HookJSONOutput {
+    if (this.thread.web !== "limited") return { continue: true };
+    const allowlist = this.ctx.webAllowlist();
+    const input = isPlainRecord(inp.tool_input) ? inp.tool_input : {};
+    const deny = (reason: string): HookJSONOutput => ({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+    });
+    if (!allowlist.length) return deny("Web access is limited and the allowlist is empty. The user can add domains in Scribe's agent settings.");
+    const listed = allowlist.join(", ");
+    if (inp.tool_name === "WebFetch") {
+      const url = str(input.url) ?? "";
+      if (webAllowed(url, allowlist)) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+      return deny(`Web access is limited to these domains (and their subdomains): ${listed}. ${url || "That URL"} is not on the list; the user can add it in Scribe's agent settings.`);
+    }
+    // WebSearch: keep only the allowed domains the agent asked for, or search the whole allowlist.
+    const asked = Array.isArray(input.allowed_domains) ? input.allowed_domains.filter((d): d is string => typeof d === "string") : [];
+    const kept = asked.filter((d) => webAllowed(d, allowlist));
+    if (asked.length && !kept.length) return deny(`Web access is limited to these domains: ${listed}. None of the requested domains are on the list.`);
+    const { blocked_domains: _blocked, ...rest } = input;
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        updatedInput: { ...rest, allowed_domains: kept.length ? kept : allowlist },
+      },
+    };
   }
 
   private async ensureQuery(): Promise<Query> {

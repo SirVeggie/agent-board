@@ -3,6 +3,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dataDir } from "../config.js";
 import type { Item, Thread, Turn } from "./types.js";
+import { parseWebAccess } from "./webAccess.js";
+
+/** A stored thread. Older ones kept web as a boolean. */
+function readThread(data: string): Thread {
+  const thread = JSON.parse(data) as Thread;
+  thread.web = parseWebAccess(thread.web) ?? "on";
+  return thread;
+}
 
 /**
  * Agent chat data lives in its own file next to scribe.sqlite, so the board schema is untouched.
@@ -56,12 +64,12 @@ export class AgentDb {
 
   listThreads(): Thread[] {
     const rows = this.db.prepare("SELECT data FROM threads ORDER BY activity_at DESC").all() as Array<{ data: string }>;
-    return rows.map((row) => JSON.parse(row.data) as Thread);
+    return rows.map((row) => readThread(row.data));
   }
 
   getThread(id: string): Thread | null {
     const row = this.db.prepare("SELECT data FROM threads WHERE id = ?").get(id) as { data: string } | undefined;
-    return row ? (JSON.parse(row.data) as Thread) : null;
+    return row ? readThread(row.data) : null;
   }
 
   saveThread(thread: Thread): void {

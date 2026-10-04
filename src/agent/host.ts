@@ -35,6 +35,7 @@ import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
+import { cleanAllowlist, parseWebAccess } from "./webAccess.js";
 import type {
   AgentEvent,
   ApprovalPolicy,
@@ -240,6 +241,7 @@ export class AgentHost {
     this.ctx = {
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
+      webAllowlist: () => this.prefs().webAllowlist,
       limits: (provider, info) => this.recordLimits(provider, info),
       task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
       followUp: (threadId, id) => this.followUp(threadId, id),
@@ -386,11 +388,23 @@ export class AgentHost {
 
   prefs(): Prefs {
     const saved = this.db.getSetting<Partial<Prefs>>("prefs", {});
-    return { ...DEFAULT_PREFS, ...saved, models: { ...DEFAULT_PREFS.models, ...saved.models }, modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams }, approvals: { ...DEFAULT_PREFS.approvals, ...saved.approvals } };
+    return {
+      ...DEFAULT_PREFS,
+      ...saved,
+      models: { ...DEFAULT_PREFS.models, ...saved.models },
+      modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams },
+      approvals: { ...DEFAULT_PREFS.approvals, ...saved.approvals },
+      // Older prefs kept web as a boolean.
+      web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
+      webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
+    };
   }
 
   setPrefs(patch: Partial<Prefs>): Prefs {
     const next = { ...this.prefs(), ...patch };
+    next.web = parseWebAccess(patch.web) ?? this.prefs().web;
+    // null puts back the starting list.
+    if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     this.db.setSetting("prefs", next);
     return next;
   }
@@ -578,7 +592,7 @@ export class AgentHost {
     if (patch.modelParams && typeof patch.modelParams === "object") next.modelParams = { ...next.modelParams, ...patch.modelParams };
     if (patch.mode) next.mode = patch.mode;
     if (patch.approval) next.approval = patch.approval;
-    if (typeof patch.web === "boolean") next.web = patch.web;
+    if (patch.web) next.web = patch.web;
     if (patch.cwd !== undefined) {
       const cwd = patch.cwd ? path.normalize(patch.cwd) : null;
       if (cwd !== thread.cwd && this.runs.has(id)) throw new Error("Stop the running turn before changing the workspace.");

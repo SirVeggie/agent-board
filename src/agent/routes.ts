@@ -8,6 +8,7 @@ import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord } from "./types.js";
+import { parseWebAccess } from "./webAccess.js";
 
 /** /api/agent/* for the board shell. The content origin gate keeps tab pages out of these. */
 export function agentRouter(host: AgentHost): express.Router {
@@ -445,7 +446,8 @@ function threadPatch(body: Record<string, unknown>): Partial<Thread> {
   }
   if (body.mode === "code" || body.mode === "ask" || body.mode === "plan" || body.mode === "board") patch.mode = body.mode;
   if (body.approval === "ask" || body.approval === "edits" || body.approval === "auto" || body.approval === "full") patch.approval = body.approval;
-  if (typeof body.web === "boolean") patch.web = body.web;
+  const web = parseWebAccess(body.web);
+  if (web) patch.web = web;
   if (typeof body.useWorktree === "boolean") patch.useWorktree = body.useWorktree;
   if (body.cwd === null || typeof body.cwd === "string") {
     const cwd = (body.cwd as string | null) || null;

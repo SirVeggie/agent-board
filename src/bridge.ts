@@ -1029,6 +1029,7 @@ export const BOARD_BRIDGE_JS = `
         out[name] = opts[name];
       }
     });
+    if (opts.web === "on" || opts.web === "limited" || opts.web === "off") out.web = opts.web;
     if (opts.modelParams && typeof opts.modelParams === "object" && !Array.isArray(opts.modelParams)) {
       var params = {};
       Object.keys(opts.modelParams).forEach(function (key) {
@@ -1045,7 +1046,7 @@ export const BOARD_BRIDGE_JS = `
      * New thread for this page: { ok, threadId, queued }. opts: { title, show: "dock" | "sidebar",
      * mode: "board" | "ask" | "code" | "plan", provider, model, effort, fast (Cursor),
      * modelParams, and for Code and Plan: cwd (folder), approval: "ask" | "edits" | "auto" | "full",
-     * worktree, web }.
+     * worktree, web: "on" | "limited" | "off" (or a boolean) }.
      */
     start: function (prompt, opts) {
       var message = agentSettings(opts || {});

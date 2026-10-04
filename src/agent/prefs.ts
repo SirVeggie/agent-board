@@ -1,5 +1,6 @@
 import path from "node:path";
-import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope } from "./types.js";
+import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope, WebAccess } from "./types.js";
+import { DEFAULT_WEB_ALLOWLIST } from "./webAccess.js";
 
 /** Last-used chat settings. New threads and drafts start from these. */
 export type Prefs = {
@@ -11,7 +12,9 @@ export type Prefs = {
   approval: ApprovalPolicy;
   /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
   approvals: Partial<Record<ProviderId, ApprovalPolicy>>;
-  web: boolean;
+  web: WebAccess;
+  /** Domains a thread with limited web access may search and fetch (subdomains included). */
+  webAllowlist: string[];
   recentWorkspaces: string[];
   /** Last workspace used for a scope ("page:<id>", "folder:<id>"), so new threads there start in it. */
   scopeWorkspaces: Record<string, string>;
@@ -31,7 +34,8 @@ export const DEFAULT_PREFS: Prefs = {
   mode: "code",
   approval: "ask",
   approvals: {},
-  web: true,
+  web: "on",
+  webAllowlist: DEFAULT_WEB_ALLOWLIST,
   recentWorkspaces: [],
   scopeWorkspaces: {},
   favoriteModels: [],
@@ -51,7 +55,7 @@ type ChoiceThread = {
   modelParams: Record<string, string>;
   mode: ThreadMode;
   approval: ApprovalPolicy;
-  web: boolean;
+  web: WebAccess;
   scope: ThreadScope;
   cwd: string | null;
   useWorktree?: boolean;
@@ -94,7 +98,7 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
     seeded[thread.provider] = thread.approval;
     next.approvals = seeded;
   }
-  if (typeof patch.web === "boolean") next.web = thread.web;
+  if (patch.web) next.web = thread.web;
   if (patch.cwd && thread.cwd) {
     const cwd = path.normalize(thread.cwd);
     next.recentWorkspaces = [thread.cwd, ...prefs.recentWorkspaces.filter((dir) => path.normalize(dir) !== cwd)].slice(0, 12);

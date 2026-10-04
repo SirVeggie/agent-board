@@ -42,6 +42,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       lines.push("", "Mode: Code. You can read and edit files and run commands in the workspace, subject to the user's approval settings.");
       break;
   }
+  if (thread.web === "limited" && thread.provider === "claude") {
+    lines.push("Web access is limited to the user's allowlist of domains: web searches only cover those sites, and fetches elsewhere are refused with the list.");
+  }
   if (thread.scope.kind === "page" && scope.page) {
     lines.push(
       "",

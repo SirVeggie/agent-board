@@ -143,6 +143,8 @@ export type SessionContext = {
   boardMcp: { command: string; args: string[]; env: Record<string, string> };
   /** Scratch working directory for threads without a workspace. */
   scratchDir: string;
+  /** Domains a thread with limited web access may reach. Read on each call, so edits apply at once. */
+  webAllowlist(): string[];
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
   /**

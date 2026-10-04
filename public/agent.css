@@ -1809,6 +1809,17 @@ button.ag-pill.ap-full {
   color: var(--danger);
 }
 
+button.ag-pill.web-limited {
+  color: #e8c27a;
+}
+
+button.ag-pill.ag-web-icon {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+  max-width: none;
+}
+
 .ag-prov {
   display: inline-flex;
   align-items: center;

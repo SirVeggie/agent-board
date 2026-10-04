@@ -52,6 +52,11 @@
     { id: "auto", label: "Auto review", detail: "A classifier approves safe calls and asks for the rest (Claude)" },
     { id: "full", label: "Full access", detail: "Approve everything automatically" },
   ];
+  const WEB_MODES = [
+    { id: "on", label: "Web", detail: "Web search and fetch on any site" },
+    { id: "limited", label: "Web: limited", detail: "Only the domains on the web allowlist, without asking (Claude)" },
+    { id: "off", label: "Web off", detail: "No web search or fetch" },
+  ];
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
   const SCOPE_SLASH = [
@@ -167,7 +172,15 @@
   }
 
   function prefs() {
-    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", approvals: {}, web: true, recentWorkspaces: [], scopeWorkspaces: {} };
+    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", approvals: {}, web: "on", recentWorkspaces: [], scopeWorkspaces: {} };
+  }
+
+  /** "on" | "limited" | "off". Older threads and prefs, and pages, may pass a boolean. */
+  function webMode(value, fallback = "on") {
+    if (value === true || value === "on") return "on";
+    if (value === false || value === "off") return "off";
+    if (value === "limited") return "limited";
+    return fallback;
   }
 
   function providerAvailable(id) {
@@ -1074,7 +1087,7 @@
         modelParams: d.settings.modelParams || p.modelParams?.[provider] || {},
         mode: d.settings.mode || (d.scope.kind === "page" || d.scope.kind === "folder" ? "board" : p.mode || "code"),
         approval: d.settings.approval || approvalFor(provider),
-        web: d.settings.web !== undefined ? d.settings.web : p.web !== false,
+        web: webMode(d.settings.web, webMode(p.web)),
         cwd,
         // Last choice made in this workspace.
         useWorktree: d.settings.useWorktree !== undefined ? d.settings.useWorktree : Boolean(cwd && p.worktrees?.[dirKey(cwd)]),
@@ -2510,9 +2523,14 @@
         bindHoverTip(wtBtn, () => worktreePendingTip(s.useWorktree));
         bar.append(wtBtn);
       }
-      const web = button("", `ag-pill toggle${s.web ? " on" : ""}`, () => this.updateSettings({ web: !s.web }), s.web ? "Web search is on" : "Web search is off");
-      web.append(icon("fetch"), el("span", null, "Web"));
-      if (this.variant !== "dock") bar.append(web);
+      const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
+      const web = button("", `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}`, (event) => this.webMenu(event.currentTarget), wm.detail);
+      web.append(icon("fetch"));
+      // The floating chat is narrow: the icon alone, with the mode in its tooltip and style.
+      if (this.variant !== "dock") web.append(el("span", null, wm.id === "limited" ? "Limited" : "Web"));
+      else web.classList.add("ag-web-icon");
+      web.setAttribute("aria-label", `${wm.label}: ${wm.detail}`);
+      bar.append(web);
       if (this.variant === "dock") {
         const meter = usageChip(s.provider, true);
         if (meter) bar.append(meter);
@@ -2660,6 +2678,19 @@
         })),
         { width: 300 }
       );
+    }
+
+    webMenu(anchor) {
+      const s = this.settings();
+      const cur = webMode(s.web);
+      const items = WEB_MODES.map((w) => ({
+        label: w.label,
+        detail: w.id === "limited" && s.provider !== "claude" ? "Claude only; other providers keep their own web tools" : w.detail,
+        checked: cur === w.id,
+        run: () => this.updateSettings({ web: w.id }),
+      }));
+      items.push({ separator: true }, { label: "Edit web allowlist…", icon: "shield", run: () => allowlists.open() });
+      openMenu(anchor, items, { width: 300 });
     }
 
     onKey(event) {
@@ -4210,8 +4241,10 @@
       panel.setAttribute("role", "dialog");
       panel.setAttribute("aria-modal", "true");
       panel.setAttribute("aria-labelledby", "ag-perm-title");
-      const title = el("h2", "settings-title", "Command allowlists");
+      const title = el("h2", "settings-title", "Allowlists");
       title.id = "ag-perm-title";
+      this.web = el("section", "settings-section ag-web-allow");
+      const commands = el("section", "settings-section");
       const intro = el(
         "p",
         "settings-hint",
@@ -4227,8 +4260,9 @@
         void this.load();
       });
       pick.append(label, this.picker);
+      commands.append(el("h3", null, "Commands"), intro, pick);
       this.body = el("div", "ag-perm-body");
-      panel.append(title, intro, pick, this.body);
+      panel.append(title, this.web, commands, this.body);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -4246,8 +4280,48 @@
       this.cwd = dirs[0] || null;
       this.picker.value = this.cwd || "";
       this.pickerWrap?.syncSelect?.();
+      this.renderWeb();
       this.root.hidden = false;
       void this.load();
+    },
+    /** Domains for Limited web access. Scribe's own list (prefs), the same for every workspace. */
+    renderWeb() {
+      const list = prefs().webAllowlist || [];
+      const rows = el("div", "ag-perm-rules");
+      for (const domain of list) {
+        const row = el("span", "ag-perm-rule");
+        row.append(el("code", null, domain), button(icon("close"), "ag-chip-x", () => this.saveWeb(list.filter((d) => d !== domain)), `Remove ${domain}`));
+        rows.append(row);
+      }
+      const input = el("input", "ag-input small ag-perm-add");
+      input.placeholder = "Add a domain, e.g. example.com";
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !input.value.trim()) return;
+        event.preventDefault();
+        void this.saveWeb([...list, input.value.trim()]);
+      });
+      rows.append(input);
+      const actions = el("div", "settings-actions");
+      actions.append(button("Reset to defaults", null, () => this.saveWeb(null)));
+      this.web.replaceChildren(
+        el("h3", null, "Web"),
+        el(
+          "p",
+          "settings-hint",
+          "With web set to Limited, Claude threads may search and fetch only these domains and their subdomains, without asking. Fetches anywhere else are refused."
+        ),
+        rows,
+        actions
+      );
+    },
+    async saveWeb(list) {
+      try {
+        S.config.prefs = await api("PUT", "/prefs", { webAllowlist: list });
+        this.renderWeb();
+        this.web.querySelector(".ag-perm-add")?.focus();
+      } catch (err) {
+        notice(err.message);
+      }
     },
     close() {
       if (!this.isOpen()) return false;
@@ -4721,7 +4795,7 @@
             model: p.models?.[provider] || "default",
             effort: p.efforts?.[provider] ?? null,
             approval: approvalFor(provider, p),
-            web: p.web !== false,
+            web: webMode(p.web),
             fast: p.modelParams?.[provider]?.fast === "true",
           }
         : null,
@@ -4764,7 +4838,7 @@
       modelParams,
       mode,
       approval: data.approval || approvalFor(provider, p),
-      web: typeof data.web === "boolean" ? data.web : p.web !== false,
+      web: webMode(data.web, webMode(p.web)),
       cwd: cwd || null,
       useWorktree: folderMode && data.worktree === true,
     };
@@ -5008,7 +5082,7 @@
       modelParams: { ...(s.modelParams || {}) },
       mode: s.mode,
       approval: s.approval,
-      web: s.web !== false,
+      web: webMode(s.web),
       cwd: homeDir(s),
       useWorktree: Boolean(s.useWorktree),
     };

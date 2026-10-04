@@ -9,7 +9,7 @@ const grok = {
   modelParams: { context: "1m", fast: "false" },
   mode: "code" as const,
   approval: "ask" as const,
-  web: true,
+  web: "limited" as const,
   scope: { kind: "global" as const, ref: null },
   cwd: "S:\\proj",
   useWorktree: true,
@@ -23,7 +23,7 @@ test("creating a thread remembers model, mode, and the rest, not only approval",
   assert.deepEqual(patch.modelParams?.cursor, { context: "1m", fast: "false" });
   assert.equal(patch.mode, "code");
   assert.equal(patch.approval, "ask");
-  assert.equal(patch.web, true);
+  assert.equal(patch.web, "limited");
   assert.equal(patch.recentWorkspaces?.[0], "S:\\proj");
   assert.equal(patch.worktrees?.[workspaceKey("S:\\proj")], true);
 });

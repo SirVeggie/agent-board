@@ -1,5 +1,9 @@
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
+import type { WebAccess } from "./webAccess.js";
+
+export type { WebAccess };
+
 export type ProviderId = "claude" | "cursor" | "openai";
 
 /** What the agent may touch. Chosen per thread; the provider maps it onto its own tools and modes. */
@@ -29,8 +33,8 @@ export type Thread = {
   modelParams: Record<string, string>;
   mode: ThreadMode;
   approval: ApprovalPolicy;
-  /** Web search and fetch tools. */
-  web: boolean;
+  /** Web search and fetch tools: any site, the allowlist in prefs only, or none. */
+  web: WebAccess;
   scope: ThreadScope;
   /** Working directory for file and shell tools. While the thread has an open worktree, a folder inside it. */
   cwd: string | null;
