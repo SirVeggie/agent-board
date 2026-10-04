@@ -12,7 +12,7 @@ import type { PageEvent } from "../types.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
-import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
@@ -1374,9 +1374,10 @@ export class AgentHost {
     }
 
     let setupError: string | null = null;
+    let reopened = "";
     if (wantsWorktree(thread) && !run.cancelled) {
       try {
-        thread = await this.makeWorktree(threadId, turn.id);
+        ({ thread, reopened } = await this.makeWorktree(threadId, turn.id));
       } catch (err) {
         setupError = `Could not make the worktree: ${(err as Error).message}`;
       }
@@ -1416,7 +1417,7 @@ export class AgentHost {
         const pageEdits = this.pageEditPrefix(thread, turn.id);
         result = await session.run(
           {
-            text: msg ? earlier + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : pageEdits,
+            text: msg ? earlier + reopened + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits,
             images: msg?.images ?? [],
             documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),
@@ -1940,8 +1941,11 @@ export class AgentHost {
 
   // ---------- worktrees ----------
 
-  /** Make the thread's worktree and move the thread into it. Runs at the start of its first turn. */
-  private async makeWorktree(threadId: string, turnId: string): Promise<Thread> {
+  /**
+   * Make the thread's worktree and move the thread into it. Runs at the start of its first turn, and
+   * of the next turn after its branch was merged. reopened is a note for the agent in that case.
+   */
+  private async makeWorktree(threadId: string, turnId: string): Promise<{ thread: Thread; reopened: string }> {
     const home = this.requireThread(threadId).cwd!;
     const repo = await findRepo(home);
     let thread = this.requireThread(threadId);
@@ -1951,21 +1955,33 @@ export class AgentHost {
       this.db.saveThread(thread);
       this.addItem(threadId, turnId, { kind: "notice", level: "info", text: "This folder is not in a git repository, so the thread works in it directly." });
       this.emitThread(threadId);
-      return thread;
+      return { thread, reopened: "" };
     }
-    const made = await createWorktree(home, repo, thread.title);
+    // A merged thread goes on in a worktree again, in the same folder when it can so its session resumes there.
+    const merged = thread.worktree?.closed?.how === "merged" ? thread.worktree : null;
+    const made = merged ? await reopenWorktree(merged, thread.title) : { ...(await createWorktree(home, repo, thread.title)), sameFolder: false };
     // Re-read: settings can change while git runs.
     thread = { ...this.requireThread(threadId), worktree: made.worktree, cwd: made.cwd };
+    if (merged && thread.nativeId && !made.sameFolder) {
+      // The session belongs to the old folder: start a new one with a recap, as after a rewind.
+      const kept = this.loadTurns(threadId).filter((t) => t.id !== turnId && t.status === "done");
+      const recap = kept.length ? this.recap(this.loadItems(threadId), kept) : "";
+      thread = { ...thread, nativeId: null, ...(recap ? { rewind: { at: null, recap, migrated: true } } : {}) };
+    }
     this.threads.set(threadId, thread);
     this.db.saveThread(thread);
+    const from = made.worktree.base ?? made.worktree.baseCommit.slice(0, 8);
     this.addItem(threadId, turnId, {
       kind: "notice",
       level: "info",
-      text: `Working in a worktree on branch ${made.worktree.branch}, from ${made.worktree.base ?? made.worktree.baseCommit.slice(0, 8)}.${made.worktree.links.length ? ` Linked from the main checkout: ${made.worktree.links.join(", ")}.` : ""}`,
+      text: `${merged ? "Working in a worktree again, on branch" : "Working in a worktree on branch"} ${made.worktree.branch}, from ${from}${merged ? " as it is now" : ""}.${made.worktree.links.length ? ` Linked from the main checkout: ${made.worktree.links.join(", ")}.` : ""}`,
     });
     for (const note of made.notes) this.addItem(threadId, turnId, { kind: "notice", level: "warn", text: note });
     this.emitThread(threadId);
-    return thread;
+    const reopened = merged
+      ? `<context>\nYour earlier work on branch ${merged.branch} was merged into ${from}, and its worktree was removed. This thread now works in a new worktree${made.sameFolder ? " in the same folder" : ` at ${made.worktree.path}`}, on branch ${made.worktree.branch} from ${from} as it is now, which may hold other work merged since. Files may have changed since you last read them: read them again before you edit them.\n</context>\n\n`
+      : "";
+    return { thread, reopened };
   }
 
   async worktreeInfo(threadId: string): Promise<{ worktree: ThreadWorktree | null; status: WorktreeStatus | null }> {
@@ -1974,7 +1990,12 @@ export class AgentHost {
     return { worktree: thread.worktree ?? null, status: wt ? await worktreeStatus(wt) : null };
   }
 
-  /** Merge the worktree's branch into its base, or leave the branch for later. Either way the folder goes and the thread returns to the main checkout. */
+  /**
+   * Merge the worktree's branch into its base, or leave the branch for later. Either way the folder
+   * goes. A merged thread keeps its session, and its next message opens a worktree again from the
+   * base as it is then (in the same folder when it can, where the session resumes). A left one goes
+   * back to the main checkout with a new session.
+   */
   async finishWorktree(threadId: string, how: "merge" | "leave"): Promise<{ ok: true; message: string }> {
     if (this.runs.has(threadId)) throw new Error("Stop the running turn first.");
     const thread = this.requireThread(threadId);
@@ -2006,21 +2027,27 @@ export class AgentHost {
     }
     await removeWorktree(wt);
     if (how === "merge") await dropBranchIfEmpty(wt);
-    // Agent sessions are tied to their folder, so the next message starts a new one in the main checkout.
+    // Agent sessions are tied to their folder. Forks that shared the worktree can't all reopen its
+    // folder, so only the thread itself keeps its session; the others start over in the main checkout.
     const closed = { how: how === "merge" ? ("merged" as const) : ("left" as const), at: Date.now() };
     for (const id of [threadId, ...sharers.map((t) => t.id)]) {
+      const reopen = how === "merge" && id === threadId;
+      const cur = this.requireThread(id);
       const next: Thread = {
-        ...this.requireThread(id),
+        ...cur,
         cwd: wt.home,
-        useWorktree: false,
-        worktree: { ...wt, ahead: 0, dirty: false, closed },
-        nativeId: null,
+        useWorktree: reopen,
+        worktree: { ...wt, ahead: 0, dirty: false, closed: reopen ? closed : { ...closed, how: "left" } },
+        nativeId: reopen ? cur.nativeId : null,
         updatedAt: Date.now(),
       };
       this.threads.set(id, next);
       this.db.saveThread(next);
       const by = id === threadId ? "" : ` (from “${thread.title}”, which shared it)`;
-      this.addItem(id, null, { kind: "notice", level: "info", text: `${message}${by} The worktree folder is removed; new messages start a fresh agent session in ${wt.home}.` });
+      const after = reopen
+        ? `new messages open a worktree again from ${wt.base} as it is then, and go on in the same agent session.`
+        : `new messages start a fresh agent session in ${wt.home}.`;
+      this.addItem(id, null, { kind: "notice", level: "info", text: `${message}${by} The worktree folder is removed; ${after}` });
       this.emitThread(id);
     }
     this.flushNow();
@@ -2242,7 +2269,8 @@ export class AgentHost {
       thread.model = to.model;
     }
     if (to.mode) thread.mode = to.mode;
-    const native = this.providers[source.provider].forks === true && source.nativeId && last.nativeEnd;
+    // A merged thread's session belongs to its removed worktree folder, not the folder a fork starts in.
+    const native = this.providers[source.provider].forks === true && source.nativeId && last.nativeEnd && !source.worktree?.closed;
     thread.fork = {
       from: source.id,
       title: source.title,

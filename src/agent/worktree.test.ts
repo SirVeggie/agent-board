@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { revertTrees, snapshotTree } from "./git.js";
-import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus } from "./worktree.js";
 
 let root = "";
 let repo = "";
@@ -71,6 +71,43 @@ test("a worktree branches from HEAD, links node_modules, and keeps the link out 
   assert.ok(!fs.existsSync(wt.path));
   assert.ok(fs.existsSync(path.join(repo, "node_modules", "dep", "index.js")), "removing the worktree leaves the linked folder alone");
   assert.ok(await dropBranchIfEmpty(wt));
+});
+
+test("a merged worktree reopens in the same folder from the latest base", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "Reopen me");
+  fs.writeFileSync(path.join(wt.path, "r.txt"), "r1\n");
+  await commitAll(wt, "add r");
+  await mergeWorktree(wt);
+  await removeWorktree(wt);
+  await dropBranchIfEmpty(wt);
+  // Other work lands on main meanwhile.
+  fs.writeFileSync(path.join(repo, "later.txt"), "later\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-q", "-m", "later");
+
+  const again = await reopenWorktree(wt, "Reopen me");
+  assert.ok(again.sameFolder);
+  assert.equal(again.worktree.path, wt.path);
+  assert.equal(again.worktree.branch, wt.branch);
+  assert.equal(again.worktree.baseCommit, sh(repo, "rev-parse", "HEAD"));
+  assert.ok(fs.existsSync(path.join(wt.path, "later.txt")));
+  await removeWorktree(again.worktree);
+
+  // A branch that is still there but already merged starts over in the same folder too.
+  const kept = await reopenWorktree(wt, "Reopen me");
+  assert.ok(kept.sameFolder);
+  fs.writeFileSync(path.join(wt.path, "unmerged.txt"), "u\n");
+  await commitAll(kept.worktree, "unmerged");
+  await removeWorktree(kept.worktree);
+
+  // One with work not merged is left alone: the thread gets a new branch and folder.
+  const moved = await reopenWorktree(wt, "Reopen me");
+  assert.equal(moved.sameFolder, false);
+  assert.notEqual(moved.worktree.branch, wt.branch);
+  assert.notEqual(moved.worktree.path, wt.path);
+  await removeWorktree(moved.worktree);
+  await dropBranchIfEmpty(moved.worktree);
+  sh(repo, "branch", "-D", wt.branch);
 });
 
 test("merge refuses when the main checkout is on another branch", async () => {

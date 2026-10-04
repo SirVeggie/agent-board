@@ -1565,7 +1565,11 @@
             ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
             : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
           : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
-      if (!(await app().confirm(`${question}\n\nThe thread then continues in the main checkout, in a fresh agent session.`, how === "merge" ? "Merge" : "Leave"))) return;
+      const after =
+        how === "merge"
+          ? `A new message to the thread then opens a worktree again from ${wt.base} as it is then, and goes on in the same agent session.`
+          : "The thread then continues in the main checkout, in a fresh agent session.";
+      if (!(await app().confirm(`${question}\n\n${after}`, how === "merge" ? "Merge" : "Leave"))) return;
       try {
         const res = await api("POST", `/threads/${encodeURIComponent(t.id)}/worktree`, { action: how });
         notice(res.message);

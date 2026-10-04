@@ -112,9 +112,6 @@ export type CreatedWorktree = { worktree: ThreadWorktree; cwd: string; notes: st
 
 /** Make a worktree for a thread on a new branch from the main checkout's HEAD. `home` is the folder the user picked. */
 export async function createWorktree(home: string, repo: string, title: string): Promise<CreatedWorktree> {
-  const baseCommit = await headCommit(repo);
-  if (!baseCommit) throw new Error("The repository has no commits yet, so there is nothing to branch a worktree from.");
-  const base = await currentBranch(repo);
   const slug = slugify(title);
   const parent = path.join(worktreesDir(), `${slugify(path.basename(repo))}-${crypto.createHash("sha1").update(repo.toLowerCase()).digest("hex").slice(0, 6)}`);
   let branch = `agent/${slug}`;
@@ -123,8 +120,34 @@ export async function createWorktree(home: string, repo: string, title: string):
     branch = `agent/${slug}-${n}`;
     dir = path.join(parent, `${slug}-${n}`);
   }
-  fs.mkdirSync(parent, { recursive: true });
-  const add = await git([...LONG, "worktree", "add", "-b", branch, dir, baseCommit], repo, { timeoutMs: 300_000 });
+  return addWorktree(home, repo, branch, dir, false);
+}
+
+/**
+ * Open a merged thread's worktree again for its next message: the same folder and branch name, from
+ * the main checkout's HEAD now. Agent sessions are keyed by folder (Claude Code's are), so the same
+ * folder lets the thread keep its session. sameFolder is false when that folder or branch is taken
+ * by something not yet merged; the thread then gets a new worktree, like a first one.
+ */
+export async function reopenWorktree(old: ThreadWorktree, title: string): Promise<CreatedWorktree & { sameFolder: boolean }> {
+  if (!fs.existsSync(old.path)) {
+    const exists = await branchExists(old.repo, old.branch);
+    // A branch the base already has (a merge whose empty branch wasn't dropped) can start over from HEAD.
+    const merged = exists && (await git(["merge-base", "--is-ancestor", `refs/heads/${old.branch}`, "HEAD"], old.repo, { timeoutMs: 10_000 })).code === 0;
+    if (!exists || merged) {
+      return { ...(await addWorktree(old.home, old.repo, old.branch, old.path, exists)), sameFolder: true };
+    }
+  }
+  return { ...(await createWorktree(old.home, old.repo, title)), sameFolder: false };
+}
+
+/** git worktree add on `branch` from the main checkout's HEAD (reset: the branch exists and starts over there), then link and note. */
+async function addWorktree(home: string, repo: string, branch: string, dir: string, reset: boolean): Promise<CreatedWorktree> {
+  const baseCommit = await headCommit(repo);
+  if (!baseCommit) throw new Error("The repository has no commits yet, so there is nothing to branch a worktree from.");
+  const base = await currentBranch(repo);
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const add = await git([...LONG, "worktree", "add", reset ? "-B" : "-b", branch, dir, baseCommit], repo, { timeoutMs: 300_000 });
   if (add.code !== 0) throw new Error(`git worktree add failed: ${add.stderr.trim() || add.stdout.trim()}`);
   const links = await linkFolders(repo, dir);
   const notes: string[] = [];

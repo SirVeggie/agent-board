@@ -2679,6 +2679,7 @@
       scribe.agent.card(c.thread, { card: c.num, title: plainLinks(c.title), resume: true }).then(function (r) {
         if (r && r.ok && r.delivered) {
           setComment(c.id, cm.id, { followUp: "continued" });
+          mergeWhenDone(c, c.thread);
           setHint((r.delivered === "queued" ? "Queued #" : "Sent #") + c.num + " back to its agent.");
         } else {
           go.disabled = skip.disabled = false;
@@ -4017,21 +4018,39 @@
           status: { kind: "working", text: "Agent starting" }
         } }]);
       }
-      var entry = { card: c.num, at: now };
-      var cur = worker(col.id);
-      if (cur && cur.solo && typeof cur.solo === "object") {
-        var add = {};
-        add[r.threadId] = entry;
-        scribe.update([{ op: "merge", path: "settings/workers/" + col.id + "/solo", value: add }]);
-      } else {
-        var solo = {};
-        solo[r.threadId] = entry;
-        patchWorker(col.id, { solo: solo });
-      }
+      addSolo(col.id, r.threadId, { card: c.num, at: now });
       setHint("Agent started on #" + c.num + ".");
       render();
     });
     render();
+  }
+  function addSolo(colId, threadId, entry) {
+    var cur = worker(colId);
+    if (cur && cur.solo && typeof cur.solo === "object") {
+      var add = {};
+      add[threadId] = entry;
+      scribe.update([{ op: "merge", path: "settings/workers/" + colId + "/solo", value: add }]);
+    } else {
+      var solo = {};
+      solo[threadId] = entry;
+      patchWorker(colId, { solo: solo });
+    }
+  }
+  /**
+   * Continue sent a card's earlier chat back to work: its branch was merged when it ended, and Scribe
+   * gives it a worktree again (#184). Keep it with the one-card runs of the worker it came from, so
+   * any window merges it once it ends. The worker's own running chat it wraps up itself.
+   */
+  function mergeWhenDone(c, threadId) {
+    var colId = c.from && worker(c.from) ? c.from : null;
+    if (!colId) {
+      var col = columns().filter(function (x) { return x.role === "agent" && worker(x.id); })[0];
+      colId = col ? col.id : null;
+    }
+    var w = colId && worker(colId);
+    if (!w || !FOLDER_MODES[workerMode(w)] || soloRuns(w)[threadId] || (workerOn(w) && w.threadId === threadId)) return;
+    if (!threadStatus[threadId] || threadStatus[threadId].status === "idle") threadStatus[threadId] = { status: "running", queued: 0 };
+    addSolo(colId, threadId, { card: c.num, at: Date.now() });
   }
   /** Merge each finished one-card run's worktree and forget it; a failed merge shows on the column. */
   function wrapUpSolos(colId) {
