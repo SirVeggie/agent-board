@@ -1,152 +1,132 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type {
+  AgentOptions,
+  InteractionUpdate,
+  LocalAgentStore,
+  ModelListItem,
+  ModelSelection,
+  Run,
+  SDKAgent,
+  SDKCustomTool,
+  SDKCustomToolContent,
+  SDKJsonValue,
+  ToolName,
+} from "@cursor/sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
-import type { ModelOption, ProviderStatus, SlashCommand, Thread, ThreadMode, ToolKind, ToolStatus, Usage } from "../types.js";
+import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
 import { isPlainRecord } from "../types.js";
-import { AcpConnection, RpcError } from "./acp.js";
+import { webAllowed } from "../webAccess.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
- * Cursor through its CLI's Agent Client Protocol server (`agent acp`). The SDK has no approval
- * callback; ACP does (session/request_permission), plus Cursor's own question and plan requests.
+ * Cursor through @cursor/sdk, in this process: one local SDK agent per thread, kept in a store under
+ * Scribe's data folder. The SDK has no approval callback, so "ask", "edits" and "auto" all run with
+ * Cursor's Auto-review classifier (it denies, it does not ask) and "full" runs everything.
  *
- * The CLI keeps one current model per process and applies it to every session in that process,
- * so each thread gets its own process.
- *
- * Cursor's interactive CLI can steer a running turn, but ACP does not: there is no inject method,
- * and a second session/prompt cancels the first. Steer here holds the message until the current
- * prompt returns, then the host adopts it as the next turn.
+ * What a thread may touch is a real tool list, passed on every create and resume (the SDK does not
+ * keep it): Pages gets the board tools only, Ask read and search tools, web off drops the web tools.
+ * The board's tools reach the agent as SDK custom tools that call this daemon's board MCP server,
+ * because Auto-review fails MCP server calls closed and custom tools are never sent to it.
  */
 
-const IDLE_KILL_MS = 15 * 60 * 1000;
-/** Name of the board MCP server this daemon hands each Cursor session. */
-export const BOARD_MCP = "scribe-chat";
+const IDLE_CLOSE_MS = 15 * 60 * 1000;
 const MODELS_TTL_MS = 30 * 60 * 1000;
-/** Cursor's backend (Connect RPC); the CLI talks to the same host. */
+/** The MCP server the SDK files custom tools under; the board's tools appear there. */
+export const BOARD_MCP = "custom-user-tools";
+/** Cursor's backend (Connect RPC); the CLI and the SDK talk to the same host. */
 const CURSOR_API = "https://api2.cursor.sh";
-/** Waits before each retry of a prompt Cursor's backend dropped; its length caps the retries. */
-const RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
-const RESUME_TEXT = "Your previous response was cut off by a network error. Continue from where you left off; don't redo steps that already finished.";
+const NOT_LOGGED_IN = "Cursor is not logged in. Log in from Agent settings, or set CURSOR_API_KEY.";
+/** Parameter ids that carry a model's reasoning level, most specific first. */
+const EFFORT_PARAMS = ["effort", "reasoning_effort", "reasoning", "thought_level", "thinking"];
+const WEB_TOOLS: ToolName[] = ["webSearch", "webFetch", "fetch", "xSearch"];
+/** Tools that wait on an answer from the host; the SDK gives Scribe no way to answer them yet (#141). */
+const NO_ANSWER_TOOLS: ToolName[] = ["askQuestion"];
+/** What an Ask thread may use besides MCP and the web: reading and searching. */
+const ASK_TOOLS: ToolName[] = ["read", "grep", "glob", "ls", "semSearch", "readLints", "updateTodos", "readTodos"];
+const MAX_FETCH_CHARS = 200_000;
 
-/** Cursor marks transient backend failures (dropped HTTP/2 streams and the like) as RetriableError. */
-export function isRetriable(err: unknown): boolean {
-  if (!(err instanceof RpcError)) return false;
-  const data = isPlainRecord(err.data) ? JSON.stringify(err.data) : "";
-  return /RetriableError|stream closed with error code|ECONNRESET|ETIMEDOUT/i.test(`${err.message} ${data}`);
+type Sdk = typeof import("@cursor/sdk");
+let sdkLoad: Promise<Sdk> | null = null;
+/** The SDK is large; load it on first use instead of with the daemon. */
+function sdk(): Promise<Sdk> {
+  sdkLoad ??= import("@cursor/sdk");
+  return sdkLoad;
 }
 
-function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve();
-    const timer = setTimeout(done, ms);
-    signal?.addEventListener("abort", done, { once: true });
-    function done() {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    }
-  });
-}
-
-type AgentBinary = { node: string; entry: string; version: string };
-
-type ConfigOption = {
-  id: string;
-  name?: string;
-  description?: string;
-  category?: string;
-  type?: string;
-  currentValue?: string;
-  options?: Array<{ value: string; name?: string; description?: string }>;
-};
-
-/** Finds the newest installed Cursor agent CLI. CURSOR_AGENT_HOME can point at the install folder. */
-export function locateCursorAgent(): AgentBinary | null {
-  const roots = [
-    process.env.CURSOR_AGENT_HOME,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "cursor-agent") : null,
-    path.join(os.homedir(), ".local", "share", "cursor-agent"),
-  ].filter(Boolean) as string[];
-  for (const root of roots) {
-    const versionsDir = path.join(root, "versions");
-    if (!fs.existsSync(versionsDir)) continue;
-    const versions = fs
-      .readdirSync(versionsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name))
-      .map((entry) => entry.name)
-      .sort(compareVersion)
-      .reverse();
-    for (const version of versions) {
-      const dir = path.join(versionsDir, version);
-      const node = [path.join(dir, "node.exe"), path.join(dir, "node")].find((file) => fs.existsSync(file));
-      const entry = path.join(dir, "index.js");
-      if (node && fs.existsSync(entry)) {
-        return { node, entry, version };
-      }
-    }
+let agentStore: LocalAgentStore | null = null;
+/** Scribe's own store, so threads don't mix with the Cursor IDE's or another SDK host's agents. */
+async function store(): Promise<LocalAgentStore> {
+  if (!agentStore) {
+    const { JsonlLocalAgentStore } = await sdk();
+    agentStore = new JsonlLocalAgentStore(path.join(dataDir(), "cursor-agents"));
   }
-  return null;
+  return agentStore;
 }
 
-function compareVersion(a: string, b: string): number {
-  const parse = (value: string) =>
-    value
-      .split("-")[0]
-      .split(".")
-      .map((part) => Number(part) || 0);
-  const [pa, pb] = [parse(a), parse(b)];
-  for (let i = 0; i < 3; i += 1) {
-    if (pa[i] !== pb[i]) return pa[i] - pb[i];
-  }
-  return a.localeCompare(b);
+/** Local SDK agent ids; anything else in Thread.nativeId is an old ACP session id. */
+export function isSdkAgentId(id: string | null | undefined): boolean {
+  return Boolean(id && id.startsWith("agent-"));
 }
 
-function spawnAcp(bin: AgentBinary, cwd: string): AcpConnection {
-  return new AcpConnection(bin.node, [bin.entry, "acp"], {
-    cwd,
-    env: {
-      ...process.env,
-      CURSOR_INVOKED_AS: "agent",
-      NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE || (process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "cursor-compile-cache") : undefined),
-    },
-  });
+function errorText(err: unknown): string {
+  const name = (err as Error)?.name ?? "";
+  if (name === "AuthenticationError" || /API key is required/i.test((err as Error)?.message ?? "")) return NOT_LOGGED_IN;
+  return (err as Error)?.message || String(err);
 }
 
-const INIT_PARAMS = {
-  protocolVersion: 1,
-  clientCapabilities: {
-    fs: { readTextFile: false, writeTextFile: false },
-    terminal: false,
-    _meta: { parameterizedModelPicker: true },
-  },
-  clientInfo: { name: "scribe", version: "1" },
-};
-
-function mapModels(raw: unknown): ModelOption[] {
-  const models = isPlainRecord(raw) && Array.isArray(raw.models) ? (raw.models as Array<{ value: string; name?: string; configOptions?: ConfigOption[] }>) : [];
-  return models.map((model) => {
-    const options = Array.isArray(model.configOptions) ? model.configOptions : [];
-    const effort = options.find((option) => option.category === "thought_level");
+export function mapModels(list: ModelListItem[]): ModelOption[] {
+  return list.map((model) => {
+    const params = model.parameters ?? [];
+    const defaults = new Map((model.variants?.find((v) => v.isDefault)?.params ?? []).map((p) => [p.id, p.value]));
+    const effort = EFFORT_PARAMS.map((id) => params.find((p) => p.id === id)).find(Boolean);
+    const choice = (value: { value: string; displayName?: string }) => ({ id: value.value, label: (value.displayName || value.value).replace(/[​-‍]/g, "") });
     return {
-      id: model.value,
-      label: model.name || model.value,
+      id: model.id,
+      label: model.displayName || model.id,
       provider: "cursor",
-      efforts: (effort?.options ?? []).map((option) => ({ id: option.value, label: option.name || option.value })),
-      defaultEffort: effort?.currentValue ?? null,
+      ...(model.description ? { description: model.description } : {}),
+      efforts: (effort?.values ?? []).map(choice),
+      defaultEffort: effort ? (defaults.get(effort.id) ?? null) : null,
       ...(effort ? { effortParam: effort.id } : {}),
-      params: options
-        .filter((option) => option !== effort)
-        .map((option) => ({
-          id: option.id,
-          label: option.name || option.id,
-          description: option.description,
-          options: (option.options ?? []).map((choice) => ({ id: choice.value, label: (choice.name || choice.value).replace(/[​-‍]/g, "") })),
-          default: option.currentValue ?? option.options?.[0]?.value ?? "",
+      params: params
+        .filter((p) => p !== effort)
+        .map((p) => ({
+          id: p.id,
+          label: p.displayName || p.id,
+          options: p.values.map(choice),
+          default: defaults.get(p.id) ?? p.values[0]?.value ?? "",
         })),
     } satisfies ModelOption;
   });
+}
+
+/** The thread's model and the parameters that model takes; unknown ones would be rejected. */
+export function modelSelection(thread: Pick<Thread, "model" | "effort" | "modelParams">, models: ModelOption[]): ModelSelection {
+  const known = models.find((m) => m.id === thread.model);
+  const id = !thread.model || thread.model === "default" ? (models[0]?.id ?? "auto") : thread.model;
+  if (!known) return { id };
+  const params: Array<{ id: string; value: string }> = [];
+  for (const param of known.params) {
+    const value = thread.modelParams[param.id];
+    if (value !== undefined && param.options.some((o) => o.id === value)) params.push({ id: param.id, value });
+  }
+  if (known.effortParam && thread.effort && known.efforts.some((e) => e.id === thread.effort)) {
+    params.push({ id: known.effortParam, value: thread.effort });
+  }
+  return params.length ? { id, params } : { id };
+}
+
+/** Built-in tools for a thread: an allowlist (tools) or what to drop from the default set (disallowedTools). */
+export function toolLists(thread: Pick<Thread, "mode" | "web">): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
+  const web = thread.web === "on" ? WEB_TOOLS : [];
+  if (thread.mode === "board") return { tools: ["mcp", "updateTodos", "readTodos", ...web] };
+  if (thread.mode === "ask") return { tools: [...ASK_TOOLS, "mcp", ...web] };
+  return { disallowedTools: [...NO_ANSWER_TOOLS, ...(thread.web === "on" ? [] : WEB_TOOLS)] };
 }
 
 export class CursorProvider implements AgentProvider {
@@ -156,19 +136,62 @@ export class CursorProvider implements AgentProvider {
   private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<CursorSession>();
   private spares = new SparePool<CursorSession>();
+  private login: { url: string | null; done: Promise<void> } | null = null;
 
   async status(): Promise<ProviderStatus> {
-    const bin = locateCursorAgent();
-    if (!bin) {
-      return { id: this.id, label: this.label, available: false, detail: "Cursor agent CLI not found. Install it and run `agent login`." };
+    if (process.env.CURSOR_API_KEY?.trim()) return { id: this.id, label: this.label, available: true, detail: "CURSOR_API_KEY" };
+    try {
+      const { Cursor } = await sdk();
+      const auth = await Cursor.auth.status();
+      if (auth.status === "logged-in") {
+        return { id: this.id, label: this.label, available: true, detail: auth.email ? `SDK · ${auth.email}` : "SDK" };
+      }
+      return { id: this.id, label: this.label, available: false, detail: this.login ? "Finish the login in your browser" : "Not logged in", login: true };
+    } catch (err) {
+      return { id: this.id, label: this.label, available: false, detail: `Cursor SDK failed to load: ${(err as Error).message}` };
     }
-    return { id: this.id, label: this.label, available: true, detail: `agent ${bin.version}` };
+  }
+
+  /**
+   * Start a browser login (Cursor.auth.login). It mints a user API key into ~/.cursor/sdk/auth.json
+   * that the SDK uses from then on. Resolves with the login URL as soon as there is one; the poll
+   * goes on in the background.
+   */
+  async startLogin(): Promise<{ url: string | null }> {
+    if (!this.login) {
+      const { Cursor } = await sdk();
+      let gotUrl: (url: string) => void = () => {};
+      const urlReady = new Promise<string>((resolve) => (gotUrl = resolve));
+      const entry: { url: string | null; done: Promise<void> } = { url: null, done: Promise.resolve() };
+      entry.done = Cursor.auth
+        .login({
+          apiKeyName: "Scribe",
+          // Scribe's settings open the URL in the user's browser.
+          openBrowser: false,
+          onLoginUrl: (url) => {
+            entry.url = url;
+            gotUrl(url);
+          },
+          signal: AbortSignal.timeout(10 * 60 * 1000),
+        })
+        .then((result) => {
+          log(`Cursor SDK login done${result.email ? ` (${result.email})` : ""}`);
+          this.modelCache = null;
+        })
+        .catch((err) => log(`Cursor SDK login failed: ${(err as Error).message}`))
+        .finally(() => {
+          if (this.login === entry) this.login = null;
+        });
+      this.login = entry;
+      await Promise.race([urlReady, entry.done, new Promise((resolve) => setTimeout(resolve, 15_000))]);
+    }
+    return { url: this.login?.url ?? null };
   }
 
   /**
    * The plan's usage this billing period, from the private dashboard API the CLI's /usage calls
-   * (no ACP or CLI command reports it). Null without a token or when the call fails. Brittle by
-   * nature: a CLI update can move it.
+   * (the SDK's getUsage reports tokens and cost per agent, not the plan's windows). Null without a
+   * token or when the call fails. Brittle by nature: a CLI update can move it.
    */
   async fetchPlanUsage(): Promise<unknown | null> {
     const token = process.env.CURSOR_ACCESS_TOKEN?.trim();
@@ -216,58 +239,44 @@ export class CursorProvider implements AgentProvider {
   }
 
   private async loadModels(): Promise<ModelOption[]> {
-    const bin = locateCursorAgent();
-    if (!bin) {
-      return [];
-    }
-    const conn = spawnAcp(bin, os.tmpdir());
     try {
-      await conn.request("initialize", INIT_PARAMS, 30_000);
-      const raw = await conn.request("cursor/list_available_models", {}, 60_000);
-      const models = mapModels(raw);
+      const { Cursor } = await sdk();
+      const models = mapModels(await Cursor.models.list());
       if (models.length) {
         this.modelCache = { at: Date.now(), models };
       }
       return models;
     } catch (err) {
-      log(`Cursor model list failed: ${(err as Error).message}`);
+      log(`Cursor model list failed: ${errorText(err)}`);
       return this.modelCache?.models ?? [];
-    } finally {
-      conn.kill();
     }
   }
 
-  /** A throwaway session in Ask mode in a temp folder; tool requests are refused. */
+  /** A throwaway agent in a temp folder with no tools: the model can only answer in text. */
   async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
-    const bin = locateCursorAgent();
-    if (!bin) throw new Error("Cursor agent CLI not found. Install it and run `agent login`.");
-    const cwd = os.tmpdir();
-    const conn = spawnAcp(bin, cwd);
-    const kill = () => conn.kill();
-    signal?.addEventListener("abort", kill, { once: true });
-    let text = "";
-    conn.onNotification = (method, params) => {
-      if (method !== "session/update" || !isPlainRecord(params) || !isPlainRecord(params.update)) return;
-      const { sessionUpdate, content } = params.update;
-      if (sessionUpdate === "agent_message_chunk" && isPlainRecord(content) && content.type === "text" && typeof content.text === "string") text += content.text;
-    };
-    conn.onRequest = async (method) => {
-      if (method === "session/request_permission") return { outcome: { outcome: "cancelled" } };
-      throw new RpcError(`Method not found: ${method}`, -32601);
-    };
+    const { Agent } = await sdk();
+    const models = this.cachedModels().length ? this.cachedModels() : await this.models();
+    const agent = await Agent.create({
+      model: modelSelection({ model, effort: null, modelParams: {} }, models),
+      tools: [],
+      local: { cwd: os.tmpdir(), settingSources: [], store: await store() },
+    }).catch((err) => {
+      throw new Error(errorText(err));
+    });
     try {
-      await conn.request("initialize", INIT_PARAMS, 60_000);
-      const created = await conn.request("session/new", { cwd, mcpServers: [] }, 120_000);
-      const sessionId = isPlainRecord(created) && typeof created.sessionId === "string" ? created.sessionId : null;
-      if (!sessionId) throw new Error("Cursor did not return a session id");
-      await conn.request("session/set_config_option", { sessionId, configId: "mode", value: "ask" }, 30_000).catch(() => undefined);
-      if (model && model !== "default") await conn.request("session/set_config_option", { sessionId, configId: "model", value: model }, 30_000);
-      await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: prompt }] });
-      if (signal?.aborted) throw new Error("cancelled");
-      return text;
+      const run = await agent.send(prompt);
+      const cancel = () => void run.cancel().catch(() => undefined);
+      signal?.addEventListener("abort", cancel, { once: true });
+      try {
+        const result = await run.wait();
+        if (signal?.aborted || result.status === "cancelled") throw new Error("cancelled");
+        if (result.status === "error") throw new Error(result.error?.message || "Cursor run failed");
+        return result.result ?? "";
+      } finally {
+        signal?.removeEventListener("abort", cancel);
+      }
     } finally {
-      signal?.removeEventListener("abort", kill);
-      conn.kill();
+      agent.close();
     }
   }
 
@@ -308,155 +317,156 @@ export class CursorProvider implements AgentProvider {
   }
 }
 
-/** A Cursor session is bound to its working directory; everything else can be set on it later. */
+/** A spare is bound to what its agent was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
-  return thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
+  const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
+  return JSON.stringify([where, thread.mode, thread.web, thread.approval]);
 }
 
-function cursorMode(mode: ThreadMode): string {
-  switch (mode) {
-    case "code":
-    case "board":
-      return "agent";
-    case "plan":
-      return "plan";
-    case "ask":
-      return "ask";
-    default: {
-      const never: never = mode;
-      return never;
+/**
+ * The board MCP server's tools as SDK custom tools: one MCP client per session, started with the
+ * thread's id so card claims point at it.
+ */
+class BoardTools {
+  private client: Client | null = null;
+  private opening: Promise<Record<string, SDKCustomTool>> | null = null;
+
+  constructor(
+    private spec: SessionContext["boardMcp"],
+    readonly threadId: string
+  ) {}
+
+  tools(): Promise<Record<string, SDKCustomTool>> {
+    this.opening ??= this.open().catch((err) => {
+      this.opening = null;
+      throw err;
+    });
+    return this.opening;
+  }
+
+  private async open(): Promise<Record<string, SDKCustomTool>> {
+    const client = new Client({ name: "scribe-cursor", version: "1" });
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId };
+    await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
+    this.client = client;
+    const { tools } = await client.listTools();
+    const out: Record<string, SDKCustomTool> = {};
+    for (const tool of tools) {
+      out[tool.name] = {
+        description: tool.description ?? "",
+        inputSchema: tool.inputSchema as Record<string, SDKJsonValue>,
+        ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        execute: async (args) => {
+          const result = await client.callTool({ name: tool.name, arguments: args });
+          return { content: mcpContent(result.content), isError: result.isError === true };
+        },
+      };
     }
+    return out;
+  }
+
+  close(): void {
+    void this.client?.close().catch(() => undefined);
+    this.client = null;
+    this.opening = null;
   }
 }
 
-function mapToolKind(kind: unknown, title: string): ToolKind {
-  switch (kind) {
+function mcpContent(content: unknown): SDKCustomToolContent[] {
+  if (!Array.isArray(content)) return [];
+  return content.filter(isPlainRecord).map((block): SDKCustomToolContent => {
+    if (block.type === "text" && typeof block.text === "string") return { type: "text", text: block.text };
+    if (block.type === "image" && typeof block.data === "string") return { type: "image", data: block.data, ...(typeof block.mimeType === "string" ? { mimeType: block.mimeType } : {}) };
+    return { type: "text", text: JSON.stringify(block) };
+  });
+}
+
+/**
+ * Limited web access: the built-in web tools are off and this fetch takes their place, refusing
+ * any URL (or redirect) off the allowlist. There is no limited search.
+ */
+function allowlistFetch(allowlist: () => string[]): SDKCustomTool {
+  return {
+    description: "Fetch a web page or file over HTTP(S) and return its text. Only domains on the user's web allowlist can be reached; others are refused. Web search is not available.",
+    inputSchema: { type: "object", properties: { url: { type: "string", description: "Absolute http(s) URL" } }, required: ["url"] },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    execute: async (args) => {
+      let url = typeof args.url === "string" ? args.url : "";
+      for (let hop = 0; hop < 6; hop += 1) {
+        if (!/^https?:\/\//i.test(url)) return { content: [{ type: "text", text: `Not an http(s) URL: ${url}` }], isError: true };
+        if (!webAllowed(url, allowlist())) {
+          return { content: [{ type: "text", text: `Refused: ${new URL(url).hostname} is not on the web allowlist. Ask the user to add it in Agent settings.` }], isError: true };
+        }
+        const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+        const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+        if (next) {
+          url = new URL(next, url).toString();
+          continue;
+        }
+        const text = await res.text();
+        const body = text.length > MAX_FETCH_CHARS ? `${text.slice(0, MAX_FETCH_CHARS)}\n… (truncated)` : text;
+        return { content: [{ type: "text", text: `HTTP ${res.status} ${res.headers.get("content-type") ?? ""}\n\n${body}` }], isError: !res.ok };
+      }
+      return { content: [{ type: "text", text: "Too many redirects." }], isError: true };
+    },
+  };
+}
+
+type Steer = { text: string; state: "queued" | "sending" | "delivered" | "dropped"; settled?: Promise<void> };
+
+function toolKind(type: string): ToolKind {
+  switch (type) {
+    case "shell":
+      return "execute";
     case "read":
+    case "ls":
+    case "readLints":
+      return "read";
+    case "grep":
+    case "glob":
+    case "semSearch":
+      return "search";
     case "edit":
+    case "write":
+      return "edit";
     case "delete":
-    case "move":
-    case "search":
-    case "execute":
-    case "think":
+      return "delete";
+    case "mcp":
+      return "mcp";
+    case "webSearch":
+    case "webFetch":
     case "fetch":
-      return kind;
+    case "xSearch":
+      return "fetch";
     default:
-      if (/^mcp\b|mcp[:_]/i.test(title)) return "mcp";
       return "other";
   }
 }
 
-function mapStatus(status: unknown): ToolStatus | undefined {
-  switch (status) {
-    case "pending":
-      return "pending";
-    case "in_progress":
-      return "running";
-    case "completed":
-      return "done";
-    case "failed":
-      return "error";
-    default:
-      return undefined;
-  }
-}
-
-/** Cursor reports new files as oldText "-- /dev/null" and newText "++ b/<path>\n<content>". */
-function normalizeDiff(entry: { path?: string; oldText?: string | null; newText?: string | null }): { path: string; oldText: string | null; newText: string | null } | null {
-  if (!entry.path) return null;
-  let oldText = entry.oldText ?? null;
-  let newText = entry.newText ?? null;
-  if (oldText !== null && /^-- (\/dev\/null|a\/)/.test(oldText)) {
-    oldText = oldText.startsWith("-- /dev/null") ? null : oldText.replace(/^-- a\/[^\n]*\n?/, "");
-  }
-  if (newText !== null && /^\+\+ (\/dev\/null|b\/)/.test(newText)) {
-    newText = newText.startsWith("++ /dev/null") ? null : newText.replace(/^\+\+ b\/[^\n]*\n?/, "");
-  }
-  return { path: entry.path, oldText, newText };
-}
-
-function contentText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isPlainRecord(block)) continue;
-    if (block.type === "content" && isPlainRecord(block.content) && typeof block.content.text === "string") {
-      parts.push(block.content.text);
-    } else if (block.type === "terminal") {
-      parts.push("[terminal]");
-    }
-  }
-  return parts.join("\n");
-}
-
-function outputText(raw: unknown): { output?: string; exitCode?: number } {
-  if (raw === undefined || raw === null) return {};
-  if (typeof raw === "string") return { output: raw };
-  if (isPlainRecord(raw)) {
-    const stdout = typeof raw.stdout === "string" ? raw.stdout : "";
-    const stderr = typeof raw.stderr === "string" ? raw.stderr : "";
-    const exitCode = typeof raw.exitCode === "number" ? raw.exitCode : undefined;
-    if (stdout || stderr || exitCode !== undefined) {
-      return { output: [stdout, stderr].filter(Boolean).join(stdout && stderr ? "\n" : ""), exitCode };
-    }
-    if (typeof raw.content === "string") return { output: raw.content };
-  }
-  try {
-    return { output: JSON.stringify(raw, null, 2) };
-  } catch {
-    return {};
-  }
-}
-
-function asNum(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "bigint") {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
-}
-
-function pathsFrom(update: Record<string, unknown>): string[] | undefined {
-  const paths = new Set<string>();
-  if (Array.isArray(update.locations)) {
-    for (const loc of update.locations) {
-      if (isPlainRecord(loc) && typeof loc.path === "string") paths.add(loc.path);
-    }
-  }
-  if (isPlainRecord(update.rawInput)) {
-    for (const key of ["path", "file_path", "filePath", "target_file"]) {
-      const value = update.rawInput[key];
-      if (typeof value === "string") paths.add(value);
-    }
-  }
-  return paths.size ? [...paths] : undefined;
-}
+const str = (value: unknown): string | undefined => (typeof value === "string" && value ? value : undefined);
 
 class CursorSession implements ProviderSession {
-  private conn: AcpConnection | null = null;
-  private starting: Promise<AcpConnection> | null = null;
-  private sessionId: string | null;
-  private applied: Record<string, string> = {};
+  private agent: SDKAgent | null = null;
+  /** What the open agent was created or resumed with; a change reopens it before the next turn. */
+  private agentKey: string | null = null;
+  private opening: Promise<SDKAgent> | null = null;
+  private agentId: string | null;
+  /** The agent id last reported to the host; the host clearing it (rewind) means start over. */
+  private reported: string | null = null;
+  private board: BoardTools | null = null;
+  private current: Run | null = null;
   private sink: RunSink | null = null;
-  private loading = false;
   private idleTimer: NodeJS.Timeout | null = null;
-  private abort: AbortController | null = null;
-  private knownCommands: SlashCommand[] = [];
-  private startedTools = new Set<string>();
+  private cancelled = false;
   private sentInstructions = false;
   private warming: Promise<void> | null = null;
-  private steers = new Map<string, "pending" | "dropped">();
-  /** Steered message the last prompt did not take in; the host adopts it as the next turn. */
+  private steers = new Map<string, Steer>();
+  /** Steered message the last turn did not take in; the host adopts it as the next turn. */
   private carry: string | null = null;
-  /** Latest context usage, including updates that arrive with no turn running. */
   private lastUsage: Usage | null = null;
-  /** Whether the running prompt has streamed anything yet; decides how a retry resumes. */
-  private progressed = false;
+  private tools = new Map<string, string>();
+  /** A plan the agent wrote this turn (Plan mode), offered to the user when the turn ends. */
+  private plan: string | null = null;
 
   constructor(
     private provider: CursorProvider,
@@ -464,7 +474,7 @@ class CursorSession implements ProviderSession {
     private ctx: SessionContext,
     private onDispose: () => void
   ) {
-    this.sessionId = thread.nativeId;
+    this.agentId = isSdkAgentId(thread.nativeId) ? thread.nativeId : null;
   }
 
   scribeThreadId(): string {
@@ -472,18 +482,18 @@ class CursorSession implements ProviderSession {
   }
 
   update(thread: Thread): void {
-    const idChanged = thread.id !== this.thread.id;
-    const cwdChanged = (thread.cwd ?? null) !== (this.thread.cwd ?? null) || (thread.mode === "board") !== (this.thread.mode === "board");
     this.thread = thread;
-    if ((cwdChanged || idChanged) && !this.sink) {
-      // The session is tied to its cwd; a new cwd needs a fresh process and session load.
-      // MCP is started with SCRIBE_THREAD from this.thread.id, so a new id needs a new process too.
-      this.stopProcess();
+    if (this.reported && thread.nativeId !== this.reported && !this.current) {
+      // The host dropped the session (a rewind): start a new agent.
+      this.reported = null;
+      this.agentId = isSdkAgentId(thread.nativeId) ? thread.nativeId : null;
+      this.closeAgent();
     }
+    if (this.agentKey !== null && this.agentKey !== this.key() && !this.current) this.closeAgent();
   }
 
   async commands(): Promise<SlashCommand[]> {
-    return this.knownCommands;
+    return [];
   }
 
   private cwd(): string {
@@ -493,101 +503,86 @@ class CursorSession implements ProviderSession {
     return this.thread.cwd;
   }
 
-  private mcpServers(): unknown[] {
-    const { command, args } = this.ctx.boardMcp;
-    // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
-    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: this.thread.id };
-    // Not "scribe": a session server with the same name as one in ~/.cursor/mcp.json gets its calls rejected.
-    return [{ name: BOARD_MCP, command, args, env: Object.entries(env).map(([name, value]) => ({ name, value })) }];
+  private key(): string {
+    const t = this.thread;
+    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd()]);
   }
 
-  private async ensureConnection(): Promise<AcpConnection> {
-    if (this.conn?.alive) {
-      return this.conn;
-    }
-    if (this.starting) {
-      return this.starting;
-    }
-    this.starting = this.start().finally(() => {
-      this.starting = null;
-    });
-    return this.starting;
-  }
-
-  private async start(): Promise<AcpConnection> {
-    const bin = locateCursorAgent();
-    if (!bin) {
-      throw new Error("Cursor agent CLI not found. Install it and run `agent login`.");
-    }
-    const cwd = this.cwd();
-    const conn = spawnAcp(bin, cwd);
-    conn.onNotification = (method, params) => this.onNotification(method, params);
-    conn.onRequest = (method, params) => this.onRequest(method, params);
-    conn.onExit = () => {
-      if (this.conn === conn) {
-        this.conn = null;
-        this.applied = {};
-      }
+  private async options(): Promise<AgentOptions> {
+    const t = this.thread;
+    const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
+    this.board ??= new BoardTools(this.ctx.boardMcp, t.id);
+    const customTools: Record<string, SDKCustomTool> = { ...(await this.board.tools()) };
+    if (t.web === "limited") customTools.web_fetch = allowlistFetch(() => this.ctx.webAllowlist());
+    return {
+      model: modelSelection(t, models),
+      ...toolLists(t),
+      mode: t.mode === "plan" ? "plan" : "agent",
+      local: {
+        cwd: this.cwd(),
+        store: await store(),
+        // Pages: nothing from Cursor's own config, so a user MCP server can't bring file tools in.
+        settingSources: t.mode === "board" ? [] : ["user", "project"],
+        autoReview: t.mode === "board" ? false : t.approval !== "full",
+        customTools,
+        // Subagents get the same tool restrictions as the thread.
+        subagentInherit: {},
+      },
     };
-    await conn.request("initialize", INIT_PARAMS, 60_000);
-    let result: unknown = null;
-    if (this.sessionId) {
-      this.loading = true;
+  }
+
+  private async ensureAgent(): Promise<SDKAgent> {
+    const key = this.key();
+    if (this.agent && this.agentKey === key) return this.agent;
+    if (this.opening) return this.opening;
+    this.opening = this.open(key).finally(() => {
+      this.opening = null;
+    });
+    return this.opening;
+  }
+
+  private async open(key: string): Promise<SDKAgent> {
+    this.closeAgent();
+    if (this.board && this.board.threadId !== this.thread.id) {
+      this.board.close();
+      this.board = null;
+    }
+    const { Agent } = await sdk();
+    const options = await this.options();
+    let agent: SDKAgent | null = null;
+    if (this.agentId) {
       try {
-        result = await conn.request("session/load", { sessionId: this.sessionId, cwd, mcpServers: this.mcpServers() }, 120_000);
+        agent = await Agent.resume(this.agentId, options);
+        this.sentInstructions = true;
       } catch (err) {
-        log(`Cursor session/load failed, starting a new session: ${(err as Error).message}`);
-        this.sessionId = null;
-      } finally {
-        this.loading = false;
+        log(`Cursor agent resume failed, starting a new agent: ${errorText(err)}`);
+        this.sink?.notice("warn", "Could not resume the Cursor agent; this turn starts a new one without the earlier conversation.");
+        this.agentId = null;
       }
     }
-    if (!this.sessionId) {
-      result = await conn.request("session/new", { cwd, mcpServers: this.mcpServers() }, 120_000);
-      const id = isPlainRecord(result) && typeof result.sessionId === "string" ? result.sessionId : null;
-      if (!id) {
-        conn.kill();
-        throw new Error("Cursor did not return a session id");
-      }
-      this.sessionId = id;
+    if (!agent) {
+      agent = await Agent.create(options).catch((err) => {
+        throw new Error(errorText(err));
+      });
+      this.agentId = agent.agentId;
       this.sentInstructions = false;
-    } else {
-      this.sentInstructions = true;
     }
-    this.syncOptions(result);
-    this.conn = conn;
-    return conn;
+    this.agent = agent;
+    this.agentKey = key;
+    return agent;
   }
 
-  private syncOptions(result: unknown): void {
-    if (!isPlainRecord(result) || !Array.isArray(result.configOptions)) return;
-    for (const option of result.configOptions as ConfigOption[]) {
-      if (option.id && typeof option.currentValue === "string") {
-        this.applied[option.id] = option.currentValue;
-      }
-    }
-  }
-
-  private async setOption(conn: AcpConnection, configId: string, value: string): Promise<boolean> {
-    if (this.applied[configId] === value) return true;
-    try {
-      const result = await conn.request("session/set_config_option", { sessionId: this.sessionId, configId, value }, 30_000);
-      this.syncOptions(result);
-      this.applied[configId] = value;
-      return true;
-    } catch (err) {
-      this.sink?.notice("warn", `Cursor rejected ${configId} = ${value}: ${(err as Error).message}`);
-      return false;
-    }
+  private closeAgent(): void {
+    this.agent?.close();
+    this.agent = null;
+    this.agentKey = null;
   }
 
   async warm(_instructions: string): Promise<void> {
     if (this.sink) return;
-    this.warming ??= (async () => {
-      const conn = await this.ensureConnection();
-      await this.applyThread(conn);
-    })()
-      .catch((err) => log(`Cursor warm-up failed: ${(err as Error).message}`))
+    this.warming ??= this.ensureAgent()
+      .then(() => undefined)
+      .catch((err) => log(`Cursor warm-up failed: ${errorText(err)}`))
       .finally(() => {
         this.warming = null;
       });
@@ -597,48 +592,49 @@ class CursorSession implements ProviderSession {
 
   private armIdle(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.stopProcess(), IDLE_KILL_MS);
+    this.idleTimer = setTimeout(() => this.stopAgent(), IDLE_CLOSE_MS);
+    this.idleTimer.unref?.();
   }
 
-  private async applyThread(conn: AcpConnection): Promise<void> {
-    await this.setOption(conn, "mode", cursorMode(this.thread.mode));
-    const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
-    const model = models.find((item) => item.id === this.thread.model);
-    if (this.applied.model !== this.thread.model) {
-      await this.setOption(conn, "model", this.thread.model);
-    }
-    if (model) {
-      const wanted: Record<string, string> = {};
-      for (const param of model.params) {
-        const value = this.thread.modelParams[param.id];
-        if (value !== undefined) wanted[param.id] = value;
-      }
-      if (model.effortParam && this.thread.effort) {
-        wanted[model.effortParam] = this.thread.effort;
-      }
-      for (const [id, value] of Object.entries(wanted)) {
-        await this.setOption(conn, id, value);
-      }
-    }
-  }
-
-  /**
-   * Hold a message until the current session/prompt returns. A second prompt on this connection
-   * cancels the turn instead of injecting at a tool boundary.
-   */
-  steer(_input: SteerInput): string {
+  /** Inject a message into the running turn (run.steer). Without a run yet, or with images, it waits for the next turn. */
+  steer(input: SteerInput): string {
     const id = randomUUID();
-    this.steers.set(id, "pending");
+    this.steers.set(id, { text: input.text, state: "queued" });
+    if (!input.images.length && !input.documents.length) this.sendSteer(id);
     return id;
   }
 
+  private sendSteer(id: string): void {
+    const steer = this.steers.get(id);
+    const run = this.current;
+    if (!steer || steer.state !== "queued" || !run?.steer || !run.supports("stream")) return;
+    steer.state = "sending";
+    steer.settled = run
+      .steer(steer.text)
+      .then((outcome) => {
+        if (steer.state === "dropped") return;
+        if (outcome === "complete_delivered") {
+          steer.state = "delivered";
+          this.steers.delete(id);
+          this.sink?.steered?.(id);
+        } else {
+          steer.state = "queued";
+        }
+      })
+      .catch((err) => {
+        log(`Cursor steer failed: ${(err as Error).message}`);
+        if (steer.state === "sending") steer.state = "queued";
+      });
+  }
+
   dropSteer(steerId: string): void {
-    if (this.steers.get(steerId) !== "pending") return;
-    this.steers.set(steerId, "dropped");
+    const steer = this.steers.get(steerId);
+    if (steer && steer.state !== "delivered") steer.state = "dropped";
   }
 
   async withdrawSteer(steerId: string): Promise<boolean> {
-    if (this.steers.get(steerId) !== "pending") return false;
+    const steer = this.steers.get(steerId);
+    if (!steer || steer.state !== "queued") return false;
     this.steers.delete(steerId);
     return true;
   }
@@ -649,72 +645,73 @@ class CursorSession implements ProviderSession {
       this.idleTimer = null;
     }
     this.sink = sink;
-    this.abort = new AbortController();
-    this.startedTools.clear();
+    this.cancelled = false;
+    this.tools.clear();
+    this.plan = null;
     if (this.lastUsage) sink.usage(this.lastUsage);
     try {
-      // A warm-up still in flight already holds the process start; join it instead of racing it.
       if (this.warming) await this.warming;
-      const conn = await this.ensureConnection();
-      if (this.sessionId) sink.nativeId(this.sessionId);
-      await this.applyThread(conn);
       if (opts?.adopt) {
         if (this.carry !== opts.adopt) return { status: "error", error: "The steered message was lost." };
         this.carry = null;
       }
-      const prompt: unknown[] = [];
+      const agent = await this.ensureAgent();
+      sink.nativeId(agent.agentId);
+      this.reported = agent.agentId;
+      if (this.cancelled) return this.endTurn({ status: "cancelled" });
       const text = !this.sentInstructions && input.instructions ? `<instructions>\n${input.instructions}\n</instructions>\n\n${input.text}` : input.text;
-      prompt.push({ type: "text", text });
-      for (const image of input.images) {
-        prompt.push({ type: "image", data: image.data, mimeType: image.mimeType });
-      }
-      const result = await this.prompt(conn, prompt, sink);
+      const models = this.provider.cachedModels();
+      const run = await agent.send(
+        { text, images: input.images.map((image) => ({ data: image.data, mimeType: image.mimeType })) },
+        {
+          model: modelSelection(this.thread, models),
+          mode: this.thread.mode === "plan" ? "plan" : "agent",
+          onDelta: ({ update }) => this.onDelta(update, sink),
+        }
+      );
+      this.current = run;
       this.sentInstructions = true;
-      const stop = result?.stopReason;
-      if (stop === "cancelled") return this.endTurn({ status: "cancelled" });
-      if (stop === "refusal") return this.endTurn({ status: "error", error: "The model refused to continue." });
-      if (stop === "max_tokens" || stop === "max_turn_requests") {
-        sink.notice("warn", stop === "max_tokens" ? "Stopped: output token limit reached." : "Stopped: turn request limit reached.");
+      for (const id of this.steers.keys()) this.sendSteer(id);
+      if (this.cancelled) await run.cancel().catch(() => undefined);
+      const result = await run.wait();
+      if (result.usage) this.takeUsage(result.usage, sink);
+      await this.addCost(agent, sink);
+      if (result.status === "cancelled" || this.cancelled) return this.endTurn({ status: "cancelled" });
+      if (result.status === "error") return this.endTurn({ status: "error", error: result.error?.message || "Cursor run failed" });
+      if (this.plan && this.thread.mode === "plan") {
+        // The host continues in Code mode when the user accepts.
+        await sink.plan({ title: "Plan", text: this.plan }).catch(() => undefined);
       }
       return this.endTurn({ status: "done" });
     } catch (err) {
-      if (this.abort?.signal.aborted) {
-        return this.endTurn({ status: "cancelled" });
-      }
-      return this.endTurn({ status: "error", error: (err as Error).message });
+      if (this.cancelled) return this.endTurn({ status: "cancelled" });
+      return this.endTurn({ status: "error", error: errorText(err) });
     } finally {
-      this.abort?.abort();
-      this.abort = null;
+      this.current = null;
       this.sink = null;
       this.armIdle();
     }
   }
 
-  /**
-   * Sends session/prompt, retrying when Cursor's backend drops the stream with a RetriableError
-   * (e.g. "http/2 stream closed with error code CANCEL"). The CLI gives up on these instead of
-   * retrying itself. If the attempt streamed nothing, the same prompt goes again; otherwise a
-   * short note asks the model to pick up where it was cut off, so finished work is not redone.
-   */
-  private async prompt(conn: AcpConnection, prompt: unknown[], sink: RunSink): Promise<{ stopReason?: string } | undefined> {
-    let body = prompt;
-    for (let attempt = 1; ; attempt += 1) {
-      this.progressed = false;
-      try {
-        return await conn.request<{ stopReason?: string }>("session/prompt", { sessionId: this.sessionId, prompt: body });
-      } catch (err) {
-        if (attempt > RETRY_DELAYS_MS.length || !isRetriable(err) || this.abort?.signal.aborted || !conn.alive) throw err;
-        sink.notice("warn", `Cursor connection dropped (${(err as Error).message}). Retrying (attempt ${attempt + 1})…`);
-        await abortableDelay(RETRY_DELAYS_MS[attempt - 1], this.abort?.signal);
-        if (this.abort?.signal.aborted) throw err;
-        if (this.progressed) body = [{ type: "text", text: RESUME_TEXT }];
-      }
+  /** The agent's billed cost so far is known only after the turn; take the newest turn's. */
+  private async addCost(agent: SDKAgent, sink: RunSink): Promise<void> {
+    try {
+      const usage = await Promise.race([agent.getUsage(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000))]);
+      const cost = usage?.runs.at(-1)?.cost;
+      if (cost) sink.usage({ costUsd: cost.rawCostCents / 100 });
+    } catch (err) {
+      log(`Cursor getUsage failed: ${(err as Error).message}`);
     }
   }
 
-  /** A pending steer the turn did not take in runs as its own turn next; the host adopts it. */
-  private endTurn(result: TurnResult): TurnResult {
-    const waiting = [...this.steers].find(([, state]) => state === "pending")?.[0];
+  /** A steered message the turn did not take in runs as its own turn next; the host adopts it. */
+  private async endTurn(result: TurnResult): Promise<TurnResult> {
+    const settling = [...this.steers.values()].map((s) => s.settled).filter(Boolean);
+    if (settling.length) await Promise.race([Promise.all(settling), new Promise((resolve) => setTimeout(resolve, 3_000))]);
+    for (const [id, steer] of this.steers) {
+      if (steer.state === "dropped" || steer.state === "delivered") this.steers.delete(id);
+    }
+    const waiting = [...this.steers].find(([, steer]) => steer.state === "queued")?.[0];
     if (waiting) {
       this.steers.delete(waiting);
       this.carry = waiting;
@@ -724,178 +721,177 @@ class CursorSession implements ProviderSession {
   }
 
   async cancel(): Promise<void> {
-    this.abort?.abort();
-    if (this.conn?.alive && this.sessionId) {
-      this.conn.notify("session/cancel", { sessionId: this.sessionId });
-    }
+    this.cancelled = true;
+    await this.current?.cancel().catch(() => undefined);
   }
 
-  private stopProcess(): void {
+  private stopAgent(): void {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
-    this.conn?.kill();
-    this.conn = null;
-    this.applied = {};
+    if (this.current) return;
+    this.closeAgent();
+    this.board?.close();
+    this.board = null;
   }
 
   dispose(): void {
     void this.cancel();
     this.steers.clear();
     this.carry = null;
-    this.stopProcess();
+    this.current = null;
+    this.stopAgent();
     this.onDispose();
   }
 
-  private onNotification(method: string, params: unknown): void {
-    if (!isPlainRecord(params)) return;
-    if (method === "session/update") {
-      const update = params.update;
-      if (!isPlainRecord(update)) return;
-      // usage_update is session-level: keep it even while loading or between turns.
-      if (this.loading && update.sessionUpdate !== "usage_update") return;
-      this.onUpdate(update);
-      return;
-    }
-    const sink = this.sink;
-    if (!sink) return;
-    if (method === "cursor/update_todos") {
-      const todos = Array.isArray(params.todos) ? params.todos : [];
-      sink.todos(
-        todos.filter(isPlainRecord).map((todo) => ({
-          content: String(todo.content ?? ""),
-          status: todo.status === "completed" ? "completed" : todo.status === "in_progress" ? "in_progress" : "pending",
-        }))
-      );
-      return;
-    }
-    if (method === "cursor/task") {
-      const description = typeof params.description === "string" ? params.description : typeof params.title === "string" ? params.title : "";
-      if (description) sink.notice("info", `Subagent: ${description}`);
-    }
+  private takeUsage(usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; reasoningTokens?: number }, sink: RunSink): void {
+    this.lastUsage = {
+      ...(this.lastUsage ?? {}),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      ...(usage.reasoningTokens !== undefined ? { reasoningTokens: usage.reasoningTokens } : {}),
+    };
+    sink.usage(this.lastUsage);
   }
 
-  private onUpdate(update: Record<string, unknown>): void {
-    const kind = update.sessionUpdate;
-    if (kind === "available_commands_update") {
-      const commands = Array.isArray(update.availableCommands) ? update.availableCommands : [];
-      this.knownCommands = commands.filter(isPlainRecord).map((cmd) => ({
-        name: String(cmd.name ?? ""),
-        description: typeof cmd.description === "string" ? cmd.description : undefined,
-        hint: isPlainRecord(cmd.input) && typeof cmd.input.hint === "string" ? cmd.input.hint : undefined,
-      }));
-      this.sink?.commands(this.knownCommands);
-      return;
-    }
-    if (kind === "usage_update") {
-      this.takeUsage(update);
-      return;
-    }
-    const sink = this.sink;
-    if (!sink) return;
-    this.progressed = true;
-    switch (kind) {
-      case "agent_message_chunk": {
-        const content = update.content;
-        if (isPlainRecord(content) && content.type === "text" && typeof content.text === "string") sink.text(content.text);
+  private onDelta(update: InteractionUpdate, sink: RunSink): void {
+    if (this.sink !== sink) return;
+    switch (update.type) {
+      case "text-delta":
+        sink.text(update.text);
         return;
-      }
-      case "agent_thought_chunk": {
-        const content = update.content;
-        if (isPlainRecord(content) && content.type === "text" && typeof content.text === "string") sink.reasoning(content.text);
+      case "thinking-delta":
+        sink.reasoning(update.text);
         return;
-      }
-      case "tool_call":
-      case "tool_call_update":
-        this.onTool(update, sink);
+      case "thinking-completed":
+        sink.breakBlock();
         return;
-      case "plan": {
-        const entries = Array.isArray(update.entries) ? update.entries : [];
-        sink.todos(
-          entries.filter(isPlainRecord).map((entry) => ({
-            content: String(entry.content ?? ""),
-            status: entry.status === "completed" ? "completed" : entry.status === "in_progress" ? "in_progress" : "pending",
-          }))
-        );
+      case "tool-call-started":
+      case "partial-tool-call":
+        this.onTool(update.callId, update.toolCall, false, sink);
         return;
-      }
-      case "session_info_update":
-        if (typeof update.title === "string" && update.title.trim()) sink.title(update.title.trim());
+      case "tool-call-completed":
+        this.onTool(update.callId, update.toolCall, true, sink);
         return;
-      case "current_mode_update": {
-        const mode = update.currentModeId;
-        if (this.thread.mode !== "board" && sink.modeChanged && (mode === "agent" || mode === "plan" || mode === "ask")) {
-          this.applied.mode = String(mode);
-          const mapped: ThreadMode = mode === "agent" ? "code" : mode;
-          if (mapped !== this.thread.mode) sink.modeChanged(mapped);
-        }
+      case "summary":
+        sink.notice("info", "Cursor summarized the conversation to make room.");
         return;
-      }
       default:
         return;
     }
   }
 
-  private takeUsage(update: Record<string, unknown>): void {
-    const used = asNum(update.used);
-    const size = asNum(update.size);
-    if (used === undefined && size === undefined) return;
-    this.lastUsage = {
-      ...(this.lastUsage ?? {}),
-      ...(used !== undefined ? { contextTokens: used } : {}),
-      ...(size !== undefined ? { contextWindow: size } : {}),
-    };
-    this.sink?.usage(this.lastUsage);
+  private onTool(callId: string, raw: unknown, finished: boolean, sink: RunSink): void {
+    const call = isPlainRecord(raw) ? raw : {};
+    const type = typeof call.type === "string" ? call.type : "tool";
+    const args = isPlainRecord(call.args) ? call.args : {};
+    if (type === "createPlan") {
+      if (finished && typeof args.plan === "string") this.plan = args.plan;
+      return;
+    }
+    if (type === "updateTodos" && Array.isArray(args.todos)) {
+      sink.todos(
+        args.todos.filter(isPlainRecord).map((todo) => ({
+          content: String(todo.content ?? ""),
+          status: todo.status === "completed" ? "completed" : todo.status === "inProgress" ? "in_progress" : "pending",
+        }))
+      );
+      if (!this.tools.has(callId)) this.tools.set(callId, type);
+      return;
+    }
+    const filePath = str(args.path);
+    const paths = filePath ? [filePath] : undefined;
+    const mcpServer = str(args.providerIdentifier);
+    const isBoard = type === "mcp" && mcpServer === BOARD_MCP;
+    const title = this.toolTitle(type, args, mcpServer, isBoard);
+    const detail = type === "shell" ? str(args.command) : undefined;
+    const input = type === "mcp" ? (isPlainRecord(args.args) ? args.args : undefined) : Object.keys(args).length ? args : undefined;
+    if (!this.tools.has(callId)) {
+      this.tools.set(callId, type);
+      sink.toolStart({ toolId: callId, name: type, tool: toolKind(type), title, detail, input, paths, status: "running" });
+    }
+    if (!finished) {
+      sink.toolUpdate(callId, { title, ...(detail ? { detail } : {}), ...(input ? { input } : {}), ...(paths ? { paths } : {}) });
+      return;
+    }
+    const result = isPlainRecord(call.result) ? call.result : null;
+    const ok = result?.status === "success";
+    const value = result && isPlainRecord(result.value) ? result.value : null;
+    const out = this.toolOutput(type, value, result);
+    sink.toolUpdate(callId, {
+      title,
+      ...(paths ? { paths } : {}),
+      status: ok ? "done" : "error",
+      ...out,
+    });
   }
 
-  private onTool(update: Record<string, unknown>, sink: RunSink): void {
-    const toolId = String(update.toolCallId ?? "");
-    if (!toolId) return;
-    // The plan card shows Cursor's plan; its tool row would repeat it.
-    if (typeof update.title === "string" && update.title.startsWith("Create Plan")) return;
-    const rawTitle = typeof update.title === "string" ? this.shortenPaths(update.title) : undefined;
-    const title = rawTitle?.startsWith(`${BOARD_MCP}: `) ? `Scribe: ${rawTitle.slice(BOARD_MCP.length + 2)}` : rawTitle;
-    const status = mapStatus(update.status);
-    const paths = pathsFrom(update);
-    const rawInput = update.rawInput;
-    const detail = isPlainRecord(rawInput) && typeof rawInput.command === "string" ? rawInput.command : undefined;
-    if (!this.startedTools.has(toolId)) {
-      this.startedTools.add(toolId);
-      const name = title ?? String(update.kind ?? "tool");
-      sink.toolStart({
-        toolId,
-        name,
-        tool: mapToolKind(update.kind, name),
-        title: name,
-        detail,
-        input: rawInput && isPlainRecord(rawInput) && Object.keys(rawInput).length ? rawInput : undefined,
-        paths,
-        status: status ?? "pending",
-      });
-      if (update.sessionUpdate === "tool_call" && !update.content && update.rawOutput === undefined) return;
-    }
-    const diffs: Array<{ path: string; oldText: string | null; newText: string | null }> = [];
-    if (Array.isArray(update.content)) {
-      for (const block of update.content) {
-        if (isPlainRecord(block) && block.type === "diff") {
-          const normalized = normalizeDiff(block as { path?: string; oldText?: string; newText?: string });
-          if (normalized) diffs.push(normalized);
-        }
+  private toolTitle(type: string, args: Record<string, unknown>, mcpServer: string | undefined, isBoard: boolean): string {
+    const rel = (p: unknown) => (typeof p === "string" ? this.shortenPaths(p) : "");
+    switch (type) {
+      case "shell":
+        return "Shell";
+      case "read":
+        return `Read ${rel(args.path)}`;
+      case "edit":
+        return `Edit ${rel(args.path)}`;
+      case "write":
+        return `Write ${rel(args.path)}`;
+      case "delete":
+        return `Delete ${rel(args.path)}`;
+      case "ls":
+        return `List ${rel(args.path) || "."}`;
+      case "grep":
+        return `Grep ${str(args.pattern) ?? ""}`.trim();
+      case "glob":
+        return `Glob ${str(args.globPattern) ?? ""}`.trim();
+      case "semSearch":
+        return `Search ${str(args.query) ?? ""}`.trim();
+      case "readLints":
+        return "Read lints";
+      case "task":
+        return `Subagent: ${str(args.description) ?? "task"}`;
+      case "mcp": {
+        const tool = str(args.toolName) ?? "tool";
+        return isBoard ? `Scribe: ${tool}` : `${mcpServer ?? "MCP"}: ${tool}`;
       }
+      case "webSearch":
+        return `Web search: ${str(args.query) ?? str(args.searchTerm) ?? ""}`.trim();
+      case "webFetch":
+      case "fetch":
+        return `Fetch ${str(args.url) ?? ""}`.trim();
+      default:
+        return type;
     }
-    const text = contentText(update.content);
-    const out = outputText(update.rawOutput);
-    sink.toolUpdate(toolId, {
-      ...(title ? { title } : {}),
-      ...(detail ? { detail } : {}),
-      ...(rawInput && isPlainRecord(rawInput) && Object.keys(rawInput).length ? { input: rawInput } : {}),
-      ...(status ? { status } : {}),
-      ...(paths ? { paths } : {}),
-      ...(out.output !== undefined ? { output: out.output } : text ? { output: text } : {}),
-      ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}),
-      ...(diffs.length ? { providerDiff: diffs } : {}),
-    });
+  }
+
+  private toolOutput(type: string, value: Record<string, unknown> | null, result: Record<string, unknown> | null): { output?: string; exitCode?: number } {
+    if (!result) return {};
+    if (result.status !== "success") {
+      const error = result.error;
+      const message = isPlainRecord(error) && typeof error.message === "string" ? error.message : typeof error === "string" ? error : JSON.stringify(result);
+      return { output: message };
+    }
+    if (!value) return {};
+    if (type === "shell") {
+      const stdout = typeof value.stdout === "string" ? value.stdout : "";
+      const stderr = typeof value.stderr === "string" ? value.stderr : "";
+      return { output: [stdout, stderr].filter(Boolean).join("\n"), ...(typeof value.exitCode === "number" ? { exitCode: value.exitCode } : {}) };
+    }
+    if (type === "mcp" && Array.isArray(value.content)) {
+      const texts = value.content.filter(isPlainRecord).map((block) => (isPlainRecord(block.text) && typeof block.text.text === "string" ? block.text.text : block.image ? "[image]" : ""));
+      return { output: texts.filter(Boolean).join("\n") };
+    }
+    // Reads, edits and writes: the file and the host's diff say it better than the tool's echo.
+    if (type === "read" || type === "edit" || type === "write" || type === "delete") return {};
+    try {
+      return { output: JSON.stringify(value, null, 2) };
+    } catch {
+      return {};
+    }
   }
 
   /** Tool titles carry absolute paths; show them relative to the workspace. */
@@ -911,90 +907,5 @@ class CursorSession implements ProviderSession {
       }
     }
     return out;
-  }
-
-  private async onRequest(method: string, params: unknown): Promise<unknown> {
-    const sink = this.sink;
-    const signal = this.abort?.signal;
-    if (!isPlainRecord(params)) throw new Error("bad params");
-    if (method === "session/request_permission") {
-      if (!sink) return { outcome: { outcome: "cancelled" } };
-      const toolCall = isPlainRecord(params.toolCall) ? params.toolCall : {};
-      const toolId = typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : undefined;
-      const options = (Array.isArray(params.options) ? params.options : []).filter(isPlainRecord).map((option) => ({
-        id: String(option.optionId),
-        label: String(option.name ?? option.optionId),
-        kind: (["allow_once", "allow_always", "reject_once", "reject_always"].includes(String(option.kind)) ? option.kind : "allow_once") as
-          | "allow_once"
-          | "allow_always"
-          | "reject_once"
-          | "reject_always",
-      }));
-      let title = typeof toolCall.title === "string" ? toolCall.title : "Tool call";
-      // MCP permission titles look like "<server>-<tool>: <tool>".
-      // The server name may contain dashes, so strip the known "-<tool>" suffix instead of splitting.
-      const titleMatch = /^([\w.-]+): ([\w.-]+)$/.exec(title);
-      const mcp = titleMatch && titleMatch[1].endsWith(`-${titleMatch[2]}`) ? [title, titleMatch[1].slice(0, -titleMatch[2].length - 1), titleMatch[2]] : null;
-      const isBoard = Boolean(mcp && mcp[1] === BOARD_MCP);
-      if (mcp) title = isBoard ? `Scribe: ${mcp[2]}` : `${mcp[1]}: ${mcp[2]}`;
-      const rawInput = isPlainRecord(toolCall.rawInput) ? toolCall.rawInput : null;
-      const reason = contentText(toolCall.content);
-      try {
-        const decision = await sink.approval(
-          {
-            toolId,
-            tool: mcp ? "mcp" : mapToolKind(toolCall.kind, title),
-            boardTool: isBoard,
-            title,
-            detail: [rawInput && typeof rawInput.command === "string" ? rawInput.command : "", reason].filter(Boolean).join("\n"),
-            options,
-          },
-          signal
-        );
-        return { outcome: { outcome: "selected", optionId: decision.optionId } };
-      } catch {
-        return { outcome: { outcome: "cancelled" } };
-      }
-    }
-    if (method === "cursor/ask_question") {
-      if (!sink) return { outcome: { outcome: "cancelled" } };
-      const questions = (Array.isArray(params.questions) ? params.questions : []).filter(isPlainRecord).map((q) => ({
-        id: String(q.id),
-        prompt: String(q.prompt ?? ""),
-        multi: q.allowMultiple === true,
-        options: (Array.isArray(q.options) ? q.options : []).filter(isPlainRecord).map((o) => ({ id: String(o.id), label: String(o.label ?? o.id) })),
-      }));
-      try {
-        const answer = await sink.question({ title: typeof params.title === "string" ? params.title : undefined, questions }, signal);
-        if ("skipped" in answer) {
-          return { outcome: { outcome: "skipped", reason: answer.reason ?? "User skipped the questions" } };
-        }
-        return {
-          outcome: {
-            outcome: "answered",
-            answers: Object.entries(answer.answers).map(([questionId, selectedOptionIds]) => ({ questionId, selectedOptionIds })),
-          },
-        };
-      } catch {
-        return { outcome: { outcome: "cancelled" } };
-      }
-    }
-    if (method === "cursor/create_plan") {
-      if (!sink) return { outcome: { outcome: "cancelled" } };
-      const overview = typeof params.overview === "string" ? params.overview : "";
-      const plan = typeof params.plan === "string" ? params.plan : "";
-      const todos = (Array.isArray(params.todos) ? params.todos : []).filter(isPlainRecord).map((todo) => `- [ ] ${String(todo.content ?? "")}`);
-      const text = [overview, plan, todos.length ? `\n**Todos**\n${todos.join("\n")}` : ""].filter(Boolean).join("\n\n");
-      try {
-        const decision = await sink.plan({ title: typeof params.name === "string" ? params.name : "Plan", text }, signal);
-        if (decision.accepted) {
-          return { outcome: { outcome: "accepted" } };
-        }
-        return { outcome: { outcome: "rejected", reason: decision.note || "The user wants changes to the plan." } };
-      } catch {
-        return { outcome: { outcome: "cancelled" } };
-      }
-    }
-    throw new RpcError(`Method not supported: ${method}`, -32601);
   }
 }

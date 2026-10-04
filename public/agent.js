@@ -45,7 +45,7 @@
     { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
     { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits" },
     { id: "plan", label: "Plan", detail: "Investigate and propose a plan before changing anything" },
-    { id: "board", label: "Pages", detail: "Scribe pages and web only, no shell (Cursor can still write files)" },
+    { id: "board", label: "Pages", detail: "Scribe pages and web only, no shell or file edits" },
   ];
   const APPROVALS = [
     { id: "ask", label: "Ask first", detail: "Ask before edits and commands that are not allowlisted" },
@@ -55,14 +55,23 @@
   ];
   const WEB_MODES = [
     { id: "on", label: "Web", detail: "Web search and fetch on any site" },
-    { id: "limited", label: "Web: limited", detail: "Only the domains on the web allowlist, without asking (Claude)" },
+    { id: "limited", label: "Web: limited", detail: "Only the domains on the web allowlist, without asking" },
     { id: "off", label: "Web off", detail: "No web search or fetch" },
   ];
-  /** Providers that actually apply Limited and Off. Cursor over ACP can't turn its web tools off (#140). */
+  /** Providers that actually apply Limited and Off. */
   function webEnforced(provider) {
-    return provider === "claude";
+    return provider === "claude" || provider === "cursor";
   }
-  const WEB_UNENFORCED = "Not enforced on Cursor yet: its own web search and fetch stay on. Use a Claude thread when web must be off.";
+  const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
+  /** Cursor has no Limited search: the allowlist covers a fetch tool only. */
+  const CURSOR_LIMITED = "Fetch from the web allowlist's domains only; no web search";
+  /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
+  const CURSOR_REVIEW = "Cursor: Auto-review approves safe calls and denies the rest; it can't ask you yet";
+  function approvalDetail(a, provider) {
+    if (provider === "cursor" && a.id !== "full") return CURSOR_REVIEW;
+    if (a.id === "auto" && provider !== "claude") return "Claude only";
+    return a.detail;
+  }
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
   const SCOPE_SLASH = [
@@ -2543,7 +2552,7 @@
       bar.append(modeBtn);
       if (s.mode === "code") {
         const ap = APPROVALS.find((a) => a.id === s.approval) || APPROVALS[0];
-        const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.approvalMenu(event.currentTarget), ap.detail);
+        const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.approvalMenu(event.currentTarget), approvalDetail(ap, s.provider));
         apBtn.append(icon("shield"), el("span", null, ap.label));
         bar.append(apBtn);
       }
@@ -2565,7 +2574,7 @@
       if (s.provider !== "openai") {
         const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
         const unenforced = wm.id !== "on" && !webEnforced(s.provider);
-        const detail = unenforced ? WEB_UNENFORCED : wm.detail;
+        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider === "cursor" ? CURSOR_LIMITED : wm.detail;
         const web = button(
           "",
           `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}${unenforced ? " web-unenforced" : ""}`,
@@ -2719,7 +2728,7 @@
         anchor,
         APPROVALS.map((a) => ({
           label: a.label,
-          detail: a.id === "auto" && s.provider !== "claude" ? "Claude only; Cursor asks as usual" : a.detail,
+          detail: approvalDetail(a, s.provider),
           checked: s.approval === a.id,
           danger: a.id === "full",
           run: () => this.updateSettings({ approval: a.id }),
@@ -2733,7 +2742,7 @@
       const cur = webMode(s.web);
       const items = WEB_MODES.map((w) => ({
         label: w.label,
-        detail: w.id !== "on" && !webEnforced(s.provider) ? "Claude only for now: Cursor keeps its own web tools" : w.detail,
+        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider === "cursor" ? CURSOR_LIMITED : w.detail,
         checked: cur === w.id,
         run: () => this.updateSettings({ web: w.id }),
       }));
@@ -4639,7 +4648,7 @@
       const about = el(
         "p",
         "settings-hint",
-        "Cursor runs through its CLI (agent acp); Claude through the Claude Agent SDK with your Claude Code login."
+        "Cursor runs through the Cursor SDK (log in above, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login."
       );
       panel.append(title, providers, sources, usage, chat, keys, about);
       root.append(backdrop, panel);
@@ -4670,7 +4679,30 @@
         const row = el("div", "setting-row");
         const label = el("span");
         label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${p.detail || ""}`));
-        row.append(label, el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
+        row.append(label);
+        if (p.login && !p.available) {
+          row.append(
+            button("Log in", "ag-btn", async () => {
+              try {
+                const res = await api("POST", `/${p.id}/login`);
+                if (res?.url) window.open(res.url, "_blank", "noopener");
+                notice("Finish the login in your browser.");
+                // The login finishes in the daemon; pick it up when it does.
+                for (let i = 0; i < 100; i += 1) {
+                  await new Promise((resolve) => setTimeout(resolve, 3000));
+                  await loadConfig();
+                  if (providerAvailable(p.id)) break;
+                }
+                agentSettings.renderStatus();
+                renderAll();
+              } catch (err) {
+                notice(err.message);
+              }
+            })
+          );
+        } else {
+          row.append(el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
+        }
         this.status.append(row);
       }
     },

@@ -14,7 +14,7 @@ import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
-import { CursorProvider } from "./providers/cursor.js";
+import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
 import type {
@@ -126,9 +126,11 @@ type QueuedMessage = {
 function promptText(msg: QueuedMessage, thread: Thread, guides: string): string {
   const origin = msg.from === "page" ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n" : "";
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" && thread.provider !== "openai" });
-  const recap = thread.rewind?.recap
-    ? `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
-    : "";
+  const recap = !thread.rewind?.recap
+    ? ""
+    : thread.rewind.migrated
+      ? `<earlier_conversation>\nThis conversation moved to a new session, so you don't have its history. This is what was said so far, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
+      : `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`;
   return recap + origin + contextBlock(msg.context) + guides + files + msg.text;
 }
 
@@ -442,6 +444,11 @@ export class AgentHost {
     if (!sources.some((s) => s.id === id)) throw new Error(`source not found: ${id}`);
     this.db.setSetting("openai.sources", sources.filter((s) => s.id !== id));
     (this.providers.openai as OpenAIProvider).invalidate();
+  }
+
+  /** Start Cursor's browser login; resolves with the login URL. */
+  cursorLogin(): Promise<{ url: string | null }> {
+    return (this.providers.cursor as CursorProvider).startLogin();
   }
 
   async providerStatus(): Promise<ProviderStatus[]> {
@@ -1219,6 +1226,10 @@ export class AgentHost {
       }
     }
 
+    if (msg && thread.provider === "cursor" && thread.nativeId && !isSdkAgentId(thread.nativeId) && !thread.rewind && !setupError) {
+      thread = this.leaveAcpSession(thread, turn.id);
+    }
+
     const sink = this.makeSink(threadId, run);
     let result: TurnResult = setupError ? { status: "error", error: setupError } : { status: "cancelled" };
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
@@ -1919,6 +1930,19 @@ export class AgentHost {
     this.flushNow();
     this.emitThread(threadId);
     return message;
+  }
+
+  /**
+   * A Cursor thread whose nativeId is an old ACP session id: the SDK cannot resume it, so the turn
+   * starts a new agent with a recap of the conversation, like a rewind to the end. Once per thread.
+   */
+  private leaveAcpSession(thread: Thread, turnId: string): Thread {
+    const kept = this.loadTurns(thread.id).filter((t) => t.id !== turnId && t.status === "done");
+    const recap = kept.length ? this.recap(this.loadItems(thread.id), kept) : "";
+    const next: Thread = { ...thread, nativeId: null, ...(recap ? { rewind: { at: null, recap, migrated: true } } : {}) };
+    this.threads.set(thread.id, next);
+    this.db.saveThread(next);
+    return next;
   }
 
   /** The kept conversation in short, for a provider that starts over after a rewind: each message and the reply to it. */

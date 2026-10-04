@@ -46,9 +46,10 @@ export type Thread = {
   /**
    * Set by a rewind until the next turn ends. at: the provider transcript entry the next turn
    * continues from (Claude forks its session there); null starts a fresh session. recap: the kept
-   * conversation, sent ahead of the next message when the provider cannot fork.
+   * conversation, sent ahead of the next message when the provider cannot fork. migrated: not a
+   * rewind but a Cursor thread moving off its old ACP session (same recap, other wording).
    */
-  rewind?: { at: string | null; recap?: string };
+  rewind?: { at: string | null; recap?: string; migrated?: boolean };
   /**
    * Made by forking another thread, until its first turn ends. The first turn continues the other
    * thread's provider session when it can (same provider and folder, and the provider forks), or
@@ -337,6 +338,8 @@ export type ProviderStatus = {
   label: string;
   available: boolean;
   detail?: string;
+  /** Not logged in, and the provider can start a browser login (Cursor). */
+  login?: boolean;
 };
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {

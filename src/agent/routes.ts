@@ -42,6 +42,9 @@ export function agentRouter(host: AgentHost): express.Router {
     }))
   );
 
+  // Cursor's browser login (the SDK's Cursor.auth.login); the URL also opens in the system browser.
+  router.post("/cursor/login", wrap(() => host.cursorLogin()));
+
   // The providers' own allow / deny / ask lists (Claude Code settings, Cursor CLI config).
   router.get("/permissions", wrap((req) => ({ sets: listPermissions(typeof req.query.cwd === "string" ? req.query.cwd : null) })));
 

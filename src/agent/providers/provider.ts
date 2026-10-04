@@ -114,7 +114,7 @@ export interface ProviderSession {
   warm(instructions: string): Promise<void>;
   /**
    * Run one turn. With `adopt`, the turn is the steered message the previous turn reported as
-   * `next`: the provider already has it (Claude), or sends it now as this turn (Cursor ACP).
+   * `next`: the provider already has it (Claude), or sends it now as this turn (Cursor).
    */
   run(input: TurnInput, sink: RunSink, opts?: { adopt?: string }): Promise<TurnResult>;
   /**
