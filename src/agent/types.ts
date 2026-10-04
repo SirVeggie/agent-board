@@ -122,6 +122,8 @@ export type ThreadView = Thread & {
   finishedAt?: number;
   /** A fork that has not run yet: how its first turn gets the earlier conversation, and which model summarizes it. */
   carry?: { how: "native" | "summary"; summarizer?: string };
+  /** True while every user turn was sent by the page; a typed user message clears it. */
+  fromPage: boolean;
 };
 
 export type FileChange = {

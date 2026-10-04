@@ -36,6 +36,7 @@ import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
+import { pageOwned } from "./threadList.js";
 import { cleanAllowlist, parseWebAccess } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -730,6 +731,7 @@ export class AgentHost {
       queued: this.queues.get(thread.id)?.length ?? 0,
       background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
+      fromPage: pageOwned(this.loadItems(thread.id)),
       ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
     };

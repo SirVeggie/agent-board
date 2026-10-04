@@ -15,6 +15,7 @@
     dockStyle: "scribe.agent.dockStyle",
     emptyEnter: "scribe.agent.emptyEnter",
     tips: "scribe.agent.showTips",
+    hidePage: "scribe.agent.hidePageThreads",
   };
   const DOCK_STYLES = [
     { id: "bar", label: "Bar" },
@@ -95,6 +96,9 @@
     dockPicks: new Map(),
     filter: ["here", "workspaces", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
     search: "",
+    hidePageThreads: localStorage.getItem(LS.hidePage) !== "0",
+    /** Extra rows revealed per grouping key via "Show 10 more". */
+    groupExtra: new Map(),
     lastActiveId: null,
     ready: false,
     /** Forks whose offer to archive the thread they came from was answered or dismissed. */
@@ -516,6 +520,35 @@
 
   function threadRank(t) {
     return (t.pinned ? 1e15 : 0) + t.activityAt;
+  }
+
+  /** Keep in sync with src/agent/threadList.ts */
+  const LIST_PAGE = 10;
+  const LIST_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function windowGroup(threads, { extra = 0, now, currentId, searching, hidePage }) {
+    const hide = Boolean(hidePage) && !searching;
+    const pool = hide ? threads.filter((t) => !t.fromPage || t.pinned || t.id === currentId) : threads;
+    if (searching) return { visible: pool, hidden: 0 };
+    const keep = new Set();
+    for (const t of pool) {
+      if (t.pinned || t.id === currentId) keep.add(t.id);
+    }
+    const recent = [];
+    const older = [];
+    for (const t of pool) {
+      if (now - threadWhenMs(t) <= LIST_RECENT_MS) recent.push(t);
+      else older.push(t);
+    }
+    const base = recent.slice(0, LIST_PAGE);
+    const seen = new Set(base.map((t) => t.id));
+    const rest = [];
+    for (const t of [...recent, ...older]) {
+      if (!seen.has(t.id)) rest.push(t);
+    }
+    for (const t of [...base, ...rest.slice(0, extra)]) keep.add(t.id);
+    const visible = pool.filter((t) => keep.has(t.id));
+    return { visible, hidden: pool.length - visible.length };
   }
 
   function setCurrent(id) {
@@ -3143,7 +3176,18 @@
     }
     const newBtn = button("", "ag-btn small primary ag-new", (event) => onNew(event.currentTarget));
     newBtn.append(icon("plus"), el("span", null, "New"));
-    top.append(search, seg, newBtn);
+    const hide = el("label", "ag-check ag-list-hide");
+    const hideBox = el("input");
+    hideBox.type = "checkbox";
+    hideBox.checked = S.hidePageThreads;
+    hideBox.addEventListener("change", () => {
+      S.hidePageThreads = hideBox.checked;
+      localStorage.setItem(LS.hidePage, hideBox.checked ? "1" : "0");
+      fill();
+    });
+    hide.append(hideBox, el("span", null, "Hide page-launched"));
+    hide.title = "Threads started by a page stay hidden until you type in them";
+    top.append(search, seg, hide, newBtn);
     const list = el("div", "ag-list");
     container.append(top, list);
     const fill = () => {
@@ -3180,8 +3224,20 @@
       }
       const kindRank = { page: 0, folder: 1, workspace: 2, global: 3 };
       if (S.filter === "here") order.sort((a, b) => kindRank[groups.get(a)[0].scope.kind] - kindRank[groups.get(b)[0].scope.kind]);
+      const now = Date.now();
+      let shown = 0;
       for (const key of order) {
-        const first = groups.get(key)[0];
+        const members = groups.get(key);
+        const { visible, hidden } = windowGroup(members, {
+          extra: S.groupExtra.get(key) || 0,
+          now,
+          currentId,
+          searching: Boolean(q),
+          hidePage: S.hidePageThreads,
+        });
+        if (!visible.length) continue;
+        shown += visible.length;
+        const first = visible[0];
         const gt = groupTitle(first);
         const head = el("div", "ag-list-group");
         const name = gt.kind === "Global" ? "" : gt.text;
@@ -3191,7 +3247,26 @@
           if (dir) head.title = dir;
         }
         list.append(head);
-        for (const t of groups.get(key)) list.append(threadRow(t, t.id === currentId, onPick));
+        for (const t of visible) list.append(threadRow(t, t.id === currentId, onPick));
+        if (hidden) {
+          const more = button("", "ag-list-more", () => {
+            S.groupExtra.set(key, (S.groupExtra.get(key) || 0) + LIST_PAGE);
+            fill();
+          });
+          more.append(el("span", null, "Show 10 more"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
+          list.append(more);
+        }
+      }
+      if (!shown) {
+        list.append(
+          el(
+            "div",
+            "ag-list-empty",
+            S.hidePageThreads
+              ? "No recent threads. Page-launched and older threads are hidden."
+              : "No recent threads. Older threads are hidden."
+          )
+        );
       }
       const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
       highlight(Math.max(0, at), false);
@@ -3212,6 +3287,7 @@
     const title = el("span", "ag-row-title", t.title);
     const meta = el("span", "ag-row-meta");
     meta.append(el("span", `ag-prov p-${t.provider}`, PROVIDER_GLYPH[t.provider] || "?"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
+    if (t.fromPage) meta.append(el("span", null, "·"), el("span", null, "page"));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
     const wt = openWorktree(t);
     if (wt) {
