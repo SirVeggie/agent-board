@@ -93,7 +93,7 @@ import {
   type SpacesView,
   type SpaceTab,
 } from "./spaces.js";
-import { applyEdits, assertRevision, type HtmlEdit, type HtmlEditResult } from "./htmlEdit.js";
+import { applyEdits, assertRevision, toLf, type HtmlEdit, type HtmlEditResult } from "./htmlEdit.js";
 import {
   mergeTemplateValues,
   normalizeTemplateInput,
@@ -196,7 +196,7 @@ export class BoardStore extends EventEmitter {
         tab.key = pageKey(tab.key) || `${PAGE_KEY_PREFIX}${tab.id}`;
         this.markDirty(tab.id);
       }
-      const upgraded = upgradeLegacyHtml(tab.html);
+      const upgraded = toLf(upgradeLegacyHtml(tab.html));
       if (upgraded !== tab.html) {
         tab.html = upgraded;
         this.markDirty(tab.id);

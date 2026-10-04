@@ -125,7 +125,20 @@ page_patch({ key: "todo-page", edits: [{ oldString: "...", newString: "..." }], 
 - Line numbers are a prefix (number, tab), not part of the HTML. Leave them out of `oldString`.
 - `pattern` is a JavaScript regex; pass `literal: true` to search plain text.
 - `full: true` returns the whole page anyway. Use it rarely: it costs the whole page in context.
+- To rewrite a whole block you just read, replace its lines instead of copying it into `oldString`: `{ startLine: 412, endLine: 440, newString: "..." }`. `{ afterLine: 440, newString: "..." }` inserts new lines after line 440 (`afterLine: 0` at the top); an empty `newString` on a range deletes those lines. Line numbers count against the page as earlier edits in the same call left it, so list several line edits bottom to top, and always pass `expectedRevision` from the read you took the numbers from: a stale number edits the wrong lines, where a stale `oldString` only fails.
 - This works in every mode and for every provider. It is the way to edit large pages in Pages mode, which has no file tools.
+
+### Building a large page in parts
+
+A new page too big for one `page_show` call: show the first part, then add the rest with `append` edits. Each `{ append: true, newString }` lands just before the page's closing `</body>` (at the end of a page without one), so parts stay in order inside the body.
+
+```
+page_show({ key: "audit", title: "Audit", html: "<h1>Audit</h1><section id=\"part-1\">...</section>", background: true })
+page_patch({ key: "audit", edits: [{ append: true, newString: "<section id=\"part-2\">...</section>" }], background: true })
+page_patch({ key: "audit", edits: [{ append: true, newString: "<script>/* wire it up */</script>" }] })
+```
+
+Pages are stored with LF line endings (CRLF is converted when a page is saved), so numbered lines, grep lines and copied snippets always agree.
 
 ### Large rewrites with file tools: check out to a file
 

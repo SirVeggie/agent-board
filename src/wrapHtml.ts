@@ -1,3 +1,5 @@
+import { toLf } from "./htmlEdit.js";
+
 /**
  * Chromium drops the ::-webkit-scrollbar rules (and draws arrow buttons) on any element with
  * scrollbar-width or scrollbar-color, so the standard properties are for other engines only.
@@ -72,7 +74,8 @@ blockquote {
 ${BOARD_SCROLLBAR_CSS}
 `.trim();
 
-export function wrapHtml(title: string, html: string): string {
+export function wrapHtml(title: string, raw: string): string {
+  const html = toLf(raw);
   const trimmed = html.trim();
   if (/^<!doctype/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
     return html;

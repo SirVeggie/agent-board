@@ -120,3 +120,63 @@ test("parseHtmlEdits rejects a malformed entry", () => {
     (err: unknown) => err instanceof HtmlEditError && /newString must be a string/.test(err.message)
   );
 });
+
+test("replaces a numbered line range", () => {
+  const result = applyEdits("a\nb\nc\nd", [{ startLine: 2, endLine: 3, newString: "B\nC2\nC3" }]);
+  assert.equal(result.html, "a\nB\nC2\nC3\nd");
+});
+
+test("an empty newString on a line range deletes the lines", () => {
+  assert.equal(applyEdits("a\nb\nc", [{ startLine: 2, endLine: 2, newString: "" }]).html, "a\nc");
+});
+
+test("line edits listed bottom to top keep their numbers from one read", () => {
+  const result = applyEdits("1\n2\n3\n4\n5", [
+    { startLine: 4, endLine: 5, newString: "four" },
+    { startLine: 1, endLine: 2, newString: "one\ntwo\nmore" },
+  ]);
+  assert.equal(result.html, "one\ntwo\nmore\n3\nfour");
+});
+
+test("refuses a line range outside the page", () => {
+  assert.throws(() => applyEdits("a\nb", [{ startLine: 2, endLine: 3, newString: "x" }]), /not a range in the page \(1–2\)/);
+  assert.throws(() => applyEdits("a\nb", [{ startLine: 2, endLine: 1, newString: "x" }]), HtmlEditError);
+});
+
+test("inserts lines after a line, or at the top with afterLine 0", () => {
+  assert.equal(applyEdits("a\nb", [{ afterLine: 1, newString: "x\n" }]).html, "a\nx\nb");
+  assert.equal(applyEdits("a\nb", [{ afterLine: 0, newString: "top" }]).html, "top\na\nb");
+  assert.throws(() => applyEdits("a\nb", [{ afterLine: 3, newString: "x" }]), /outside the page/);
+});
+
+test("append inserts parts before the closing body in order", () => {
+  const page = "<html>\n<body>\n<h1>Part 1</h1>\n</body>\n</html>\n";
+  const once = applyEdits(page, [{ append: true, newString: "<section>2</section>" }]).html;
+  const twice = applyEdits(once, [{ append: true, newString: "<section>3</section>\n" }]).html;
+  assert.equal(twice, "<html>\n<body>\n<h1>Part 1</h1>\n<section>2</section>\n<section>3</section>\n</body>\n</html>\n");
+  assert.equal(applyEdits("<p>a</p>", [{ append: true, newString: "<p>b</p>" }]).html, "<p>a</p>\n<p>b</p>\n");
+});
+
+test("CRLF pages and snippets are matched as LF", () => {
+  const result = applyEdits("<ul>\r\n<li>a</li>\r\n</ul>", [{ oldString: "<li>a</li>\n</ul>", newString: "<li>b</li>\r\n</ul>" }]);
+  assert.equal(result.html, "<ul>\n<li>b</li>\n</ul>");
+});
+
+test("parseHtmlEdits reads each edit kind and refuses mixed ones", () => {
+  assert.deepEqual(
+    parseHtmlEdits([
+      { startLine: 1, endLine: 2, newString: "x" },
+      { afterLine: 0, newString: "y" },
+      { append: true, newString: "z" },
+    ]),
+    [
+      { startLine: 1, endLine: 2, newString: "x" },
+      { afterLine: 0, newString: "y" },
+      { append: true, newString: "z" },
+    ]
+  );
+  assert.throws(() => parseHtmlEdits([{ oldString: "a", startLine: 1, endLine: 1, newString: "b" }]), /only one of/);
+  assert.throws(() => parseHtmlEdits([{ startLine: 1.5, endLine: 2, newString: "b" }]), /integer/);
+  assert.throws(() => parseHtmlEdits([{ startLine: 1, newString: "b" }]), /endLine must be/);
+  assert.throws(() => parseHtmlEdits([{ newString: "b" }]), /pass oldString, startLine/);
+});

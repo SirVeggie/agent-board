@@ -216,7 +216,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_patch",
-    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, find the spot with page_grep or a page_read offset/limit window and patch it the same way. With file tools (Code mode) you can instead check it out with page_read toFile: true, edit that file, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
+    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, find the spot with page_grep or a page_read offset/limit window and patch it the same way, or replace a numbered block with startLine/endLine. To build a large new page in parts, page_show the first part and add the rest with append edits. With file tools (Code mode) you can instead check it out with page_read toFile: true, edit that file, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -226,17 +226,39 @@ export async function startMcp(): Promise<void> {
             oldString: z
               .string()
               .min(1)
+              .optional()
               .describe("Exact snippet to find in the stored HTML. Must match once unless replaceAll is true."),
-            newString: z.string().describe("Replacement. Pass an empty string to delete the snippet."),
+            newString: z
+              .string()
+              .describe("Replacement, inserted lines, or the appended part. Pass an empty string to delete the snippet or lines."),
             replaceAll: z
               .boolean()
               .optional()
-              .describe("Replace every match. Default false (exactly one match required)."),
+              .describe("With oldString: replace every match. Default false (exactly one match required)."),
+            startLine: z
+              .number()
+              .int()
+              .optional()
+              .describe("Instead of oldString: first line to replace (1-based, as numbered by page_read / page_grep). Pass endLine too."),
+            endLine: z.number().int().optional().describe("Last line to replace, inclusive."),
+            afterLine: z
+              .number()
+              .int()
+              .optional()
+              .describe("Instead of oldString: insert newString as new lines after this line (0 = at the top)."),
+            append: z
+              .boolean()
+              .optional()
+              .describe(
+                "Instead of oldString: insert newString before the page's closing </body> (or at its end). Build a large page in parts: page_show the first part, then append the rest one call at a time."
+              ),
           })
         )
         .min(1)
         .optional()
-        .describe("Replacements to apply in order. Each sees the result of the previous edit. Omit when only changing title or when passing htmlPath. Refused on pages bound to a template."),
+        .describe(
+          "Edits to apply in order; each sees the result of the previous one. Each edit has newString and one of: oldString (exact snippet), startLine + endLine (replace those lines), afterLine (insert after it), or append: true. Line numbers count against the page as earlier edits left it, so list line edits bottom to top, and pass expectedRevision from the read you numbered them from. Omit when only changing title or when passing htmlPath. Refused on pages bound to a template."
+        ),
       htmlPath: z
         .string()
         .optional()

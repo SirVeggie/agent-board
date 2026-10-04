@@ -1,8 +1,16 @@
-export type HtmlEdit = {
-  oldString: string;
-  newString: string;
-  replaceAll?: boolean;
-};
+/**
+ * One page_patch edit. Every kind writes newString:
+ * - oldString: replace an exact snippet (replaceAll for every match).
+ * - startLine..endLine: replace those lines (1-based, inclusive), as numbered by page_read / page_grep.
+ * - afterLine: insert newString as new lines after that line (0 = at the top).
+ * - append: insert before the closing </body> (or at the end of a page without one), to build a page in parts.
+ * Line numbers count against the HTML as the previous edits left it.
+ */
+export type HtmlEdit =
+  | { oldString: string; newString: string; replaceAll?: boolean }
+  | { startLine: number; endLine: number; newString: string }
+  | { afterLine: number; newString: string }
+  | { append: true; newString: string };
 
 export type HtmlEditResult = {
   html: string;
@@ -31,60 +39,134 @@ export function assertRevision(actual: number, expected: number | undefined, not
   }
 }
 
+const EDITS_REQUIRED =
+  "edits is required (a non-empty array of { oldString, newString }, { startLine, endLine, newString }, { afterLine, newString } or { append: true, newString })";
+
 export function parseHtmlEdits(value: unknown): HtmlEdit[] {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new HtmlEditError("edits is required (a non-empty array of { oldString, newString })");
+    throw new HtmlEditError(EDITS_REQUIRED);
   }
   return value.map((item, index) => {
     const n = index + 1;
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new HtmlEditError(`edit ${n}: must be an object with oldString and newString`);
+      throw new HtmlEditError(`edit ${n}: must be an object with newString and one of oldString, startLine/endLine, afterLine or append`);
     }
     const rec = item as Record<string, unknown>;
-    if (typeof rec.oldString !== "string") {
-      throw new HtmlEditError(`edit ${n}: oldString must be a string`);
-    }
     if (typeof rec.newString !== "string") {
       throw new HtmlEditError(`edit ${n}: newString must be a string`);
     }
-    if (rec.replaceAll !== undefined && typeof rec.replaceAll !== "boolean") {
-      throw new HtmlEditError(`edit ${n}: replaceAll must be a boolean`);
+    const kinds = [
+      rec.oldString !== undefined && "oldString",
+      (rec.startLine !== undefined || rec.endLine !== undefined) && "startLine/endLine",
+      rec.afterLine !== undefined && "afterLine",
+      rec.append !== undefined && "append",
+    ].filter(Boolean);
+    if (kinds.length !== 1) {
+      throw new HtmlEditError(
+        kinds.length
+          ? `edit ${n}: pass only one of ${kinds.join(", ")}`
+          : `edit ${n}: pass oldString, startLine/endLine, afterLine or append`
+      );
+    }
+    if (rec.oldString !== undefined) {
+      if (typeof rec.oldString !== "string") {
+        throw new HtmlEditError(`edit ${n}: oldString must be a string`);
+      }
+      if (rec.replaceAll !== undefined && typeof rec.replaceAll !== "boolean") {
+        throw new HtmlEditError(`edit ${n}: replaceAll must be a boolean`);
+      }
+      return {
+        oldString: rec.oldString,
+        newString: rec.newString,
+        ...(rec.replaceAll === true ? { replaceAll: true } : {}),
+      };
+    }
+    if (rec.replaceAll !== undefined) {
+      throw new HtmlEditError(`edit ${n}: replaceAll only goes with oldString`);
+    }
+    if (rec.afterLine !== undefined) {
+      return { afterLine: lineNumber(rec.afterLine, n, "afterLine"), newString: rec.newString };
+    }
+    if (rec.append !== undefined) {
+      if (rec.append !== true) {
+        throw new HtmlEditError(`edit ${n}: append must be true`);
+      }
+      return { append: true, newString: rec.newString };
     }
     return {
-      oldString: rec.oldString,
+      startLine: lineNumber(rec.startLine, n, "startLine"),
+      endLine: lineNumber(rec.endLine, n, "endLine"),
       newString: rec.newString,
-      ...(rec.replaceAll === true ? { replaceAll: true } : {}),
     };
   });
 }
 
+function lineNumber(value: unknown, n: number, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new HtmlEditError(`edit ${n}: ${name} must be an integer line number`);
+  }
+  return value;
+}
+
 export function applyEdits(html: string, edits: HtmlEdit[]): HtmlEditResult {
   if (!edits.length) {
-    throw new HtmlEditError("edits is required (a non-empty array of { oldString, newString })");
+    throw new HtmlEditError(EDITS_REQUIRED);
   }
-  let next = html;
+  let next = toLf(html);
   let applied = 0;
   for (let i = 0; i < edits.length; i += 1) {
     const edit = edits[i];
     const n = i + 1;
-    if (!edit.oldString) {
-      throw new HtmlEditError(`edit ${n}: oldString must not be empty`);
-    }
-    const matches = countNonOverlapping(next, edit.oldString);
-    if (matches === 0) {
-      throw new HtmlEditError(`edit ${n}: oldString not found. ${describeMiss(next, edit.oldString)}`);
-    }
-    if (!edit.replaceAll && matches > 1) {
-      throw new HtmlEditError(
-        `edit ${n}: oldString matched ${matches} times. Add more surrounding context to match exactly once, or pass replaceAll: true to change every match.`
-      );
-    }
-    if (edit.replaceAll) {
-      next = next.split(edit.oldString).join(edit.newString);
-      applied += matches;
+    const newString = toLf(edit.newString);
+    if ("oldString" in edit) {
+      const oldString = toLf(edit.oldString);
+      if (!oldString) {
+        throw new HtmlEditError(`edit ${n}: oldString must not be empty`);
+      }
+      const matches = countNonOverlapping(next, oldString);
+      if (matches === 0) {
+        throw new HtmlEditError(`edit ${n}: oldString not found. ${describeMiss(next, oldString)}`);
+      }
+      if (!edit.replaceAll && matches > 1) {
+        throw new HtmlEditError(
+          `edit ${n}: oldString matched ${matches} times. Add more surrounding context to match exactly once, or pass replaceAll: true to change every match.`
+        );
+      }
+      if (edit.replaceAll) {
+        next = next.split(oldString).join(newString);
+        applied += matches;
+      } else {
+        const at = next.indexOf(oldString);
+        next = next.slice(0, at) + newString + next.slice(at + oldString.length);
+        applied += 1;
+      }
+    } else if ("append" in edit) {
+      next = appendToBody(next, newString);
+      applied += 1;
     } else {
-      const at = next.indexOf(edit.oldString);
-      next = next.slice(0, at) + edit.newString + next.slice(at + edit.oldString.length);
+      const lines = next.split("\n");
+      const total = lines.length;
+      let start: number;
+      let removed: number;
+      if ("afterLine" in edit) {
+        if (edit.afterLine < 0 || edit.afterLine > total) {
+          throw new HtmlEditError(`edit ${n}: afterLine ${edit.afterLine} is outside the page (0–${total}; it has ${total} lines)`);
+        }
+        start = edit.afterLine;
+        removed = 0;
+      } else {
+        if (edit.startLine < 1 || edit.endLine < edit.startLine || edit.endLine > total) {
+          throw new HtmlEditError(
+            `edit ${n}: lines ${edit.startLine}–${edit.endLine} are not a range in the page (1–${total}). Line numbers count against the page as earlier edits left it; list line edits bottom to top.`
+          );
+        }
+        start = edit.startLine - 1;
+        removed = edit.endLine - edit.startLine + 1;
+      }
+      // Empty newString on a line range deletes the lines rather than leaving a blank one.
+      const inserted = newString === "" ? [] : newString.replace(/\n$/, "").split("\n");
+      lines.splice(start, removed, ...inserted);
+      next = lines.join("\n");
       applied += 1;
     }
   }
@@ -92,6 +174,20 @@ export function applyEdits(html: string, edits: HtmlEdit[]): HtmlEditResult {
     throw new HtmlEditError("patch would leave the page empty");
   }
   return { html: next, applied };
+}
+
+/** Before the last </body>, on its own line, so parts land inside the page's body in order. */
+function appendToBody(html: string, part: string): string {
+  const block = part.endsWith("\n") ? part : `${part}\n`;
+  const at = html.search(/<\/body\s*>(?![\s\S]*<\/body\s*>)/i);
+  const head = at === -1 ? html : html.slice(0, at);
+  const tail = at === -1 ? "" : html.slice(at);
+  return `${head}${head === "" || head.endsWith("\n") ? "" : "\n"}${block}${tail}`;
+}
+
+/** Pages are stored with LF line endings so numbered windows, grep lines and copied oldStrings all agree. */
+export function toLf(text: string): string {
+  return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
 }
 
 const MISS_EXCERPT_CHARS = 80;
