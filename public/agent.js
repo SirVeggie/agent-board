@@ -4516,7 +4516,7 @@
     if (!itemId) return true;
     let tries = 0;
     const reveal = () => {
-      const node = sidebar.view.root?.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`);
+      const node = (S.fullOpen ? full.view : sidebar.view).root?.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`);
       if (node) node.scrollIntoView({ block: "center" });
       else if (++tries < 20) setTimeout(reveal, 50);
     };
@@ -4775,7 +4775,7 @@
   /** Open a thread from the flyout or a toast: in the dock (expanded), else in the sidebar at its question. */
   function openActive(t, inDock) {
     if (inDock) {
-      showPageThread(t.id, "dock");
+      showPageThread(t.id, "dock", { reveal: true });
       dock.setExpanded(true);
     } else if (t.status === "waiting" && t.asking) openAsk(t.id, t.asking.itemId);
     else openThread(t.id);
@@ -5950,20 +5950,37 @@
       .trim();
   }
 
-  function showPageThread(id, where) {
+  /**
+   * Show a thread in the sidebar or the floating chat. `reveal` (the user clicked for it) also clears
+   * whatever would hide it: an open menu, the sidebar's thread list, and the full window, which shows it instead.
+   * Without it (background starts and sends) nothing the user has open is closed.
+   */
+  function showPageThread(id, where, { reveal = false } = {}) {
+    if (reveal) {
+      closeMenu();
+      setCurrent(id);
+      if (S.fullOpen && where === "sidebar") {
+        full.view.setThread(id);
+        full.renderList();
+        full.view.focus();
+        return;
+      }
+    }
     if (where === "sidebar") {
       if (!S.sideOpen) sidebar.setOpen(true);
       sidebar.view.setThread(id);
+      if (reveal && sidebar.listOpen) sidebar.toggleList();
     } else if (where === "dock") {
       if (id !== dock.view.threadId) dock.pick(id);
       if (!S.dockShown) dock.setShown(true);
     }
   }
 
+  /** A user's "open thread" click from a page, card, link, toast, or the palette. */
   function openThread(id) {
     const thread = S.threads.get(id);
     if (!thread || thread.archived) return false;
-    showPageThread(id, "sidebar");
+    showPageThread(id, "sidebar", { reveal: true });
     return true;
   }
 
@@ -6176,7 +6193,7 @@
         // Only opens it for the user; nothing about the thread goes back to the page.
         if (!activated) return { ok: false, error: "no_gesture" };
         if (!thread || thread.archived) return { ok: false, error: "not_found" };
-        showPageThread(thread.id, data.where === "dock" ? "dock" : "sidebar");
+        showPageThread(thread.id, data.where === "dock" ? "dock" : "sidebar", { reveal: true });
         return { ok: true };
       case "options":
         return pageOptions();
@@ -6206,7 +6223,7 @@
         S.details.set(created.id, { items: [], byId: new Map(), turns: new Map() });
         pageSentAt.set(created.id, Date.now());
         const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page" });
-        showPageThread(created.id, data.show);
+        showPageThread(created.id, data.show, { reveal: activated });
         return { ok: true, threadId: created.id, queued: Boolean(sent.queued) };
       }
       case "send": {
@@ -6222,7 +6239,7 @@
         await ensureDetail(thread.id);
         pageSentAt.set(thread.id, Date.now());
         const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page" });
-        showPageThread(thread.id, data.show);
+        showPageThread(thread.id, data.show, { reveal: activated });
         return { ok: true, queued: Boolean(sent.queued) };
       }
       case "stop": {
