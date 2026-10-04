@@ -113,6 +113,7 @@ export type PlanLimits = {
 /** Thread plus runtime fields the UI needs in lists. */
 export type ThreadView = Thread & {
   status: RunStatus;
+  /** True when the last turn finished and the user has not opened the thread. Never set on page-owned threads. */
   unread: boolean;
   queued: number;
   /** Subagents and commands still working in the background, after or beside the current turn. */

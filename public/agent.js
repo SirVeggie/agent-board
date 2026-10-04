@@ -3279,7 +3279,7 @@
   }
 
   function threadRow(t, current, onPick) {
-    const row = button("", `ag-row${current ? " on" : ""}${t.unread ? " unread" : ""}`, () => onPick(t.id));
+    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}`, () => onPick(t.id));
     row.dataset.id = t.id;
     const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
     if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
@@ -3628,7 +3628,7 @@
       this.status.replaceChildren(el("span", "dock-dot"));
       if (start) this.status.append(setClock(el("span", "ag-clock"), start));
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
-      else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread ? "Reply ready" : "Ask the agent", status);
+      else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
     /** The hidden handle shows one line at a time; a new step slides the previous one up and out. */
     setHandleText(text, key) {
@@ -3787,7 +3787,7 @@
     const threads = [...S.threads.values()];
     const waiting = threads.some((t) => t.status === "waiting");
     const running = threads.filter((t) => t.status === "running").length;
-    const unread = threads.filter((t) => t.unread && !t.archived).length;
+    const unread = threads.filter((t) => t.unread && !t.archived && !t.fromPage).length;
     btn.classList.toggle("busy", running > 0);
     btn.classList.toggle("waiting", waiting);
     const badge = document.getElementById("agent-badge");

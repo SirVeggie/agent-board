@@ -724,14 +724,15 @@ export class AgentHost {
         removed += file.removed;
       }
     }
+    const fromPage = pageOwned(this.loadItems(thread.id));
     return {
       ...thread,
       status: this.status.get(thread.id) ?? "idle",
-      unread: this.unread.has(thread.id),
+      unread: this.unread.has(thread.id) && !fromPage,
       queued: this.queues.get(thread.id)?.length ?? 0,
       background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
-      fromPage: pageOwned(this.loadItems(thread.id)),
+      fromPage,
       ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
     };
@@ -1324,7 +1325,7 @@ export class AgentHost {
     if (latest) {
       latest.activityAt = Date.now();
       this.db.saveThread(latest);
-      this.unread.add(threadId);
+      if (!pageOwned(this.loadItems(threadId))) this.unread.add(threadId);
     }
     this.emitThread(threadId);
 
