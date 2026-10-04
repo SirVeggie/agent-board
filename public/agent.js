@@ -4159,6 +4159,8 @@
 
   /* ---------- chrome badge ---------- */
 
+  let lastAsks = "";
+
   function renderBadge() {
     const btn = document.getElementById("agent-toggle");
     if (!btn) return;
@@ -4175,22 +4177,67 @@
       badge.classList.toggle("warn", waiting);
     }
     dock.renderHandle();
-    for (const tabEl of document.querySelectorAll(".tab[data-id]")) {
-      const status = pageStatus(tabEl.dataset.id);
-      tabEl.classList.toggle("agent-running", status === "running");
-      tabEl.classList.toggle("agent-waiting", status === "waiting");
+    for (const rowEl of document.querySelectorAll(".tab[data-id], .lib-page[data-id]")) {
+      const status = pageStatus(rowEl.dataset.id);
+      rowEl.classList.toggle("agent-running", status === "running");
+      rowEl.classList.toggle("agent-waiting", status === "waiting");
+    }
+    const asks = threads
+      .filter((t) => t.status === "waiting")
+      .map((t) => `${t.id}:${t.asking?.itemId || ""}`)
+      .join(",");
+    if (asks !== lastAsks) {
+      lastAsks = asks;
+      window.dispatchEvent(new Event("scribe:agent-status"));
     }
   }
 
-  /** "waiting" or "running" when a thread for this page is at work, for the tab strip. */
+  /**
+   * "waiting" or "running" when a thread for this page is at work, for the tab strip and Library.
+   * A page another thread is asking with (page_ask) also shows as waiting.
+   */
   function pageStatus(tabId) {
     let status = null;
     for (const t of S.threads.values()) {
+      if (t.status === "waiting" && t.asking?.page?.id === tabId) return "waiting";
       if (t.scope.kind !== "page" || t.scope.ref !== tabId || t.status === "idle") continue;
       if (t.status === "waiting") return "waiting";
       status = "running";
     }
     return status;
+  }
+
+  /** Questions, approvals and plans the user still has to answer, newest thread first, for the palette. */
+  function pendingAsks() {
+    const label = { approval: "Approval", question: "Question", plan: "Plan" };
+    return [...S.threads.values()]
+      .filter((t) => t.status === "waiting" && !t.archived)
+      .sort((a, b) => threadRank(b) - threadRank(a))
+      .map((t) => ({
+        kind: "ask",
+        id: `ask:${t.id}`,
+        threadId: t.id,
+        itemId: t.asking?.itemId || "",
+        page: t.asking?.page || null,
+        title: t.asking?.title || "Needs your answer",
+        snippet: t.title,
+        locationLabel: label[t.asking?.kind] || "Waiting",
+        location: "ask",
+      }));
+  }
+
+  /** Open a waiting thread in the sidebar and bring its question into view. */
+  function openAsk(threadId, itemId) {
+    if (!openThread(threadId)) return false;
+    if (!itemId) return true;
+    let tries = 0;
+    const reveal = () => {
+      const node = sidebar.view.root?.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`);
+      if (node) node.scrollIntoView({ block: "center" });
+      else if (++tries < 20) setTimeout(reveal, 50);
+    };
+    requestAnimationFrame(reveal);
+    return true;
   }
 
   function views() {
@@ -5877,7 +5924,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, searchThreads, threadTitle, pageActions, runAction };
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction };
 
   /* ---------- boot ---------- */
 

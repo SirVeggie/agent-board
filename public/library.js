@@ -255,6 +255,7 @@ window.createLibrary = function createLibrary(host) {
       (open ? " open" : "") +
       (open && host.activeId() === page.id ? " active" : "") +
       (page.pinned ? " pinned" : "") +
+      (host.pageStatus?.(page.id) ? ` agent-${host.pageStatus(page.id)}` : "") +
       (drag?.id === page.id && drag.kind === "page" ? " lib-drag-source" : "");
     el.role = "treeitem";
     el.tabIndex = 0;

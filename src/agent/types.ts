@@ -126,6 +126,8 @@ export type ThreadView = Thread & {
   carry?: { how: "native" | "summary"; summarizer?: string };
   /** True while every user turn was sent by the page; a typed user message clears it. */
   fromPage: boolean;
+  /** While waiting: the first question, approval or plan the user has not answered yet. */
+  asking?: { kind: "approval" | "question" | "plan"; itemId: string; title: string; page?: { id: string; key: string; title: string } };
 };
 
 export type FileChange = {

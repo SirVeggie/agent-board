@@ -253,6 +253,7 @@
     clearStripSlot,
     provenance: pageProvenanceLine,
     openThread: (id) => window.scribeChat?.openThread?.(id),
+    pageStatus: (id) => window.scribeChat?.pageStatus?.(id) || null,
     icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE, folderInstructions: FOLDER_INSTRUCTIONS_SVG, folderInstructionsTitle: FOLDER_INSTRUCTIONS_TITLE },
   });
   const views = window.createViews({
@@ -3194,6 +3195,7 @@
     updatePaletteChrome({ id: "pages", query: "" });
     const recentClosed = [...state.closed].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0)).slice(0, 15);
     paletteHits = [
+      ...(window.scribeChat?.pendingAsks?.() || []),
       ...paletteActionRows(""),
       ...state.tabs.map((tab) => ({ ...tab, open: true })),
       ...recentClosed.map((tab) => ({ ...tab, open: false })),
@@ -3309,7 +3311,7 @@
       if (tab.qualityLabel) {
         chips.appendChild(paletteChip(tab.qualityLabel));
       }
-      if (tab.kind === "thread" || tab.kind === "action") {
+      if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask") {
         if (tab.open) {
           chips.appendChild(paletteChip("Open"));
         }
@@ -3373,6 +3375,22 @@
     if (!tab) {
       return;
     }
+    if (tab.kind === "ask") {
+      closePalette();
+      if (tab.page?.id) {
+        if (mode === "peek" || mode === "split") {
+          views.open(tab.page.id, mode);
+        } else if (state.tabs.some((item) => item.id === tab.page.id)) {
+          selectTab(tab.page.id, { fromUser: true });
+        } else {
+          openPage(tab.page.id);
+        }
+      }
+      if (!window.scribeChat?.openAsk?.(tab.threadId, tab.itemId)) {
+        showNotice("Could not open that thread");
+      }
+      return;
+    }
     if (tab.kind === "action") {
       closePalette();
       void window.scribeChat?.runAction(tab.tab, tab.action);
@@ -3429,6 +3447,18 @@
   );
 
   window.addEventListener("keydown", onBoardShortcut, true);
+  // Keep the empty palette's pending questions current while it is open.
+  window.addEventListener("scribe:agent-status", () => {
+    if (isPaletteOpen() && paletteKind === "pages" && !parsePaletteQuery(paletteInput.value, currentPalettePrefixes()).query) {
+      const current = paletteHits[paletteIndex]?.id;
+      showLocalPaletteRows();
+      const index = paletteHits.findIndex((hit) => hit.id === current);
+      if (index > 0) {
+        paletteIndex = index;
+        highlightPaletteRows();
+      }
+    }
+  });
   window.scribeShortcut = runShortcut;
   /** What the agent chat (agent.js) needs from the shell. */
   window.scribeApp = {

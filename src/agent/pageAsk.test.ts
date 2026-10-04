@@ -54,6 +54,8 @@ test("page_ask waits on the page's submit and returns its state", async () => {
   assert.equal(item.title, "Which one?");
   assert.equal(item.page?.key, "scribe:ask-form");
   assert.equal(status(threadId), "waiting");
+  const asking = host.listThreads().find((t) => t.id === threadId)?.asking;
+  assert.deepEqual(asking, { kind: "question", itemId: item.id, title: "Which one?", page: item.page });
 
   store.logEvent("ask-form", { name: "other", data: null, by: "user" });
   store.writeState("ask-form", { ops: [{ op: "set", path: "choice", value: "b" }] });
@@ -65,6 +67,7 @@ test("page_ask waits on the page's submit and returns its state", async () => {
   assert.equal(pageQuestion(threadId).status, "answered");
   assert.equal(pageQuestion(threadId).event, "submit");
   assert.equal(status(threadId), "running");
+  assert.equal(host.listThreads().find((t) => t.id === threadId)?.asking, undefined);
 });
 
 test("skipping the chat card ends page_ask with the user's note", async () => {

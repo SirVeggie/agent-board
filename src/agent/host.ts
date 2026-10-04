@@ -746,6 +746,7 @@ export class AgentHost {
       }
     }
     const fromPage = pageOwned(this.loadItems(thread.id));
+    const asking = this.asking(thread.id);
     return {
       ...thread,
       status: this.status.get(thread.id) ?? "idle",
@@ -756,7 +757,24 @@ export class AgentHost {
       fromPage,
       ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
+      ...(asking ? { asking } : {}),
     };
+  }
+
+  /** The thread's oldest unanswered interaction, for the tab strip, Library and palette. */
+  private asking(threadId: string): ThreadView["asking"] {
+    for (const pending of this.pending.values()) {
+      if (pending.threadId !== threadId) continue;
+      const item = this.loadItems(threadId).find((it) => it.id === pending.itemId);
+      if (!item) continue;
+      if (item.kind === "approval") return { kind: "approval", itemId: item.id, title: item.title };
+      if (item.kind === "question") {
+        const title = item.title || item.questions[0]?.prompt || item.page?.title || "Question";
+        return { kind: "question", itemId: item.id, title, ...(item.page ? { page: item.page } : {}) };
+      }
+      if (item.kind === "plan") return { kind: "plan", itemId: item.id, title: item.title || "Plan to review" };
+    }
+    return undefined;
   }
 
   private emitThread(id: string): void {
@@ -1465,7 +1483,8 @@ export class AgentHost {
     return new Promise<T>((resolve, reject) => {
       const requestId = itemId;
       this.pending.set(requestId, { kind, threadId, itemId, resolve: resolve as never, reject } as Pending);
-      this.setStatus(threadId, "waiting");
+      if (this.status.get(threadId) === "waiting") this.emitThread(threadId);
+      else this.setStatus(threadId, "waiting");
       const onAbort = () => {
         const pending = this.pending.get(requestId);
         if (pending) {
@@ -1477,9 +1496,9 @@ export class AgentHost {
       if (signal?.aborted) onAbort();
       else signal?.addEventListener("abort", onAbort);
     }).finally(() => {
-      if (this.runs.get(threadId) === run && ![...this.pending.values()].some((p) => p.threadId === threadId)) {
-        this.setStatus(threadId, "running");
-      }
+      if (this.runs.get(threadId) !== run) return;
+      if (![...this.pending.values()].some((p) => p.threadId === threadId)) this.setStatus(threadId, "running");
+      else this.emitThread(threadId);
     });
   }
 
