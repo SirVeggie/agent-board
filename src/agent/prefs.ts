@@ -20,6 +20,11 @@ export type Prefs = {
    * fail-closed hook meant for the user's own terminal sessions can deny every tool call here.
    */
   claudeHooks: boolean;
+  /**
+   * Experimental: Cursor threads set to Ask or Edits run shell commands through Scribe, which asks
+   * first, instead of Cursor's own shell under Auto-review. Board workers keep Cursor's shell.
+   */
+  cursorHostShell: boolean;
   recentWorkspaces: string[];
   /** Last workspace used for a scope ("page:<id>", "folder:<id>"), so new threads there start in it. */
   scopeWorkspaces: Record<string, string>;
@@ -42,6 +47,7 @@ export const DEFAULT_PREFS: Prefs = {
   web: "on",
   webAllowlist: DEFAULT_WEB_ALLOWLIST,
   claudeHooks: false,
+  cursorHostShell: false,
   recentWorkspaces: [],
   scopeWorkspaces: {},
   favoriteModels: [],

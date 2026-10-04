@@ -247,6 +247,8 @@ export class AgentHost {
       scratchDir,
       webAllowlist: () => this.prefs().webAllowlist,
       claudeHooks: () => this.prefs().claudeHooks,
+      // Not for board workers: nobody watches their threads to approve commands.
+      cursorHostShell: (threadId) => this.prefs().cursorHostShell && !pageOwned(this.loadItems(threadId)),
       limits: (provider, info) => this.recordLimits(provider, info),
       task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
       followUp: (threadId, id) => this.followUp(threadId, id),
@@ -403,6 +405,7 @@ export class AgentHost {
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
       claudeHooks: saved.claudeHooks === true,
+      cursorHostShell: saved.cursorHostShell === true,
     };
   }
 
@@ -411,6 +414,7 @@ export class AgentHost {
     next.web = parseWebAccess(patch.web) ?? this.prefs().web;
     // null puts back the starting list.
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
+    if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     this.db.setSetting("prefs", next);
     return next;

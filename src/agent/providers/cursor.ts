@@ -11,6 +11,7 @@ import type {
   SDKAgent,
   SDKCustomTool,
   SDKCustomToolContent,
+  SDKCustomToolResult,
   SDKJsonValue,
   ToolName,
 } from "@cursor/sdk";
@@ -21,6 +22,7 @@ import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
 import { isPlainRecord } from "../types.js";
 import { webAllowed } from "../webAccess.js";
+import { clampTimeout, runCommand } from "../hostShell.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -32,6 +34,10 @@ import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type
  * keep it): Pages gets the board tools only, Ask read and search tools, web off drops the web tools.
  * The board's tools reach the agent as SDK custom tools that call this daemon's board MCP server,
  * because Auto-review fails MCP server calls closed and custom tools are never sent to it.
+ *
+ * Host shell (experimental, Agent settings): in Code and Plan threads set to "ask" or "edits", the
+ * built-in shell is off and a custom tool runs commands in this daemon after the user approves each
+ * one, the only way to ask first that the SDK leaves open. Board workers keep the built-in shell.
  */
 
 const IDLE_CLOSE_MS = 15 * 60 * 1000;
@@ -49,6 +55,8 @@ const NO_ANSWER_TOOLS: ToolName[] = ["askQuestion"];
 /** What an Ask thread may use besides MCP and the web: reading and searching. */
 const ASK_TOOLS: ToolName[] = ["read", "grep", "glob", "ls", "semSearch", "readLints", "updateTodos", "readTodos"];
 const MAX_FETCH_CHARS = 200_000;
+/** The custom tool that stands in for the built-in shell when Scribe runs commands itself. */
+export const HOST_SHELL = "run_command";
 
 type Sdk = typeof import("@cursor/sdk");
 let sdkLoad: Promise<Sdk> | null = null;
@@ -122,11 +130,17 @@ export function modelSelection(thread: Pick<Thread, "model" | "effort" | "modelP
 }
 
 /** Built-in tools for a thread: an allowlist (tools) or what to drop from the default set (disallowedTools). */
-export function toolLists(thread: Pick<Thread, "mode" | "web">): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
+export function toolLists(thread: Pick<Thread, "mode" | "web">, hostShell = false): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
   const web = thread.web === "on" ? WEB_TOOLS : [];
   if (thread.mode === "board") return { tools: ["mcp", "updateTodos", "readTodos", ...web] };
   if (thread.mode === "ask") return { tools: [...ASK_TOOLS, "mcp", ...web] };
-  return { disallowedTools: [...NO_ANSWER_TOOLS, ...(thread.web === "on" ? [] : WEB_TOOLS)] };
+  // Not "mcp": that would take the custom tools, the host shell among them, away too.
+  return { disallowedTools: [...NO_ANSWER_TOOLS, ...(hostShell ? (["shell"] as ToolName[]) : []), ...(thread.web === "on" ? [] : WEB_TOOLS)] };
+}
+
+/** Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be asked. */
+export function wantsHostShell(thread: Pick<Thread, "mode" | "approval">, enabled: boolean): boolean {
+  return enabled && (thread.mode === "code" || thread.mode === "plan") && (thread.approval === "ask" || thread.approval === "edits");
 }
 
 export class CursorProvider implements AgentProvider {
@@ -467,6 +481,10 @@ class CursorSession implements ProviderSession {
   private tools = new Map<string, string>();
   /** A plan the agent wrote this turn (Plan mode), offered to the user when the turn ends. */
   private plan: string | null = null;
+  /** Host shell calls seen in the stream (call id to command), and whether a run has been matched to each. */
+  private shellCalls = new Map<string, { command: string; taken: boolean; exitCode?: number | null }>();
+  /** Host shell commands waiting on approval or running; cancel stops them. */
+  private shellRuns = new Set<AbortController>();
 
   constructor(
     private provider: CursorProvider,
@@ -505,7 +523,12 @@ class CursorSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd()]);
+    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell()]);
+  }
+
+  /** Board workers (threads only a page has written to) keep Cursor's own shell; the host says which these are. */
+  private hostShell(): boolean {
+    return wantsHostShell(this.thread, this.ctx.cursorHostShell?.(this.thread.id) ?? false);
   }
 
   private async options(): Promise<AgentOptions> {
@@ -514,9 +537,11 @@ class CursorSession implements ProviderSession {
     this.board ??= new BoardTools(this.ctx.boardMcp, t.id);
     const customTools: Record<string, SDKCustomTool> = { ...(await this.board.tools()) };
     if (t.web === "limited") customTools.web_fetch = allowlistFetch(() => this.ctx.webAllowlist());
+    const hostShell = this.hostShell();
+    if (hostShell) customTools[HOST_SHELL] = this.hostShellTool();
     return {
       model: modelSelection(t, models),
-      ...toolLists(t),
+      ...toolLists(t, hostShell),
       mode: t.mode === "plan" ? "plan" : "agent",
       local: {
         cwd: this.cwd(),
@@ -525,8 +550,8 @@ class CursorSession implements ProviderSession {
         settingSources: t.mode === "board" ? [] : ["user", "project"],
         autoReview: t.mode === "board" ? false : t.approval !== "full",
         customTools,
-        // Subagents get the same tool restrictions as the thread.
-        subagentInherit: {},
+        // Subagents get the same tool restrictions as the thread, and with the host shell no shell of their own.
+        subagentInherit: hostShell ? { resourceProviderOptions: { suppressDefaultShellExecutor: true } } : {},
       },
     };
   }
@@ -647,6 +672,7 @@ class CursorSession implements ProviderSession {
     this.sink = sink;
     this.cancelled = false;
     this.tools.clear();
+    this.shellCalls.clear();
     this.plan = null;
     if (this.lastUsage) sink.usage(this.lastUsage);
     try {
@@ -722,6 +748,7 @@ class CursorSession implements ProviderSession {
 
   async cancel(): Promise<void> {
     this.cancelled = true;
+    for (const run of this.shellRuns) run.abort();
     await this.current?.cancel().catch(() => undefined);
   }
 
@@ -806,6 +833,7 @@ class CursorSession implements ProviderSession {
     const paths = filePath ? [filePath] : undefined;
     const mcpServer = str(args.providerIdentifier);
     const isBoard = type === "mcp" && mcpServer === BOARD_MCP;
+    if (isBoard && args.toolName === HOST_SHELL) return this.onHostShell(callId, isPlainRecord(args.args) ? args.args : {}, finished, call.result, sink);
     const title = this.toolTitle(type, args, mcpServer, isBoard);
     const detail = type === "shell" ? str(args.command) : undefined;
     const input = type === "mcp" ? (isPlainRecord(args.args) ? args.args : undefined) : Object.keys(args).length ? args : undefined;
@@ -827,6 +855,103 @@ class CursorSession implements ProviderSession {
       status: ok ? "done" : "error",
       ...out,
     });
+  }
+
+  /** The host shell shows as a shell call, not as a board tool. */
+  private onHostShell(callId: string, input: Record<string, unknown>, finished: boolean, rawResult: unknown, sink: RunSink): void {
+    const command = str(input.command) ?? "";
+    let call = this.shellCalls.get(callId);
+    if (!call) {
+      call = { command, taken: false };
+      this.shellCalls.set(callId, call);
+    } else if (command) {
+      call.command = command;
+    }
+    if (!this.tools.has(callId)) {
+      this.tools.set(callId, "shell");
+      sink.toolStart({ toolId: callId, name: "shell", tool: "execute", title: "Shell", ...(command ? { detail: command } : {}), status: "running" });
+    } else if (command) {
+      sink.toolUpdate(callId, { detail: command });
+    }
+    if (!finished) return;
+    const result = isPlainRecord(rawResult) ? rawResult : null;
+    const value = result && isPlainRecord(result.value) ? result.value : null;
+    const ok = result?.status === "success" && value?.isError !== true && (call.exitCode === undefined || call.exitCode === 0);
+    sink.toolUpdate(callId, { status: ok ? "done" : "error", ...this.toolOutput("mcp", value, result), ...(typeof call.exitCode === "number" ? { exitCode: call.exitCode } : {}) });
+  }
+
+  /** The stream's call id for a host shell run: the SDK's id when the stream has it, else the oldest unmatched call with this command. */
+  private shellCallId(id: string | undefined, command: string): string | undefined {
+    const known = id ? this.shellCalls.get(id) : undefined;
+    if (id && known) {
+      known.taken = true;
+      return id;
+    }
+    for (const [callId, call] of this.shellCalls) {
+      if (!call.taken && call.command === command) {
+        call.taken = true;
+        return callId;
+      }
+    }
+    return id;
+  }
+
+  private hostShellTool(): SDKCustomTool {
+    return {
+      description:
+        "Run a command line in the workspace's shell (PowerShell on Windows, sh elsewhere) and return its combined output and exit code. Cursor's built-in shell is off in this thread: use this for every terminal command. The user may be asked to approve each command first and can deny it with a note; follow the note.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The command line to run." },
+          working_directory: { type: "string", description: "Folder to run it in, absolute or relative to the workspace. Defaults to the workspace." },
+          timeout_ms: { type: "number", description: "Stop it after this many milliseconds (default 120000, at most 600000)." },
+        },
+        required: ["command"],
+      },
+      annotations: { title: "Shell", destructiveHint: true, openWorldHint: true },
+      execute: (args, context) => this.runHostShell(args, context.toolCallId),
+    };
+  }
+
+  private async runHostShell(args: Record<string, SDKJsonValue>, sdkCallId: string | undefined): Promise<SDKCustomToolResult> {
+    const fail = (text: string): SDKCustomToolResult => ({ content: [{ type: "text", text }], isError: true });
+    const command = typeof args.command === "string" ? args.command.trim() : "";
+    if (!command) return fail("No command given.");
+    const dir = typeof args.working_directory === "string" ? args.working_directory.trim() : "";
+    const cwd = dir ? path.resolve(this.cwd(), dir) : this.cwd();
+    const sink = this.sink;
+    // Between turns (a background subagent) the host answers from the thread's rules alone.
+    const ask: RunSink["approval"] | undefined = sink ? (req, signal) => sink.approval(req, signal) : this.ctx.approval ? (req) => this.ctx.approval!(this.thread.id, req) : undefined;
+    if (!ask) return fail("No active turn: nobody is there to approve this command.");
+    const toolId = this.shellCallId(sdkCallId, command);
+    const abort = new AbortController();
+    this.shellRuns.add(abort);
+    try {
+      const decision = await ask(
+        {
+          ...(toolId ? { toolId } : {}),
+          tool: "execute",
+          title: "Run command",
+          detail: dir ? `${command}\nin ${cwd}` : command,
+          options: [
+            { id: "allow", label: "Allow", kind: "allow_once" },
+            { id: "deny", label: "Deny", kind: "reject_once" },
+          ],
+        },
+        abort.signal
+      );
+      if (decision.optionId !== "allow") return fail(decision.note ? `The user denied this command: ${decision.note}` : "The user denied this command.");
+      const result = await runCommand({ command, cwd, timeoutMs: clampTimeout(args.timeout_ms), signal: abort.signal });
+      const call = toolId ? this.shellCalls.get(toolId) : undefined;
+      if (call) call.exitCode = result.exitCode;
+      const status = result.cancelled ? "Cancelled by the user." : result.timedOut ? "Timed out and stopped." : `Exit code: ${result.exitCode ?? "none"}`;
+      return { content: [{ type: "text", text: `${result.output || "(no output)"}\n\n${status}` }], isError: result.exitCode !== 0 };
+    } catch (err) {
+      return fail(abort.signal.aborted ? "Cancelled by the user." : `Could not run the command: ${(err as Error).message}`);
+    } finally {
+      this.shellRuns.delete(abort);
+    }
   }
 
   private toolTitle(type: string, args: Record<string, unknown>, mcpServer: string | undefined, isBoard: boolean): string {

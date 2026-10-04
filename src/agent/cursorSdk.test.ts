@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isSdkAgentId, mapModels, modelSelection, toolLists } from "./providers/cursor.js";
+import { isSdkAgentId, mapModels, modelSelection, toolLists, wantsHostShell } from "./providers/cursor.js";
 
 const models = mapModels([
   {
@@ -55,4 +55,17 @@ test("isSdkAgentId tells SDK agents from old ACP sessions", () => {
   assert.equal(isSdkAgentId("agent-7f0c2b9e-1111-2222-3333-444455556666"), true);
   assert.equal(isSdkAgentId("0f8e7d6c-1111-2222-3333-444455556666"), false);
   assert.equal(isSdkAgentId(null), false);
+});
+
+test("host shell: only Code and Plan threads that ask, and it drops the built-in shell but keeps mcp", () => {
+  assert.equal(wantsHostShell({ mode: "code", approval: "ask" }, true), true);
+  assert.equal(wantsHostShell({ mode: "plan", approval: "edits" }, true), true);
+  assert.equal(wantsHostShell({ mode: "code", approval: "ask" }, false), false);
+  assert.equal(wantsHostShell({ mode: "code", approval: "auto" }, true), false);
+  assert.equal(wantsHostShell({ mode: "code", approval: "full" }, true), false);
+  assert.equal(wantsHostShell({ mode: "board", approval: "ask" }, true), false);
+  assert.equal(wantsHostShell({ mode: "ask", approval: "ask" }, true), false);
+  const lists = toolLists({ mode: "code", web: "on" }, true).disallowedTools!;
+  assert.ok(lists.includes("shell"));
+  assert.ok(!lists.includes("mcp"));
 });

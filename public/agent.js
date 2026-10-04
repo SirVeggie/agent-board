@@ -67,7 +67,10 @@
   const CURSOR_LIMITED = "Fetch from the web allowlist's domains only; no web search";
   /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
   const CURSOR_REVIEW = "Cursor: Auto-review approves safe calls and denies the rest; it can't ask you yet";
+  /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */
+  const CURSOR_HOST_SHELL = "Cursor: asks before each shell command (Scribe runs it); other tools go through Auto-review";
   function approvalDetail(a, provider) {
+    if (provider === "cursor" && (a.id === "ask" || a.id === "edits") && prefs().cursorHostShell) return CURSOR_HOST_SHELL;
     if (provider === "cursor" && a.id !== "full") return CURSOR_REVIEW;
     if (a.id === "auto" && provider !== "claude") return "Claude only";
     return a.detail;
@@ -4564,6 +4567,34 @@
       );
       providers.append(el("h3", null, "Providers"), this.status, actions);
 
+      const cursor = el("section", "settings-section");
+      const hostShell = switchControl(
+        () => Boolean(prefs().cursorHostShell),
+        () => {
+          const on = !prefs().cursorHostShell;
+          S.config.prefs = { ...prefs(), cursorHostShell: on };
+          api("PUT", "/prefs", { cursorHostShell: on })
+            .then((next) => {
+              S.config.prefs = next;
+              renderAll();
+            })
+            .catch((err) => {
+              S.config.prefs = { ...prefs(), cursorHostShell: !on };
+              hostShell.setAttribute("aria-checked", String(!on));
+              notice(err.message);
+            });
+        }
+      );
+      cursor.append(
+        el("h3", null, "Cursor"),
+        settingRow("Ask before shell commands (experimental)", hostShell, { id: "ag-cursor-shell-label" }),
+        el(
+          "p",
+          "settings-hint",
+          "The Cursor SDK can't ask you before a tool runs. With this on, Code and Plan threads set to Ask or Edits get Scribe's own shell tool instead of Cursor's: you approve each command, and Scribe runs it outside Cursor's sandbox. File edits still go through Auto-review. Board workers keep Cursor's shell. Applies from a thread's next message."
+        )
+      );
+
       const sources = el("section", "settings-section");
       this.sources = el("div", "ag-sources");
       const sourceActions = el("div", "settings-actions");
@@ -4650,7 +4681,7 @@
         "settings-hint",
         "Cursor runs through the Cursor SDK (log in above, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login."
       );
-      panel.append(title, providers, sources, usage, chat, keys, about);
+      panel.append(title, providers, cursor, sources, usage, chat, keys, about);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
