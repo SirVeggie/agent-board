@@ -1985,7 +1985,10 @@
       const status = busy ? el("span", "ag-spin") : failed ? icon("cross", "ag-ico ag-st-err") : icon(it.tool, "ag-ico");
       head.append(status);
       const label = el("span", "ag-tool-label");
-      if ((it.tool === "edit" || it.tool === "delete") && (it.files?.length || it.paths?.length)) {
+      const page = pageTool(it);
+      if (page) {
+        label.append(...this.pageToolLabel(page));
+      } else if ((it.tool === "edit" || it.tool === "delete") && (it.files?.length || it.paths?.length)) {
         const files = it.files?.length ? it.files : it.paths.map((p) => ({ path: p }));
         label.append(el("span", "ag-tool-verb", it.tool === "delete" ? "Delete" : files.some((f) => f.status === "A") ? "Create" : "Edit"));
         for (const f of files.slice(0, 3)) {
@@ -2010,7 +2013,9 @@
       node.append(head);
       if (task) node.append(this.renderTaskLine(it));
       const body = el("div", "ag-tool-body");
-      if (it.tool === "execute") {
+      if (page) {
+        this.pageToolBody(body, it, page);
+      } else if (it.tool === "execute") {
         if (it.detail && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
         // The head cuts the command to one line; the body has all of it.
         if (it.detail) body.append(el("pre", "ag-pre small ag-cmd-full", it.detail));
@@ -2034,7 +2039,7 @@
         body.append(el("pre", "ag-pre small", jsonText(it.input)));
       }
       // A background task's tool result is only the launch receipt; its outcome is on the task line.
-      if (it.output && it.tool !== "read" && !task?.background) {
+      if (it.output && it.tool !== "read" && !task?.background && !page) {
         const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
         body.append(out);
       }
@@ -2052,6 +2057,91 @@
       if (body.childElementCount) node.append(body);
       else node.classList.add("bare");
       return node;
+    }
+
+    /** A Scribe page write's head: what it did, and the page as a chip that opens it. */
+    pageToolLabel(page) {
+      const parts = [];
+      const chip = page.ref ? this.pageChip(page) : null;
+      if (page.name === "page_action") {
+        if (chip) parts.push(chip);
+        const text = el("span", "ag-tool-verb ag-tool-title", page.summary);
+        text.title = page.summary;
+        parts.push(text);
+        return parts;
+      }
+      parts.push(el("span", "ag-tool-verb", page.verb));
+      if (chip) parts.push(chip);
+      if (page.summary) parts.push(el("span", "ag-muted ag-tool-title", page.summary));
+      return parts;
+    }
+
+    pageChip(page) {
+      const chip = el("span", "ag-page-chip", page.title);
+      chip.setAttribute("role", "link");
+      chip.title = `Scribe page · ${page.ref} (opens as a peek; Ctrl navigate, Shift split)`;
+      chip.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        app()?.openLink(page.ref, event, { mode: "peek" });
+      });
+      return chip;
+    }
+
+    /** A Scribe page write's body: open the page, then what changed in a readable form, and the raw call one click away. */
+    pageToolBody(body, it, page) {
+      const input = isRecord(it.input) ? it.input : {};
+      if (page.ref) {
+        const actions = el("div", "ag-page-tool-actions");
+        const open = (mode) => (event) => {
+          event.stopPropagation();
+          app()?.openLink(page.ref, mode ? null : event, { mode });
+        };
+        actions.append(button("Open", "ag-btn tiny", open(null)), button("Peek", "ag-btn tiny", open("peek")), button("Split", "ag-btn tiny", open("split")));
+        body.append(actions);
+      }
+      if (it.status === "error" && it.output) body.append(el("pre", "ag-pre ag-out", it.output.slice(0, 2000)));
+      if (page.name === "page_patch") {
+        const edits = Array.isArray(input.edits) ? input.edits.filter(isRecord) : [];
+        edits.forEach((edit, i) => {
+          const file = snippetDiff(String(edit.oldString ?? ""), String(edit.newString ?? ""));
+          const head = el("div", "ag-inline-diff-head");
+          const name = edits.length > 1 ? `Edit ${i + 1}${edit.replaceAll ? " (all matches)" : ""}` : edit.replaceAll ? "All matches" : "Edit";
+          head.append(el("span", "ag-fpath", name), R.counts(file.added, file.removed));
+          body.append(head, R.renderDiffFile(file, { collapsedAfter: 80 }));
+        });
+        if (typeof input.htmlPath === "string") body.append(el("div", "ag-tool-desc", `Replaced the HTML with ${input.htmlPath}`));
+        if (typeof input.title === "string") body.append(el("div", "ag-tool-desc", `Renamed to “${input.title}”`));
+      } else if (page.name === "page_update") {
+        const ops = Array.isArray(input.ops) ? input.ops.filter(isRecord) : [];
+        if (ops.length) {
+          const list = el("div", "ag-page-ops");
+          for (const op of ops.slice(0, 40)) list.append(el("div", "ag-page-op", opLine(op)));
+          if (ops.length > 40) list.append(el("div", "ag-muted", `+${ops.length - 40} more`));
+          body.append(list);
+        }
+      } else if (page.name === "page_action") {
+        const args = isRecord(input.args) ? input.args : {};
+        const text = [args.text, args.summary, args.note, args.description].find((v) => typeof v === "string" && v.trim());
+        if (text) {
+          const md = el("div", "ag-md small ag-page-tool-text");
+          R.renderMarkdown(md, text, mdCtx);
+          body.append(md);
+        }
+      }
+      const rawKey = `raw:${it.id}`;
+      const raw = el("div", `ag-page-raw${this.expanded.has(rawKey) ? " open" : ""}`);
+      const toggle = button("Raw call", "ag-btn tiny ag-page-raw-toggle", (event) => {
+        event.stopPropagation();
+        this.toggle(rawKey, raw);
+      });
+      const shown = { ...input };
+      if (typeof shown.html === "string" && shown.html.length > 600) shown.html = `${shown.html.slice(0, 600)}… (${shown.html.length} chars)`;
+      const rawBody = el("div", "ag-page-raw-body");
+      rawBody.append(el("pre", "ag-pre small", jsonText(shown)));
+      if (it.output && it.status !== "error") rawBody.append(el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output));
+      raw.append(toggle, rawBody);
+      body.append(raw);
     }
 
     /** Under a task's head, always visible: what it is doing now (or how it ended), its usage, and its controls. */
@@ -3356,6 +3446,145 @@
   function lastLine(text) {
     const lines = String(text || "").trim().split(/\n+/);
     return plain(lines[lines.length - 1] || "").slice(0, 160);
+  }
+
+  const PAGE_WRITE_TOOLS = new Set(["page_show", "page_patch", "page_update", "page_action"]);
+
+  function isRecord(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
+
+  /**
+   * A call to one of Scribe's page-writing tools, read for the chat: { name, ref, title, verb, summary }.
+   * Claude names it mcp__scribe__page_show; OpenAI and Cursor title it "Scribe: page_show".
+   */
+  function pageTool(it) {
+    if (it.tool !== "mcp") return null;
+    const name = /^Scribe:\s+(page_\w+)/.exec(it.title || "")?.[1] || (PAGE_WRITE_TOOLS.has(it.name) ? it.name : "");
+    if (!PAGE_WRITE_TOOLS.has(name)) return null;
+    const input = isRecord(it.input) ? it.input : {};
+    const result = parseToolJson(it.output);
+    const ref = [input.key, input.id, result?.key, result?.id].find((v) => typeof v === "string" && v.trim()) || "";
+    const resolved = ref ? app()?.resolvePages?.([ref])?.[ref] : null;
+    const title = resolved?.title || result?.title || (typeof input.title === "string" && input.title) || ref.replace(/^scribe:/, "") || "page";
+    const done = it.status === "done";
+    const page = { name, ref, title, verb: "", summary: "" };
+    if (name === "page_show") page.verb = done ? (result?.created ? "Created" : "Showed") : it.status === "error" ? "Show" : "Showing";
+    else if (name === "page_patch") {
+      page.verb = done ? "Edited" : it.status === "error" ? "Edit" : "Editing";
+      const n = Array.isArray(input.edits) ? input.edits.length : 0;
+      page.summary = n ? `${n} ${n === 1 ? "edit" : "edits"}` : typeof input.htmlPath === "string" ? "whole page" : typeof input.title === "string" ? "title" : "";
+    } else if (name === "page_update") {
+      page.verb = done ? "Updated" : it.status === "error" ? "Update" : "Updating";
+      const ops = Array.isArray(input.ops) ? input.ops.filter(isRecord) : [];
+      page.summary = ops.length === 1 ? opLine(ops[0]) : ops.length ? `${ops.length} changes` : "";
+    } else page.summary = actionSummary(typeof input.action === "string" ? input.action : "", isRecord(input.args) ? input.args : {}, result?.result, done);
+    return page;
+  }
+
+  /** The JSON object a page tool returned; its text may carry a guide or note after it. */
+  function parseToolJson(output) {
+    const text = String(output || "").trim();
+    if (!text.startsWith("{")) return null;
+    for (const end of [text.length, text.indexOf("\n}") + 2]) {
+      if (end < 2) continue;
+      try {
+        const value = JSON.parse(text.slice(0, end));
+        if (isRecord(value)) return value;
+      } catch {
+        /* try the next cut */
+      }
+    }
+    return null;
+  }
+
+  /** One line for a page_action call, e.g. "Moved #12 to Done". Written for Kanban and todo pages; other actions read as "Action #12". */
+  function actionSummary(action, args, result, done) {
+    const ref = (v) => (typeof v === "number" || (typeof v === "string" && /^\d+$/.test(v)) ? `#${v}` : typeof v === "string" ? v : "");
+    const item = ref(args.card ?? args.item);
+    const quote = (v) => {
+      const text = typeof v === "string" ? v.trim() : "";
+      return text ? `“${text.length > 60 ? `${text.slice(0, 60)}…` : text}”` : "";
+    };
+    const pick = (past, now) => (done ? past : now);
+    switch (action) {
+      case "list": {
+        const filters = ["column", "label", "assignee", "q"].filter((k) => typeof args[k] === "string" && args[k]).map((k) => `${k} ${args[k]}`);
+        return `${pick("Listed", "Listing")} ${args.archived ? "archived " : ""}items${filters.length ? ` · ${filters.join(", ")}` : ""}`;
+      }
+      case "get":
+        return `${pick("Read", "Reading")} ${item}`.trim();
+      case "create":
+        return [pick("Created", "Creating"), done && isRecord(result) && result.num ? `#${result.num}` : "", quote(args.title), typeof args.column === "string" ? `in ${args.column}` : ""].filter(Boolean).join(" ");
+      case "update": {
+        if (args.status === null) return `${pick("Cleared the status of", "Clearing the status of")} ${item}`;
+        if (isRecord(args.status) && typeof args.status.text === "string") return `${item} status: ${args.status.text}`;
+        const fields = Object.keys(args).filter((k) => k !== "card" && k !== "item");
+        return `${pick("Updated", "Updating")} ${item}${fields.length ? ` · ${fields.join(", ")}` : ""}`;
+      }
+      case "comment":
+        return `${pick("Commented on", "Commenting on")} ${item}`;
+      case "move":
+        return `${pick("Moved", "Moving")} ${item}${args.to ? ` to ${args.to}` : ""}`;
+      case "claim":
+        return `${pick("Claimed", "Claiming")} ${item}${typeof args.text === "string" ? ` · ${args.text}` : ""}`;
+      case "release":
+        return `${pick("Released", "Releasing")} ${item}${args.to ? ` to ${args.to}` : ""}`;
+      case "finish":
+        return `${pick("Finished", "Finishing")} ${item}${args.to ? ` to ${args.to}` : ""}`;
+      default: {
+        const words = action.replace(/[_-]+/g, " ").trim() || "action";
+        return `${words[0].toUpperCase()}${words.slice(1)}${item ? ` ${item}` : ""}`;
+      }
+    }
+  }
+
+  /** One page_update op in a short form: "merge cards/num=31 · status, title". */
+  function opLine(op) {
+    const path = typeof op.path === "string" ? op.path || "(whole state)" : "?";
+    const brief = (v) => {
+      let text;
+      try {
+        text = JSON.stringify(v);
+      } catch {
+        text = String(v);
+      }
+      return text === undefined ? "" : text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    };
+    switch (op.op) {
+      case "merge":
+        return `merge ${path}${isRecord(op.value) ? ` · ${Object.keys(op.value).join(", ")}` : ""}`;
+      case "set":
+        return `set ${path} = ${brief(op.value)}`;
+      case "insert":
+        return `insert into ${path}${isRecord(op.value) && (op.value.title || op.value.text) ? ` · ${brief(op.value.title || op.value.text)}` : ""}`;
+      case "remove":
+        return `remove ${path}`;
+      case "move":
+        return `move ${path}${op.before ? ` before ${op.before}` : op.after ? ` after ${op.after}` : op.at !== undefined ? ` to ${op.at}` : ""}`;
+      case "test":
+        return `check ${path} = ${brief(op.value)}`;
+      default:
+        return `${op.op || "op"} ${path}`;
+    }
+  }
+
+  /** An old → new snippet pair as a diff file for R.renderDiffFile, with shared leading and trailing lines as context. */
+  function snippetDiff(oldText, newText) {
+    const a = oldText.split("\n");
+    const b = newText === "" ? [] : newText.split("\n");
+    let head = 0;
+    while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+    let tail = 0;
+    while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+    const lines = [];
+    let oldNo = 1;
+    let newNo = 1;
+    for (let i = 0; i < head; i += 1) lines.push({ kind: "ctx", text: a[i], oldNo: oldNo++, newNo: newNo++ });
+    for (let i = head; i < a.length - tail; i += 1) lines.push({ kind: "del", text: a[i], oldNo: oldNo++ });
+    for (let i = head; i < b.length - tail; i += 1) lines.push({ kind: "add", text: b[i], newNo: newNo++ });
+    for (let i = a.length - tail; i < a.length; i += 1) lines.push({ kind: "ctx", text: a[i], oldNo: oldNo++, newNo: newNo++ });
+    return { path: "", lines, added: b.length - tail - head, removed: a.length - tail - head, binary: false, status: "M" };
   }
 
   function jsonText(value) {
