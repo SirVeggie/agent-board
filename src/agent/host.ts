@@ -40,6 +40,7 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
+import { activityKey, threadActivity } from "./activity.js";
 import { cleanAllowlist, parseWebAccess } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -76,6 +77,8 @@ const CURSOR_USAGE_TTL_MS = 30 * 60 * 1000;
 /** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
 const MAX_RECAP = 24_000;
 const DELTA_MS = 50;
+/** At most this often, a running thread is sent again because its live step changed. */
+const ACTIVITY_MS = 1000;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_TOOL_DIFF = 200_000;
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
@@ -224,6 +227,9 @@ export class AgentHost {
   private commandCache = new Map<string, SlashCommand[]>();
   private deltaBuf = new Map<string, { threadId: string; text: string }>();
   private deltaTimer: NodeJS.Timeout | null = null;
+  /** Per thread: the activity last sent with it, and a pending resend after a live step changed. */
+  private activitySent = new Map<string, string>();
+  private activityTimers = new Map<string, NodeJS.Timeout>();
   private flushTimer: NodeJS.Timeout | null = null;
   private ctx: SessionContext;
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
@@ -745,12 +751,18 @@ export class AgentHost {
         removed += file.removed;
       }
     }
-    const fromPage = pageOwned(this.loadItems(thread.id));
+    const items = this.loadItems(thread.id);
+    const fromPage = pageOwned(items);
     const asking = this.asking(thread.id);
+    const status = this.status.get(thread.id) ?? "idle";
+    const unread = this.unread.has(thread.id) && !fromPage;
+    const activity = threadActivity(items, status, unread);
+    if (activity) this.activitySent.set(thread.id, activityKey(activity));
+    else this.activitySent.delete(thread.id);
     return {
       ...thread,
-      status: this.status.get(thread.id) ?? "idle",
-      unread: this.unread.has(thread.id) && !fromPage,
+      status,
+      unread,
       queued: this.queues.get(thread.id)?.length ?? 0,
       background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
@@ -758,7 +770,23 @@ export class AgentHost {
       ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
       ...(asking ? { asking } : {}),
+      ...(activity ? { activity } : {}),
     };
+  }
+
+  /** A running thread's live step changed: send the thread again, at most every ACTIVITY_MS. */
+  private activityChanged(threadId: string): void {
+    if (this.activityTimers.has(threadId) || (this.status.get(threadId) ?? "idle") === "idle") return;
+    const timer = setTimeout(() => {
+      this.activityTimers.delete(threadId);
+      const thread = this.threads.get(threadId);
+      if (!thread) return;
+      const status = this.status.get(threadId) ?? "idle";
+      const activity = threadActivity(this.loadItems(threadId), status, false);
+      if (activity && activityKey(activity) !== this.activitySent.get(threadId)) this.emitThread(threadId);
+    }, ACTIVITY_MS);
+    timer.unref?.();
+    this.activityTimers.set(threadId, timer);
   }
 
   /** The thread's oldest unanswered interaction, for the tab strip, Library and palette. */
@@ -767,7 +795,9 @@ export class AgentHost {
       if (pending.threadId !== threadId) continue;
       const item = this.loadItems(threadId).find((it) => it.id === pending.itemId);
       if (!item) continue;
-      if (item.kind === "approval") return { kind: "approval", itemId: item.id, title: item.title };
+      if (item.kind === "approval") {
+        return { kind: "approval", itemId: item.id, title: item.title, ...(item.detail ? { detail: item.detail } : {}), options: item.options };
+      }
       if (item.kind === "question") {
         const title = item.title || item.questions[0]?.prompt || item.page?.title || "Question";
         return { kind: "question", itemId: item.id, title, ...(item.page ? { page: item.page } : {}) };
@@ -924,6 +954,7 @@ export class AgentHost {
     this.dirty.set(item.id, item);
     this.emit({ type: "agent_item", item });
     this.scheduleFlush();
+    if (item.kind === "tool" || item.kind === "text" || item.kind === "reasoning") this.activityChanged(item.threadId);
   }
 
   private appendText(item: Item & { text: string }, delta: string): void {
@@ -932,6 +963,7 @@ export class AgentHost {
     const buf = this.deltaBuf.get(item.id);
     if (buf) buf.text += delta;
     else this.deltaBuf.set(item.id, { threadId: item.threadId, text: delta });
+    if (item.kind === "text") this.activityChanged(item.threadId);
     if (!this.deltaTimer) {
       this.deltaTimer = setTimeout(() => this.flushDeltas(), DELTA_MS);
     }

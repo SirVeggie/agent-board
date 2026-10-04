@@ -127,7 +127,18 @@ export type ThreadView = Thread & {
   /** True while every user turn was sent by the page; a typed user message clears it. */
   fromPage: boolean;
   /** While waiting: the first question, approval or plan the user has not answered yet. */
-  asking?: { kind: "approval" | "question" | "plan"; itemId: string; title: string; page?: { id: string; key: string; title: string } };
+  asking?: {
+    kind: "approval" | "question" | "plan";
+    /** Also the request id the answer goes to (POST /approvals/:id for approvals). */
+    itemId: string;
+    title: string;
+    page?: { id: string; key: string; title: string };
+    /** Approvals: the command or path it is about, and the answers it offers. */
+    detail?: string;
+    options?: ApprovalOption[];
+  };
+  /** Running, waiting or unread threads: the live step and the latest agent message, for the activity flyout and toasts. */
+  activity?: { line: string; lastText?: string };
 };
 
 export type FileChange = {
