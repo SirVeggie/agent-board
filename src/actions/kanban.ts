@@ -8,6 +8,7 @@ import {
   type ActionOutcome,
   type ActionSet,
   type SweepContext,
+  type ThreadRunInfo,
 } from "./types.js";
 
 /** Rules the Kanban page follows too: done time, column order, card numbers, claims. Keep them in step. */
@@ -15,7 +16,9 @@ import {
 type Column = { id: string; title: string; role?: string; wip?: number };
 type Label = { id: string; name: string; color?: string };
 type Comment = { id: string; by: "user" | "agent"; at: number; text: string };
-type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string };
+type Status = { kind: string; text: string };
+/** waiting: set while the holder's turn waits on the user; keeps the status to put back after. */
+type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string; waiting?: { status: Status | null } };
 type Card = {
   id: string;
   num: number;
@@ -30,7 +33,7 @@ type Card = {
   comments?: Comment[];
   images?: unknown[];
   blockedBy?: string[];
-  status?: { kind: string; text: string };
+  status?: Status;
   claim?: Claim;
   /** Last in-app agent thread that claimed the card; kept after the claim ends. */
   thread?: string;
@@ -51,6 +54,14 @@ const columns = (state: BoardState) => arr<Column>(state.columns);
 const labels = (state: BoardState) => arr<Label>(state.labels);
 const cards = (state: BoardState) => arr<Card>(state.cards);
 const cardPath = (card: Card) => `cards/id=${card.id}`;
+
+/** The blocked status a card shows while its agent waits on the user. */
+function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }>["asking"]>): string {
+  if (asking.kind === "approval") return `Waiting for your approval: ${asking.title}`;
+  if (asking.kind === "plan") return "Waiting for you to review the plan";
+  const what = asking.page ? asking.page.title || asking.page.key : asking.title;
+  return `Waiting for your answer: ${what}`.slice(0, 300);
+}
 
 /** An agent column's worker, set up on the page in settings.workers. */
 type Worker = { threadId?: string; stop?: boolean; run?: unknown; step?: { token: string; at: number } };
@@ -534,9 +545,13 @@ export const kanbanActions: ActionSet = {
       if (!claim || claim.stale) continue;
       let release: string | null = null;
       let stale: string | null = null;
+      let waiting: string | null = null;
       if (claim.thread) {
         const info = ctx.thread(claim.thread);
-        if (!info.exists) {
+        if (info.exists && info.running && info.asking) {
+          // A worker's turn asking the user (page_ask, a question, an approval) holds its column up: say so on the card.
+          waiting = waitingText(info.asking);
+        } else if (!info.exists) {
           // Prewarm starts MCP with a throwaway draft id; the real thread is created later.
           // That draft is not in AgentHost, so "missing thread" is not "agent gone" while the
           // MCP session is still calling.
@@ -575,6 +590,16 @@ export const kanbanActions: ActionSet = {
       } else if (stale) {
         ops.push({ op: "merge", path: cardPath(card), value: { claim: { ...claim, stale: true }, status: { kind: "blocked", text: stale } } });
         events.push({ name: "claim_stale", data: { card: card.id, num: card.num, reason: stale } });
+      } else if (waiting) {
+        if (card.status?.text !== waiting) {
+          const before = claim.waiting ?? { status: card.status ?? null };
+          ops.push({ op: "merge", path: cardPath(card), value: { status: { kind: "blocked", text: waiting }, claim: { ...claim, waiting: before } } });
+        }
+      } else if (claim.waiting) {
+        // Answered: put back the status the card had, unless someone changed it meanwhile.
+        const { waiting: was, ...rest } = claim;
+        const ours = card.status?.kind === "blocked" && /^Waiting for (your|you to)/.test(card.status.text);
+        ops.push({ op: "merge", path: cardPath(card), value: { claim: rest, ...(ours ? { status: was.status } : {}) } });
       }
     }
     return ops.length ? { ops, result: null, events } : null;

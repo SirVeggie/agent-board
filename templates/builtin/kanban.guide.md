@@ -17,7 +17,7 @@ Columns are named by role (`agent`, `working`, `review`, `done`), id, or title. 
 4. Done: `finish` with a summary (what changed, what to check). The summary is posted as the card's hand-in comment, so do not also `comment` the same wrap-up. If you already did, call `finish` without `summary` and that comment is the hand-in. It moves the card to review, or to done when the board has no review column.
 5. Giving up or handing back: `release` with a note.
 
-If your thread fails or is stopped, Scribe moves your card back to the column it was claimed from with a blocked note. If you go quiet for a long time, it marks the card as held by a stale agent so someone can pick it up.
+If your thread fails or is stopped, Scribe moves your card back to the column it was claimed from with a blocked note. If you go quiet for a long time, it marks the card as held by a stale agent so someone can pick it up. While your chat waits on the user (page_ask, a question, an approval), the card you hold shows as blocked on that, and gets its status back once they answer.
 
 ## Agent workers
 

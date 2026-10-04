@@ -84,6 +84,13 @@ export async function startHttp(): Promise<http.Server> {
     if (event.type === "agent_turn" && event.turn.status !== "running") {
       scheduleSweep(2000);
     }
+    // A thread that starts or stops waiting on the user blocks or frees the card it holds.
+    if (event.type === "agent_thread" && (event.thread.status === "waiting") !== waitingThreads.has(event.thread.id)) {
+      if (event.thread.status === "waiting") waitingThreads.add(event.thread.id);
+      else waitingThreads.delete(event.thread.id);
+      scheduleSweep(1000);
+    }
+    if (event.type === "agent_thread_deleted") waitingThreads.delete(event.id);
   });
   const sweepTimer = setInterval(() => scheduleSweep(0), 60_000);
   sweepTimer.unref?.();
@@ -1431,6 +1438,8 @@ function actorOf(req: express.Request): PageActor | undefined {
 }
 
 let sweepQueued: NodeJS.Timeout | null = null;
+/** Threads last seen waiting on the user, so the sweep runs when that changes. */
+const waitingThreads = new Set<string>();
 
 /** Release or flag claims whose agent stopped. Debounced: turn ends come in bursts. */
 function scheduleSweep(delayMs: number): void {

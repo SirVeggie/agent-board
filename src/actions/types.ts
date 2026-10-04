@@ -43,7 +43,14 @@ export type ActionDef = {
 /** How a chat thread is doing, for releasing claims of agents that stopped. */
 export type ThreadRunInfo =
   | { exists: false }
-  | { exists: true; running: boolean; title: string; lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number } };
+  | {
+      exists: true;
+      running: boolean;
+      title: string;
+      lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number };
+      /** While the turn waits on the user: the question (a page_ask page too), approval or plan. */
+      asking?: { kind: "approval" | "question" | "plan"; title: string; page?: { key: string; title: string } };
+    };
 
 export type SweepContext = {
   now: number;

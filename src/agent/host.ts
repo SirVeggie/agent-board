@@ -518,10 +518,12 @@ export class AgentHost {
     if (!thread) return { exists: false };
     const status = this.status.get(id) ?? "idle";
     const last = this.db.listTurns(id).at(-1);
+    const asking = status === "waiting" ? this.asking(id) : undefined;
     return {
       exists: true,
       running: status !== "idle",
       title: thread.title,
+      ...(asking ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
       ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}) } } : {}),
     };
   }
