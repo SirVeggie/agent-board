@@ -246,6 +246,21 @@ export const USER_TITLE_HOLD_MS = 24 * 60 * 60 * 1000;
 export const PAGE_KEY_PREFIX = "scribe:";
 export const WELCOME_KEY = "scribe:welcome";
 
+export function normalizeKey(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const cleaned = trimmed.replace(/[^a-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "");
+  return cleaned.slice(0, 80);
+}
+
+/**
+ * Page keys read "scribe:<slug>" so a pasted key is recognizable on its own. Lookups accept
+ * the slug with or without the prefix.
+ */
+export function pageKey(value: string): string {
+  const slug = normalizeKey(value.trim().replace(/^(scribe:)+/i, ""));
+  return slug ? `${PAGE_KEY_PREFIX}${slug}` : "";
+}
+
 export function isAppTab(tab: { key: string }): boolean {
   return tab.key === WELCOME_KEY;
 }
@@ -333,6 +348,8 @@ export type UpsertInput = {
   viewer?: Viewer;
   /** In-app or external agent that made this write. User writes leave it unset. */
   actor?: PageActor;
+  /** Refuse to replace an existing page whose revision is no longer this one. Ignored when the key is new. */
+  expectedRevision?: number;
 };
 
 export type StateWriteInput = {

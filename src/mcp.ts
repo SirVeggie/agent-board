@@ -30,7 +30,7 @@ import {
 import { withAgentDates } from "./dates.js";
 import type { PageAssetUsage } from "./pageAssets.js";
 import { MAX_INLINE_PAGE_IMAGES, collectStateImages, mcpImageMime } from "./mcpImages.js";
-import type { Tab, TabAsset, TabMeta } from "./types.js";
+import { pageKey, type Tab, type TabAsset, type TabMeta } from "./types.js";
 
 type ApiError = { error?: string };
 
@@ -108,6 +108,7 @@ const INSTRUCTIONS = [
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: INSTRUCTIONS });
+  const revisions = new SeenRevisions();
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {
     const client = server.server.getClientVersion();
@@ -162,9 +163,16 @@ export async function startMcp(): Promise<void> {
         .describe(
           "Initial state for an interactive page, readable in the page as scribe.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
         ),
+      expectedRevision: z
+        .number()
+        .optional()
+        .describe(
+          "Refuse to replace an existing page whose revision is no longer this one. Without it, re-showing a page you read or wrote earlier in this session is refused if someone changed it since."
+        ),
     },
-    async ({ key, title, html, assets, pin, state, background, folder }) => {
+    async ({ key, title, html, assets, pin, state, background, folder, expectedRevision }) => {
       const activate = background !== true;
+      const guard = expectedRevision ?? (key ? revisions.forKey(key) : undefined);
       let resolvedAssets: { path: string; name?: string }[] = [];
       try {
         resolvedAssets = resolveAssetPaths(assets);
@@ -180,7 +188,13 @@ export async function startMcp(): Promise<void> {
         state,
         folder,
         assets: resolvedAssets.length ? resolvedAssets : undefined,
+        expectedRevision: guard,
       });
+      if (status === 409 && expectedRevision === undefined) {
+        return errorResult(
+          `Not shown: ${(data as ApiError).error} Someone changed this page after you last read or wrote it, and page_show would replace their changes. Carry them into your HTML (or use page_patch), then show again.`
+        );
+      }
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
@@ -188,9 +202,10 @@ export async function startMcp(): Promise<void> {
         created?: boolean;
         closed?: boolean;
         titleKept?: boolean;
-        tab: { id: string; key: string; title: string; folder: string | null; assets?: TabAsset[] };
+        tab: { id: string; key: string; title: string; revision: number; folder: string | null; assets?: TabAsset[] };
       };
       const { tab } = payload;
+      revisions.note(tab);
       const closed = Boolean(payload.closed);
       if (activate) {
         const info = await health();
@@ -321,6 +336,7 @@ export async function startMcp(): Promise<void> {
         titleKept?: boolean;
         tab: { id: string; key: string; title: string; revision: number; htmlBytes: number; folder: string | null };
       };
+      revisions.note(payload.tab);
       if (activate) {
         const info = await health();
         if (!info || info.viewers === 0) {
@@ -565,6 +581,7 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab & { folder: string | null; pageAssets?: PageAssetUsage };
+      revisions.note(tab);
       const dates = withAgentDates(tab);
       const meta = {
         id: tab.id,
@@ -684,6 +701,7 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab;
+      revisions.note(tab);
       let found;
       try {
         found = grepLines(tab.html, pattern, { literal, ignoreCase, context, maxMatches });
@@ -1662,6 +1680,23 @@ async function withImages(result: ToolResult, value: unknown, which: string): Pr
     result.content.push({ type: "text", text: notes.join("\n") });
   }
   return result;
+}
+
+/**
+ * The page revision this session last read or wrote, by page. page_show passes it as
+ * expectedRevision, so re-showing a page someone changed since is refused instead of wiping
+ * their edits. A page this session never saw is not guarded.
+ */
+export class SeenRevisions {
+  private byKey = new Map<string, number>();
+
+  note(tab: { key: string; revision: number }): void {
+    this.byKey.set(tab.key, tab.revision);
+  }
+
+  forKey(key: string): number | undefined {
+    return this.byKey.get(pageKey(key));
+  }
 }
 
 function errorResult(message: string) {

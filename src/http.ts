@@ -203,6 +203,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs", (req, res) => {
     try {
       const assets = prepareAssets(parseAssetInputs(req.body?.assets));
+      const rawRevision = req.body?.expectedRevision;
       const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
@@ -214,13 +215,14 @@ export async function startHttp(): Promise<http.Server> {
         folder: optionalString(req.body?.folder),
         viewer: viewerOf(req),
         actor: actorOf(req),
+        expectedRevision: typeof rawRevision === "number" && Number.isFinite(rawRevision) ? rawRevision : undefined,
       });
       if (!created) {
         agentRewrote(req, tab.id);
       }
       res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(tab) });
     } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
+      res.status(err instanceof RevisionConflictError ? 409 : 400).json({ error: (err as Error).message });
     }
   });
 

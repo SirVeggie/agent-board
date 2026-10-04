@@ -543,6 +543,22 @@ test("patchHtml refuses a stale expectedRevision and changes nothing", () => {
   store.closeDb();
 });
 
+test("upsert refuses to replace a page whose revision moved past expectedRevision", () => {
+  const store = loaded();
+  store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });
+  store.patchHtml("page", { edits: [{ oldString: "<p>a</p>", newString: "<p>user</p>" }] });
+  assert.throws(
+    () => store.upsert({ key: "page", title: "Page", html: "<p>agent</p>", expectedRevision: 1 }),
+    (err: unknown) => err instanceof RevisionConflictError
+  );
+  assert.match(store.get("page")!.html, /<p>user<\/p>/);
+  store.upsert({ key: "page", title: "Page", html: "<p>agent</p>", expectedRevision: 2 });
+  assert.match(store.get("page")!.html, /<p>agent<\/p>/);
+  // A new key has nothing to conflict with.
+  assert.equal(store.upsert({ key: "fresh", title: "Fresh", html: "<p>x</p>", expectedRevision: 7 }).created, true);
+  store.closeDb();
+});
+
 test("patchHtml rejects edits and html together", () => {
   const store = loaded();
   store.upsert({ key: "page", title: "Page", html: "<p>a</p>" });

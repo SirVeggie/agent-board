@@ -47,6 +47,8 @@ import {
   TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
   PAGE_KEY_PREFIX,
+  normalizeKey,
+  pageKey,
   WELCOME_KEY,
   isAppTab,
   isFolderInstructionTitle,
@@ -933,6 +935,9 @@ export class BoardStore extends EventEmitter {
     const existing = input.key ? this.locateFor(input.key, viewer) : undefined;
     if (existing && isTemplateBound(existing.tab)) {
       throw new Error(boundHtmlError(existing.tab, this.templateLabel(existing.tab)));
+    }
+    if (existing) {
+      this.assertTabRevision(existing.tab, input.expectedRevision);
     }
     const kept = existing ? this.heldTitle(existing.tab, requestedTitle, viewer) : undefined;
     const title = kept ? existing!.tab.title : requestedTitle;
@@ -3588,21 +3593,6 @@ function actorFromCaller(caller: ActionCaller): PageActor | undefined {
     ...(caller.thread ? { thread: caller.thread } : {}),
     ...(title ? { title } : {}),
   };
-}
-
-function normalizeKey(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  const cleaned = trimmed.replace(/[^a-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "");
-  return cleaned.slice(0, 80);
-}
-
-/**
- * Page keys read "scribe:<slug>" so a pasted key is recognizable on its own. Lookups accept
- * the slug with or without the prefix.
- */
-export function pageKey(value: string): string {
-  const slug = normalizeKey(value.trim().replace(/^(scribe:)+/i, ""));
-  return slug ? `${PAGE_KEY_PREFIX}${slug}` : "";
 }
 
 function newTemplateId(): string {

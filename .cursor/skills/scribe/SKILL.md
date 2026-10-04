@@ -64,6 +64,8 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 
 If the result has `titleKept: true`, the user renamed that page in the last 24 hours and your `title` was ignored. Keep using their title; do not fight it.
 
+Re-showing a page you read or wrote earlier in this session is refused if someone changed it since (the error says so). Their changes are in the page: `page_read` it, carry them into your HTML or switch to `page_patch`, then show again. Pass `expectedRevision` yourself to guard a page you read in an earlier session.
+
 **Small markup edits** to a page that already exists: `page_patch` (see below). Do not `page_show` the whole document again.
 
 Do not pass a second tool to open or refresh. `background` is the only focus flag.
