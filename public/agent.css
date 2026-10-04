@@ -2228,6 +2228,12 @@ button.ag-list-group-new:focus-visible {
   opacity: 1;
 }
 
+button.ag-icon-btn.ag-list-group-new:hover,
+button.ag-icon-btn.ag-list-group-new.on {
+  background: transparent;
+  color: var(--heading);
+}
+
 .ag-list-hide {
   font-size: 12px;
   color: var(--muted);
