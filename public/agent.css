@@ -2234,14 +2234,11 @@ button.ag-icon-btn.ag-list-group-new.on {
   color: var(--heading);
 }
 
-.ag-list-hide {
-  font-size: 12px;
-  color: var(--muted);
-  padding: 0 2px;
-}
-
-.ag-list-hide input {
-  margin: 0;
+.ag-list-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
 }
 
 button.ag-list-more {

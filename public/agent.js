@@ -3820,18 +3820,19 @@
     }
     const newBtn = button("", "ag-btn small primary ag-new", (event) => onNew(event.currentTarget));
     newBtn.append(icon("plus"), el("span", null, "New"));
-    const hide = el("label", "ag-check ag-list-hide");
-    const hideBox = el("input");
-    hideBox.type = "checkbox";
-    hideBox.checked = S.hidePageThreads;
-    hideBox.addEventListener("change", () => {
-      S.hidePageThreads = hideBox.checked;
-      localStorage.setItem(LS.hidePage, hideBox.checked ? "1" : "0");
+    // Toolbox row above the threads: list toggles that change which rows show.
+    const tools = el("div", "ag-list-tools");
+    const hide = button("", `ag-chip small toggle${S.hidePageThreads ? " on" : ""}`, () => {
+      S.hidePageThreads = !S.hidePageThreads;
+      localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
+      hide.classList.toggle("on", S.hidePageThreads);
+      hide.setAttribute("aria-pressed", String(S.hidePageThreads));
       fill();
-    });
-    hide.append(hideBox, el("span", null, "Hide page-launched"));
-    hide.title = "Threads started by a page stay hidden until you type in them";
-    top.append(search, seg, hide, newBtn);
+    }, "Threads started by a page stay hidden until you type in them");
+    hide.setAttribute("aria-pressed", String(S.hidePageThreads));
+    hide.append(icon("page"), el("span", null, "Hide page-launched"));
+    tools.append(hide);
+    top.append(search, seg, newBtn, tools);
     const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
     container.append(top, list);
     const fill = () => {
