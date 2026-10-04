@@ -1,6 +1,7 @@
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
 import type { WebAccess } from "./webAccess.js";
+import type { BrowserView } from "../browser.js";
 
 export type { WebAccess };
 
@@ -339,7 +340,9 @@ export type AgentEvent =
   | { type: "agent_limits"; limits: Partial<Record<ProviderId, PlanLimits>> }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn }
-  | { type: "agent_turn_deleted"; threadId: string; id: string };
+  | { type: "agent_turn_deleted"; threadId: string; id: string }
+  /** The thread's agent browser opened, navigated, or closed (view null). */
+  | { type: "agent_browser"; threadId: string; view: BrowserView | null };
 
 export type ModelOption = {
   id: string;

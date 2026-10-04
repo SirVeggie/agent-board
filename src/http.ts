@@ -34,6 +34,7 @@ import {
   browserTabs,
   browserViewport,
   closeAgentBrowser,
+  onBrowserChange,
 } from "./browser.js";
 import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
@@ -96,6 +97,7 @@ export async function startHttp(): Promise<http.Server> {
   sweepTimer.unref?.();
   scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
+  onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js")));
   app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js")));
   app.use(express.json({ limit: "6mb" }));

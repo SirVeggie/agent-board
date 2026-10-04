@@ -121,6 +121,8 @@
     ready: false,
     /** Forks whose offer to archive the thread they came from was answered or dismissed. */
     forkArchiveSeen: new Set(),
+    /** threadId -> the thread's open agent browser: { threadId, tabs: [{ tab, url, title, current }] }. */
+    browsers: new Map(),
   };
 
   async function api(method, path, body) {
@@ -331,6 +333,7 @@
     if (event.detail?.connected) {
       loadConfig();
       loadThreads();
+      loadBrowsers();
     }
   });
   window.addEventListener("scribe:render", () => {
@@ -421,6 +424,14 @@
           if (view.threadId === msg.threadId) view.onDelta(item);
         }
         dock.onDelta(item);
+        return;
+      }
+      case "agent_browser": {
+        if (msg.view) S.browsers.set(msg.threadId, msg.view);
+        else S.browsers.delete(msg.threadId);
+        for (const view of views()) {
+          if (view.threadId === msg.threadId) view.renderHeader();
+        }
         return;
       }
       case "agent_turn_deleted": {
@@ -789,7 +800,7 @@
 
   /* ---------- modal helper ---------- */
 
-  function modal(cls) {
+  function modal(cls, onClose) {
     const root = el("div", `ag-modal ${cls}`);
     const backdrop = el("div", "ag-modal-backdrop");
     const panel = el("div", "ag-modal-panel");
@@ -797,6 +808,7 @@
     const close = () => {
       root.remove();
       modalStack.splice(modalStack.indexOf(close), 1);
+      onClose?.();
     };
     backdrop.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -1008,6 +1020,155 @@
     agentSettings.renderStatus();
     void agentSettings.renderSources();
     renderAll();
+  }
+
+  /* ---------- agent browser ---------- */
+
+  async function loadBrowsers() {
+    try {
+      const data = await api("GET", "/browsers");
+      S.browsers = new Map(data.browsers.map((view) => [view.threadId, view]));
+    } catch {
+      return;
+    }
+    for (const view of views()) view.renderHeader();
+  }
+
+  /** A KeyboardEvent as a Playwright key, or null for a lone modifier. */
+  function browserKey(event) {
+    if (["Shift", "Control", "Alt", "Meta", "Dead", "Unidentified", "Process"].includes(event.key)) return null;
+    const printable = event.key.length === 1;
+    const mods = [];
+    if (event.ctrlKey) mods.push("Control");
+    if (event.altKey) mods.push("Alt");
+    if (event.metaKey) mods.push("Meta");
+    // A printable key already carries Shift ("A", "!"); named keys need it spelled out.
+    if (event.shiftKey && (!printable || mods.length)) mods.push("Shift");
+    return [...mods, printable && mods.length ? event.key.toLowerCase() : event.key].join("+");
+  }
+
+  /**
+   * The thread's headless agent browser, live: screencast frames of its current tab, with the
+   * user's clicks, scrolls, and keys sent back to it. The agent keeps driving it meanwhile.
+   */
+  function openBrowser(threadId) {
+    const base = `/threads/${encodeURIComponent(threadId)}/browser`;
+    const source = new EventSource(`/api/agent${base}/live`);
+    const { panel, close } = modal("ag-browserview", () => source.close());
+    const thread = S.threads.get(threadId);
+    const title = el("h2", "ag-modal-title", thread ? `Browser · ${thread.title}` : "Agent browser");
+    const address = el("span", "ag-browser-url");
+    const head = el("div", "ag-browser-head");
+    head.append(
+      title,
+      address,
+      el("span", "ag-grow"),
+      button("Close browser", "ag-btn ghost", () => api("POST", `${base}/close`).catch((err) => notice(err.message)), "Close the agent's browser and its tabs"),
+      button(icon("close"), "ag-icon-btn", () => close(), "Close this view (Esc)")
+    );
+    const stage = el("div", "ag-browser-stage");
+    const screen = el("img", "ag-browser-screen");
+    screen.alt = "";
+    screen.tabIndex = 0;
+    screen.draggable = false;
+    screen.hidden = true;
+    const empty = el("div", "ag-muted ag-pad", "Waiting for the page…");
+    stage.append(screen, empty);
+    panel.append(head, stage, el("div", "ag-modal-hint", "Click, scroll, and type to use the page; Ctrl+V pastes into it. The agent drives it too. Esc closes this view."));
+
+    let frame = null;
+    source.addEventListener("frame", (event) => {
+      frame = JSON.parse(event.data);
+      screen.src = `data:image/jpeg;base64,${frame.data}`;
+      screen.hidden = false;
+      empty.hidden = true;
+    });
+    source.addEventListener("view", (event) => {
+      const view = JSON.parse(event.data);
+      const tab = view?.tabs.find((t) => t.current);
+      address.textContent = tab ? tab.url : "";
+      address.title = tab ? `${tab.title}\n${tab.url}` : "";
+      if (!tab) {
+        frame = null;
+        screen.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "The agent has no browser open. It shows here when the agent opens a page.";
+      }
+    });
+
+    // Inputs go one at a time, in order; a mouse move is dropped while another is on its way.
+    let queue = Promise.resolve();
+    let movePending = false;
+    const send = (input) => {
+      if (!frame) return;
+      if (input.kind === "move") {
+        if (movePending) return;
+        movePending = true;
+      }
+      const body = { tab: frame.tab, ...input };
+      queue = queue
+        .then(() => api("POST", `${base}/input`, body))
+        .catch(() => undefined)
+        .finally(() => {
+          if (input.kind === "move") movePending = false;
+        });
+    };
+    const at = (event) => {
+      const rect = screen.getBoundingClientRect();
+      const x = Math.min(rect.right, Math.max(rect.left, event.clientX));
+      const y = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
+      return {
+        x: Math.round(((x - rect.left) * frame.width) / rect.width),
+        y: Math.round(((y - rect.top) * frame.height) / rect.height),
+      };
+    };
+    const BUTTONS = ["left", "middle", "right"];
+    let pressed = false;
+    screen.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      screen.focus();
+      if (!frame) return;
+      pressed = true;
+      send({ kind: "down", ...at(event), button: BUTTONS[event.button] || "left", clickCount: event.detail || 1 });
+    });
+    screen.addEventListener("mousemove", (event) => {
+      if (frame) send({ kind: "move", ...at(event) });
+    });
+    const onUp = (event) => {
+      if (!screen.isConnected) {
+        window.removeEventListener("mouseup", onUp);
+        return;
+      }
+      if (!pressed || !frame) return;
+      pressed = false;
+      send({ kind: "up", ...at(event), button: BUTTONS[event.button] || "left", clickCount: event.detail || 1 });
+    };
+    window.addEventListener("mouseup", onUp);
+    screen.addEventListener("contextmenu", (event) => event.preventDefault());
+    screen.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        if (!frame) return;
+        const scale = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
+        send({ kind: "wheel", ...at(event), dx: event.deltaX * scale, dy: event.deltaY * scale });
+      },
+      { passive: false }
+    );
+    screen.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") return;
+      // Ctrl+V: the paste event brings the text across, since the headless page can't read our clipboard.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const key = browserKey(event);
+      if (key) send({ kind: "key", key });
+    });
+    screen.addEventListener("paste", (event) => {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain");
+      if (text) send({ kind: "text", text });
+    });
   }
 
   /* ---------- diff viewer ---------- */
@@ -1376,6 +1537,7 @@
         const onBranch = openWorktree(t);
         acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, ...(onBranch ? {} : { cwd: s.cwd }) }), onBranch ? `Changes on ${onBranch.branch}` : "Git working tree changes"));
       }
+      if (t && S.browsers.has(t.id)) acts.append(button(icon("browser"), "ag-icon-btn", () => openBrowser(t.id), "Agent browser: watch it, click and type into it"));
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
       acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings"));
       acts.append(button(icon("plus"), "ag-icon-btn", (event) => newThreadMenu(event.currentTarget, this), "New thread"));

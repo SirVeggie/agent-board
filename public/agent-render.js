@@ -41,6 +41,8 @@
     folder:
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 3.5h4.2l1.5 1.5h7.3v8.5h-13z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
     page: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 2h6.5L13 5.5V14H3z" fill="currentColor" opacity=".85"/></svg>',
+    browser:
+      '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.8 5.8h12.4" stroke="currentColor" stroke-width="1.3"/><circle cx="3.9" cy="4.15" r=".6" fill="currentColor"/><circle cx="5.7" cy="4.15" r=".6" fill="currentColor"/></svg>',
     globe:
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>',
     box: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 4.5L8 2l6 2.5v7L8 14l-6-2.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2 4.5L8 7l6-2.5M8 7v7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',

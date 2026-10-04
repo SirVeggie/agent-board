@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Locator, Page } from "playwright-core";
 import { BROWSER_ACTIONS, type BrowserAction } from "./browserActions.js";
 import { launchChromium } from "./chromium.js";
 import { log } from "./log.js";
@@ -6,12 +6,13 @@ import { pngOrJpeg, screenshotUrl, shotOptions } from "./screenshot.js";
 import { store } from "./store.js";
 
 /**
- * The agent browser: a headed Chromium that Scribe chat threads drive through the browser_*
- * MCP tools. Each thread gets its own context (cookies and storage stay apart, and survive
- * between turns) with its own window and tabs. A context closes when its thread is archived or
+ * The agent browser: a headless Chromium that Scribe chat threads drive through the browser_*
+ * MCP tools, so it never takes the user's focus. The chat shows it live (watchBrowser) and the
+ * user can click and type into it (browserInput). Each thread gets its own context (cookies and
+ * storage stay apart, and survive between turns) with its own tabs. A context closes when its thread is archived or
  * deleted, or after it sits idle; the browser closes with its last context. It is a separate
  * browser from the headless one behind page_screenshot, so a stuck agent page can't break that.
- * SCRIBE_AGENT_BROWSER_HEADLESS=1 runs it headless (tests).
+ * SCRIBE_AGENT_BROWSER_HEADED=1 shows it as a desktop window instead (debugging).
  */
 
 const LAUNCH_ARGS = ["--mute-audio", "--no-first-run", "--no-default-browser-check"];
@@ -30,7 +31,8 @@ const DEFAULT_SNAPSHOT_CHARS = 20_000;
 const MAX_SNAPSHOT_CHARS = 100_000;
 const MAX_EVAL_CHARS = 20_000;
 const MAX_LIST = 200;
-
+const FRAME_QUALITY = 70;
+const FRAME_MAX = 1920;
 
 type ConsoleEntry = { seq: number; at: number; level: string; text: string; location?: string };
 type NetworkEntry = {
@@ -63,10 +65,45 @@ type Session = {
 
 export type Target = { ref?: string; selector?: string; text?: string };
 
+/** A thread's tabs, for the chat's browser button and live view. */
+export type BrowserView = {
+  threadId: string;
+  tabs: Array<{ tab: string; url: string; title: string; current: boolean }>;
+};
+
+/** One screencast frame: a JPEG of the tab's viewport, which is width × height CSS pixels. */
+export type BrowserFrame = { tab: string; data: string; width: number; height: number };
+
+export type BrowserInput = {
+  tab?: string;
+  kind: "click" | "down" | "up" | "move" | "wheel" | "key" | "text";
+  x?: number;
+  y?: number;
+  button?: "left" | "middle" | "right";
+  clickCount?: number;
+  dx?: number;
+  dy?: number;
+  /** A Playwright key, e.g. Enter or Control+A. */
+  key?: string;
+  text?: string;
+};
+
+type Watcher = {
+  threadId: string;
+  onFrame: (frame: BrowserFrame) => void;
+  onView: (view: BrowserView | null) => void;
+  tab?: BrowserTab;
+  cdp?: CDPSession;
+  closed: boolean;
+};
+
 let browser: Browser | null = null;
 let launching: Promise<Browser> | null = null;
 const sessions = new Map<string, Session>();
 const opening = new Map<string, Promise<Session>>();
+const changeListeners = new Set<(view: BrowserView | null, threadId: string) => void>();
+const pendingChanges = new Map<string, ReturnType<typeof setTimeout>>();
+const watchers = new Set<Watcher>();
 
 /**
  * Hosts the agent browser may load as a page: loopback only (dev servers and Scribe itself).
@@ -138,6 +175,7 @@ export async function browserOpen(
   const session = await ensureSession(threadId);
   const tab = input.newTab || !session.tabs.size ? await newTab(session) : pickTab(session, input.tab);
   session.current = tab.id;
+  changed(threadId);
   await tab.page.bringToFront().catch(() => undefined);
   let navError: string | undefined;
   try {
@@ -387,10 +425,12 @@ export async function browserTabs(threadId: string, input: { close?: string; sel
     if (session.current === tab.id) {
       session.current = [...session.tabs.keys()].at(-1);
     }
+    changed(threadId);
   }
   if (input.select) {
     const tab = pickTab(session, input.select);
     session.current = tab.id;
+    changed(threadId);
     await tab.page.bringToFront().catch(() => undefined);
   }
   const tabs = await Promise.all(
@@ -415,6 +455,7 @@ export async function closeThreadBrowser(threadId: string): Promise<void> {
     clearTimeout(session.idle);
   }
   await session.context.close().catch(() => undefined);
+  changed(threadId);
   if (!sessions.size) {
     await closeAgentBrowser();
   }
@@ -426,7 +467,9 @@ export async function closeAgentBrowser(): Promise<void> {
       clearTimeout(session.idle);
     }
   }
+  const closing = [...sessions.keys()];
   sessions.clear();
+  closing.forEach(changed);
   const current = browser;
   browser = null;
   launching = null;
@@ -437,6 +480,95 @@ export async function closeAgentBrowser(): Promise<void> {
 
 export function browserSessions(): Array<{ threadId: string; tabs: number }> {
   return [...sessions.values()].map((session) => ({ threadId: session.threadId, tabs: session.tabs.size }));
+}
+
+/** A thread's tabs, or null when it has no browser open. */
+export async function browserView(threadId: string): Promise<BrowserView | null> {
+  const session = sessions.get(threadId);
+  if (!session || !session.tabs.size) {
+    return null;
+  }
+  const tabs = await Promise.all(
+    [...session.tabs.values()].map(async (tab) => ({
+      tab: tab.id,
+      url: tab.page.url(),
+      title: await tab.page.title().catch(() => ""),
+      current: tab.id === session.current,
+    }))
+  );
+  return { threadId, tabs };
+}
+
+export async function browserViews(): Promise<BrowserView[]> {
+  const views = await Promise.all([...sessions.keys()].map(browserView));
+  return views.filter((view): view is BrowserView => view !== null);
+}
+
+/** Calls fn when a thread's browser opens, closes, navigates, or switches tabs. */
+export function onBrowserChange(fn: (view: BrowserView | null, threadId: string) => void): () => void {
+  changeListeners.add(fn);
+  return () => changeListeners.delete(fn);
+}
+
+/**
+ * Streams a thread's current tab as screencast frames (sent when it paints), following the
+ * agent when it switches or opens tabs. Waits for the thread to open a browser if it has none.
+ */
+export function watchBrowser(
+  threadId: string,
+  onFrame: (frame: BrowserFrame) => void,
+  onView: (view: BrowserView | null) => void
+): () => void {
+  const watcher: Watcher = { threadId, onFrame, onView, closed: false };
+  watchers.add(watcher);
+  void browserView(threadId).then((view) => !watcher.closed && onView(view));
+  void retarget(watcher);
+  return () => {
+    watcher.closed = true;
+    watchers.delete(watcher);
+    void stopCast(watcher.cdp);
+    watcher.cdp = undefined;
+  };
+}
+
+/** The user's mouse and keys from the chat's live view, at viewport CSS pixels. */
+export async function browserInput(threadId: string, input: BrowserInput) {
+  const session = await requireSession(threadId);
+  const { page } = pickTab(session, input.tab);
+  const x = Number(input.x ?? 0);
+  const y = Number(input.y ?? 0);
+  const button = input.button === "middle" || input.button === "right" ? input.button : "left";
+  const clickCount = clamp(input.clickCount ?? 1, 1, 3);
+  switch (input.kind) {
+    case "click":
+      await page.mouse.click(x, y, { button, clickCount });
+      break;
+    case "move":
+      await page.mouse.move(x, y);
+      break;
+    case "down":
+      await page.mouse.move(x, y);
+      await page.mouse.down({ button, clickCount });
+      break;
+    case "up":
+      await page.mouse.move(x, y);
+      await page.mouse.up({ button, clickCount });
+      break;
+    case "wheel":
+      await page.mouse.move(x, y);
+      await page.mouse.wheel(Number(input.dx ?? 0), Number(input.dy ?? 0));
+      break;
+    case "key":
+      if (!input.key) throw new Error("key input needs key");
+      await page.keyboard.press(input.key);
+      break;
+    case "text":
+      if (input.text) await page.keyboard.insertText(input.text);
+      break;
+    default:
+      throw new Error(`unknown input: ${String(input.kind)}`);
+  }
+  return { ok: true };
 }
 
 function blockedMessage(url: string): string {
@@ -487,6 +619,7 @@ async function createSession(threadId: string): Promise<Session> {
       // A popup or target=_blank link: track it like a tab the agent opened.
       const tab = track(session, page);
       session.current = tab.id;
+      changed(threadId);
     }
   });
   context.on("close", () => {
@@ -496,6 +629,7 @@ async function createSession(threadId: string): Promise<Session> {
   });
   sessions.set(threadId, session);
   touch(session);
+  changed(threadId);
   return session;
 }
 
@@ -557,11 +691,16 @@ function track(session: Session, page: Page): BrowserTab {
     row.ms = Date.now() - row.at;
     row.failure = request.failure()?.errorText ?? "failed";
   });
+  page.on("framenavigated", (frame) => {
+    if (!frame.parentFrame()) changed(session.threadId);
+  });
+  page.on("load", () => changed(session.threadId));
   page.on("close", () => {
     session.tabs.delete(tab.id);
     if (session.current === tab.id) {
       session.current = [...session.tabs.keys()].at(-1);
     }
+    changed(session.threadId);
   });
   return tab;
 }
@@ -645,7 +784,7 @@ async function ensureBrowser(): Promise<Browser> {
     return browser;
   }
   if (!launching) {
-    launching = launchChromium({ headless: process.env.SCRIBE_AGENT_BROWSER_HEADLESS === "1", args: LAUNCH_ARGS, purpose: "Agent" })
+    launching = launchChromium({ headless: process.env.SCRIBE_AGENT_BROWSER_HEADED !== "1", args: LAUNCH_ARGS, purpose: "Agent" })
       .then((opened) => {
         browser = opened;
         opened.on("disconnected", () => {
@@ -654,7 +793,9 @@ async function ensureBrowser(): Promise<Browser> {
             for (const session of sessions.values()) {
               if (session.idle) clearTimeout(session.idle);
             }
+            const closing = [...sessions.keys()];
             sessions.clear();
+            closing.forEach(changed);
           }
         });
         return opened;
@@ -664,6 +805,84 @@ async function ensureBrowser(): Promise<Browser> {
       });
   }
   return launching;
+}
+
+/** Batches a thread's browser changes into one view for listeners, and moves its watchers along. */
+function changed(threadId: string): void {
+  if (pendingChanges.has(threadId)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    pendingChanges.delete(threadId);
+    void browserView(threadId).then((view) => {
+      for (const fn of changeListeners) {
+        try {
+          fn(view, threadId);
+        } catch (err) {
+          log(`Agent browser change listener failed: ${(err as Error).message}`);
+        }
+      }
+      for (const watcher of watchers) {
+        if (watcher.threadId !== threadId) continue;
+        watcher.onView(view);
+        void retarget(watcher);
+      }
+    });
+  }, 50);
+  timer.unref?.();
+  pendingChanges.set(threadId, timer);
+}
+
+/** Points a watcher's screencast at its thread's current tab. */
+async function retarget(watcher: Watcher): Promise<void> {
+  const session = sessions.get(watcher.threadId);
+  const tab = session?.current ? session.tabs.get(session.current) : undefined;
+  if (watcher.closed || tab === watcher.tab) {
+    return;
+  }
+  const old = watcher.cdp;
+  watcher.cdp = undefined;
+  watcher.tab = tab;
+  await stopCast(old);
+  if (!tab || !session) {
+    return;
+  }
+  try {
+    const cdp = await session.context.newCDPSession(tab.page);
+    if (watcher.closed || watcher.tab !== tab) {
+      await cdp.detach().catch(() => undefined);
+      return;
+    }
+    watcher.cdp = cdp;
+    cdp.on("Page.screencastFrame", (event) => {
+      void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
+      if (watcher.closed || watcher.tab !== tab) return;
+      watcher.onFrame({
+        tab: tab.id,
+        data: event.data,
+        width: Math.round(event.metadata.deviceWidth),
+        height: Math.round(event.metadata.deviceHeight),
+      });
+    });
+    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_QUALITY, maxWidth: FRAME_MAX, maxHeight: FRAME_MAX });
+    // A still page paints nothing new: send what it shows now.
+    const size = tab.page.viewportSize() ?? DEFAULT_VIEWPORT;
+    const shot = await tab.page.screenshot({ type: "jpeg", quality: FRAME_QUALITY, timeout: ACTION_TIMEOUT_MS });
+    if (!watcher.closed && watcher.tab === tab) {
+      watcher.onFrame({ tab: tab.id, data: shot.toString("base64"), ...size });
+    }
+  } catch (err) {
+    // The next change tries again.
+    if (watcher.tab === tab) watcher.tab = undefined;
+    log(`Agent browser live view of ${watcher.threadId}: ${(err as Error).message.split("\n")[0]}`);
+  }
+}
+
+async function stopCast(cdp: CDPSession | undefined): Promise<void> {
+  if (cdp) {
+    await cdp.send("Page.stopScreencast").catch(() => undefined);
+    await cdp.detach().catch(() => undefined);
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -3,23 +3,25 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, test } from "node:test";
 
-process.env.SCRIBE_AGENT_BROWSER_HEADLESS = "1";
-
 const {
   allowedBrowserUrl,
   browserAct,
   browserConsole,
   browserEval,
   browserHttpStatus,
+  browserInput,
   browserNetwork,
   browserOpen,
   browserScreenshot,
   browserSessions,
   browserSnapshot,
   browserTabs,
+  browserViews,
   closeAgentBrowser,
   closeThreadBrowser,
+  onBrowserChange,
   resolveBrowserUrl,
+  watchBrowser,
 } = await import("./browser.js");
 
 test("allowedBrowserUrl lets loopback through and nothing else", () => {
@@ -240,3 +242,59 @@ test("drag interpolates pointermove so pointer-capture reorder UIs run", async (
 
   await closeThreadBrowser("thr_drag");
 });
+
+test("the live view streams frames and follows tabs, and the user's input reaches the page", async (t) => {
+  if (!launched) {
+    t.skip("no Chromium browser installed");
+    return;
+  }
+  const changes: Array<string | null> = [];
+  const stopChanges = onBrowserChange((view, threadId) => {
+    if (threadId === "thr_live") changes.push(view ? view.tabs.find((tab) => tab.current)?.tab ?? "" : null);
+  });
+  const frames: Array<{ tab: string; width: number; height: number }> = [];
+  const views: Array<string | undefined> = [];
+  // Watching before the thread has a browser waits for it.
+  const stop = watchBrowser(
+    "thr_live",
+    (frame) => frames.push({ tab: frame.tab, width: frame.width, height: frame.height }),
+    (view) => views.push(view?.tabs.find((tab) => tab.current)?.url)
+  );
+  await browserOpen("thr_live", { url: `${base}/`, snapshot: false });
+  await until(() => frames.some((frame) => frame.tab === "b1"));
+  assert.equal(frames[0].width, 1280);
+  assert.equal(frames[0].height, 800);
+  await until(() => views.includes(`${base}/`));
+  assert.ok((await browserViews()).some((view) => view.threadId === "thr_live"));
+
+  // Clicks land at viewport pixels; keys and text go to the focused field.
+  const box = JSON.parse(
+    (await browserEval("thr_live", { script: "const r = document.getElementById('inc').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }" })).result
+  );
+  await browserInput("thr_live", { kind: "down", ...box });
+  await browserInput("thr_live", { kind: "up", ...box });
+  assert.equal((await browserEval("thr_live", { script: "document.getElementById('count').textContent" })).result, '"1"');
+  await browserAct("thr_live", { action: "click", selector: "#name", snapshot: false });
+  await browserInput("thr_live", { kind: "text", text: "Ad" });
+  await browserInput("thr_live", { kind: "key", key: "a" });
+  await browserInput("thr_live", { kind: "key", key: "Backspace" });
+  await browserInput("thr_live", { kind: "key", key: "A" });
+  assert.equal((await browserEval("thr_live", { script: "document.getElementById('name').value" })).result, '"AdA"');
+
+  await browserOpen("thr_live", { url: `${base}/drag`, newTab: true, snapshot: false });
+  await until(() => frames.some((frame) => frame.tab === "b2"));
+  await until(() => changes.at(-1) === "b2");
+
+  stop();
+  await closeThreadBrowser("thr_live");
+  await until(() => changes.at(-1) === null);
+  stopChanges();
+});
+
+async function until(check: () => boolean, ms = 5000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}

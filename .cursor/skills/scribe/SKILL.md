@@ -274,7 +274,7 @@ When you are done iterating and the user should see the result, `page_show` or `
 
 Scribe shows each page in an iframe that browser tools cannot reach. To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `page_show`, `page_patch`, and `page_read`) directly in a browser. There, the page runs on its own with a live `window.scribe`.
 
-In a Scribe chat thread you have your own browser: the `browser_*` tools (other MCP clients don't get them; use your host's browser tool there). It is a real window on the user's desktop, with your thread's own cookies and storage, kept between turns and closed when the thread is archived. It opens loopback addresses (`localhost`, `127.x.x.x`, `*.localhost`) and Scribe pages only, so start dev servers with Keeper first.
+In a Scribe chat thread you have your own browser: the `browser_*` tools (other MCP clients don't get them; use your host's browser tool there). It runs headless, so it never takes the user's focus; the user can watch it live and click or type into it from your chat. It has your thread's own cookies and storage, kept between turns and closed when the thread is archived. It opens loopback addresses (`localhost`, `127.x.x.x`, `*.localhost`) and Scribe pages only, so start dev servers with Keeper first.
 
 ```
 browser_open({ key: "scribe:hero" })            // a Scribe page's viewUrl; or { url: "localhost:5173" }

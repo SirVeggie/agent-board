@@ -4,6 +4,7 @@ import express from "express";
 import { listPermissions, setRules } from "./permissions.js";
 import type { AgentHost } from "./host.js";
 import { baseUrl } from "../config.js";
+import { browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
@@ -296,6 +297,28 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.get("/threads/:id/worktree", wrap((req) => host.worktreeInfo(req.params.id)));
+
+  // The thread's agent browser, watched and driven from the chat (the agent drives it over MCP).
+  router.get("/browsers", wrap(async () => ({ browsers: await browserViews() })));
+  router.get("/threads/:id/browser/live", (req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+    const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const stop = watchBrowser(
+      req.params.id,
+      (frame) => send("frame", frame),
+      (view) => send("view", view)
+    );
+    const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
+    req.on("close", () => {
+      clearInterval(ping);
+      stop();
+    });
+  });
+  router.post("/threads/:id/browser/input", wrap((req) => browserInput(req.params.id, req.body as BrowserInput)));
+  router.post("/threads/:id/browser/close", wrap(async (req) => {
+    await closeThreadBrowser(req.params.id);
+    return { ok: true };
+  }));
 
   // Finish a thread's worktree: merge its branch into the base, or leave the branch for later.
   router.post(
