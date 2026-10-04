@@ -3727,7 +3727,24 @@
     return { icon: label.icon, text: s.kind === "global" ? "Global" : label.text, kind };
   }
 
-  function renderThreadList(container, { onPick, currentId, onNew }) {
+  /**
+   * Draft for a new thread in a list group: the group's scope, with the settings of the group's
+   * latest thread (threads a person started win over page-launched ones).
+   */
+  function groupDraft(key) {
+    const members = [...S.threads.values()].filter((t) => !t.archived && groupKey(t) === key);
+    const last = (members.some((t) => !t.fromPage) ? members.filter((t) => !t.fromPage) : members).sort((a, b) => b.activityAt - a.activityAt)[0];
+    if (!last) return null;
+    const dir = S.filter === "workspaces" ? workspaceDir(last) : null;
+    const scope = dir ? { kind: "workspace", ref: dir } : { ...last.scope };
+    const settings = { mode: last.mode, web: last.web, cwd: dir || homeDir(last), useWorktree: Boolean(last.useWorktree) };
+    if (providerAvailable(last.provider)) {
+      Object.assign(settings, { provider: last.provider, model: last.model, effort: last.effort, modelParams: { ...(last.modelParams || {}) }, approval: last.approval });
+    }
+    return { scope, settings };
+  }
+
+  function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
     const hadFocus = Boolean(oldSearch) && document.activeElement === oldSearch;
@@ -3852,6 +3869,13 @@
         if (S.filter === "workspaces") {
           const dir = workspaceDir(first);
           if (dir) head.title = dir;
+        }
+        if (S.filter !== "archived") {
+          const add = button(icon("plus"), "ag-icon-btn small ag-list-group-new", () => {
+            const draft = groupDraft(key);
+            if (draft) onNewIn(draft.scope, draft.settings);
+          }, `New thread here, with the settings of its latest thread`);
+          head.append(add);
         }
         list.append(head);
         for (const t of visible) list.append(threadRow(t, t.id === currentId, onPick));
@@ -4012,15 +4036,13 @@
           this.toggleList();
           this.view.focus();
         },
-        onNew: (anchor) => {
-          newThreadMenu(anchor, {
-            startDraft: (scope, settings) => {
-              this.view.startDraft(scope, settings);
-              if (this.listOpen) this.toggleList();
-            },
-          });
-        },
+        onNew: (anchor) => newThreadMenu(anchor, { startDraft: (scope, settings) => this.startDraft(scope, settings) }),
+        onNewIn: (scope, settings) => this.startDraft(scope, settings),
       });
+    },
+    startDraft(scope, settings) {
+      this.view.startDraft(scope, settings);
+      if (this.listOpen) this.toggleList();
     },
   };
 
@@ -4077,6 +4099,10 @@
           this.view.focus();
         },
         onNew: (anchor) => newThreadMenu(anchor, this.view),
+        onNewIn: (scope, settings) => {
+          this.view.startDraft(scope, settings);
+          this.renderList();
+        },
       });
     },
   };

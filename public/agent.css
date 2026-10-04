@@ -2217,6 +2217,17 @@ button.ag-seg-btn.on {
   color: var(--text);
 }
 
+button.ag-list-group-new {
+  margin: -4px 0 -4px auto;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+
+.ag-list-group:hover button.ag-list-group-new,
+button.ag-list-group-new:focus-visible {
+  opacity: 1;
+}
+
 .ag-list-hide {
   font-size: 12px;
   color: var(--muted);
