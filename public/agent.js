@@ -3583,6 +3583,9 @@
       this.feed.replaceChildren();
       this.feedLines.clear();
       this.renderTitle();
+      // The picker is a popover: closing it drops the focused search field, and focus would
+      // land on the title button. Put it in the composer, as the sidebar and full window do.
+      if (S.dockShown) setTimeout(() => this.view.focus(), 0);
     },
     /* Transient progress lines while the conversation is collapsed. The latest agent
        message stays; tool steps cap at 4 while the agent works, then fade once it stops. */
