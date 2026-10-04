@@ -64,7 +64,7 @@ Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 
 
 | Tool | Purpose |
 | --- | --- |
-| `page_show` | Create or replace a page (`key` + `title` + `html`, optional `state`, `assets`, and `folder` for new pages). Default focuses the tab (and opens it if it was closed). Pass `background: true` to update without focusing: unread blip on an open tab, or on Library if the page is closed. Returns `titleKept: true` when the user renamed the page in the last 24h and the new title was ignored. |
+| `page_show` | Create or replace a page (`key` + `title` + `html`, optional `state`, `assets`, and `folder` for new pages). Default focuses the tab (and opens it if it was closed). Pass `background: true` to skip focus: a new page is created in the Library (not on the strip); an open tab gets an unread blip; a closed page stays closed with a Library blip. Returns `titleKept: true` when the user renamed the page in the last 24h and the new title was ignored. |
 | `page_patch` | Change snippets on an existing page (`id`/`key` + `edits` of `oldString`/`newString`), or replace the whole HTML from a checked-out file (`htmlPath`). Optional `expectedRevision` refuses the change if the page moved. Same background/focus rules as show. Does not create a tab or change state or events. |
 | `page_screenshot` | Capture a PNG (or JPEG) of a tab's page or a CSS `selector`. Canonical 1280×800 viewport unless you pass `width`/`height`/`fullPage`. |
 | `page_list` | List open tabs (`id`, `key`, `title`, `folder`, …) plus `closedCount`. Pass `query` to search title, key, page text, and JSON state among **open** tabs. |

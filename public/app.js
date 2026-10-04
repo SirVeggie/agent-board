@@ -569,6 +569,7 @@
 
   /** A page whose tab is closed. Blips the Library only when its content or state changed, not on moves or pins. */
   function upsertClosed(tab, structural) {
+    const wasOpen = state.tabs.some((item) => item.id === tab.id);
     const neighbor = neighborTabId(tab.id);
     state.tabs = state.tabs.filter((item) => item.id !== tab.id);
     unread.delete(tab.id);
@@ -581,6 +582,10 @@
     const idx = state.closed.findIndex((item) => item.id === tab.id);
     if (idx === -1) {
       state.closed.push(tab);
+      // New Library-only page (agent background create). Closing an open tab is not unread.
+      if (!shown && !wasOpen && structural !== false) {
+        unreadLibrary.add(tab.id);
+      }
     } else {
       const prev = state.closed[idx];
       if (!shown && ((structural !== false && prev.revision !== tab.revision) || prev.stateRevision !== tab.stateRevision)) {

@@ -56,7 +56,7 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 - `title`: short tab label
 - `html`: a complete HTML document with inline CSS, or a fragment (Scribe wraps fragments)
 - `assets`: omit unless the page needs images
-- `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing Scribe). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, or during a **project design** screenshot loop they should not see yet.
+- `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing Scribe). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, during a **project design** screenshot loop they should not see yet, or when creating a page you will **link to** (a form, investigation, or evidence) rather than put in front of them. A new page with `background: true` is created in the Library without opening a tab.
 - `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
 - `folder`: for a **new** page, call `library_folders` first and pass an existing path when the page clearly belongs there (e.g. a CLIMS release analysis → `"CLIMS/Releases"`). Pass a path that does not exist yet only when the user asked for that folder (it is created). Otherwise omit: new pages land at the top of the Library root. It only applies when the page is created; re-showing never moves a page.
 
@@ -69,7 +69,8 @@ Do not pass a second tool to open or refresh. `background` is the only focus fla
 | User said | Call | After |
 | --- | --- | --- |
 | show me / put it in Scribe | `page_show` (default) | Focused. A closed page is opened on the strip. |
-| update in the background / don’t switch | `page_show` or `page_patch` with `background: true` | Open: unread blip on that tab. Closed: stays closed, unread blip on Library. |
+| create a page you will link to (form, investigation, evidence) | `page_show` with `background: true` | Created in the Library, not on the strip. Unread blip on Library. |
+| update in the background / don’t switch | `page_show` or `page_patch` with `background: true` | New: Library only. Open: unread blip on that tab. Closed: stays closed, unread blip on Library. |
 | tweak a section / fix a line / add a paragraph | `page_patch` | Same focus rules as show. Does not rewrite the rest of the page. |
 | a small follow-up about what’s already on the page | nothing — answer in chat | Leave the tab as-is. |
 | bring it back / open it | `page_open` | Strip, focused. |
@@ -203,7 +204,7 @@ Do **not** screenshot investigation results, analyses, architecture notes, ticke
 
 When it **is** project design work:
 
-1. `page_show` with the same `key`, `background: true` (so the tab does not steal focus).
+1. `page_show` with the same `key`, `background: true` (so a new page stays in the Library and does not steal focus).
 2. `page_screenshot` with that `key`. Default is a 1280×800 viewport of the page.
 3. Inspect the image. For a small markup change, `page_patch` with `background: true`. For a larger rewrite, `page_show` again with `background: true`. Then screenshot again.
 

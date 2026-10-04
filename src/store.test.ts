@@ -873,6 +873,60 @@ test("a schema v1 board migrates archived tabs into the Library", () => {
   again.closeDb();
 });
 
+test("creating with activate:false lands in the Library, not the strip", () => {
+  const store = loaded();
+  const { tab: open } = store.upsert({ key: "open", title: "Open", html: "<p>a</p>" });
+  const { tab, created, closed } = store.upsert({
+    key: "quiet",
+    title: "Quiet",
+    html: "<p>q</p>",
+    activate: false,
+  });
+  assert.equal(created, true);
+  assert.equal(closed, true);
+  assert.equal(store.isClosed(tab.id), true);
+  assert.equal(store.isOpen(tab.id), false);
+  assert.deepEqual(titles(store), ["Open"]);
+  assert.equal(store.getActiveId(), open.id);
+  assert.ok(tab.closedAt);
+  assert.equal(store.searchLibrary("Quiet", {}).hits[0]?.tab.title, "Quiet");
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.isClosed("quiet"), true);
+  assert.deepEqual(titles(again), ["Open"]);
+  assert.equal(again.getActiveId(), again.get("open")?.id);
+  again.closeDb();
+});
+
+test("background create on an empty strip does not open a tab", () => {
+  const store = loaded();
+  const { closed } = store.upsert({ key: "quiet", title: "Quiet", html: "<p>q</p>", activate: false });
+  assert.equal(closed, true);
+  assert.equal(store.list().length, 0);
+  assert.equal(store.getActiveId(), null);
+  store.closeDb();
+});
+
+test("re-showing a background-created page without activate opens it", () => {
+  const store = loaded();
+  store.upsert({ key: "quiet", title: "Quiet", html: "<p>q</p>", activate: false });
+  const { created, closed } = store.upsert({ key: "quiet", title: "Quiet", html: "<p>q2</p>" });
+  assert.equal(created, false);
+  assert.equal(closed, false);
+  assert.equal(store.isOpen("quiet"), true);
+  store.closeDb();
+});
+
+test("re-showing a background-created page with activate:false stays closed", () => {
+  const store = loaded();
+  store.upsert({ key: "quiet", title: "Quiet", html: "<p>q</p>", activate: false });
+  const { closed } = store.upsert({ key: "quiet", title: "Quiet", html: "<p>q2</p>", activate: false });
+  assert.equal(closed, true);
+  assert.equal(store.isClosed("quiet"), true);
+  store.closeDb();
+});
+
 test("closing a tab keeps the page in the Library at its position", () => {
   const store = loaded();
   store.upsert({ key: "a", title: "A", html: "<p>a</p>" });

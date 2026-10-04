@@ -942,25 +942,29 @@ export class BoardStore extends EventEmitter {
       assets,
     };
     seedState(tab, input.state);
-    this.tabs.set(id, tab);
-    this.rebuildOrder();
-    const createdAt = this.order.indexOf(id);
-    if (input.activate !== false) {
+    const activate = input.activate !== false;
+    if (activate) {
+      this.tabs.set(id, tab);
+      this.rebuildOrder();
       this.activeId = id;
+    } else {
+      // background create: Library only. A new unfocused tab still clutters the strip.
+      tab.closedAt = this.stamp();
+      this.closed.set(id, tab);
     }
     this.markDirty(id);
     this.persistSoon();
     if (this.folders.size !== foldersBefore) {
       this.emitFolders();
     }
-    this.emit("tab_upserted", toMeta(tab), createdAt, {
-      activate: input.activate !== false,
+    this.emit("tab_upserted", toMeta(tab), activate ? this.order.indexOf(id) : undefined, {
+      activate,
       structural: true,
     });
-    if (input.activate !== false) {
+    if (activate) {
       this.emit("tab_focused", id);
     }
-    return { tab, created: true, closed: false };
+    return { tab, created: true, closed: !activate };
   }
 
   patchHtml(

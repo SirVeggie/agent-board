@@ -78,7 +78,7 @@ const INSTRUCTIONS = [
   "Scribe is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms, kanban boards). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
   "Also use it whenever the user refers to something in Scribe: a page title, a pasted page key (keys look like scribe:some-page; pass it as key to page_read / page_patch / page_state as is), or their todo list or kanban.",
   "If the scribe skill is available, load it before building or changing pages; it has the full rules.",
-  "Show a page once with page_show and a stable key; for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key.",
+  "Show a page once with page_show and a stable key; for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key. Pass background: true when creating a page the user will open from a link (a form, investigation, or evidence) rather than look at now — a new background page stays in the Library, not the tab strip.",
   "Find pages by title with page_list (open tabs), then library_search (every page). Never guess a key.",
   "Pages keep user data in page state (scribe.state / scribe.update / scribe.bind in the page). Read it with page_state (pass path to read one part), change it with page_update ops, or with page_action when the page's template has actions (its guide lists them). Never use localStorage in a page.",
   "Pages can link to each other by key: <a data-scribe-open=\"scribe:key\" data-scribe-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with page_list / library_search.",
@@ -100,7 +100,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_show",
-    "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to update without focusing or raising the window — an open tab stays in the background with an unread blip; a closed page stays closed with a Library blip. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
+    "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to skip focus and the strip for a new page (created in the Library with a Library blip); an already-open tab stays in the background with an unread blip; an already-closed page stays closed with a Library blip. Use background when creating a page the user will open from a link rather than look at now. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
     {
       key: z
         .string()
@@ -129,7 +129,7 @@ export async function startMcp(): Promise<void> {
         .boolean()
         .optional()
         .describe(
-          "If true, do not focus this tab and do not bring the Scribe window forward. Use when the user said update in the background, stay where I am, or don’t switch tabs, and for private screenshot loops. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
+          "If true, do not focus this tab and do not bring the Scribe window forward. A new page is created in the Library without opening a tab (unread blip on Library). An already-open tab stays open with an unread blip; an already-closed page stays closed with a Library blip. Use when the user said in the background / don’t switch tabs, for a page you will link to rather than put in front of them, and for private screenshot loops. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
         ),
       pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned will keep it."),
       folder: z
@@ -191,7 +191,7 @@ export async function startMcp(): Promise<void> {
         url: boardUrl(tab.id),
         viewUrl: viewUrl(tab.id),
         assets: tab.assets ?? [],
-        note: showNote(closed, activate, payload.titleKept, "Shown", "Updated"),
+        note: showNote(closed, activate, payload.titleKept, "Shown", "Updated", Boolean(payload.created)),
       });
     }
   );
@@ -1116,9 +1116,18 @@ async function pinResult(which: string | undefined, pin: boolean) {
   });
 }
 
-function showNote(closed: boolean, activate: boolean, titleKept: boolean | undefined, shown: string, updated: string): string {
+function showNote(
+  closed: boolean,
+  activate: boolean,
+  titleKept: boolean | undefined,
+  shown: string,
+  updated: string,
+  created = false
+): string {
   const base = closed
-    ? `${updated} in the Library (tab closed). The unread blip is on Library, not the tab strip. Use page_open to bring it back.`
+    ? created
+      ? "Created in the Library (not on the tab strip). The unread blip is on Library. Link the page, or use page_open if the user should see a tab."
+      : `${updated} in the Library (tab closed). The unread blip is on Library, not the tab strip. Use page_open to bring it back.`
     : activate
       ? `${shown} on Scribe. Do not write this HTML to a workspace file.`
       : `${updated} in the background. The unread blip is on that tab if it was not focused. Do not write this HTML to a workspace file.`;
