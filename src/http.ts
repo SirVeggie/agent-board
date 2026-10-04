@@ -1465,7 +1465,56 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
       : chatKey === "j" && !event.shiftKey ? "threads" : "";
     if (action) {
       event.preventDefault();
-      parent.postMessage({ type: "scribe-chat-key", action: action }, "*");
+      // With text selected, Ctrl+K and Ctrl+L open the chat with the selection attached.
+      var picked = action === "dock" || action === "side" ? selectedText() : "";
+      parent.postMessage(picked ? { type: "scribe-chat-key", action: action, selection: picked } : { type: "scribe-chat-key", action: action }, "*");
+    }
+  });
+  var SELECTION_MAX = 20000;
+  function selectedText() {
+    var el = document.activeElement;
+    var text = "";
+    if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && /^(text|search|url|email|tel)?$/i.test(el.type || "")))) {
+      try { text = el.value.slice(el.selectionStart || 0, el.selectionEnd || 0); } catch (err) {}
+    } else {
+      var sel = window.getSelection();
+      text = sel ? String(sel) : "";
+    }
+    text = text.trim();
+    return text.length > SELECTION_MAX ? text.slice(0, SELECTION_MAX) + "\\n…" : text;
+  }
+  // Right-click opens Scribe's menu (Ask agent, Copy, …). A page with its own menu keeps it, text fields
+  // keep the browser's (cut, paste, spelling), and Shift+right-click always gets the browser's.
+  var menuOpen = false;
+  window.addEventListener("contextmenu", function (event) {
+    if (event.defaultPrevented || event.shiftKey) return;
+    if (typing(event.target)) return;
+    event.preventDefault();
+    var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    var href = link ? link.href : "";
+    menuOpen = true;
+    parent.postMessage({ type: "scribe-context-menu", x: event.clientX, y: event.clientY, selection: selectedText(), link: /^https?:/i.test(href) ? href : "" }, "*");
+  });
+  // The menu lives in the board; a click, key or scroll in here closes it. Esc closes only the menu.
+  function closeMenu(event) {
+    if (!menuOpen) return;
+    menuOpen = false;
+    parent.postMessage({ type: "scribe-context-menu-close" }, "*");
+    if (event.type === "keydown" && event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }
+  window.addEventListener("pointerdown", closeMenu, true);
+  window.addEventListener("keydown", closeMenu, true);
+  window.addEventListener("wheel", closeMenu, { capture: true, passive: true });
+  // Choosing an item, or clicking anywhere else in the board, takes focus from the page and closes the menu.
+  window.addEventListener("blur", function () { menuOpen = false; });
+  window.addEventListener("message", function (event) {
+    if (event.source !== parent || !event.data) return;
+    if (event.data.type === "scribe-select-all") {
+      var sel = window.getSelection();
+      if (sel && document.body) sel.selectAllChildren(document.body);
     }
   });
 })();

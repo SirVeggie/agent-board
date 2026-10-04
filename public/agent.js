@@ -1098,6 +1098,8 @@
       this.mdTimers = new Map();
       /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
       this.attachments = [];
+      /** Context chips added from a page (Ask agent): selections, or a page that is not the active one. */
+      this.picked = [];
       this.drafts = new Map();
       this.contextOn = variant === "dock";
 
@@ -1728,7 +1730,7 @@
         const chips = el("div", "ag-chips");
         for (const c of item.context || []) {
           const chip = el("span", "ag-chip small");
-          chip.append(icon(c.kind === "page" ? "page" : c.kind === "folder" ? "folder" : "read"), el("span", null, c.title || c.path || (c.text ? `“${c.text.slice(0, 30)}…”` : c.kind)));
+          chip.append(icon(c.kind === "page" ? "page" : c.kind === "folder" ? "folder" : c.kind === "selection" ? "quote" : "read"), el("span", null, c.title || c.path || (c.text ? `“${c.text.slice(0, 30)}…”` : c.kind)));
           chips.append(chip);
         }
         const sent = [...(item.images || []), ...(item.files || [])];
@@ -2459,6 +2461,21 @@
         chip.append(icon("page"), el("span", null, this.contextOn ? tab.title : `+ ${tab.title}`));
         row.append(chip);
       }
+      this.picked.forEach((c, index) => {
+        const chip = el("span", "ag-chip small");
+        if (c.kind === "selection") {
+          chip.title = c.text.length > 600 ? `${c.text.slice(0, 600)}…` : c.text;
+          chip.append(icon("quote"), el("span", "ag-chip-name", `“${c.text.replace(/\s+/g, " ").slice(0, 40)}${c.text.length > 40 ? "…" : ""}”`));
+        } else {
+          chip.append(icon("page"), el("span", "ag-chip-name", c.title));
+        }
+        chip.append(button(icon("close"), "ag-chip-x", (event) => {
+          event.stopPropagation();
+          this.picked.splice(index, 1);
+          this.renderContext();
+        }, "Remove"));
+        row.append(chip);
+      });
       this.attachments.forEach((file, index) => {
         const chip = fileChip(file, () => window.scribePreview?.open(this.attachments, index));
         chip.append(button(icon("close"), "ag-chip-x", (event) => {
@@ -2905,7 +2922,7 @@
         await this.applyScopeSlash(scopeCmd[1].toLowerCase());
         return;
       }
-      if (!text && !this.attachments.length) return;
+      if (!text && !this.attachments.length && !this.picked.length) return;
       if (this.attachments.some((f) => f.data === null)) {
         // Still being read (a large file just dropped): try again in a moment.
         setTimeout(() => this.send(), 100);
@@ -2924,6 +2941,12 @@
       if (this.contextOn && tab && !this.pageInThread(tab)) {
         context.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
       }
+      const picked = this.picked;
+      for (const c of picked) {
+        if (c.kind === "page" && (context.some((x) => x.kind === "page" && x.id === c.id) || this.pageInThread(c))) continue;
+        context.push(c);
+      }
+      this.picked = [];
       const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
       const images = sending.filter((f) => f.mimeType.startsWith("image/"));
       const files = sending.filter((f) => !f.mimeType.startsWith("image/"));
@@ -2968,6 +2991,7 @@
         if (!this.input.value && !this.attachments.length) {
           this.input.value = text;
           this.attachments = held;
+          this.picked = [...picked, ...this.picked];
           this.autosize();
           this.renderContext();
         } else {
@@ -5362,7 +5386,33 @@
     }
   });
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest };
+  /**
+   * Ask about a page: attach a selection from it (or the page itself, with no text) to a chat and focus
+   * its input. target "dock" or "side" picks that chat (Ctrl+K / Ctrl+L); otherwise the open one.
+   */
+  function ask(text, tab, target) {
+    if (!tab) return;
+    let view;
+    if (S.fullOpen) {
+      view = full.view;
+    } else if (target === "side" || (!target && S.sideOpen && !S.dockShown)) {
+      if (!S.sideOpen) sidebar.setOpen(true);
+      view = sidebar.view;
+    } else {
+      if (!S.dockShown) dock.setShown(true);
+      view = dock.view;
+    }
+    const chip = text
+      ? { kind: "selection", text, source: `"${tab.title}" (key: ${tab.key})` }
+      : { kind: "page", id: tab.id, key: tab.key, title: tab.title };
+    const same = (c) => c.kind === chip.kind && (chip.kind === "page" ? c.id === chip.id : c.text === chip.text);
+    const shownAlready = chip.kind === "page" && ((view.contextOn && activeTab()?.id === tab.id) || view.pageInThread(tab));
+    if (!shownAlready && !view.picked.some(same)) view.picked.push(chip);
+    view.renderContext();
+    setTimeout(() => view.focus(), 70);
+  }
+
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask };
 
   /* ---------- boot ---------- */
 

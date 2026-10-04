@@ -215,7 +215,7 @@ What shows in a thread:
 - **Page edits**: a turn on a page (a page thread, or with the page attached) keeps a checkpoint of the page's HTML. The footer's **Page edited** button puts it back.
 - Approvals, questions, plans, and todo lists as cards. Page links from the agent (`[[scribe:page-key]]` or `[label](scribe:page-key)`) open like page links do (Ctrl navigate, Shift split, Alt peek).
 
-The composer takes pasted or dropped images, `/` opens the provider's slash commands and skills, and the page chip attaches the current page. Messages sent while a turn runs are queued; Stop drops the queue, and those messages stay marked "Not sent" with **Send again**. Esc twice in the composer stops a running turn.
+The composer takes pasted or dropped images, `/` opens the provider's slash commands and skills, and the page chip attaches the current page. To ask about part of a page, select the text and right-click → **Ask agent**, or press **Ctrl+K** / **Ctrl+L** with it selected: the chat opens with the selection as a chip (the page named as its source) and the input focused. Messages sent while a turn runs are queued; Stop drops the queue, and those messages stay marked "Not sent" with **Send again**. Esc twice in the composer stops a running turn.
 
 In Code, Ask, and Plan modes the agents load your usual setup: Claude's user and project settings, skills, MCP servers and CLAUDE.md; Cursor's own config, rules, skills and MCP servers. Pages mode runs in a scratch folder under the data folder.
 

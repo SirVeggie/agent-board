@@ -4,6 +4,8 @@
     sparkle:
       '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.2l1.5 3.9 3.9 1.5-3.9 1.5L8 12l-1.5-3.9L2.6 6.6l3.9-1.5z" fill="currentColor"/><circle cx="12.8" cy="12.6" r="1.5" fill="currentColor"/></svg>',
     read: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 2h6.5L13 5.5V14H3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.5 8h5M5.5 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+    quote:
+      '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 9.5h3.5V13H3zM3 9.5C3 6.5 4 4.5 6.5 3.5M9.5 9.5H13V13H9.5zM9.5 9.5c0-3 1-5 3.5-6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>',
     edit: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M10.8 2.4l2.8 2.8-7.9 7.9H2.9v-2.8z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9.3 3.9l2.8 2.8" stroke="currentColor" stroke-width="1.3"/></svg>',
     execute:
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 6.2l2.2 1.8-2.2 1.8M8.4 10.2h3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',

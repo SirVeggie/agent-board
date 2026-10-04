@@ -799,7 +799,11 @@ export class AgentHost {
   private pageGuides(thread: Thread, msg: QueuedMessage): string {
     const ids: Array<{ ref: string; own?: boolean }> = [];
     if (thread.scope.kind === "page" && thread.scope.ref) ids.push({ ref: thread.scope.ref, own: true });
-    for (const chip of msg.context) if (chip.kind === "page") ids.push({ ref: chip.id });
+    for (const chip of msg.context) {
+      if (chip.kind === "page") ids.push({ ref: chip.id });
+      // A selection names the page it came from.
+      else if (chip.kind === "selection" && chip.source) for (const key of pageKeysIn(chip.source).slice(0, 1)) ids.push({ ref: key });
+    }
     // Pasted text can hold many keys; a few is what "look at this page" looks like.
     for (const key of pageKeysIn(msg.text).slice(0, 8)) ids.push({ ref: key });
     const pages: PageGuide[] = [];

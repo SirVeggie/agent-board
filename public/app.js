@@ -2828,6 +2828,46 @@
    * scribe.preview from a page: the page sends the files' bytes, shown here in the shared viewer.
    * Like scribe.agent, it needs the click or key press to have reached the board.
    */
+  /** The page's right-click menu: the frame sends where, and what text or link is under it. */
+  function onPageContextMenu(event) {
+    const id = frameIdByWindow(event.source);
+    const frame = id ? frames.get(id) : null;
+    const tab = id ? findAnyTab(id) : null;
+    if (!frame || !tab) {
+      return;
+    }
+    const data = event.data;
+    const box = frame.el.getBoundingClientRect();
+    const scale = frame.el.offsetWidth ? box.width / frame.el.offsetWidth : 1;
+    const point = { x: box.left + (Number(data.x) || 0) * scale, y: box.top + (Number(data.y) || 0) * scale };
+    const selection = typeof data.selection === "string" ? data.selection : "";
+    const link = typeof data.link === "string" && /^https?:/i.test(data.link) ? data.link : "";
+    library.openMenu(point, [
+      selection && { label: "Ask agent", action: () => window.scribeChat?.ask(selection, tab) },
+      selection && { label: "Copy", action: () => copyText(selection, "Copied selection") },
+      link && { label: "Copy link address", action: () => copyText(link, "Copied link") },
+      {
+        label: "Select all",
+        action: () => {
+          frame.el.focus();
+          frame.el.contentWindow?.postMessage({ type: "scribe-select-all" }, contentOrigin());
+        },
+      },
+      "sep",
+      !selection && { label: "Ask agent about this page", action: () => window.scribeChat?.ask("", tab) },
+      { label: "Copy page key", action: () => copyTabKey(id) },
+    ]);
+  }
+
+  async function copyText(text, done) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showNotice(done);
+    } catch {
+      showNotice("Could not copy to clipboard");
+    }
+  }
+
   function onPagePreview(event) {
     const data = event.data;
     const reply = (result) => {
@@ -3124,7 +3164,18 @@
     } else if (event.data?.type === "scribe-preview") {
       onPagePreview(event);
     } else if (event.data?.type === "scribe-chat-key") {
-      window.scribeChat?.shortcut(String(event.data.action || ""));
+      const action = String(event.data.action || "");
+      const selection = typeof event.data.selection === "string" ? event.data.selection : "";
+      const tab = selection ? findAnyTab(frameIdByWindow(event.source)) : null;
+      if (tab && (action === "dock" || action === "side")) {
+        window.scribeChat?.ask(selection, tab, action);
+      } else {
+        window.scribeChat?.shortcut(action);
+      }
+    } else if (event.data?.type === "scribe-context-menu") {
+      onPageContextMenu(event);
+    } else if (event.data?.type === "scribe-context-menu-close") {
+      library.closeMenu();
     }
   });
 
