@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { revertTrees, snapshotTree } from "./git.js";
-import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus } from "./worktree.js";
 
 let root = "";
 let repo = "";
@@ -101,4 +101,17 @@ test("reverting a worktree turn undoes its commits too", async () => {
   assert.equal(sh(wt.path, "status", "--porcelain"), "");
   await removeWorktree(wt);
   assert.ok(await dropBranchIfEmpty(wt));
+});
+
+test("a worktree no thread uses loses its links, so removing it by hand is safe", async () => {
+  const { worktree: kept } = await createWorktree(repo, repo, "kept");
+  const { worktree: orphan } = await createWorktree(repo, repo, "orphan");
+  const cut = unlinkOrphanedWorktrees([kept.path]);
+  assert.deepEqual(cut, [path.join(orphan.path, "node_modules")]);
+  assert.ok(fs.existsSync(path.join(kept.path, "node_modules", "dep", "index.js")));
+  assert.ok(!fs.existsSync(path.join(orphan.path, "node_modules")));
+  fs.rmSync(orphan.path, { recursive: true, force: true });
+  assert.ok(fs.existsSync(path.join(repo, "node_modules", "dep", "index.js")), "deleting the orphan leaves the main checkout's node_modules");
+  await removeWorktree(kept);
+  sh(repo, "worktree", "prune");
 });

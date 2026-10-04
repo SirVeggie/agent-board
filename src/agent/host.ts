@@ -11,7 +11,8 @@ import { waitForEvents } from "../wait.js";
 import type { PageEvent } from "../types.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
-import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
+import { syncDependencies } from "./deps.js";
+import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
@@ -274,6 +275,9 @@ export class AgentHost {
         }
       }
     }
+    // Worktrees left behind by a crash or a lost thread: cut their node_modules links, so removing them by hand is safe.
+    const openWorktrees = [...this.threads.values()].flatMap((t) => openWorktree(t)?.path ?? []);
+    for (const link of unlinkOrphanedWorktrees(openWorktrees)) log(`Unlinked ${link} from a worktree no thread uses`);
     const scratchDir = path.join(dataDir(), "agent", "scratch");
     fs.mkdirSync(scratchDir, { recursive: true });
     const entry = fileURLToPath(new URL("../index.js", import.meta.url));
@@ -1985,6 +1989,11 @@ export class AgentHost {
       message = commits
         ? `Merged ${commits} commit${commits === 1 ? "" : "s"} from ${wt.branch} into ${wt.base}.`
         : `${wt.branch} had no new commits, so there was nothing to merge.`;
+      // Worktrees link the main checkout's node_modules, so a merged dependency change has to be installed there.
+      if (commits) {
+        const synced = await syncDependencies(wt.repo).catch((err) => `Checking node_modules after the merge failed: ${(err as Error).message}`);
+        if (synced) message += ` ${synced}`;
+      }
     } else {
       const committed = await commitAll(wt, `WIP: ${thread.title}`);
       message = `Left the work on branch ${wt.branch}${committed ? "; its uncommitted changes were committed there as WIP" : ""}.`;
