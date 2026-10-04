@@ -5,6 +5,7 @@ import { listPermissions, setRules } from "./permissions.js";
 import type { AgentHost } from "./host.js";
 import { baseUrl } from "../config.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
+import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord } from "./types.js";
@@ -375,6 +376,18 @@ export function agentRouter(host: AgentHost): express.Router {
         return listDir("/");
       }
       return listDir(raw);
+    })
+  );
+
+  /** Files under a workspace for the composer's @-mention picker. */
+  router.get(
+    "/fs/files",
+    wrap(async (req) => {
+      const cwd = typeof req.query.cwd === "string" ? req.query.cwd : "";
+      const query = typeof req.query.query === "string" ? req.query.query : "";
+      const raw = Number(req.query.limit);
+      const limit = Number.isFinite(raw) ? raw : undefined;
+      return { files: await searchWorkspaceFiles(cwd, query, limit) };
     })
   );
 

@@ -105,7 +105,7 @@ export function contextBlock(chips: ContextChip[] | undefined): string {
   for (const chip of chips) {
     switch (chip.kind) {
       case "page":
-        lines.push(`Current Scribe page: "${chip.title}" (key: ${chip.key})`);
+        lines.push(`Scribe page: "${chip.title}" (key: ${chip.key})`);
         break;
       case "folder":
         lines.push(`Library folder: ${chip.path}`);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextChipKey, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
+import { contextBlock, contextChipKey, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
 import type { ContextChip, Thread } from "./types.js";
 
 const page = (id: string, title = id): ContextChip => ({ kind: "page", id, key: `scribe:${id}`, title });
@@ -19,6 +19,15 @@ test("freshContext drops pages, folders and files the thread already has", () =>
 test("freshContext keeps selections and unique chips in one message", () => {
   const chips: ContextChip[] = [page("t1"), page("t1"), sel("hello"), sel("hello")];
   assert.deepEqual(freshContext(chips, []), [page("t1"), sel("hello"), sel("hello")]);
+});
+
+test("contextBlock names pages, folders, files and selections", () => {
+  const text = contextBlock([page("t1", "Todo"), folder("f1"), file("src/a.ts"), sel("hello")]);
+  assert.match(text, /Scribe page: "Todo" \(key: scribe:t1\)/);
+  assert.match(text, /Library folder: Folder\/f1/);
+  assert.match(text, /File: src\/a\.ts/);
+  assert.match(text, /Selected text:\n"""\nhello\n"""/);
+  assert.equal(contextBlock([]), "");
 });
 
 test("contextChipKey ignores selections", () => {

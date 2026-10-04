@@ -153,6 +153,47 @@
 
   /** Same limits as src/agent/attachments.ts, checked here first so a file is refused before it is read. */
   const FILE_LIMITS = { count: 10, image: 8 * 1024 * 1024, file: 20 * 1024 * 1024, total: 50 * 1024 * 1024 };
+  const MENTION_LIMIT = 20;
+
+  /** The @token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix; start/end cover the whole token. */
+  function mentionAt(value, cursor) {
+    const before = value.slice(0, cursor);
+    const m = /(^|[\s])@([^\s@]*)$/.exec(before);
+    if (!m) return null;
+    const start = before.length - 1 - m[2].length;
+    const rest = /^[^\s@]*/.exec(value.slice(cursor))?.[0] || "";
+    return { start, end: cursor + rest.length, query: m[2] };
+  }
+
+  function chipKey(chip) {
+    if (chip.kind === "page") return `page:${chip.id}`;
+    if (chip.kind === "folder") return `folder:${chip.id}`;
+    if (chip.kind === "file") return `file:${chip.path}`;
+    return null;
+  }
+
+  function chipIcon(chip) {
+    if (chip.kind === "page") return "page";
+    if (chip.kind === "folder") return "folder";
+    if (chip.kind === "selection") return "quote";
+    return "read";
+  }
+
+  function chipLabel(chip) {
+    if (chip.kind === "page") return chip.title || chip.key || "Page";
+    if (chip.kind === "folder") return chip.path || "Folder";
+    if (chip.kind === "file") return R.basename(chip.path) || chip.path;
+    if (chip.kind === "selection") {
+      const text = String(chip.text || "").replace(/\s+/g, " ");
+      return text ? `“${text.slice(0, 40)}${text.length > 40 ? "…" : ""}”` : "Selection";
+    }
+    return chip.kind;
+  }
+
+  function chipTitle(chip) {
+    if (chip.kind === "selection") return chip.text.length > 600 ? `${chip.text.slice(0, 600)}…` : chip.text;
+    return chip.path || chip.key || "";
+  }
 
   function sentFileUrl(threadId, fileId) {
     return `/api/agent/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(fileId)}`;
@@ -593,7 +634,8 @@
   window.addEventListener("blur", () => {
     closeMenu();
     for (const view of views()) {
-      if (view.slash) view.slash.hidden = true;
+      if (view.hidePicker) view.hidePicker();
+      else if (view.slash) view.slash.hidden = true;
     }
   });
 
@@ -1098,9 +1140,11 @@
       this.mdTimers = new Map();
       /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
       this.attachments = [];
-      /** Context chips added from a page (Ask agent): selections, or a page that is not the active one. */
-      this.picked = [];
       this.drafts = new Map();
+      this.mentions = [];
+      this.mentionGen = 0;
+      this.mentionTimer = 0;
+      this.mentionLoading = false;
       this.contextOn = variant === "dock";
 
       this.root = el("div", `ag-view ag-view-${variant}`);
@@ -1250,12 +1294,15 @@
     }
 
     saveDraftText() {
-      if (this.input) this.drafts.set(this.draftKey(), this.input.value);
+      if (!this.input) return;
+      this.drafts.set(this.draftKey(), { text: this.input.value, mentions: this.mentions.map((c) => ({ ...c })) });
     }
 
     restoreDraftText() {
       if (!this.input) return;
-      this.input.value = this.drafts.get(this.draftKey()) || "";
+      const d = this.drafts.get(this.draftKey());
+      this.mentions = d?.mentions ? d.mentions.map((c) => ({ ...c })) : [];
+      this.input.value = d?.text || "";
       this.autosize();
     }
 
@@ -1730,7 +1777,8 @@
         const chips = el("div", "ag-chips");
         for (const c of item.context || []) {
           const chip = el("span", "ag-chip small");
-          chip.append(icon(c.kind === "page" ? "page" : c.kind === "folder" ? "folder" : c.kind === "selection" ? "quote" : "read"), el("span", null, c.title || c.path || (c.text ? `“${c.text.slice(0, 30)}…”` : c.kind)));
+          chip.title = chipTitle(c);
+          chip.append(icon(chipIcon(c)), el("span", null, chipLabel(c)));
           chips.append(chip);
         }
         const sent = [...(item.images || []), ...(item.files || [])];
@@ -1865,8 +1913,7 @@
       this.input.value = msg.text || "";
       this.clearAttachments();
       this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
-      const tab = activeTab();
-      if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
+      this.restoreContextChips(msg.context);
       this.renderContext();
       this.autosize();
       this.focus();
@@ -2355,12 +2402,17 @@
       this.input = el("textarea", "ag-textarea");
       this.input.rows = 1;
       this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
+      this.input.title = "Enter to send · @ mentions a page, folder or file · / for commands";
       this.input.addEventListener("input", () => {
         this.autosize();
-        this.updateSlash();
+        this.updatePicker();
         this.warm();
       });
       this.input.addEventListener("keydown", (event) => this.onKey(event));
+      this.input.addEventListener("keyup", (event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") this.updatePicker();
+      });
+      this.input.addEventListener("click", () => this.updatePicker());
       this.input.addEventListener("paste", (event) => this.onPaste(event));
       this.input.addEventListener("focus", () => {
         this.renderContext();
@@ -2449,11 +2501,10 @@
       const row = this.ctxRow;
       if (!row) return;
       row.replaceChildren();
-      const s = this.settings();
       const tab = activeTab();
-      const pageScoped = s.scope?.kind === "page" && s.scope.ref === tab?.id;
       const already = this.pageInThread(tab);
-      if (tab && !pageScoped && !already) {
+      const mentionedHere = Boolean(tab && this.mentions.some((c) => c.kind === "page" && c.id === tab.id));
+      if (tab && !already && !mentionedHere) {
         const chip = button("", `ag-chip small toggle${this.contextOn ? " on" : ""}`, () => {
           this.contextOn = !this.contextOn;
           this.renderContext();
@@ -2461,20 +2512,16 @@
         chip.append(icon("page"), el("span", null, this.contextOn ? tab.title : `+ ${tab.title}`));
         row.append(chip);
       }
-      this.picked.forEach((c, index) => {
-        const chip = el("span", "ag-chip small");
-        if (c.kind === "selection") {
-          chip.title = c.text.length > 600 ? `${c.text.slice(0, 600)}…` : c.text;
-          chip.append(icon("quote"), el("span", "ag-chip-name", `“${c.text.replace(/\s+/g, " ").slice(0, 40)}${c.text.length > 40 ? "…" : ""}”`));
-        } else {
-          chip.append(icon("page"), el("span", "ag-chip-name", c.title));
-        }
-        chip.append(button(icon("close"), "ag-chip-x", (event) => {
+      this.mentions.forEach((chip, index) => {
+        const node = el("span", "ag-chip small");
+        node.title = chipTitle(chip);
+        node.append(icon(chipIcon(chip)), el("span", null, chipLabel(chip)));
+        node.append(button(icon("close"), "ag-chip-x", (event) => {
           event.stopPropagation();
-          this.picked.splice(index, 1);
+          this.mentions.splice(index, 1);
           this.renderContext();
         }, "Remove"));
-        row.append(chip);
+        row.append(node);
       });
       this.attachments.forEach((file, index) => {
         const chip = fileChip(file, () => window.scribePreview?.open(this.attachments, index));
@@ -2496,6 +2543,59 @@
       if (s.scope?.kind === "page" && s.scope.ref === tab.id) return true;
       const items = S.details.get(this.threadId)?.items || [];
       return items.some((it) => it.kind === "user" && !it.dropped && (it.context || []).some((c) => c.kind === "page" && c.id === tab.id));
+    }
+
+    /** Pages, folders and files already on this message or earlier in the thread. */
+    knownMentionKeys() {
+      const keys = new Set();
+      const add = (chip) => {
+        const key = chipKey(chip);
+        if (key) keys.add(key);
+      };
+      for (const chip of this.mentions) add(chip);
+      const tab = activeTab();
+      if (tab && this.pageInThread(tab)) keys.add(`page:${tab.id}`);
+      const items = S.details.get(this.threadId)?.items || [];
+      for (const it of items) {
+        if (it.kind !== "user" || it.dropped) continue;
+        for (const chip of it.context || []) add(chip);
+      }
+      return keys;
+    }
+
+    composerContext() {
+      const chips = [];
+      const seen = new Set();
+      const push = (chip) => {
+        const key = chipKey(chip);
+        if (key) {
+          if (seen.has(key)) return;
+          seen.add(key);
+        }
+        chips.push(chip);
+      };
+      for (const chip of this.mentions) {
+        if (chip.kind === "page" && this.pageInThread(chip)) continue;
+        push(chip);
+      }
+      const tab = activeTab();
+      if (this.contextOn && tab && !this.pageInThread(tab)) {
+        push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
+      }
+      return chips;
+    }
+
+    restoreContextChips(context) {
+      this.mentions = Array.isArray(context) ? context.map((c) => ({ ...c })) : [];
+      const tab = activeTab();
+      if (tab && this.mentions.some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
+    }
+
+    hidePicker() {
+      this.slash.hidden = true;
+      this.mentionLoading = false;
+      this.mentionGen += 1;
+      clearTimeout(this.mentionTimer);
     }
 
     onPaste(event) {
@@ -2776,30 +2876,37 @@
         const at = items.findIndex((i) => i.classList.contains("on"));
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
+          if (!items.length) return;
           const next = event.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
           items.forEach((i, n) => i.classList.toggle("on", n === next));
           items[next]?.scrollIntoView({ block: "nearest" });
           return;
         }
-        if ((event.key === "Enter" || event.key === "Tab") && items.length) {
-          event.preventDefault();
-          (items[at >= 0 ? at : 0]).click();
-          return;
+        if (event.key === "Enter" || event.key === "Tab") {
+          if (items.length) {
+            event.preventDefault();
+            (items[at >= 0 ? at : 0]).click();
+            return;
+          }
+          if (this.mentionLoading || event.key === "Tab") {
+            event.preventDefault();
+            return;
+          }
         }
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
-          this.slash.hidden = true;
+          this.hidePicker();
           return;
         }
       }
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
-        if (!this.input.value.trim() && !this.attachments.length && this.pushQueued()) return;
+        if (!this.input.value.trim() && !this.attachments.length && !this.mentions.length && this.pushQueued()) return;
         this.send();
         return;
       }
-      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.attachments.length && this.withdrawQueued()) {
+      if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.attachments.length && !this.mentions.length && this.withdrawQueued()) {
         event.preventDefault();
         return;
       }
@@ -2819,13 +2926,25 @@
       }
     }
 
-    async updateSlash() {
+    async updatePicker() {
       const value = this.input.value;
-      const m = /^\/([\w:.-]*)$/.exec(value);
-      if (!m) {
-        this.slash.hidden = true;
+      const slash = /^\/([\w:.-]*)$/.exec(value);
+      if (slash) {
+        this.hidePicker();
+        await this.showSlash(slash[1]);
         return;
       }
+      const cur = this.input.selectionStart ?? value.length;
+      const mention = mentionAt(value, cur);
+      if (mention) {
+        this.showMentions(mention);
+        return;
+      }
+      if (!this.slash.hidden || this.mentionLoading) this.hidePicker();
+    }
+
+    async showSlash(typed) {
+      const gen = this.mentionGen;
       const s = this.settings();
       let list = S.commands.get(s.provider);
       if (this.threadId || !list) {
@@ -2839,7 +2958,9 @@
           /* keep cache */
         }
       }
-      const q = m[1].toLowerCase();
+      if (gen !== this.mentionGen) return;
+      if (!/^\/([\w:.-]*)$/.exec(this.input.value)) return;
+      const q = typed.toLowerCase();
       const local = SCOPE_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
       const remote = (list || []).filter((c) => c.name.toLowerCase().includes(q) && !SCOPE_SLASH.some((s) => s.name === c.name.toLowerCase()));
       const hits = [...local, ...remote].slice(0, 40);
@@ -2852,14 +2973,14 @@
         const row = button("", `ag-slash-item${i === 0 ? " on" : ""}`, () => {
           if (c.local) {
             this.input.value = "";
-            this.slash.hidden = true;
+            this.hidePicker();
             this.autosize();
             void this.applyScopeSlash(c.name);
             this.focus();
             return;
           }
           this.input.value = `/${c.name} `;
-          this.slash.hidden = true;
+          this.hidePicker();
           this.autosize();
           this.focus();
         });
@@ -2867,6 +2988,155 @@
         this.slash.append(row);
       });
       this.slash.hidden = false;
+    }
+
+    showMentions(mention) {
+      const gen = ++this.mentionGen;
+      this.mentionLoading = true;
+      clearTimeout(this.mentionTimer);
+      this.mentionTimer = setTimeout(() => {
+        void this.loadMentions(mention, gen);
+      }, mention.query ? 70 : 0);
+    }
+
+    async loadMentions(mention, gen) {
+      if (gen !== this.mentionGen) return;
+      const q = mention.query;
+      const taken = this.knownMentionKeys();
+      const s = this.settings();
+      const folders = this.localFolderMentions(q, taken);
+      const wantFiles = (s.mode === "code" || s.mode === "plan") && s.cwd;
+      this.renderMentionPicker({ pages: [], folders, files: [], mention, loading: true });
+      try {
+        const [pages, folderHits, files] = await Promise.all([
+          this.searchPageMentions(q, taken),
+          folders.length ? Promise.resolve(folders) : this.fetchFolderMentions(q, taken),
+          wantFiles ? this.searchFileMentions(s.cwd, q, taken) : Promise.resolve([]),
+        ]);
+        if (gen !== this.mentionGen) return;
+        this.mentionLoading = false;
+        this.renderMentionPicker({ pages, folders: folderHits, files, mention, loading: false });
+      } catch {
+        if (gen !== this.mentionGen) return;
+        this.mentionLoading = false;
+        this.renderMentionPicker({ pages: [], folders, files: [], mention, loading: false });
+      }
+    }
+
+    localFolderMentions(query, taken) {
+      const q = query.toLowerCase();
+      return (app()?.folders?.() || [])
+        .map((f) => ({ kind: "folder", id: f.id, path: folderPath(f.id) || f.name }))
+        .filter((f) => f.path && !taken.has(`folder:${f.id}`) && (!q || f.path.toLowerCase().includes(q)))
+        .slice(0, 8);
+    }
+
+    async fetchFolderMentions(query, taken) {
+      try {
+        const res = await fetch("/api/folders/tree");
+        if (!res.ok) return [];
+        const data = await res.json();
+        const q = query.toLowerCase();
+        return (data.folders || [])
+          .filter((f) => f.path && !taken.has(`folder:${f.id}`) && (!q || String(f.path).toLowerCase().includes(q)))
+          .slice(0, 8)
+          .map((f) => ({ kind: "folder", id: f.id, path: f.path }));
+      } catch {
+        return [];
+      }
+    }
+
+    async searchPageMentions(query, taken) {
+      try {
+        const url = `/api/search?limit=16${query ? `&query=${encodeURIComponent(query)}` : ""}`;
+        const res = await fetch(url);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return (data.tabs || [])
+          .filter((t) => t.id && t.key && !taken.has(`page:${t.id}`))
+          .slice(0, 12)
+          .map((t) => ({ kind: "page", id: t.id, key: t.key, title: t.title, folder: t.folder || "" }));
+      } catch {
+        return [];
+      }
+    }
+
+    async searchFileMentions(cwd, query, taken) {
+      try {
+        const data = await api("GET", `/fs/files?cwd=${encodeURIComponent(cwd)}&query=${encodeURIComponent(query)}&limit=16`);
+        return (data.files || [])
+          .filter((f) => f.path && !taken.has(`file:${f.path}`))
+          .slice(0, 12)
+          .map((f) => ({ kind: "file", path: f.path, name: f.name || R.basename(f.path) }));
+      } catch {
+        return [];
+      }
+    }
+
+    renderMentionPicker({ pages, folders, files, mention, loading }) {
+      this.slash.replaceChildren();
+      const sections = [
+        { title: "Pages", items: pages },
+        { title: "Folders", items: folders },
+        { title: "Files", items: files },
+      ];
+      let first = true;
+      for (const section of sections) {
+        if (!section.items.length) continue;
+        this.slash.append(el("div", "ag-slash-head", section.title));
+        for (const item of section.items) {
+          const on = first;
+          first = false;
+          const row = button("", `ag-slash-item${on ? " on" : ""}`, () => this.pickMention(item, mention));
+          row.addEventListener("mousedown", (event) => event.preventDefault());
+          const name = item.kind === "page" ? item.title : item.kind === "folder" ? item.path : item.name || R.basename(item.path);
+          const detail = item.kind === "page" ? item.folder : item.kind === "file" ? R.dirname(item.path) : "";
+          row.append(icon(chipIcon(item)), el("span", "ag-slash-title", name));
+          if (detail) row.append(el("span", "ag-slash-desc", detail));
+          row.title = item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
+          this.slash.append(row);
+        }
+      }
+      if (!this.slash.querySelector(".ag-slash-item")) {
+        this.slash.append(el("div", "ag-slash-empty", loading ? "Searching…" : "No matching pages, folders or files"));
+      }
+      this.slash.hidden = false;
+    }
+
+    pickMention(item, mention) {
+      const chip =
+        item.kind === "page"
+          ? { kind: "page", id: item.id, key: item.key, title: item.title }
+          : item.kind === "folder"
+            ? { kind: "folder", id: item.id, path: item.path }
+            : { kind: "file", path: item.path };
+      const value = this.input.value;
+      const cur = this.input.selectionStart ?? value.length;
+      const at = mention || mentionAt(value, cur);
+      if (at) {
+        const next = `${value.slice(0, at.start)}${value.slice(at.end)}`;
+        this.input.value = next;
+        this.input.setSelectionRange(at.start, at.start);
+      }
+      const key = chipKey(chip);
+      if (key && this.knownMentionKeys().has(key)) {
+        this.hidePicker();
+        this.autosize();
+        this.focus();
+        return;
+      }
+      if (this.mentions.length >= MENTION_LIMIT) {
+        notice(`Up to ${MENTION_LIMIT} mentions per message`);
+        this.hidePicker();
+        this.autosize();
+        this.focus();
+        return;
+      }
+      this.mentions.push(chip);
+      this.hidePicker();
+      this.renderContext();
+      this.autosize();
+      this.focus();
     }
 
     async stop() {
@@ -2901,8 +3171,7 @@
           this.input.value = msg.text || "";
           this.clearAttachments();
           this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
-          const tab = activeTab();
-          if (tab && (msg.context || []).some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
+          this.restoreContextChips(msg.context);
           this.renderContext();
           this.autosize();
           this.focus();
@@ -2917,12 +3186,12 @@
       const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
       if (scopeCmd && !this.attachments.length) {
         this.input.value = "";
-        this.slash.hidden = true;
+        this.hidePicker();
         this.autosize();
         await this.applyScopeSlash(scopeCmd[1].toLowerCase());
         return;
       }
-      if (!text && !this.attachments.length && !this.picked.length) return;
+      if (!text && !this.attachments.length) return;
       if (this.attachments.some((f) => f.data === null)) {
         // Still being read (a large file just dropped): try again in a moment.
         setTimeout(() => this.send(), 100);
@@ -2936,26 +3205,18 @@
         if (s.scope.kind === "global" || s.scope.kind === "workspace") patch.scope = { kind: "workspace", ref: dir };
         await this.updateSettings(patch);
       }
-      const tab = activeTab();
-      const context = [];
-      if (this.contextOn && tab && !this.pageInThread(tab)) {
-        context.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
-      }
-      const picked = this.picked;
-      for (const c of picked) {
-        if (c.kind === "page" && (context.some((x) => x.kind === "page" && x.id === c.id) || this.pageInThread(c))) continue;
-        context.push(c);
-      }
-      this.picked = [];
+      const context = this.composerContext();
       const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
       const images = sending.filter((f) => f.mimeType.startsWith("image/"));
       const files = sending.filter((f) => !f.mimeType.startsWith("image/"));
       const held = this.attachments;
+      const heldMentions = this.mentions;
       this.attachments = [];
+      this.mentions = [];
       this.input.value = "";
       this.autosize();
       this.renderContext();
-      this.slash.hidden = true;
+      this.hidePicker();
       this.drafts.delete(this.draftKey());
       try {
         let id = this.threadId;
@@ -2988,10 +3249,10 @@
         this.renderContext();
       } catch (err) {
         notice(err.message);
-        if (!this.input.value && !this.attachments.length) {
+        if (!this.input.value && !this.attachments.length && !this.mentions.length) {
           this.input.value = text;
           this.attachments = held;
-          this.picked = [...picked, ...this.picked];
+          this.mentions = heldMentions;
           this.autosize();
           this.renderContext();
         } else {
@@ -5407,7 +5668,7 @@
       : { kind: "page", id: tab.id, key: tab.key, title: tab.title };
     const same = (c) => c.kind === chip.kind && (chip.kind === "page" ? c.id === chip.id : c.text === chip.text);
     const shownAlready = chip.kind === "page" && ((view.contextOn && activeTab()?.id === tab.id) || view.pageInThread(tab));
-    if (!shownAlready && !view.picked.some(same)) view.picked.push(chip);
+    if (!shownAlready && !view.mentions.some(same)) view.mentions.push(chip);
     view.renderContext();
     setTimeout(() => view.focus(), 70);
   }
