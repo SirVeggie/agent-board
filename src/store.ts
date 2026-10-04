@@ -417,7 +417,12 @@ export class BoardStore extends EventEmitter {
   /** Template metadata, flagging a built-in's copy that fell behind its built-in. */
   templateMeta(template: Template, instanceCount = 0): TemplateMeta {
     const builtin = template.source ? this.locateBuiltin(template.source.builtin) : undefined;
-    return toTemplateMeta(template, instanceCount, Boolean(builtin && template.source!.fingerprint !== templateFingerprint(builtin)));
+    return toTemplateMeta(
+      template,
+      instanceCount,
+      Boolean(builtin && template.source!.fingerprint !== templateFingerprint(builtin)),
+      template.agentActions ?? builtin?.agentActions
+    );
   }
 
   listBuiltinTemplates(): BuiltinTemplateMeta[] {
@@ -558,8 +563,8 @@ export class BoardStore extends EventEmitter {
     }
     const id = newTemplateId();
     const now = Date.now();
-    // The guide stays with the built-in, so an app update reaches copies made before it.
-    const { guide: _guide, ...content } = structuredClone(builtin);
+    // The guide and agent actions stay with the built-in, so an app update reaches copies made before it.
+    const { guide: _guide, agentActions: _actions, ...content } = structuredClone(builtin);
     const template: Template = {
       ...content,
       id,
@@ -602,6 +607,13 @@ export class BoardStore extends EventEmitter {
           delete existing.guide;
         }
       }
+      if (parsed.agentActions !== undefined) {
+        if (parsed.agentActions.length) {
+          existing.agentActions = parsed.agentActions;
+        } else {
+          delete existing.agentActions;
+        }
+      }
       if (parsed.stateVersion !== undefined) {
         existing.stateVersion = parsed.stateVersion;
       }
@@ -628,6 +640,7 @@ export class BoardStore extends EventEmitter {
       ...(parsed.initialState ? { initialState: parsed.initialState } : {}),
       stateVersion: parsed.stateVersion ?? 1,
       ...(parsed.guide ? { guide: parsed.guide } : {}),
+      ...(parsed.agentActions?.length ? { agentActions: parsed.agentActions } : {}),
       createdAt: now,
       updatedAt: now,
     };

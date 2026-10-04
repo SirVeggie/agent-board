@@ -60,6 +60,7 @@ type TemplateRow = {
   builtin_key: string | null;
   builtin_fingerprint: string | null;
   guide: string | null;
+  agent_actions: string | null;
 };
 
 type PageAssetRow = {
@@ -141,7 +142,8 @@ CREATE TABLE IF NOT EXISTS templates (
   updated_at INTEGER NOT NULL,
   builtin_key TEXT,
   builtin_fingerprint TEXT,
-  guide TEXT
+  guide TEXT,
+  agent_actions TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -200,8 +202,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 const UPSERT_TEMPLATE_SQL = `
 INSERT INTO templates (
   id, key, title, description, html, fields, title_template, initial_state,
-  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide, agent_actions
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
   title = excluded.title,
@@ -215,7 +217,8 @@ ON CONFLICT(id) DO UPDATE SET
   updated_at = excluded.updated_at,
   builtin_key = excluded.builtin_key,
   builtin_fingerprint = excluded.builtin_fingerprint,
-  guide = excluded.guide
+  guide = excluded.guide,
+  agent_actions = excluded.agent_actions
 `;
 
 const UPSERT_BINDING_SQL = `
@@ -892,6 +895,7 @@ function templateToParams(template: Template): SQLInputValue[] {
     template.source?.builtin ?? null,
     template.source?.fingerprint ?? null,
     template.guide ?? null,
+    template.agentActions ? JSON.stringify(template.agentActions) : null,
   ];
 }
 
@@ -925,6 +929,15 @@ function rowToTemplate(row: TemplateRow): Template {
   } catch {
     initialState = undefined;
   }
+  let agentActions: Template["agentActions"];
+  try {
+    const parsed = row.agent_actions ? (JSON.parse(row.agent_actions) as unknown) : undefined;
+    if (Array.isArray(parsed) && parsed.length) {
+      agentActions = parsed as Template["agentActions"];
+    }
+  } catch {
+    agentActions = undefined;
+  }
   return {
     id: row.id,
     key: row.key,
@@ -939,6 +952,7 @@ function rowToTemplate(row: TemplateRow): Template {
     updatedAt: row.updated_at,
     ...(row.builtin_key ? { source: { builtin: row.builtin_key, fingerprint: row.builtin_fingerprint ?? "" } } : {}),
     ...(row.guide ? { guide: row.guide } : {}),
+    ...(agentActions ? { agentActions } : {}),
   };
 }
 

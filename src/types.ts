@@ -69,6 +69,44 @@ export type Template = {
   source?: TemplateSource;
   /** Markdown for agents working with pages made from this template: state shape, signals, conventions. */
   guide?: string;
+  /** Agent prompts the user can run on a page made from this template (page menu, palette, chat slash menu). */
+  agentActions?: AgentAction[];
+};
+
+export const AGENT_ACTION_PLACES = ["menu", "palette", "slash"] as const;
+export type AgentActionPlace = (typeof AGENT_ACTION_PLACES)[number];
+
+/**
+ * One template-declared agent action. The prompt's placeholders are filled in when it runs:
+ * {{selection}} (text selected on the page), {{input}} (text after the slash command),
+ * {{page.title}}, {{page.key}}; {{#name}}…{{/name}} keeps its text only when name is not empty.
+ */
+export type AgentAction = {
+  /** Slash command name, unique in the template. */
+  id: string;
+  label: string;
+  description?: string;
+  prompt: string;
+  /** Where it is offered; all three when the template leaves it out. */
+  where: AgentActionPlace[];
+  /** required: only offered with text selected; none: only without. Default: either. */
+  selection?: "required" | "none";
+  /** new (default): a new thread on the page with the thread settings; chat: sent in the chat at hand. */
+  run?: "new" | "chat";
+  /** Settings for a new thread; unset ones follow the user's defaults. */
+  thread?: AgentActionThread;
+};
+
+export type AgentActionThread = {
+  /** Only modes without a workspace folder: board (Pages) or ask. */
+  mode?: "board" | "ask";
+  provider?: string;
+  model?: string;
+  effort?: string;
+  fast?: boolean;
+  web?: "on" | "limited" | "off";
+  /** Thread title; placeholders work here too. */
+  title?: string;
 };
 
 /** Which built-in a local template was copied from, and that built-in's fingerprint at copy time. */
@@ -77,7 +115,9 @@ export type TemplateSource = {
   fingerprint: string;
 };
 
-export type TemplateMeta = Omit<Template, "html" | "initialState" | "source" | "guide"> & {
+export type TemplateMeta = Omit<Template, "html" | "initialState" | "source" | "guide" | "agentActions"> & {
+  /** Its agent actions, or for a local copy of a built-in without its own, the built-in's. */
+  agentActions?: AgentAction[];
   htmlBytes: number;
   /** The template carries an agent guide (tool results deliver it). */
   hasGuide?: boolean;
@@ -363,7 +403,12 @@ export function toMeta(tab: Tab): TabMeta {
   };
 }
 
-export function toTemplateMeta(template: Template, instanceCount = 0, builtinUpdate = false): TemplateMeta {
+export function toTemplateMeta(
+  template: Template,
+  instanceCount = 0,
+  builtinUpdate = false,
+  agentActions = template.agentActions
+): TemplateMeta {
   return {
     id: template.id,
     key: template.key,
@@ -379,6 +424,7 @@ export function toTemplateMeta(template: Template, instanceCount = 0, builtinUpd
     ...(template.source ? { builtinSource: template.source.builtin } : {}),
     ...(builtinUpdate ? { builtinUpdate: true } : {}),
     ...(template.guide ? { hasGuide: true } : {}),
+    ...(agentActions?.length ? { agentActions } : {}),
   };
 }
 

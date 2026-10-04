@@ -1005,6 +1005,44 @@ export async function startMcp(): Promise<void> {
         .describe(
           "Markdown for agents that later work with pages from this template: the state shape, events the page sends, and conventions (how to add an item, which keys to leave alone). Tool results hand it to an agent the first time it touches such a page. Omit to keep the current guide; an empty string removes it."
         ),
+      agentActions: z
+        .array(
+          z.object({
+            id: z.string().describe("Lowercase slug, e.g. summarise. It is the chat's slash command (/summarise)."),
+            label: z.string().describe("Menu and palette label, e.g. Summarise."),
+            description: z.string().optional(),
+            prompt: z
+              .string()
+              .describe(
+                "The message sent to the agent. Placeholders: {{selection}} (text selected on the page), {{input}} (text typed after the slash command), {{page.title}}, {{page.key}}. {{#selection}}…{{/selection}} keeps its text only when there is a selection (same for the others). The page and its guide are attached for the agent anyway."
+              ),
+            where: z
+              .array(z.enum(["menu", "palette", "slash"]))
+              .optional()
+              .describe("Page right-click menu, Ctrl+P palette while the page is open, chat slash menu. Default: all three."),
+            selection: z.enum(["required", "optional", "none"]).optional().describe("Offer it only with text selected (required), only without (none), or either (default)."),
+            run: z
+              .enum(["new", "chat"])
+              .optional()
+              .describe("new (default): a new thread on the page with the thread settings. chat: sent in the chat at hand, with its settings."),
+            thread: z
+              .object({
+                mode: z.enum(["board", "ask"]).optional().describe("board (Pages, the default) or ask (read-only)."),
+                provider: z.string().optional(),
+                model: z.string().optional(),
+                effort: z.string().optional(),
+                fast: z.boolean().optional(),
+                web: z.enum(["on", "limited", "off"]).optional(),
+                title: z.string().optional().describe("Thread title; placeholders work here too."),
+              })
+              .optional()
+              .describe("Settings for the new thread; unset ones follow the user's defaults."),
+          })
+        )
+        .optional()
+        .describe(
+          "Agent prompts the user can run on pages from this template, from the page's right-click menu, the palette, and the chat's slash menu. Omit to keep the current ones; an empty array removes them (a built-in's local copy then uses the built-in's)."
+        ),
       syncedWithBuiltin: z
         .boolean()
         .optional()
@@ -1012,7 +1050,7 @@ export async function startMcp(): Promise<void> {
           "For a built-in's local copy with builtinUpdate: pass true once this upsert brings in the built-in's latest changes (template_get the built-in), to clear the flag."
         ),
     },
-    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, syncedWithBuiltin }) => {
+    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, agentActions, syncedWithBuiltin }) => {
       const { status, data } = await api("POST", "/api/templates", {
         key,
         title,
@@ -1023,6 +1061,7 @@ export async function startMcp(): Promise<void> {
         initialState,
         stateVersion,
         guide,
+        agentActions,
         syncedWithBuiltin,
       });
       if (status >= 400) {

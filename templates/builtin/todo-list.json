@@ -44,6 +44,17 @@
       "default": 1
     }
   ],
+  "agentActions": [
+    {
+      "id": "break-down",
+      "label": "Break this down",
+      "description": "Split a task into smaller steps on the list",
+      "prompt": "Break a task on {{page.title}} ({{page.key}}) into smaller, concrete steps and add them as new items right after it, in the same column.{{#selection}}\n\nThe task: {{selection}}{{/selection}}{{#input}}\n\n{{input}}{{/input}}\n\nIf no task is named, pick the largest open one and say which you chose.",
+      "thread": {
+        "title": "Break down: {{page.title}}"
+      }
+    }
+  ],
   "titleTemplate": "{{title}}",
   "initialState": {
     "todos": [],

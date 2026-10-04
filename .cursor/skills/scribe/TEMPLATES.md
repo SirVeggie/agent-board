@@ -8,7 +8,7 @@ A template is reusable page HTML plus a form. The user opens instances from the 
 
 | Tool | Purpose |
 | --- | --- |
-| `template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`) |
+| `template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`, `agentActions`) |
 | `template_list` | Names and field schemas (no HTML) |
 | `template_get` | Full HTML and fields |
 | `template_delete` | Remove the template. Existing pages stay, keep last HTML, and become ordinary pages |
@@ -32,6 +32,7 @@ If the user wants a changed version of a built-in, `template_get` it and upsert 
 4. Set `titleTemplate` if the tab title should include a field, e.g. `{{title}}`.
 5. Field `type`: `text`, `textarea`, `number`, `select`, `checkbox`. Select needs `options`. Keys must be JS identifiers.
 6. If an agent will read or change the page's state, write a `guide`: markdown with the state shape, the events the page logs and their data, and the rules for editing (which keys to leave alone, how to add an item). Give array items stable `id`s so agents can address them by path, and keep per-viewer things (filters, drafts, the open item) in `scribe.local`. Tool results hand it to any agent the first time it touches a page from the template, so nothing about the template needs to go in this skill. Keep it under a page; `templates/builtin/todo-list.guide.md` is a good model. (Actions, like the Kanban board's, ship only with built-in templates for now.) Upserting without `guide` keeps the current one.
+7. If the user wants one-click agent prompts on these pages, add `agentActions`: `{ id, label, prompt, where?, selection?, run?, thread? }`. Scribe offers them in the page's right-click menu, the Ctrl+P palette while the page is open, and the chat's slash menu (`/<id>`, with any text after it as `{{input}}`). The prompt can use `{{selection}}`, `{{input}}`, `{{page.title}}`, `{{page.key}}`, and `{{#selection}}…{{/selection}}` for text that only shows when there is a selection. By default an action starts a new thread on the page (`thread`: `mode` board or ask, `provider`, `model`, `effort`, `fast`, `web`, `title`); `run: "chat"` sends it in the chat at hand instead. Upserting without `agentActions` keeps the current ones. `templates/builtin/*.json` have examples.
 
 Do not pin the template itself. The user opens pages from the sidebar.
 

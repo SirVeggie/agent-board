@@ -1,4 +1,4 @@
-import { isPlainObject, type BoardState, type Template, type TemplateField, type TemplateFieldType, type TemplateValues } from "./types.js";
+import { AGENT_ACTION_PLACES, isPlainObject, type AgentAction, type AgentActionThread, type BoardState, type Template, type TemplateField, type TemplateFieldType, type TemplateValues } from "./types.js";
 
 export const TEMPLATE_FIELD_TYPES = ["text", "textarea", "number", "select", "checkbox"] as const;
 
@@ -22,6 +22,8 @@ export type TemplateUpsertInput = {
   stateVersion?: number;
   /** Omit to keep an existing template's guide; an empty string removes it. */
   guide?: string;
+  /** Omit to keep an existing template's agent actions; an empty array removes them. */
+  agentActions?: unknown;
   /** On a built-in's local copy: the built-in's latest changes are merged, so clear builtinUpdate. */
   syncedWithBuiltin?: boolean;
 };
@@ -96,6 +98,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
   initialState?: BoardState;
   stateVersion?: number;
   guide?: string;
+  agentActions?: AgentAction[];
 } {
   const title = input.title.trim();
   if (!title) {
@@ -128,6 +131,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
       throw new Error(`guide is too long (${guide.length} characters, max ${MAX_GUIDE_CHARS})`);
     }
   }
+  const agentActions = input.agentActions === undefined ? undefined : parseAgentActions(input.agentActions);
   let stateVersion: number | undefined;
   if (input.stateVersion !== undefined) {
     if (!Number.isInteger(input.stateVersion) || input.stateVersion < 1) {
@@ -144,7 +148,172 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
     ...(initialState ? { initialState } : {}),
     ...(stateVersion !== undefined ? { stateVersion } : {}),
     ...(guide !== undefined ? { guide } : {}),
+    ...(agentActions !== undefined ? { agentActions } : {}),
   };
+}
+
+const MAX_AGENT_ACTIONS = 16;
+const MAX_ACTION_PROMPT = 8000;
+const ACTION_ID = /^[a-z][a-z0-9-]{0,39}$/;
+const ACTION_PLACEHOLDERS = new Set(["selection", "input", "page.title", "page.key"]);
+const ACTION_TAG = /\{\{\s*([#/]?)\s*([a-zA-Z_.]+)\s*\}\}/g;
+const ACTION_MODES = ["board", "ask"] as const;
+const ACTION_WEB = ["on", "limited", "off"] as const;
+
+/** Check a template's agentActions list; null or undefined is an empty list. */
+export function parseAgentActions(raw: unknown): AgentAction[] {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error("agentActions must be an array");
+  }
+  if (raw.length > MAX_AGENT_ACTIONS) {
+    throw new Error(`agentActions is too long (max ${MAX_AGENT_ACTIONS})`);
+  }
+  const seen = new Set<string>();
+  return raw.map((item, index) => {
+    const at = `agentActions[${index}]`;
+    if (!isPlainObject(item)) {
+      throw new Error(`${at} must be an object`);
+    }
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    if (!ACTION_ID.test(id)) {
+      throw new Error(`${at}.id must be lowercase letters, digits and dashes, starting with a letter (it is the slash command)`);
+    }
+    if (seen.has(id)) {
+      throw new Error(`${at}.id "${id}" is used twice`);
+    }
+    seen.add(id);
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    if (!label || label.length > 60) {
+      throw new Error(`${at}.label is required (max 60 characters)`);
+    }
+    const prompt = typeof item.prompt === "string" ? item.prompt.trim() : "";
+    if (!prompt || prompt.length > MAX_ACTION_PROMPT) {
+      throw new Error(`${at}.prompt is required (max ${MAX_ACTION_PROMPT} characters)`);
+    }
+    assertActionPlaceholders(prompt, `${at}.prompt`);
+    const action: AgentAction = { id, label, prompt, where: [...AGENT_ACTION_PLACES] };
+    const description = typeof item.description === "string" ? item.description.trim() : "";
+    if (description) {
+      action.description = description.slice(0, 200);
+    }
+    if (item.where !== undefined) {
+      const places = Array.isArray(item.where) ? item.where : [item.where];
+      if (!places.length || places.some((place) => !(AGENT_ACTION_PLACES as readonly unknown[]).includes(place))) {
+        throw new Error(`${at}.where must list some of ${AGENT_ACTION_PLACES.join(", ")}`);
+      }
+      action.where = AGENT_ACTION_PLACES.filter((place) => places.includes(place));
+    }
+    if (item.selection !== undefined && item.selection !== "optional") {
+      if (item.selection !== "required" && item.selection !== "none") {
+        throw new Error(`${at}.selection must be required, optional or none`);
+      }
+      action.selection = item.selection;
+    }
+    if (item.run !== undefined && item.run !== "new") {
+      if (item.run !== "chat") {
+        throw new Error(`${at}.run must be new or chat`);
+      }
+      action.run = "chat";
+    }
+    if (item.thread !== undefined) {
+      const thread = parseActionThread(item.thread, `${at}.thread`);
+      if (Object.keys(thread).length) {
+        action.thread = thread;
+      }
+    }
+    return action;
+  });
+}
+
+function parseActionThread(raw: unknown, at: string): AgentActionThread {
+  if (!isPlainObject(raw)) {
+    throw new Error(`${at} must be an object`);
+  }
+  const known = new Set(["mode", "provider", "model", "effort", "fast", "web", "title"]);
+  for (const key of Object.keys(raw)) {
+    if (!known.has(key)) {
+      throw new Error(`${at}.${key} is not a thread setting (use ${[...known].join(", ")})`);
+    }
+  }
+  const thread: AgentActionThread = {};
+  if (raw.mode !== undefined) {
+    if (!(ACTION_MODES as readonly unknown[]).includes(raw.mode)) {
+      throw new Error(`${at}.mode must be board or ask (actions do not run in a workspace folder)`);
+    }
+    thread.mode = raw.mode as AgentActionThread["mode"];
+  }
+  for (const key of ["provider", "model", "effort"] as const) {
+    if (raw[key] !== undefined) {
+      if (typeof raw[key] !== "string" || !raw[key].trim()) {
+        throw new Error(`${at}.${key} must be a string`);
+      }
+      thread[key] = raw[key].trim();
+    }
+  }
+  if (raw.fast !== undefined) {
+    if (typeof raw.fast !== "boolean") {
+      throw new Error(`${at}.fast must be true or false`);
+    }
+    thread.fast = raw.fast;
+  }
+  if (raw.web !== undefined) {
+    if (!(ACTION_WEB as readonly unknown[]).includes(raw.web)) {
+      throw new Error(`${at}.web must be on, limited or off`);
+    }
+    thread.web = raw.web as AgentActionThread["web"];
+  }
+  if (raw.title !== undefined) {
+    if (typeof raw.title !== "string") {
+      throw new Error(`${at}.title must be a string`);
+    }
+    const title = raw.title.trim().slice(0, 120);
+    if (title) {
+      assertActionPlaceholders(title, `${at}.title`);
+      thread.title = title;
+    }
+  }
+  return thread;
+}
+
+function assertActionPlaceholders(source: string, where: string): void {
+  const open: string[] = [];
+  for (const match of source.matchAll(ACTION_TAG)) {
+    const [, mark, name] = match;
+    if (!ACTION_PLACEHOLDERS.has(name)) {
+      throw new Error(`${where} uses unknown placeholder "${name}" (use ${[...ACTION_PLACEHOLDERS].join(", ")})`);
+    }
+    if (mark === "#") {
+      open.push(name);
+    } else if (mark === "/") {
+      if (open.pop() !== name) {
+        throw new Error(`${where}: {{/${name}}} does not close the section opened before it`);
+      }
+    }
+  }
+  if (open.length) {
+    throw new Error(`${where}: {{#${open[open.length - 1]}}} is not closed`);
+  }
+}
+
+/**
+ * Fill in an action's prompt or title. {{#name}}…{{/name}} keeps its text only when the value is not
+ * empty. public/agent.js does the same when it runs an action; keep the two in step.
+ */
+export function renderAgentActionText(source: string, values: Record<string, string>): string {
+  const sections = /\{\{\s*#\s*([a-zA-Z_.]+)\s*\}\}([\s\S]*?)\{\{\s*\/\s*\1\s*\}\}/g;
+  let text = source;
+  // Nested sections: the inner ones go on a later pass.
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = text.replace(sections, (_, name: string, inner: string) => ((values[name] ?? "").trim() ? inner : ""));
+    if (next === text) {
+      break;
+    }
+    text = next;
+  }
+  return text.replace(ACTION_TAG, (_, mark: string, name: string) => (mark ? "" : (values[name] ?? ""))).trim();
 }
 
 /** Same content means the same template, regardless of id, key, or timestamps. */

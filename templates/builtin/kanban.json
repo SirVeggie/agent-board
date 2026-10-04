@@ -30,6 +30,17 @@
       "default": true
     }
   ],
+  "agentActions": [
+    {
+      "id": "triage",
+      "label": "Triage inbox",
+      "description": "Label, prioritise and tidy new cards",
+      "prompt": "Triage the board {{page.title}} ({{page.key}}): go through the cards in its first column, add labels and a priority, tidy titles and descriptions, and comment with questions where a card is unclear. Don't move cards into an agent column or start work on them.{{#selection}}\n\nStart with: {{selection}}{{/selection}}{{#input}}\n\n{{input}}{{/input}}",
+      "thread": {
+        "title": "Triage: {{page.title}}"
+      }
+    }
+  ],
   "titleTemplate": "{{title}}",
   "initialState": {
     "columns": [],

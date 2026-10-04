@@ -1793,6 +1793,28 @@ test("a page from a built-in copy gets the built-in's guide; a user template kee
   again.closeDb();
 });
 
+test("a built-in copy offers the built-in's agent actions; a user template keeps its own", () => {
+  const store = loaded();
+  const { template: copy } = store.copyBuiltinTemplate("markdown-note");
+  assert.equal(copy.agentActions, undefined, "the copy does not store them");
+  assert.equal(store.templateMeta(copy).agentActions?.[0]?.id, "summarise");
+  assert.equal(store.listBuiltinTemplates().find((t) => t.key === "markdown-note")?.agentActions?.[0]?.id, "summarise");
+
+  const action = { id: "ping", label: "Ping", prompt: "Ping {{page.key}}" };
+  store.upsertTemplate({ key: "log", title: "Log", html: "<p>log</p>", agentActions: [action] });
+  store.upsertTemplate({ key: "log", title: "Log", html: "<p>log v2</p>" });
+  assert.equal(store.findTemplate("log")?.template.agentActions?.[0]?.id, "ping", "an update without agentActions keeps them");
+  store.persist();
+  store.closeDb();
+
+  const again = loaded();
+  const log = again.findTemplate("log")!.template;
+  assert.deepEqual(again.templateMeta(log).agentActions, [{ ...action, where: ["menu", "palette", "slash"] }]);
+  again.upsertTemplate({ key: "log", title: "Log", html: "<p>log</p>", agentActions: [] });
+  assert.equal(again.templateMeta(again.findTemplate("log")!.template).agentActions, undefined);
+  again.closeDb();
+});
+
 test("a new page can take the key of a page in the Trash, and both save", () => {
   const store = loaded();
   const { tab: old } = store.upsert({ key: "kanban", title: "Kanban", html: "<p>old</p>" });

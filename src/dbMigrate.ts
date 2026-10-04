@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS templates (
   updated_at INTEGER NOT NULL,
   builtin_key TEXT,
   builtin_fingerprint TEXT,
-  guide TEXT
+  guide TEXT,
+  agent_actions TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -55,6 +56,9 @@ function ensureTemplateBuiltinColumns(db: DatabaseSync): void {
   }
   if (!columns.some((column) => column.name === "guide")) {
     db.exec("ALTER TABLE templates ADD COLUMN guide TEXT");
+  }
+  if (!columns.some((column) => column.name === "agent_actions")) {
+    db.exec("ALTER TABLE templates ADD COLUMN agent_actions TEXT");
   }
 }
 

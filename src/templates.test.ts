@@ -3,8 +3,10 @@ import { test } from "node:test";
 import {
   mergeTemplateValues,
   normalizeTemplateInput,
+  parseAgentActions,
   parseTemplateFields,
   parseTemplateValues,
+  renderAgentActionText,
   renderTemplateTitle,
   substituteTemplate,
 } from "./templates.js";
@@ -71,4 +73,53 @@ test("mergeTemplateValues keeps current values when fields stay compatible", () 
   assert.equal(values.title, "Shop");
   assert.equal(values.columns, 4);
   assert.equal("extra" in values, false);
+});
+
+test("parseAgentActions fills defaults and keeps declared settings", () => {
+  const [plain, chat] = parseAgentActions([
+    { id: "summarise", label: "Summarise", prompt: "Summarise {{page.title}}." },
+    {
+      id: "break-down",
+      label: "Break this down",
+      prompt: "Break down{{#selection}}: {{selection}}{{/selection}}",
+      where: ["menu", "slash"],
+      selection: "optional",
+      run: "chat",
+      thread: { mode: "ask", fast: true, title: "Break down {{page.title}}" },
+    },
+  ]);
+  assert.deepEqual(plain, { id: "summarise", label: "Summarise", prompt: "Summarise {{page.title}}.", where: ["menu", "palette", "slash"] });
+  assert.deepEqual(chat.where, ["menu", "slash"]);
+  assert.equal(chat.selection, undefined);
+  assert.equal(chat.run, "chat");
+  assert.deepEqual(chat.thread, { mode: "ask", fast: true, title: "Break down {{page.title}}" });
+});
+
+test("parseAgentActions rejects bad ids, placeholders, sections and modes", () => {
+  const base = { id: "go", label: "Go", prompt: "Go" };
+  assert.throws(() => parseAgentActions([{ ...base, id: "Go now" }]), /id must be/);
+  assert.throws(() => parseAgentActions([base, base]), /used twice/);
+  assert.throws(() => parseAgentActions([{ ...base, prompt: "{{card}}" }]), /unknown placeholder "card"/);
+  assert.throws(() => parseAgentActions([{ ...base, prompt: "{{#selection}}x" }]), /not closed/);
+  assert.throws(() => parseAgentActions([{ ...base, prompt: "{{#selection}}x{{/input}}" }]), /does not close/);
+  assert.throws(() => parseAgentActions([{ ...base, thread: { mode: "code" } }]), /board or ask/);
+  assert.throws(() => parseAgentActions([{ ...base, thread: { cwd: "C:/" } }]), /not a thread setting/);
+  assert.throws(() => parseAgentActions([{ ...base, where: ["toolbar"] }]), /where must list/);
+});
+
+test("normalizeTemplateInput keeps agentActions unset when omitted", () => {
+  assert.equal(normalizeTemplateInput({ title: "T", html: "<p>x</p>" }).agentActions, undefined);
+  assert.deepEqual(normalizeTemplateInput({ title: "T", html: "<p>x</p>", agentActions: [] }).agentActions, []);
+});
+
+test("renderAgentActionText fills placeholders and drops empty sections", () => {
+  const prompt = "Break down {{page.title}} ({{page.key}}){{#selection}}, starting with: {{selection}}{{/selection}}.{{#input}} Note: {{input}}{{/input}}";
+  assert.equal(
+    renderAgentActionText(prompt, { "page.title": "Todos", "page.key": "scribe:todos", selection: "Ship it", input: "" }),
+    "Break down Todos (scribe:todos), starting with: Ship it."
+  );
+  assert.equal(
+    renderAgentActionText(prompt, { "page.title": "Todos", "page.key": "scribe:todos", selection: "  ", input: "be brief" }),
+    "Break down Todos (scribe:todos). Note: be brief"
+  );
 });

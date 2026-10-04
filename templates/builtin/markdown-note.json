@@ -11,6 +11,18 @@
       "default": "Notes"
     }
   ],
+  "agentActions": [
+    {
+      "id": "summarise",
+      "label": "Summarise",
+      "description": "A short summary of the note in the chat",
+      "prompt": "Summarise the note {{page.title}} ({{page.key}}) in a few bullet points. Don't change the page.{{#selection}}\n\nSummarise only this part: {{selection}}{{/selection}}{{#input}}\n\n{{input}}{{/input}}",
+      "thread": {
+        "mode": "ask",
+        "title": "Summary: {{page.title}}"
+      }
+    }
+  ],
   "titleTemplate": "{{title}}",
   "initialState": {
     "text": ""

@@ -972,6 +972,7 @@ export async function startHttp(): Promise<http.Server> {
         initialState: isPlainObject(req.body?.initialState) ? req.body.initialState : undefined,
         stateVersion: typeof req.body?.stateVersion === "number" ? req.body.stateVersion : undefined,
         guide: typeof req.body?.guide === "string" ? req.body.guide : undefined,
+        agentActions: req.body?.agentActions,
         syncedWithBuiltin: req.body?.syncedWithBuiltin === true,
       });
       if (!created && viewerOf(req) === "agent") {
