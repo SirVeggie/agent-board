@@ -16,6 +16,7 @@
     emptyEnter: "scribe.agent.emptyEnter",
     tips: "scribe.agent.showTips",
     hidePage: "scribe.agent.hidePageThreads",
+    compact: "scribe.agent.compactThreads",
   };
   const DOCK_STYLES = [
     { id: "bar", label: "Bar" },
@@ -32,6 +33,11 @@
     { id: "steer", label: "Steer, then send" },
     { id: "send", label: "Send now" },
   ];
+
+  /** The thread list shows only each thread's title and status dot (Agent settings). */
+  function compactThreads() {
+    return localStorage.getItem(LS.compact) === "1";
+  }
 
   function emptyEnter() {
     return localStorage.getItem(LS.emptyEnter) === "send" ? "send" : "steer";
@@ -3812,7 +3818,7 @@
     hide.append(hideBox, el("span", null, "Hide page-launched"));
     hide.title = "Threads started by a page stay hidden until you type in them";
     top.append(search, seg, hide, newBtn);
-    const list = el("div", "ag-list");
+    const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
     container.append(top, list);
     const fill = () => {
       list.replaceChildren();
@@ -3909,13 +3915,8 @@
     }
   }
 
-  function threadRow(t, current, onPick) {
-    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}`, () => onPick(t.id));
-    row.dataset.id = t.id;
-    const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
-    if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
-    const main = el("span", "ag-row-main");
-    const title = el("span", "ag-row-title", t.title);
+  /** The line under a thread's title: provider, model, when, page, changes and worktree branch. */
+  function threadRowMeta(t) {
     const meta = el("span", "ag-row-meta");
     meta.append(el("span", `ag-prov p-${t.provider}`, PROVIDER_GLYPH[t.provider] || "?"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
     if (t.fromPage) meta.append(el("span", null, "·"), el("span", null, "page"));
@@ -3927,7 +3928,18 @@
       branch.title = `${wt.branch}${wt.ahead || wt.dirty ? ": work not merged yet" : ""}`;
       meta.append(branch);
     }
-    main.append(title, meta);
+    return meta;
+  }
+
+  function threadRow(t, current, onPick) {
+    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}`, () => onPick(t.id));
+    row.dataset.id = t.id;
+    const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
+    if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
+    const main = el("span", "ag-row-main");
+    const title = el("span", "ag-row-title", t.title);
+    if (compactThreads()) main.append(title);
+    else main.append(title, threadRowMeta(t));
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     row.title = t.title;
@@ -5685,6 +5697,17 @@
             }
           ),
           { id: "ag-tips-label" }
+        ),
+        settingRow(
+          "Compact thread list",
+          switchControl(
+            () => compactThreads(),
+            () => {
+              localStorage.setItem(LS.compact, compactThreads() ? "0" : "1");
+              renderLists();
+            }
+          ),
+          { id: "ag-compact-label", title: "Each thread shows only its title and status dot, in a smaller font with less spacing." }
         ),
         settingRow(
           "Show reasoning expanded",

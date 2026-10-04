@@ -2361,6 +2361,37 @@ button.ag-row.unread .ag-row-title {
   font-size: 10.5px;
 }
 
+/* Compact thread list (Agent settings): title and status dot only. */
+.ag-list.compact .ag-list-group {
+  padding: 6px 6px 2px;
+}
+
+.ag-list.compact button.ag-row {
+  min-height: 24px;
+  padding: 2px 8px;
+  gap: 7px;
+}
+
+.ag-list.compact .ag-row-title {
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.ag-list.compact .ag-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.ag-list.compact .ag-row-actions .ag-icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+.ag-list.compact button.ag-list-more {
+  height: 22px;
+  margin: 0 0 4px;
+}
+
 .ag-dot {
   width: 8px;
   height: 8px;
