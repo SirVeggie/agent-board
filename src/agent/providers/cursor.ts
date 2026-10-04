@@ -24,6 +24,8 @@ const IDLE_KILL_MS = 15 * 60 * 1000;
 /** Name of the board MCP server this daemon hands each Cursor session. */
 export const BOARD_MCP = "scribe-chat";
 const MODELS_TTL_MS = 30 * 60 * 1000;
+/** Cursor's backend (Connect RPC); the CLI talks to the same host. */
+const CURSOR_API = "https://api2.cursor.sh";
 /** Waits before each retry of a prompt Cursor's backend dropped; its length caps the retries. */
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 const RESUME_TEXT = "Your previous response was cut off by a network error. Continue from where you left off; don't redo steps that already finished.";
@@ -161,6 +163,32 @@ export class CursorProvider implements AgentProvider {
       return { id: this.id, label: this.label, available: false, detail: "Cursor agent CLI not found. Install it and run `agent login`." };
     }
     return { id: this.id, label: this.label, available: true, detail: `agent ${bin.version}` };
+  }
+
+  /**
+   * The plan's usage this billing period, from the private dashboard API the CLI's /usage calls
+   * (no ACP or CLI command reports it). Null without a token or when the call fails. Brittle by
+   * nature: a CLI update can move it.
+   */
+  async fetchPlanUsage(): Promise<unknown | null> {
+    const token = process.env.CURSOR_ACCESS_TOKEN?.trim();
+    if (!token) return null;
+    try {
+      const res = await fetch(`${CURSOR_API}/aiserver.v1.DashboardService/GetCurrentPeriodUsage`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "connect-protocol-version": "1", authorization: `Bearer ${token}` },
+        body: "{}",
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) {
+        log(`Cursor usage fetch failed: HTTP ${res.status}`);
+        return null;
+      }
+      return await res.json();
+    } catch (err) {
+      log(`Cursor usage fetch failed: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   models(refresh = false): Promise<ModelOption[]> {

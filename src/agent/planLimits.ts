@@ -161,3 +161,48 @@ export function usageLimitResetsAt(error: string | undefined, limits: PlanLimits
 export function livePlanLimits(limits: PlanLimits, now = Date.now()): PlanLimits {
   return applyExpiredWindows(limits, now);
 }
+
+/** Cursor windows: the plan's included pool, split into first-party (Auto) and API models, and on-demand spend. */
+export const CURSOR_WINDOW_LABELS: Record<string, string> = {
+  cursor_included: "Included",
+  cursor_auto: "Auto",
+  cursor_api: "API",
+  cursor_on_demand: "On-demand",
+};
+
+function num(raw: unknown): number | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() && Number.isFinite(Number(raw))) return Number(raw);
+  return undefined;
+}
+
+/**
+ * Cursor's DashboardService.GetCurrentPeriodUsage response in Connect JSON (camelCase, int64 as
+ * strings): percents are 0–100, billingCycleEnd is epoch ms. Null when it has no plan usage.
+ */
+export function planLimitsFromCursorUsage(resp: unknown, now: number): PlanLimits | null {
+  if (!isPlainRecord(resp) || !isPlainRecord(resp.planUsage)) return null;
+  const plan = resp.planUsage;
+  const end = num(resp.billingCycleEnd);
+  const resetsAt = end && end > 0 ? parseResetsAt(end) : undefined;
+  const windows: PlanLimits["windows"] = [];
+  const add = (id: string, percent: number | undefined) => {
+    if (percent === undefined) return;
+    windows.push({ id, label: CURSOR_WINDOW_LABELS[id], utilization: Math.max(0, percent / 100), ...(resetsAt ? { resetsAt } : {}) });
+  };
+  const limit = num(plan.limit) ?? 0;
+  const included = num(plan.includedSpend) ?? 0;
+  add("cursor_included", num(plan.totalPercentUsed) ?? (limit > 0 ? (included / limit) * 100 : undefined));
+  add("cursor_auto", num(plan.autoPercentUsed));
+  add("cursor_api", num(plan.apiPercentUsed));
+  const spend = isPlainRecord(resp.spendLimitUsage) ? resp.spendLimitUsage : null;
+  if (spend) {
+    const individual = num(spend.individualLimit) ?? 0;
+    const pooled = num(spend.pooledLimit) ?? 0;
+    if (individual > 0) add("cursor_on_demand", ((num(spend.individualUsed) ?? 0) / individual) * 100);
+    else if (pooled > 0) add("cursor_on_demand", ((num(spend.pooledUsed) ?? 0) / pooled) * 100);
+  }
+  if (!windows.length) return null;
+  const onDemand = windows.find((w) => w.id === "cursor_on_demand");
+  return { at: now, windows, ...(onDemand && onDemand.utilization > 0 ? { overage: true } : {}) };
+}

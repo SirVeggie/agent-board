@@ -5,6 +5,7 @@ import {
   nextRefreshAt,
   nextResetAfter,
   parseResetsAt,
+  planLimitsFromCursorUsage,
   planLimitsFromRateLimitInfo,
   planLimitsFromUsageReport,
   UNKNOWN_RESET_RETRY_MS,
@@ -127,4 +128,34 @@ test("usageLimitResetsAt tells a plan limit from other failures and finds when i
   assert.equal(usageLimitResetsAt("credit balance too low", { ...limits, status: "allowed" }, 1000, 2000), undefined);
   // A limit with no known reset tries again later.
   assert.equal(usageLimitResetsAt("5-hour limit reached ∙ resets 2am", undefined, 1000, 2000), 2000 + UNKNOWN_RESET_RETRY_MS);
+});
+
+test("Cursor GetCurrentPeriodUsage maps Included, Auto, API and on-demand to windows reset at the cycle end", () => {
+  const now = 1_700_000_000_000;
+  const next = planLimitsFromCursorUsage(
+    {
+      billingCycleStart: "1699000000000",
+      billingCycleEnd: "1701000000000",
+      planUsage: { totalSpend: 3000, includedSpend: 2000, limit: 4000, totalPercentUsed: 50, autoPercentUsed: 20, apiPercentUsed: 80 },
+      spendLimitUsage: { individualLimit: 1000, individualUsed: 250, limitType: "user" },
+      enabled: true,
+    },
+    now
+  );
+  assert.deepEqual(next, {
+    at: now,
+    overage: true,
+    windows: [
+      { id: "cursor_included", label: "Included", utilization: 0.5, resetsAt: 1_701_000_000_000 },
+      { id: "cursor_auto", label: "Auto", utilization: 0.2, resetsAt: 1_701_000_000_000 },
+      { id: "cursor_api", label: "API", utilization: 0.8, resetsAt: 1_701_000_000_000 },
+      { id: "cursor_on_demand", label: "On-demand", utilization: 0.25, resetsAt: 1_701_000_000_000 },
+    ],
+  });
+});
+
+test("Cursor usage without percents falls back to included spend over the limit, and skips an unset on-demand limit", () => {
+  const next = planLimitsFromCursorUsage({ billingCycleEnd: "0", planUsage: { includedSpend: 1000, limit: 4000 }, spendLimitUsage: { individualUsed: 0 } }, 1);
+  assert.deepEqual(next, { at: 1, windows: [{ id: "cursor_included", label: "Included", utilization: 0.25 }] });
+  assert.equal(planLimitsFromCursorUsage({}, 1), null);
 });

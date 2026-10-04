@@ -33,7 +33,7 @@ import type {
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
-import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
+import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import type {
   AgentEvent,
@@ -65,6 +65,8 @@ export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
 
 const FLUSH_MS = 700;
+/** Cursor's usage comes from a private API call, so refresh it at most this often (after turns). */
+const CURSOR_USAGE_TTL_MS = 30 * 60 * 1000;
 /** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
 const MAX_RECAP = 24_000;
 const DELTA_MS = 50;
@@ -251,6 +253,7 @@ export class AgentHost {
   private usageTimer: NodeJS.Timeout | null = null;
   private usageFetch: Promise<void> | null = null;
   private lastUsageFetchAt = 0;
+  private cursorUsageFetchAt = 0;
   private closed = false;
 
   /** Last reported plan usage per provider. Expired windows read as 0% until a fetch or turn updates them. */
@@ -259,10 +262,23 @@ export class AgentHost {
   }
 
   private liveLimits(): Partial<Record<ProviderId, PlanLimits>> {
-    const claude = this.planLimits.claude;
-    if (!claude) return this.planLimits;
-    const live = livePlanLimits(claude);
-    return live === claude ? this.planLimits : { ...this.planLimits, claude: live };
+    let out = this.planLimits;
+    for (const [provider, limits] of Object.entries(this.planLimits) as Array<[ProviderId, PlanLimits]>) {
+      const live = livePlanLimits(limits);
+      if (live !== limits) out = { ...out, [provider]: live };
+    }
+    return out;
+  }
+
+  /** After a Cursor turn, pull its plan usage, at most once per CURSOR_USAGE_TTL_MS. */
+  private refreshCursorUsage(): void {
+    if (this.closed || Date.now() - this.cursorUsageFetchAt < CURSOR_USAGE_TTL_MS) return;
+    this.cursorUsageFetchAt = Date.now();
+    void (this.providers.cursor as CursorProvider).fetchPlanUsage().then((resp) => {
+      if (this.closed || !resp) return;
+      const parsed = planLimitsFromCursorUsage(resp, Date.now());
+      if (parsed) this.commitLimits("cursor", parsed, false);
+    });
   }
 
   private recordLimits(provider: ProviderId, info: unknown): void {
@@ -1267,6 +1283,7 @@ export class AgentHost {
     }
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
+    if (thread.provider === "cursor") this.refreshCursorUsage();
     if (result.status === "error") {
       const resetsAt = usageLimitResetsAt(result.error, this.planLimits[thread.provider], turn.startedAt, turn.endedAt);
       if (resetsAt) turn.limitResetsAt = resetsAt;

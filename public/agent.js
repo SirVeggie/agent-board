@@ -3814,6 +3814,9 @@
     if (w.id === "seven_day_sonnet") return "wk Sonnet";
     if (w.id === "seven_day_overage_included") return "wk extra";
     if (w.id === "overage") return "extra";
+    if (w.id === "cursor_auto") return "auto";
+    if (w.id === "cursor_api") return "api";
+    if (w.id === "cursor_on_demand") return "on-demand";
     return w.label;
   }
 
@@ -4059,13 +4062,15 @@
   function usageChip(provider) {
     const limits = planLimits(provider);
     if (!limits) return null;
+    // Cursor's Included pool is Auto + API, so the chip shows the two parts (and on-demand once it is used).
+    const shown = limits.windows.filter((w) => w.id !== "cursor_included" && (w.id !== "cursor_on_demand" || w.utilization > 0));
     const top = Math.max(...limits.windows.map((w) => w.utilization));
     const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => {
       hideUsageTip();
       agentSettings.open();
     }, "");
     chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
-    for (const w of limits.windows) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${w.label === "5-hour" ? "5h" : w.label === "Weekly" ? "wk" : w.label} ${percent(w.utilization)}`));
+    for (const w of shown) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${percent(w.utilization)}`));
     bindHoverTip(chip, () => usageTip(provider));
     return chip;
   }
@@ -4083,7 +4088,7 @@
         el(
           "p",
           "ag-muted ag-meter-none",
-          provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Cursor does not report plan usage to Scribe (its ACP server has no usage call)."
+          provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Shows after the next Cursor turn, then refreshes after turns at most every 30 minutes. Needs CURSOR_ACCESS_TOKEN in the daemon's environment."
         )
       );
       return box;
