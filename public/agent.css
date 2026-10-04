@@ -2541,7 +2541,15 @@ html.tight-small .agent-full {
   overflow: clip;
 }
 
-/* output */
+/* output; the island style also puts status, thread and scope in tabs at its foot (.dock-top) */
+
+.dock-head {
+  display: contents;
+}
+
+.dock-top {
+  display: none;
+}
 
 .dock-out {
   position: relative;
@@ -2882,21 +2890,94 @@ button.dock-scope.warn {
   display: none;
 }
 
-/* ----- island style: capsule with the output above and two bars below, sliding out from behind ----- */
+/* ----- island style: capsule with two tabs above (thread, scope) and the settings tab below, sliding out from behind.
+   With output showing, the tabs' panels fade away and thread and scope sit on the output's faded surface. ----- */
 
 .agent-dock.style-island {
   width: min(680px, calc(100% - 40px));
 }
 
+.style-island .dock-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0 18px -14px;
+}
+
 .style-island .dock-out {
-  margin: 0 18px;
   z-index: 1;
 }
 
+/* The output runs down behind the tabs and leaves room at its foot so its lines never sit under them. */
 .style-island.expanded .dock-out,
 .style-island .dock-out:has(> .dock-feed:not(:empty)) {
-  margin-bottom: -14px;
-  padding-bottom: 14px;
+  margin-bottom: -44px;
+  padding-bottom: 44px;
+}
+
+.style-island .dock-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.style-island .dock-top-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding: 2px 6px 12px 2px;
+  border-radius: 11px 11px 0 0;
+  background-color: var(--dock-surface-2);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transition:
+    background-color 0.4s ease,
+    box-shadow 0.4s ease;
+}
+
+.style-island .dock-top-left {
+  max-width: 70%;
+}
+
+.style-island .dock-top-right {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.style-island.expanded .dock-top-tab,
+.style-island .dock-head:has(.dock-feed:not(:empty)) .dock-top-tab {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.style-island .dock-top .dock-status {
+  padding-right: 0;
+}
+
+.style-island .dock-top-sep {
+  width: 1px;
+  height: 12px;
+  margin: 0 4px;
+  flex-shrink: 0;
+  background: rgba(var(--lift-rgb), 0.12);
+}
+
+.style-island .dock-top button.dock-title,
+.style-island .dock-top button.dock-scope,
+.style-island .dock-top button.ag-icon-btn {
+  height: 22px;
+  font-size: 11.5px;
+}
+
+.style-island .dock-top button.dock-scope {
+  flex-shrink: 2;
 }
 
 /* The surface fades out sooner than the text and blurs what is behind it, so lines stay readable over busy pages. */
@@ -2908,8 +2989,8 @@ button.dock-scope.warn {
   background: var(--dock-surface-2);
   backdrop-filter: blur(10px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  -webkit-mask-image: linear-gradient(to top, #000 0, #000 55%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0, #000 55%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to top, #000 0, #000 62%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0, #000 62%, transparent 100%);
   pointer-events: none;
 }
 
@@ -3011,13 +3092,6 @@ button.dock-scope.warn {
   animation: ag-pulse 1.6s ease-in-out infinite;
 }
 
-.style-island .dock-input .dock-toggle {
-  display: inline-flex;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-}
-
 .style-island .ag-send-slot button.ag-send {
   width: 30px;
   height: 30px;
@@ -3026,15 +3100,18 @@ button.dock-scope.warn {
 
 .style-island .dock-bar {
   margin: 0 18px;
-  justify-content: space-between;
-  gap: 20px;
+  justify-content: flex-end;
   position: relative;
   z-index: 1;
 }
 
-.style-island .dock-bar-left,
+.style-island .dock-bar-left {
+  display: none;
+}
+
 .style-island .dock-bar-right {
   flex: 0 1 auto;
+  max-width: 100%;
   height: 42px;
   margin-top: -13px;
   padding: 13px 6px 0;
@@ -3043,18 +3120,10 @@ button.dock-scope.warn {
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
 }
 
-.style-island .dock-bar-right {
-  flex-shrink: 0;
-}
-
-.style-island .dock-bar-right > .ag-grow,
-.style-island .dock-bar .dock-toggle,
-.style-island .dock-bar .dock-close {
+.style-island .dock-bar-right > .ag-grow {
   display: none;
 }
 
-.style-island .dock-bar button.dock-title,
-.style-island .dock-bar button.dock-scope,
 .style-island .dock-bar button.ag-pill,
 .style-island .dock-bar button.ag-icon-btn {
   height: 22px;

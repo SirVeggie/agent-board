@@ -4160,34 +4160,40 @@
       const history = el("div", "dock-history");
       history.append(view.scroll);
       out.append(history, this.feed, el("span", "dock-sweep"));
-      // Input: composer and send. The island style also shows the model orb and the conversation toggle here.
-      const toggle = () => button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)");
+      // Input: composer and send. The island style also shows the model orb here.
+      const toggle = button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)");
       this.orb = button("", "dock-orb", (event) => view.modelMenu(event.currentTarget));
       const input = el("div", "dock-input");
       flyout.bind(this.orb, "orb");
-      input.append(this.orb, view.composer, toggle(), view.sendSlot);
+      input.append(this.orb, view.composer, view.sendSlot);
       // Bar: status, thread and scope on the left; settings and window tools on the right.
+      // The island style moves status, thread, scope and the window tools into two tabs above the input (see place).
       this.status = el("span", "dock-status");
       this.titleBtn = button("", "dock-title", (event) => this.threadMenu(event.currentTarget), "Switch thread");
       this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
-      const left = el("div", "dock-bar-left");
-      left.append(this.status, this.titleBtn, this.scopeBtn);
-      const right = el("div", "dock-bar-right");
-      right.append(
-        view.bar,
-        el("span", "ag-grow"),
-        toggle(),
+      const tools = [
+        toggle,
         button(icon("expand"), "ag-icon-btn small", () => {
           const id = this.view.threadId;
           if (id) setCurrent(id);
           sidebar.setOpen(true);
           if (id) sidebar.view.setThread(id);
         }, "Open in the sidebar"),
-        button(icon("close"), "ag-icon-btn small dock-close", () => this.setShown(false), "Hide (Esc)")
-      );
+        button(icon("close"), "ag-icon-btn small dock-close", () => this.setShown(false), "Hide (Esc)"),
+      ];
+      const left = el("div", "dock-bar-left");
+      const right = el("div", "dock-bar-right");
+      right.append(view.bar, el("span", "ag-grow"));
       const bar = el("div", "dock-bar");
       bar.append(left, right);
-      panel.append(out, input, bar);
+      const topLeft = el("div", "dock-top-tab dock-top-left");
+      const topRight = el("div", "dock-top-tab dock-top-right");
+      const top = el("div", "dock-top");
+      top.append(topLeft, topRight);
+      this.parts = { left, right, topLeft, topRight, tools, sep: el("span", "dock-top-sep") };
+      const head = el("div", "dock-head");
+      head.append(out, top);
+      panel.append(head, input, bar);
       const handle = button("", "dock-handle", () => this.setShown(true), "Agent (Ctrl+K)");
       this.handleClock = el("span", "ag-clock dock-handle-clock");
       this.handleText = el("span", "dock-handle-text");
@@ -4206,11 +4212,23 @@
       if (!this.root) return;
       const style = dockStyle();
       for (const s of DOCK_STYLES) this.root.classList.toggle(`style-${s.id}`, s.id === style);
+      this.place(style);
       this.root.classList.toggle("shown", S.dockShown);
       this.root.classList.toggle("expanded", S.dockShown && S.dockExpanded);
       this.renderHandle();
       // The input sizes itself to its text; measure again once the layout for this style is in place.
       requestAnimationFrame(() => this.view.autosize());
+    },
+    /** Island: status and thread in a tab on the left above the input, scope and window tools in one on the right. Bar: all in the bar. */
+    place(style) {
+      const p = this.parts;
+      if (style === "island") {
+        p.topLeft.append(this.status, this.titleBtn);
+        p.topRight.append(this.scopeBtn, p.sep, ...p.tools);
+      } else {
+        p.left.append(this.status, this.titleBtn, this.scopeBtn);
+        p.right.append(...p.tools);
+      }
     },
     setShown(shown) {
       S.dockShown = shown;
