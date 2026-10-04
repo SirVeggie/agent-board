@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
 import { log } from "../log.js";
+import { syncDependencies } from "./deps.js";
 import { git } from "./git.js";
 import { claudeDir } from "./permissions.js";
 import type { ThreadWorktree } from "./types.js";
@@ -130,6 +131,11 @@ export async function createWorktree(home: string, repo: string, title: string):
   if ((await dirtyFiles(repo)).length) {
     notes.push(`Uncommitted changes in the main checkout are not in the worktree; it starts from the last commit${base ? ` on ${base}` : ""}.`);
   }
+  // The linked node_modules is the main checkout's, so it has to match the lockfile the worktree starts from.
+  if (links.includes("node_modules")) {
+    const synced = await syncDependencies(repo);
+    if (synced) notes.push(synced);
+  }
   const rel = path.relative(repo, home);
   const cwd = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? path.join(dir, rel) : dir;
   return {
@@ -208,6 +214,42 @@ export async function removeWorktree(wt: ThreadWorktree): Promise<void> {
     }
   }
   await git(["worktree", "prune"], wt.repo, { timeoutMs: 30_000 });
+}
+
+/**
+ * Cut the links in worktree folders no open thread uses. On Windows a plain `git worktree remove`
+ * (or Explorer) deletes through a junction into the main checkout's node_modules, so a leftover
+ * worktree must not keep one around for whoever cleans up by hand. Returns the links removed.
+ */
+export function unlinkOrphanedWorktrees(open: string[]): string[] {
+  const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const inUse = new Set(open.map(norm));
+  const cut: string[] = [];
+  const list = (dir: string) => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  };
+  for (const repoDir of list(worktreesDir())) {
+    if (!repoDir.isDirectory()) continue;
+    for (const wtDir of list(path.join(worktreesDir(), repoDir.name))) {
+      const dir = path.join(worktreesDir(), repoDir.name, wtDir.name);
+      if (!wtDir.isDirectory() || inUse.has(norm(dir))) continue;
+      for (const entry of list(dir)) {
+        const link = path.join(dir, entry.name);
+        try {
+          if (!fs.lstatSync(link).isSymbolicLink()) continue;
+          fs.unlinkSync(link);
+          cut.push(link);
+        } catch (err) {
+          log(`Unlinking ${link} failed: ${(err as Error).message}`);
+        }
+      }
+    }
+  }
+  return cut;
 }
 
 /** Delete the worktree's branch when it holds nothing the base does not. */
