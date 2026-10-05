@@ -2110,7 +2110,7 @@
       });
       const secs = it.endedAt && it.endedAt - it.startedAt >= 1000 ? R.duration(it.endedAt - it.startedAt) : "";
       head.append(icon("think"), el("span", "ag-reason-label", running ? "Thinking" : `Thought${secs ? ` for ${secs}` : ""}`), el("span", "ag-reason-preview", lastLine(it.text)), icon("chevron", "ag-ico ag-chev"));
-      const body = el("div", "ag-reason-body");
+      const body = el("div", "ag-reason-body ag-md");
       R.renderMarkdown(body, it.text, mdCtx);
       node.append(head, body);
       return node;
