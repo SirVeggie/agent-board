@@ -63,16 +63,30 @@ function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }
   return `Waiting for your answer: ${what}`.slice(0, 300);
 }
 
-/** An agent column's worker, set up on the page in settings.workers. */
-type Worker = { threadId?: string; stop?: boolean; run?: unknown; step?: { token: string; at: number } };
+/** An agent worker, set up on the page in settings.workers by its id. It takes the ready cards assigned to its name. */
+type Worker = { name?: string; threadId?: string; stop?: boolean; run?: unknown; step?: { token: string; at: number } };
 
 /** How long a page holds a worker's step before another window may take over: covers a permission prompt. */
 const STEP_LEASE_MS = 15 * 60 * 1000;
 
-function worker(state: BoardState, columnId: string): Worker | undefined {
+function workerMap(state: BoardState): Record<string, Worker> {
   const settings = state.settings as { workers?: Record<string, Worker> } | undefined;
-  const w = settings?.workers?.[columnId];
-  return w && typeof w === "object" ? w : undefined;
+  const all = settings?.workers;
+  return all && typeof all === "object" ? all : {};
+}
+
+/** The workers as [id, worker] pairs, skipping broken entries. */
+function workerList(state: BoardState): Array<[string, Worker]> {
+  return Object.entries(workerMap(state)).filter((e): e is [string, Worker] => Boolean(e[1]) && typeof e[1] === "object");
+}
+
+/** A worker by id, else by name. */
+function findWorker(state: BoardState, ref: unknown): [string, Worker] {
+  const text = str(ref).trim();
+  const list = workerList(state);
+  const found = list.find(([id]) => id === text) ?? list.find(([, w]) => str(w.name).trim().toLowerCase() === text.toLowerCase());
+  if (!found) throw new ActionError(`no agent worker "${text}"`);
+  return found;
 }
 
 /** Title, description, comments, checklist, status, assignee, and card number for `list` q. */
@@ -96,11 +110,6 @@ function matchesQuery(c: Card, q: unknown): boolean {
   if (!words.length) return true;
   const hay = searchHay(c);
   return words.every((w) => hay.includes(w));
-}
-
-/** The user asked the column's agent worker to stop after its card. */
-function workerStopRequested(state: BoardState, columnId: string): boolean {
-  return worker(state, columnId)?.stop === true;
 }
 
 function findCard(state: BoardState, ref: unknown): Card {
@@ -164,33 +173,18 @@ function claimFrom(state: BoardState, card: Card): string | undefined {
   return columnById(state, card.from)?.id ?? columnById(state, card.claim?.from)?.id;
 }
 
-function workerColumnForThread(state: BoardState, threadId: string): Column | undefined {
-  const settings = state.settings as { workers?: Record<string, Worker> } | undefined;
-  const workers = settings?.workers;
-  if (!workers) return undefined;
-  return columns(state).find((c) => workers[c.id]?.threadId === threadId);
-}
-
 /** The thread is a running worker's chat, which the board resumes after a plan limit resets. */
 function workerWaits(state: BoardState, threadId: string): boolean {
-  const col = workerColumnForThread(state, threadId);
-  return Boolean(col && worker(state, col.id)?.run);
+  return workerList(state).some(([, w]) => w.threadId === threadId && Boolean(w.run));
 }
 
 function resetTime(at: number): string {
   return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-/** Where a stopped or released card goes: the inbox it came from, else that thread's worker, else the first agent column. */
+/** Where a stopped or released card goes: the inbox it came from, else the first agent column. */
 function returnColumn(state: BoardState, card: Card): Column | undefined {
-  const origin = columnById(state, card.claim?.from) ?? columnById(state, card.from);
-  if (origin) return origin;
-  const thread = card.claim?.thread;
-  if (thread) {
-    const viaWorker = workerColumnForThread(state, thread);
-    if (viaWorker) return viaWorker;
-  }
-  return roleColumn(state, "agent");
+  return columnById(state, card.claim?.from) ?? columnById(state, card.from) ?? roleColumn(state, "agent");
 }
 
 function labelIds(state: BoardState, refs: unknown): string[] {
@@ -314,7 +308,7 @@ export const kanbanActions: ActionSet = {
   actions: {
     list: {
       description:
-        "Compact rows for the board's cards (no descriptions or comment text), plus the columns (stopRequested: true on one whose agent worker should stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Rows follow board column order. With no column, done-role cards are omitted unless done: true (only that role) or q (search still finds them). Archived cards only with archived: true.",
+        "Compact rows for the board's cards (no descriptions or comment text), plus the columns and the agent workers (stopRequested: true on one the user asked to stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Rows follow board column order. With no column, done-role cards are omitted unless done: true (only that role) or q (search still finds them). Archived cards only with archived: true.",
       args: "{ column?, label?, assignee?, q?, archived?, done?, limit? }",
       run(state, args) {
         let list = cards(state).filter((c) => (args.archived ? c.archived : !c.archived));
@@ -333,7 +327,8 @@ export const kanbanActions: ActionSet = {
           list = list.filter((c) => arr(c.labels).includes(id));
         }
         if (args.assignee !== undefined) {
-          list = list.filter((c) => str(c.assignee) === str(args.assignee));
+          const who = str(args.assignee).trim().toLowerCase();
+          list = list.filter((c) => str(c.assignee).trim().toLowerCase() === who);
         }
         if (args.q !== undefined) {
           list = list.filter((c) => matchesQuery(c, args.q));
@@ -348,8 +343,17 @@ export const kanbanActions: ActionSet = {
               title: c.title,
               ...(c.role ? { role: c.role } : {}),
               cards: cards(state).filter((x) => x.col === c.id && !x.archived).length,
-              ...(workerStopRequested(state, c.id) ? { stopRequested: true } : {}),
             })),
+            ...(workerList(state).length
+              ? {
+                  workers: workerList(state).map(([id, w]) => ({
+                    id,
+                    name: str(w.name) || id,
+                    ...(w.run ? { running: true } : {}),
+                    ...(w.stop === true ? { stopRequested: true } : {}),
+                  })),
+                }
+              : {}),
             cards: list.slice(0, limit).map((c) => summary(state, c)),
             ...(list.length > limit ? { more: list.length - limit } : {}),
           },
@@ -521,13 +525,11 @@ export const kanbanActions: ActionSet = {
     },
     worker_step: {
       description:
-        "The board's own bookkeeping for its agent workers; only the page calls it. Takes the column's worker for one step (start, or move on from its thread once that thread is done), so two windows don't both start the next agent.",
-      args: "{ column, from, token, start? }",
+        "The board's own bookkeeping for its agent workers; only the page calls it. Takes a worker for one step (start, or move on from its thread once that thread is done), so two windows don't both start the next agent.",
+      args: "{ worker, from, token, start? }",
       run(state, args, ctx) {
         if (ctx.caller.by !== "user") throw new ActionError("worker_step is for the board page itself");
-        const col = findColumn(state, args.column);
-        const w = worker(state, col.id);
-        if (!w) throw new ActionError(`${col.title} has no agent worker`);
+        const [workerId, w] = findWorker(state, args.worker);
         const token = str(args.token).trim();
         if (!token) throw new ActionError("token is required");
         if ((str(args.from) || null) !== (str(w.threadId) || null)) throw new ActionError("the worker has moved on");
@@ -549,7 +551,7 @@ export const kanbanActions: ActionSet = {
         }
         const value: Record<string, unknown> = { step: { token, at: ctx.now } };
         if (args.start) Object.assign(value, { run: { since: ctx.now }, stop: null, error: null });
-        return { ops: [{ op: "merge", path: `settings/workers/${col.id}`, value }], result: { ok: true, lastTurn } };
+        return { ops: [{ op: "merge", path: `settings/workers/${workerId}`, value }], result: { ok: true, lastTurn } };
       },
     },
   },

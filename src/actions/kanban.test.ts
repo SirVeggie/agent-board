@@ -271,11 +271,19 @@ test("create and move refuse a shared role and still accept a unique role, id, o
   assert.equal(card(run(twoAgents(), "move", { card: 2, to: "claude" }).state, 2).col, "claude");
 });
 
-test("list marks a column whose agent worker was asked to stop", () => {
-  const state = { ...board(), settings: { workers: { ready: { name: "Opus", stop: true }, in: { name: "Other" } } } };
-  const cols = run(state, "list", {}).result.columns as Array<{ id: string; stopRequested?: boolean }>;
-  assert.equal(cols.find((c) => c.id === "ready")?.stopRequested, true);
-  assert.equal(cols.find((c) => c.id === "in")?.stopRequested, undefined);
+test("list shows the agent workers, marking one that was asked to stop", () => {
+  const state = { ...board(), settings: { workers: { w_1: { name: "Opus", stop: true, run: { since: 1 } }, w_2: { name: "Other" } } } };
+  const workers = run(state, "list", {}).result.workers;
+  assert.deepEqual(workers, [
+    { id: "w_1", name: "Opus", running: true, stopRequested: true },
+    { id: "w_2", name: "Other" },
+  ]);
+  assert.equal(run(board(), "list", {}).result.workers, undefined);
+});
+
+test("list filters by assignee regardless of case", () => {
+  const state = run(board(), "update", { card: 2, assignee: "Opus" }).state;
+  assert.deepEqual((run(state, "list", { assignee: "opus" }).result.cards as Array<{ num: number }>).map((c) => c.num), [2]);
 });
 
 test("worker_step lets one window at a time move a worker on, once its thread is done", () => {
@@ -285,29 +293,32 @@ test("worker_step lets one window at a time move a worker on, once its thread is
     failed: { exists: true, running: false, title: "Failed", lastTurn: { status: "error", endedAt: 900, error: "rate limited" } },
   };
   const page = (now = 1000): ActionContext => ({ caller: { by: "user", label: "user" }, now, values: {}, thread: (id) => threads[id] ?? { exists: false } });
-  const withWorker = (w: Record<string, unknown>) => ({ ...board(), settings: { workers: { ready: { name: "Opus", ...w } } } });
-  const workerOf = (state: Record<string, unknown>) => (state.settings as { workers: Record<string, Record<string, unknown>> }).workers.ready;
+  const withWorker = (w: Record<string, unknown>) => ({ ...board(), settings: { workers: { w_op: { name: "Opus", ...w } } } });
+  const workerOf = (state: Record<string, unknown>) => (state.settings as { workers: Record<string, Record<string, unknown>> }).workers.w_op;
 
-  assert.throws(() => run(withWorker({}), "worker_step", { column: "ready", from: null, token: "a", start: true }), /board page itself/);
-  assert.throws(() => run(withWorker({}), "worker_step", { column: "ready", from: null, token: "a" }, page()), /not running/);
+  assert.throws(() => run(withWorker({}), "worker_step", { worker: "w_op", from: null, token: "a", start: true }), /board page itself/);
+  assert.throws(() => run(withWorker({}), "worker_step", { worker: "w_op", from: null, token: "a" }, page()), /not running/);
 
-  const started = run(withWorker({ stop: true, error: "old" }), "worker_step", { column: "ready", from: null, token: "a", start: true }, page());
+  const started = run(withWorker({ stop: true, error: "old" }), "worker_step", { worker: "w_op", from: null, token: "a", start: true }, page());
   assert.deepEqual(workerOf(started.state).run, { since: 1000 });
   assert.deepEqual(workerOf(started.state).step, { token: "a", at: 1000 });
   assert.equal(workerOf(started.state).stop, undefined);
   assert.equal(workerOf(started.state).error, undefined);
-  assert.throws(() => run(started.state, "worker_step", { column: "ready", from: null, token: "b" }, page()), /another window/);
-  assert.throws(() => run(started.state, "worker_step", { column: "ready", from: null, token: "b", start: true }, page()), /already running/);
-  run(started.state, "worker_step", { column: "ready", from: null, token: "b" }, page(1000 + 16 * 60 * 1000));
-  run(withWorker({ step: { token: "gone", at: 999 } }), "worker_step", { column: "ready", from: null, token: "b", start: true }, page());
+  assert.throws(() => run(started.state, "worker_step", { worker: "w_op", from: null, token: "b" }, page()), /another window/);
+  assert.throws(() => run(started.state, "worker_step", { worker: "w_op", from: null, token: "b", start: true }, page()), /already running/);
+  run(started.state, "worker_step", { worker: "w_op", from: null, token: "b" }, page(1000 + 16 * 60 * 1000));
+  run(withWorker({ step: { token: "gone", at: 999 } }), "worker_step", { worker: "w_op", from: null, token: "b", start: true }, page());
+  // By name too; an unknown worker is refused.
+  run(withWorker({}), "worker_step", { worker: "opus", from: null, token: "a", start: true }, page());
+  assert.throws(() => run(withWorker({}), "worker_step", { worker: "nobody", from: null, token: "a", start: true }, page()), /no agent worker/);
 
   const running = { run: { since: 1 } };
-  assert.throws(() => run(withWorker({ ...running, threadId: "busy" }), "worker_step", { column: "ready", from: "busy", token: "a" }, page()), /still working/);
-  assert.throws(() => run(withWorker({ ...running, threadId: "fresh" }), "worker_step", { column: "ready", from: "fresh", token: "a" }, page()), /still working/);
-  assert.throws(() => run(withWorker({ ...running, threadId: "failed" }), "worker_step", { column: "ready", from: "other", token: "a" }, page()), /moved on/);
-  const failed = run(withWorker({ ...running, threadId: "failed" }), "worker_step", { column: "ready", from: "failed", token: "a" }, page());
+  assert.throws(() => run(withWorker({ ...running, threadId: "busy" }), "worker_step", { worker: "w_op", from: "busy", token: "a" }, page()), /still working/);
+  assert.throws(() => run(withWorker({ ...running, threadId: "fresh" }), "worker_step", { worker: "w_op", from: "fresh", token: "a" }, page()), /still working/);
+  assert.throws(() => run(withWorker({ ...running, threadId: "failed" }), "worker_step", { worker: "w_op", from: "other", token: "a" }, page()), /moved on/);
+  const failed = run(withWorker({ ...running, threadId: "failed" }), "worker_step", { worker: "w_op", from: "failed", token: "a" }, page());
   assert.deepEqual(failed.result, { ok: true, lastTurn: { status: "error", error: "rate limited" } });
-  const gone = run(withWorker({ ...running, threadId: "deleted" }), "worker_step", { column: "ready", from: "deleted", token: "a" }, page());
+  const gone = run(withWorker({ ...running, threadId: "deleted" }), "worker_step", { worker: "w_op", from: "deleted", token: "a" }, page());
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });
 
@@ -390,40 +401,6 @@ test("claim, release, and sweep return a card to the agent column it came from, 
   assert.equal(card(applyStateOps(claimed.state, lost.ops), 1).col, "grok");
 });
 
-test("sweep with no stored origin still returns via the worker that started the thread", () => {
-  const state = {
-    columns: [
-      { id: "claude", title: "claude", role: "agent" },
-      { id: "grok", title: "grok", role: "agent" },
-      { id: "work", title: "Agent working", role: "working" },
-    ],
-    labels: [],
-    cards: [
-      {
-        id: "c1",
-        num: 1,
-        col: "work",
-        title: "One",
-        comments: [],
-        createdAt: 1,
-        movedAt: 1,
-        claim: { holder: "Grok", thread: "th_g", at: 1, seenAt: 1 },
-      },
-    ],
-    nextNum: 2,
-    settings: { workers: { grok: { threadId: "th_g" }, claude: { threadId: "th_c" } } },
-  };
-  const threads: Record<string, ThreadRunInfo> = {
-    th_g: { exists: true, running: false, title: "G", lastTurn: { status: "error", endedAt: 2000 } },
-  };
-  const lost = kanbanActions.sweep!(state, {
-    now: 3000,
-    thread: (id) => threads[id] ?? { exists: false },
-    sessionSeenAt: () => undefined,
-  })!;
-  assert.equal(card(applyStateOps(state, lost.ops), 1).col, "grok");
-});
-
 test("sweep falls back to the first agent column when the origin column is gone", () => {
   const claimed = run(
     {
@@ -459,7 +436,7 @@ test("the sweep keeps a running worker's card claimed while its chat waits out a
   const resetsAt = 50_000;
   const limited: ThreadRunInfo = { exists: true, running: false, title: "W", lastTurn: { status: "error", endedAt: 2000, error: "You've hit your limit", limitResetsAt: resetsAt } };
   const claimed = run(board(), "claim", { card: 1 }, agent({ session: undefined, thread: "th_w" })).state;
-  const withWorker = (w: Record<string, unknown>) => ({ ...claimed, settings: { workers: { ready: { threadId: "th_w", ...w } } } });
+  const withWorker = (w: Record<string, unknown>) => ({ ...claimed, settings: { workers: { w_1: { threadId: "th_w", ...w } } } });
   const ctx = (now: number): SweepContext => ({ now, thread: () => limited, sessionSeenAt: () => undefined });
 
   const waiting = kanbanActions.sweep!(withWorker({ run: { since: 1 } }), ctx(3000))!;
@@ -486,8 +463,8 @@ test("worker_step passes on when a plan limit resets", () => {
     limited: { exists: true, running: false, title: "L", lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } },
   };
   const page: ActionContext = { caller: { by: "user", label: "user" }, now: 1000, values: {}, thread: (id) => threads[id] ?? { exists: false } };
-  const state = { ...board(), settings: { workers: { ready: { threadId: "limited", run: { since: 1 } } } } };
-  const r = run(state, "worker_step", { column: "ready", from: "limited", token: "a" }, page);
+  const state = { ...board(), settings: { workers: { w_1: { threadId: "limited", run: { since: 1 } } } } };
+  const r = run(state, "worker_step", { worker: "w_1", from: "limited", token: "a" }, page);
   assert.deepEqual(r.result, { ok: true, lastTurn: { status: "error", error: "limit", limitResetsAt: 5000 } });
 });
 
