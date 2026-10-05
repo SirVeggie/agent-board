@@ -27,7 +27,7 @@ after(() => {
 
 /** A thread with a running turn, as if the agent were mid-turn. */
 function runningThread(): string {
-  const thread = host.createThread({ provider: "openai", scope: { kind: "global", ref: null } });
+  const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
   const turn = { id: `tu_${thread.id}`, threadId: thread.id, seq: 1, status: "running", model: "m", effort: null, mode: thread.mode, startedAt: Date.now() };
   const internals = host as unknown as { runs: Map<string, unknown>; turns: Map<string, unknown[]> };
   internals.turns.get(thread.id)?.push(turn);
@@ -97,6 +97,6 @@ test("a cancelled call expires the card", async () => {
 
 test("page_ask needs a running turn", async () => {
   store.upsert({ key: "ask-idle", title: "Idle", html: "<p>form</p>" });
-  const thread = host.createThread({ provider: "openai", scope: { kind: "global", ref: null } });
+  const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
   await assert.rejects(host.askPage(thread.id, { page: "ask-idle", events: ["submit"], timeoutMs: 1000, signal: new AbortController().signal }), /turn running/);
 });

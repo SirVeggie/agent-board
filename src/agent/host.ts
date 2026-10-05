@@ -19,7 +19,7 @@ import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
-import { OpenAIProvider } from "./providers/openai.js";
+import { PiProvider } from "./providers/pi.js";
 import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
 import type {
   AgentProvider,
@@ -155,7 +155,7 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
       ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n"
       : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
-  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" && thread.provider !== "openai" });
+  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
   const recap = !thread.rewind?.recap
     ? ""
     : thread.rewind.migrated
@@ -264,11 +264,17 @@ export class AgentHost {
 
   constructor(private emit: (event: AgentEvent) => void) {
     this.db = new AgentDb();
-    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), openai: new OpenAIProvider(() => this.openaiSources()) };
+    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), pi: new PiProvider(() => this.modelSources()) };
     const claudeModels = this.db.getSetting<ModelOption[]>("models.claude", []);
     (this.providers.claude as ClaudeProvider).setModelCache(claudeModels);
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
     for (const thread of this.db.listThreads()) {
+      if ((thread.provider as string) === "openai") {
+        // The OpenAI-compatible provider is gone: its models run through Pi now, in a new session.
+        thread.provider = "pi";
+        thread.nativeId = null;
+        this.db.saveThread(thread);
+      }
       this.threads.set(thread.id, thread);
       // A turn cannot survive a daemon restart: mark leftovers as cancelled.
       const turns = this.db.listTurns(thread.id);
@@ -453,6 +459,9 @@ export class AgentHost {
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
+      // The OpenAI-compatible provider's models run through Pi now.
+      ...((saved.provider as string) === "openai" ? { provider: "pi" as const } : {}),
+      ...((saved.summarizer?.provider as string) === "openai" ? { summarizer: DEFAULT_PREFS.summarizer } : {}),
     };
   }
 
@@ -467,34 +476,35 @@ export class AgentHost {
     return next;
   }
 
-  // ---------- OpenAI-compatible sources ----------
+  // ---------- Pi's model sources ----------
 
-  private openaiSources(): OpenAISource[] {
+  /** Compatible endpoints for Pi. Kept under the setting the old OpenAI-compatible provider used. */
+  private modelSources(): OpenAISource[] {
     return this.db.getSetting<OpenAISource[]>("openai.sources", []);
   }
 
   /** The sources as the board sees them: never the API keys. */
-  openaiSourceViews(): OpenAISourceView[] {
-    return this.openaiSources().map(sourceView);
+  modelSourceViews(): OpenAISourceView[] {
+    return this.modelSources().map(sourceView);
   }
 
   /** Add a source (no id) or change one. The key stays unless the form sends a new one. */
-  saveOpenaiSource(id: string | null, body: unknown): OpenAISourceView {
-    const sources = this.openaiSources();
+  saveModelSource(id: string | null, body: unknown): OpenAISourceView {
+    const sources = this.modelSources();
     const previous = id ? sources.find((s) => s.id === id) : undefined;
     if (id && !previous) throw new Error(`source not found: ${id}`);
     const source = normalizeSource(body, previous, new Set(sources.map((s) => s.id)));
     const next = previous ? sources.map((s) => (s.id === id ? source : s)) : [...sources, source];
     this.db.setSetting("openai.sources", next);
-    (this.providers.openai as OpenAIProvider).invalidate();
+    (this.providers.pi as PiProvider).invalidate();
     return sourceView(source);
   }
 
-  deleteOpenaiSource(id: string): void {
-    const sources = this.openaiSources();
+  deleteModelSource(id: string): void {
+    const sources = this.modelSources();
     if (!sources.some((s) => s.id === id)) throw new Error(`source not found: ${id}`);
     this.db.setSetting("openai.sources", sources.filter((s) => s.id !== id));
-    (this.providers.openai as OpenAIProvider).invalidate();
+    (this.providers.pi as PiProvider).invalidate();
   }
 
   /** Start Cursor's browser login; resolves with the login URL. */
@@ -1068,7 +1078,7 @@ export class AgentHost {
     const text = input.text.trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
     const context = freshContext(input.context, this.knownContext(threadId, thread));
-    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd && thread.provider !== "openai") {
+    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
       // Code and plan work on files; without a workspace the agent would work in a scratch folder.
       throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
     }

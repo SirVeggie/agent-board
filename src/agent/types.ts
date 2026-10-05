@@ -5,7 +5,7 @@ import type { BrowserView } from "../browser.js";
 
 export type { WebAccess };
 
-export type ProviderId = "claude" | "cursor" | "openai";
+export type ProviderId = "claude" | "cursor" | "pi";
 
 /** What the agent may touch. Chosen per thread; the provider maps it onto its own tools and modes. */
 export type ThreadMode = "code" | "ask" | "plan" | "board";

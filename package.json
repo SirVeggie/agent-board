@@ -13,15 +13,17 @@
     "desktop": "cargo run --manifest-path desktop/Cargo.toml",
     "desktop:build": "tauri build",
     "desktop:install": "node desktop/install.mjs",
-    "test": "tsx --test src/db.test.ts src/htmlEdit.test.ts src/pageLines.test.ts src/stateOps.test.ts src/store.test.ts src/pageSearch.test.ts src/boardExport.test.ts src/templates.test.ts src/embed.test.ts src/frameCheck.test.ts src/screenshot.test.ts src/agent/textDiff.test.ts src/agent/prompt.test.ts src/agent/pageEdits.test.ts src/actions/kanban.test.ts src/legacyPages.test.ts src/agent/worktree.test.ts src/agent/deps.test.ts src/agent/attachments.test.ts src/wait.test.ts src/mcpImages.test.ts src/agent/prefs.test.ts src/pagePermissions.test.ts src/agent/openaiSources.test.ts src/agent/planLimits.test.ts src/agent/fork.test.ts src/agent/webAccess.test.ts src/agent/webRequest.test.ts src/agent/cursorSdk.test.ts src/agent/hostShell.test.ts src/skillDocs.test.ts src/browser.test.ts src/agent/threadList.test.ts src/agent/workspaceFiles.test.ts src/agent/mention.test.ts src/palettePrefixes.test.ts src/agent/pageAsk.test.ts src/agent/cardMessage.test.ts src/agent/activity.test.ts src/spaces.test.ts src/agent/sparePool.test.ts"
+    "test": "tsx --test src/db.test.ts src/htmlEdit.test.ts src/pageLines.test.ts src/stateOps.test.ts src/store.test.ts src/pageSearch.test.ts src/boardExport.test.ts src/templates.test.ts src/embed.test.ts src/frameCheck.test.ts src/screenshot.test.ts src/agent/textDiff.test.ts src/agent/prompt.test.ts src/agent/pageEdits.test.ts src/actions/kanban.test.ts src/legacyPages.test.ts src/agent/worktree.test.ts src/agent/deps.test.ts src/agent/attachments.test.ts src/wait.test.ts src/mcpImages.test.ts src/agent/prefs.test.ts src/pagePermissions.test.ts src/agent/openaiSources.test.ts src/agent/planLimits.test.ts src/agent/fork.test.ts src/agent/webAccess.test.ts src/agent/webRequest.test.ts src/agent/cursorSdk.test.ts src/agent/hostShell.test.ts src/skillDocs.test.ts src/browser.test.ts src/agent/threadList.test.ts src/agent/workspaceFiles.test.ts src/agent/mention.test.ts src/palettePrefixes.test.ts src/agent/pageAsk.test.ts src/agent/cardMessage.test.ts src/agent/activity.test.ts src/spaces.test.ts src/agent/sparePool.test.ts src/agent/piProvider.test.ts"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.19"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.286",
     "@anthropic-ai/sdk": "^0.130.0",
     "@cursor/sdk": "^1.0.35",
+    "@earendil-works/pi-ai": "^1.0.3",
+    "@earendil-works/pi-coding-agent": "^1.0.3",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "dompurify": "^3.4.16",
     "express": "^4.21.2",

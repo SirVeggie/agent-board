@@ -21,7 +21,7 @@ import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
 import { isPlainRecord } from "../types.js";
-import { webCallAllowed } from "../webAccess.js";
+import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
@@ -54,7 +54,6 @@ const WEB_TOOLS: ToolName[] = ["webSearch", "webFetch", "fetch", "xSearch"];
 const NO_ANSWER_TOOLS: ToolName[] = ["askQuestion"];
 /** What an Ask thread may use besides MCP and the web: reading and searching. */
 const ASK_TOOLS: ToolName[] = ["read", "grep", "glob", "ls", "semSearch", "readLints", "updateTodos", "readTodos"];
-const MAX_FETCH_CHARS = 200_000;
 /** The custom tool that stands in for the built-in shell when Scribe runs commands itself. */
 export const HOST_SHELL = "run_command";
 
@@ -406,22 +405,8 @@ function gatedFetch(gate: (url: string) => Promise<{ allowed: boolean; message?:
     inputSchema: { type: "object", properties: { url: { type: "string", description: "Absolute http(s) URL" } }, required: ["url"] },
     annotations: { readOnlyHint: true, openWorldHint: true },
     execute: async (args) => {
-      let url = typeof args.url === "string" ? args.url : "";
-      for (let hop = 0; hop < 6; hop += 1) {
-        if (!/^https?:\/\//i.test(url)) return { content: [{ type: "text", text: `Not an http(s) URL: ${url}` }], isError: true };
-        const gated = await gate(url);
-        if (!gated.allowed) return { content: [{ type: "text", text: `Refused: ${gated.message ?? "the user did not allow this fetch."}` }], isError: true };
-        const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
-        const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
-        if (next) {
-          url = new URL(next, url).toString();
-          continue;
-        }
-        const text = await res.text();
-        const body = text.length > MAX_FETCH_CHARS ? `${text.slice(0, MAX_FETCH_CHARS)}\n… (truncated)` : text;
-        return { content: [{ type: "text", text: `HTTP ${res.status} ${res.headers.get("content-type") ?? ""}\n\n${body}` }], isError: !res.ok };
-      }
-      return { content: [{ type: "text", text: "Too many redirects." }], isError: true };
+      const { text, isError } = await gatedFetchText(args.url, gate);
+      return { content: [{ type: "text", text }], isError };
     },
   };
 }

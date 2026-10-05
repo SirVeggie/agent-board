@@ -134,3 +134,28 @@ export function webPassCovers(pass: WebCall, call: WebCall): boolean {
   const domains = webCallDomains(call);
   return domains.length > 0 && domains.every((domain) => webAllowed(domain, asked));
 }
+
+const MAX_FETCH_CHARS = 200_000;
+
+/**
+ * The web_fetch tool's work, for providers that bring their own (Cursor with web off or limited,
+ * Pi always): fetch a URL as text, following redirects by hand so gate sees every host on the way.
+ */
+export async function gatedFetchText(rawUrl: unknown, gate: (url: string) => Promise<{ allowed: boolean; message?: string }>): Promise<{ text: string; isError: boolean }> {
+  let url = typeof rawUrl === "string" ? rawUrl : "";
+  for (let hop = 0; hop < 6; hop += 1) {
+    if (!/^https?:\/\//i.test(url)) return { text: `Not an http(s) URL: ${url}`, isError: true };
+    const gated = await gate(url);
+    if (!gated.allowed) return { text: `Refused: ${gated.message ?? "the user did not allow this fetch."}`, isError: true };
+    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+    const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    if (next) {
+      url = new URL(next, url).toString();
+      continue;
+    }
+    const text = await res.text();
+    const body = text.length > MAX_FETCH_CHARS ? `${text.slice(0, MAX_FETCH_CHARS)}\n… (truncated)` : text;
+    return { text: `HTTP ${res.status} ${res.headers.get("content-type") ?? ""}\n\n${body}`, isError: !res.ok };
+  }
+  return { text: "Too many redirects.", isError: true };
+}

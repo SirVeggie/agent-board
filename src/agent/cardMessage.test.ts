@@ -28,7 +28,7 @@ const card = { num: 12, title: "Fix it", board: "Todo", boardKey: "scribe:todo" 
 
 /** A thread with a running turn, and a session that steers when `steers` (it records what it got). */
 function runningThread(steers: boolean): { id: string; steered: SteerInput[] } {
-  const thread = host.createThread({ provider: "openai", scope: { kind: "global", ref: null } });
+  const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
   const turn = { id: `tu_${thread.id}`, threadId: thread.id, seq: 1, status: "running", model: "m", effort: null, mode: thread.mode, startedAt: Date.now() };
   const internals = host as unknown as { runs: Map<string, unknown>; turns: Map<string, unknown[]>; sessions: Map<string, unknown> };
   internals.turns.get(thread.id)?.push(turn);
@@ -42,7 +42,7 @@ function runningThread(steers: boolean): { id: string; steered: SteerInput[] } {
 const userItems = (threadId: string) => (host.threadDetail(threadId)?.items ?? []).filter((it) => it.kind === "user");
 
 test("a card comment is not sent to an idle thread", () => {
-  const thread = host.createThread({ provider: "openai", scope: { kind: "global", ref: null } });
+  const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
   assert.deepEqual(host.cardMessage(thread.id, card, "please also add tests"), { delivered: null });
   assert.equal(userItems(thread.id).length, 0);
 });

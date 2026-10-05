@@ -115,7 +115,7 @@ test("writePageRefs reads key or id from successful page writes across providers
   );
 });
 
-test("mcpToolName understands Claude, OpenAI and Cursor names", () => {
+test("mcpToolName understands Claude, Cursor and Pi names", () => {
   assert.equal(mcpToolName(tool({ name: "mcp__scribe__page_show", title: "Scribe: page_show · scribe:a" })), "page_show");
   assert.equal(mcpToolName(tool({ name: "page_patch", title: "Scribe: page_patch" })), "page_patch");
   assert.equal(mcpToolName(tool({ name: "mcp", title: "Scribe: page_action" })), "page_action");

@@ -20,7 +20,7 @@ export type PageEdit = {
 const PAGE_WRITE_TOOLS = new Set(["page_show", "page_patch", "page_update", "page_action"]);
 const MAX_SEEN_PAGES = 24;
 
-/** MCP tool name from a transcript item: Claude's mcp__scribe__page_show, OpenAI's page_show, Cursor's title. */
+/** MCP tool name from a transcript item: Claude's mcp__scribe__page_show, Cursor's and Pi's title. */
 export function mcpToolName(item: { kind: string; name: string; title: string }): string {
   if (item.kind !== "tool") return "";
   const name = item.name;

@@ -66,10 +66,10 @@
   ];
   /** Providers that actually apply Limited and Off. */
   function webEnforced(provider) {
-    return provider === "claude" || provider === "cursor";
+    return provider === "claude" || provider === "cursor" || provider === "pi";
   }
   const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
-  /** Cursor has no Limited search: the allowlist covers a fetch tool only. */
+  /** Cursor and Pi have no Limited search: the allowlist covers a fetch tool only. */
   const CURSOR_LIMITED = "Fetch from the web allowlist's domains; the agent asks for others; no web search";
   /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
   const CURSOR_REVIEW = "Cursor: Auto-review approves safe calls and denies the rest; it can't ask you yet";
@@ -78,6 +78,7 @@
   function approvalDetail(a, provider) {
     if (provider === "cursor" && (a.id === "ask" || a.id === "edits") && prefs().cursorHostShell) return CURSOR_HOST_SHELL;
     if (provider === "cursor" && a.id !== "full") return CURSOR_REVIEW;
+    if (a.id === "auto" && provider === "pi") return "Like Edits, plus read-only commands and tests without asking";
     if (a.id === "auto" && provider !== "claude") return "Claude only";
     return a.detail;
   }
@@ -89,18 +90,14 @@
     { name: "workspace", description: "Set the workspace folder" },
     { name: "global", description: "Not tied to a page or folder" },
   ];
-  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", openai: "OpenAI-compatible" };
-  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", openai: "◎" };
-  const PROVIDERS = ["cursor", "claude", "openai"];
-  /** Modes a provider can run. OpenAI-compatible models only get Scribe's page tools. */
-  function modeAllowed(provider, mode) {
-    return provider !== "openai" || mode === "board" || mode === "ask";
-  }
+  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", pi: "Pi" };
+  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", pi: "π" };
+  const PROVIDERS = ["cursor", "claude", "pi"];
 
   /* ---------- state ---------- */
 
   const S = {
-    config: { providers: [], prefs: null, models: { claude: [], cursor: [], openai: [] } },
+    config: { providers: [], prefs: null, models: { claude: [], cursor: [], pi: [] } },
     threads: new Map(),
     details: new Map(),
     loading: new Map(),
@@ -931,7 +928,7 @@
     });
   }
 
-  /* ---------- OpenAI-compatible sources ---------- */
+  /* ---------- Pi's model sources ---------- */
 
   /** Add (source null) or edit an endpoint. The API key field only sends a new key; it never shows the old one. */
   function editSource(source) {
@@ -968,8 +965,8 @@
       const body = { name: name.value, baseUrl: baseUrl.value, models: models.value, reasoning: reasoningBox.checked };
       if (key.value.trim()) body.apiKey = key.value.trim();
       try {
-        if (source) await api("PUT", `/openai/sources/${encodeURIComponent(source.id)}`, body);
-        else await api("POST", "/openai/sources", body);
+        if (source) await api("PUT", `/model-sources/${encodeURIComponent(source.id)}`, body);
+        else await api("POST", "/model-sources", body);
       } catch (err) {
         error.textContent = err.message;
         error.hidden = false;
@@ -983,13 +980,13 @@
       actions.append(
         button("Remove", "ag-btn ghost danger", async () => {
           if (!(await app()?.confirm?.(`Remove “${source.name}”? Threads that use its models can't continue until you add it again.`, "Remove"))) return;
-          await api("DELETE", `/openai/sources/${encodeURIComponent(source.id)}`).catch((err) => notice(err.message));
+          await api("DELETE", `/model-sources/${encodeURIComponent(source.id)}`).catch((err) => notice(err.message));
           close();
           await sourcesChanged();
         })
       );
       if (source.hasKey) actions.append(button("Clear key", "ag-btn ghost", async () => {
-        await api("PUT", `/openai/sources/${encodeURIComponent(source.id)}`, { apiKey: "" }).catch((err) => notice(err.message));
+        await api("PUT", `/model-sources/${encodeURIComponent(source.id)}`, { apiKey: "" }).catch((err) => notice(err.message));
         close();
         await sourcesChanged();
       }));
@@ -997,9 +994,9 @@
     actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), button(source ? "Save" : "Add", "ag-btn primary", save));
     panel.append(
       el("h2", "ag-modal-title", source ? `Edit ${source.name}` : "Add a model source"),
-      el("p", "ag-modal-hint", "Any endpoint that speaks the OpenAI Chat Completions API. The key is stored on this PC and never shown again."),
+      el("p", "ag-modal-hint", "Any endpoint that speaks the OpenAI Chat Completions API. Its models run through Pi. The key is stored on this PC and never shown again."),
       field("Name", name),
-      field("Base URL", baseUrl, "Up to the version, e.g. …/v1. Scribe calls /chat/completions and /models under it."),
+      field("Base URL", baseUrl, "Up to the version, e.g. …/v1. Pi calls /chat/completions under it, and Scribe /models when the list below is empty."),
       field("API key", key, source?.hasKey ? "Leave empty to keep the saved key." : "Leave empty for local servers that need none."),
       field("Models", models),
       reasoning,
@@ -1012,8 +1009,8 @@
   /** Sources changed: the provider's status and model list follow them. */
   async function sourcesChanged() {
     await loadConfig();
-    const data = await api("GET", "/models?provider=openai&refresh=1").catch(() => null);
-    S.config.models.openai = data?.models || [];
+    const data = await api("GET", "/models?provider=pi&refresh=1").catch(() => null);
+    S.config.models.pi = data?.models || [];
     agentSettings.renderStatus();
     void agentSettings.renderSources();
     renderAll();
@@ -1372,9 +1369,6 @@
 
     async updateSettings(patch) {
       const t = this.thread();
-      // Switching to a provider that can't run the current mode drops back to Pages.
-      const provider = patch.provider || this.settings().provider;
-      if (!modeAllowed(provider, patch.mode || this.settings().mode)) patch = { ...patch, mode: "board" };
       if (!t) {
         this.draft = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
         Object.assign(this.draft.settings, patch);
@@ -3006,11 +3000,10 @@
         bindHoverTip(wtBtn, () => worktreePendingTip(s.useWorktree));
         bar.append(wtBtn);
       }
-      // OpenAI-compatible threads have no web tools, so there is nothing to set.
-      if (s.provider !== "openai") {
+      {
         const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
         const unenforced = wm.id !== "on" && !webEnforced(s.provider);
-        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider === "cursor" ? CURSOR_LIMITED : wm.detail;
+        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : wm.detail;
         const web = button(
           "",
           `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}${unenforced ? " web-unenforced" : ""}`,
@@ -3148,10 +3141,7 @@
       const s = this.settings();
       openMenu(
         anchor,
-        MODES.map((m) => {
-          const ok = modeAllowed(s.provider, m.id);
-          return { label: m.label, detail: ok ? m.detail : "Not for OpenAI-compatible models: they only get page tools", checked: s.mode === m.id, disabled: !ok, run: () => this.updateSettings({ mode: m.id }) };
-        }),
+        MODES.map((m) => ({ label: m.label, detail: m.detail, checked: s.mode === m.id, run: () => this.updateSettings({ mode: m.id }) })),
         { width: 290 }
       );
     }
@@ -3176,7 +3166,7 @@
       const cur = webMode(s.web);
       const items = WEB_MODES.map((w) => ({
         label: w.label,
-        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider === "cursor" ? CURSOR_LIMITED : w.detail,
+        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : w.detail,
         checked: cur === w.id,
         run: () => this.updateSettings({ web: w.id }),
       }));
@@ -3626,7 +3616,7 @@
 
   /**
    * A call to one of Scribe's page-writing tools, read for the chat: { name, ref, title, verb, summary }.
-   * Claude names it mcp__scribe__page_show; OpenAI and Cursor title it "Scribe: page_show".
+   * Claude names it mcp__scribe__page_show; Cursor and Pi title it "Scribe: page_show".
    */
   function pageTool(it) {
     if (it.tool !== "mcp") return null;
@@ -5935,7 +5925,7 @@
       sourceActions.append(button("Add source…", null, () => editSource(null)));
       sources.append(
         el("h3", null, "Model sources"),
-        el("p", "settings-hint", "OpenAI-compatible endpoints (OpenAI, OpenRouter, LM Studio, Ollama, vLLM…). Their models chat with Scribe's page tools: no files or shell."),
+        el("p", "settings-hint", "OpenAI-compatible endpoints (OpenRouter, LM Studio, Ollama, vLLM, llama.cpp…) for Pi threads. Pi also offers the models of providers whose API key is set in the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, …)."),
         this.sources,
         sourceActions
       );
@@ -6086,7 +6076,7 @@
       if (!this.sources) return;
       let list = [];
       try {
-        list = (await api("GET", "/openai/sources")).sources || [];
+        list = (await api("GET", "/model-sources")).sources || [];
       } catch (err) {
         this.sources.replaceChildren(el("div", "ag-muted", err.message));
         return;
@@ -6745,7 +6735,7 @@
   async function cycleMode() {
     const view = targetView();
     const s = view.settings();
-    const modes = MODES.filter((m) => modeAllowed(s.provider, m.id));
+    const modes = MODES;
     const at = modes.findIndex((m) => m.id === s.mode);
     const next = modes[(at + 1) % modes.length];
     await view.updateSettings({ mode: next.id });

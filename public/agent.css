@@ -1910,8 +1910,8 @@ button.ag-pill.ag-web-icon {
   color: var(--heading);
 }
 
-.ag-prov.p-openai {
-  background: #10a37f;
+.ag-prov.p-pi {
+  background: #7c5cff;
   color: #fff;
 }
 
@@ -4330,7 +4330,7 @@ button.ag-menu-item:hover .ag-star {
   cursor: pointer;
 }
 
-/* OpenAI-compatible source editor (Chat settings → Model sources). */
+/* Model source editor for Pi (Agent settings → Model sources). */
 .ag-source .ag-modal-panel {
   width: min(520px, calc(100vw - 40px));
 }
