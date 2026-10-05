@@ -42,9 +42,10 @@ import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCurso
 import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
-import { cleanAllowlist, parseWebAccess } from "./webAccess.js";
+import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
+  ApprovalOption,
   ApprovalPolicy,
   ChatFile,
   ChatImage,
@@ -83,6 +84,8 @@ const ACTIVITY_MS = 1000;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_TOOL_DIFF = 200_000;
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+/** How long an "Allow once" from web_request waits for the call it allowed. */
+const WEB_PASS_MS = 10 * 60 * 1000;
 
 /** The thread's worktree while it is open. */
 export function openWorktree(thread: Thread): ThreadWorktree | null {
@@ -246,6 +249,8 @@ export class AgentHost {
   private seq = new Map<string, number>();
   private dirty = new Map<string, Item>();
   private pending = new Map<string, Pending>();
+  /** "Allow once" answers to web_request, per thread, until a web call uses them. */
+  private webPasses = new Map<string, Array<{ call: WebCall; at: number }>>();
   private commandCache = new Map<string, SlashCommand[]>();
   private deltaBuf = new Map<string, { threadId: string; text: string }>();
   private deltaTimer: NodeJS.Timeout | null = null;
@@ -294,6 +299,7 @@ export class AgentHost {
       task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
       followUp: (threadId, id) => this.followUp(threadId, id),
       approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
+      webRequest: (threadId, call, opts) => this.requestWeb(threadId, call, opts),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
     this.scheduleClaudeUsageRefresh();
@@ -1226,6 +1232,102 @@ export class AgentHost {
     const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
     const note = "The user was not asked: this ran in the background after the turn ended. Leave it out, and mention it in your result.";
     return reject ? Promise.resolve({ optionId: reject.id, note }) : Promise.reject(new Error(note));
+  }
+
+  /**
+   * A web call the thread's web setting does not cover (off, or off the limited allowlist): ask the
+   * user to allow it once, for its domain or for the rest of the thread. In a board worker's thread
+   * nobody may be watching, so an unanswered request is refused after its importance's wait and the
+   * agent carries on without it.
+   */
+  async requestWeb(threadId: string, call: WebCall, opts: { importance?: WebImportance; reason?: string; signal?: AbortSignal } = {}): Promise<{ allowed: boolean; message?: string }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) return { allowed: false, message: "Unknown thread." };
+    if (webCallAllowed(call, thread.web, this.prefs().webAllowlist, thread.webGrants)) return { allowed: true };
+    if (this.takeWebPass(threadId, call)) return { allowed: true };
+    const run = this.runs.get(threadId);
+    if (!run) return { allowed: false, message: "Web access is off for this thread, and with no turn running the user cannot be asked. Carry on without it." };
+    const importance = opts.importance ?? "useful";
+    const waitMs = pageOwned(this.loadItems(threadId)) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const domains = webCallDomains(call);
+    const title = call.kind === "fetch" ? `Web access: fetch ${call.url}` : `Web access: search${call.query ? ` “${call.query}”` : ""}${domains.length ? ` on ${domains.join(", ")}` : ""}`;
+    const detail = [
+      `Web access for this thread is ${thread.web === "limited" ? "limited to the allowlist" : "off"}. Importance: ${importance}.`,
+      opts.reason?.trim(),
+      waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const options: ApprovalOption[] = [
+      { id: "once", label: "Allow once", kind: "allow_once" },
+      ...(domains.length ? [{ id: "domain", label: domains.length === 1 ? `Allow ${domains[0]}` : "Allow these domains", kind: "allow_always" as const }] : []),
+      { id: "session", label: "Allow for this thread", kind: "allow_always" },
+      { id: "deny", label: "Deny", kind: "reject_once" },
+    ];
+    this.closeBlocks(run);
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "fetch", title: title.slice(0, 300), detail, options, status: "pending" });
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    opts.signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer =
+      waitMs === null
+        ? null
+        : setTimeout(() => {
+            timedOut = true;
+            abort.abort();
+          }, waitMs);
+    try {
+      const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", item.id, abort.signal);
+      if (decision.optionId === "deny") return { allowed: false, message: decision.note ? `The user denied this web request: ${decision.note}` : "The user denied this web request. Carry on without it." };
+      if (decision.optionId === "domain" || decision.optionId === "session") {
+        const t = this.threads.get(threadId);
+        if (t) {
+          t.webGrants = grantWeb(t.webGrants, decision.optionId, call);
+          this.db.saveThread(t);
+          this.emitThread(threadId);
+        }
+      }
+      return { allowed: true };
+    } catch {
+      return {
+        allowed: false,
+        message: timedOut ? "Nobody answered the web request in time. Carry on without web access and do what you can; mention what you could not check." : "The web request was cancelled.",
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * web_request from the thread's MCP: ask ahead of the call, with the agent's importance and reason.
+   * "Allow once" leaves a pass the next matching web call uses up.
+   */
+  async preRequestWeb(threadId: string, call: WebCall, opts: { importance?: WebImportance; reason?: string; signal?: AbortSignal }): Promise<{ allowed: boolean; message: string }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("web_request only works in Scribe chat threads.");
+    if (webCallAllowed(call, thread.web, this.prefs().webAllowlist, thread.webGrants)) return { allowed: true, message: "Already allowed: make the call." };
+    const result = await this.requestWeb(threadId, call, opts);
+    if (!result.allowed) return { allowed: false, message: result.message ?? "Not allowed." };
+    const t = this.threads.get(threadId);
+    if (t && !webCallAllowed(call, t.web, this.prefs().webAllowlist, t.webGrants)) {
+      const passes = (this.webPasses.get(threadId) ?? []).filter((p) => Date.now() - p.at < WEB_PASS_MS);
+      passes.push({ call, at: Date.now() });
+      this.webPasses.set(threadId, passes);
+      return { allowed: true, message: `Allowed once: make the ${call.kind === "fetch" ? "fetch" : "search"} now.` };
+    }
+    return { allowed: true, message: "Allowed: make the call." };
+  }
+
+  /** Use up an "Allow once" pass from web_request that covers this call. */
+  private takeWebPass(threadId: string, call: WebCall): boolean {
+    const passes = (this.webPasses.get(threadId) ?? []).filter((p) => Date.now() - p.at < WEB_PASS_MS);
+    const index = passes.findIndex((p) => webPassCovers(p.call, call));
+    if (index >= 0) passes.splice(index, 1);
+    if (passes.length) this.webPasses.set(threadId, passes);
+    else this.webPasses.delete(threadId);
+    return index >= 0;
   }
 
   /** A subagent or background command changed; its tool item can be from an earlier turn. */

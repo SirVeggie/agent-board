@@ -3,7 +3,7 @@ import path from "node:path";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { isPlainRecord } from "../types.js";
-import { webAllowed } from "../webAccess.js";
+import { webCallAllowed, type WebCall } from "../webAccess.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -495,7 +495,8 @@ class ClaudeSession implements ProviderSession {
   private buildOptions(): Options {
     const thread = this.thread;
     const board = thread.mode === "board";
-    const webTools = thread.web !== "off" ? ["WebSearch", "WebFetch"] : [];
+    // Always there: with web off or limited, gateWeb asks the user before a call goes out.
+    const webTools = ["WebSearch", "WebFetch"];
     const { command, args } = this.ctx.boardMcp;
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
     const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id };
@@ -537,10 +538,12 @@ class ClaudeSession implements ProviderSession {
             ],
           },
           {
-            // Limited web access: searches only cover the allowlist and fetches elsewhere are refused.
+            // Web off or limited: calls the setting does not cover ask the user (see gateWeb).
             // A hook, so it also holds where tools pass without asking (allowedTools, full access).
             matcher: "WebSearch|WebFetch",
-            hooks: [async (hookInput) => this.limitWeb(hookInput as { tool_name?: string; tool_input?: unknown })],
+            // It can wait on the user for hours (a necessary request); the turn's own stop still aborts it.
+            timeout: 7 * 24 * 60 * 60,
+            hooks: [async (hookInput, _toolUseId, { signal }) => this.gateWeb(hookInput as { tool_name?: string; tool_input?: unknown }, signal)],
           },
         ],
       },
@@ -562,38 +565,40 @@ class ClaudeSession implements ProviderSession {
       options.tools = { type: "preset", preset: "claude_code" };
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`];
       // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
-      options.disallowedTools = ["EnterWorktree", "ExitWorktree", ...(thread.web !== "off" ? [] : ["WebSearch", "WebFetch"])];
+      options.disallowedTools = ["EnterWorktree", "ExitWorktree"];
     }
     return options;
   }
 
-  /** PreToolUse for web tools. The allowlist is the user's approval, so calls on it run without asking. */
-  private limitWeb(inp: { tool_name?: string; tool_input?: unknown }): HookJSONOutput {
-    if (this.thread.web !== "limited") return { continue: true };
-    const allowlist = this.ctx.webAllowlist();
+  /**
+   * PreToolUse for web tools. Web off, or a call off the limited allowlist: the user is asked (once,
+   * for the domain, or for the thread) and grants are kept on the thread. The allowlist and grants
+   * are the user's approval, so calls they cover run without asking.
+   */
+  private async gateWeb(inp: { tool_name?: string; tool_input?: unknown }, signal?: AbortSignal): Promise<HookJSONOutput> {
+    const thread = this.thread;
+    if (thread.web === "on") return { continue: true };
     const input = isPlainRecord(inp.tool_input) ? inp.tool_input : {};
+    const allow = (updatedInput?: Record<string, unknown>): HookJSONOutput => ({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", ...(updatedInput ? { updatedInput } : {}) },
+    });
     const deny = (reason: string): HookJSONOutput => ({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
     });
-    if (!allowlist.length) return deny("Web access is limited and the allowlist is empty. The user can add domains in Scribe's agent settings.");
-    const listed = allowlist.join(", ");
-    if (inp.tool_name === "WebFetch") {
-      const url = str(input.url) ?? "";
-      if (webAllowed(url, allowlist)) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
-      return deny(`Web access is limited to these domains (and their subdomains): ${listed}. ${url || "That URL"} is not on the list; the user can add it in Scribe's agent settings.`);
-    }
-    // WebSearch: keep only the allowed domains the agent asked for, or search the whole allowlist.
+    const allowlist = thread.web === "limited" ? this.ctx.webAllowlist() : [];
+    const grants = thread.webGrants;
     const asked = Array.isArray(input.allowed_domains) ? input.allowed_domains.filter((d): d is string => typeof d === "string") : [];
-    const kept = asked.filter((d) => webAllowed(d, allowlist));
-    if (asked.length && !kept.length) return deny(`Web access is limited to these domains: ${listed}. None of the requested domains are on the list.`);
-    const { blocked_domains: _blocked, ...rest } = input;
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "allow",
-        updatedInput: { ...rest, allowed_domains: kept.length ? kept : allowlist },
-      },
-    };
+    const call: WebCall = inp.tool_name === "WebFetch" ? { kind: "fetch", url: str(input.url) ?? "" } : { kind: "search", query: str(input.query), domains: asked };
+    if (webCallAllowed(call, thread.web, allowlist, grants)) return allow();
+    // Limited: a search that names no domains covers the allowlist (and granted domains) without asking.
+    const reach = [...allowlist, ...(grants?.domains ?? [])];
+    if (call.kind === "search" && !asked.length && reach.length) {
+      const { blocked_domains: _blocked, ...rest } = input;
+      return allow({ ...rest, allowed_domains: reach });
+    }
+    if (!this.ctx.webRequest) return deny("Web access is off for this thread.");
+    const result = await this.ctx.webRequest(thread.id, call, { signal });
+    return result.allowed ? allow() : deny(result.message ?? "The user did not allow this web request.");
   }
 
   private async ensureQuery(): Promise<Query> {

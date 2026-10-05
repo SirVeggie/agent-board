@@ -27,3 +27,22 @@ test("a domain allows itself and its subdomains, not look-alikes", () => {
   assert.ok(!webAllowed("https://github.com.evil.io/", list));
   assert.ok(!webAllowed("not a url://", list));
 });
+
+test("web calls: the setting, the allowlist and the thread's grants", async () => {
+  const { webCallAllowed, grantWeb, webPassCovers, parseWebImportance } = await import("./webAccess.js");
+  const fetch = (url: string) => ({ kind: "fetch" as const, url });
+  assert.ok(webCallAllowed(fetch("https://x.io"), "on", [], undefined));
+  assert.ok(!webCallAllowed(fetch("https://x.io"), "off", ["x.io"], undefined));
+  assert.ok(webCallAllowed(fetch("https://x.io"), "limited", ["x.io"], undefined));
+  assert.ok(!webCallAllowed({ kind: "search", query: "q" }, "limited", ["x.io"], undefined));
+  assert.ok(webCallAllowed({ kind: "search", domains: ["x.io"] }, "limited", ["x.io"], undefined));
+  const grants = grantWeb(undefined, "domain", fetch("https://www.Example.com/a"));
+  assert.deepEqual(grants, { domains: ["example.com"] });
+  assert.ok(webCallAllowed(fetch("https://api.example.com"), "off", [], grants));
+  assert.ok(webCallAllowed({ kind: "search", query: "q" }, "off", [], grantWeb(grants, "session", fetch("https://y.io"))));
+  assert.ok(webPassCovers(fetch("https://a.io/1"), fetch("https://a.io/2")));
+  assert.ok(!webPassCovers(fetch("https://a.io/1"), fetch("https://b.io/")));
+  assert.ok(webPassCovers({ kind: "search" }, { kind: "search", query: "q" }));
+  assert.equal(parseWebImportance("trivial"), "trivial");
+  assert.equal(parseWebImportance("urgent"), undefined);
+});

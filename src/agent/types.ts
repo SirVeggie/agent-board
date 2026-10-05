@@ -1,6 +1,6 @@
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
-import type { WebAccess } from "./webAccess.js";
+import type { WebAccess, WebGrants } from "./webAccess.js";
 import type { BrowserView } from "../browser.js";
 
 export type { WebAccess };
@@ -36,6 +36,8 @@ export type Thread = {
   approval: ApprovalPolicy;
   /** Web search and fetch tools: any site, the allowlist in prefs only, or none. */
   web: WebAccess;
+  /** Web access the user granted this thread beyond its web setting (a web request answered with a domain or the thread). */
+  webGrants?: WebGrants;
   scope: ThreadScope;
   /** Working directory for file and shell tools. While the thread has an open worktree, a folder inside it. */
   cwd: string | null;

@@ -45,8 +45,14 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       lines.push("", "Mode: Code. You can read and edit files and run commands in the workspace, subject to the user's approval settings.");
       break;
   }
-  if (thread.web === "limited" && thread.provider === "claude") {
-    lines.push("Web access is limited to the user's allowlist of domains: web searches only cover those sites, and fetches elsewhere are refused with the list.");
+  if (thread.web !== "on" && thread.provider !== "openai") {
+    const tools = thread.provider === "claude" ? "WebSearch or WebFetch" : "web_fetch (there is no web search)";
+    lines.push(
+      thread.web === "limited"
+        ? `Web access is limited to the user's allowlist of domains${thread.provider === "claude" ? " (a web search that names no domains covers those sites)" : ""}. ${tools} elsewhere asks the user first.`
+        : `Web access is off in this thread: ${tools} asks the user first.`,
+      "To say why and how much you need it, call web_request first with importance: necessary (waits until answered), important (about 2 hours), useful (15 minutes) or trivial (2 minutes). In a chat run by a board worker an unanswered request is refused after that wait; then carry on without the web, doing what you can."
+    );
   }
   if (thread.scope.kind === "page" && scope.page) {
     lines.push(

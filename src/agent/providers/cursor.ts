@@ -21,7 +21,7 @@ import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
 import { isPlainRecord } from "../types.js";
-import { webAllowed } from "../webAccess.js";
+import { webCallAllowed } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
@@ -396,21 +396,21 @@ function mcpContent(content: unknown): SDKCustomToolContent[] {
 }
 
 /**
- * Limited web access: the built-in web tools are off and this fetch takes their place, refusing
- * any URL (or redirect) off the allowlist. There is no limited search.
+ * Web off or limited: the built-in web tools are off and this fetch takes their place. A URL (or
+ * redirect) the thread's web setting does not cover goes through gate, which asks the user.
+ * There is no gated search.
  */
-function allowlistFetch(allowlist: () => string[]): SDKCustomTool {
+function gatedFetch(gate: (url: string) => Promise<{ allowed: boolean; message?: string }>): SDKCustomTool {
   return {
-    description: "Fetch a web page or file over HTTP(S) and return its text. Only domains on the user's web allowlist can be reached; others are refused. Web search is not available.",
+    description: "Fetch a web page or file over HTTP(S) and return its text. Sites the user has not allowed ask the user first, who may refuse. Web search is not available.",
     inputSchema: { type: "object", properties: { url: { type: "string", description: "Absolute http(s) URL" } }, required: ["url"] },
     annotations: { readOnlyHint: true, openWorldHint: true },
     execute: async (args) => {
       let url = typeof args.url === "string" ? args.url : "";
       for (let hop = 0; hop < 6; hop += 1) {
         if (!/^https?:\/\//i.test(url)) return { content: [{ type: "text", text: `Not an http(s) URL: ${url}` }], isError: true };
-        if (!webAllowed(url, allowlist())) {
-          return { content: [{ type: "text", text: `Refused: ${new URL(url).hostname} is not on the web allowlist. Ask the user to add it in Agent settings.` }], isError: true };
-        }
+        const gated = await gate(url);
+        if (!gated.allowed) return { content: [{ type: "text", text: `Refused: ${gated.message ?? "the user did not allow this fetch."}` }], isError: true };
         const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
         const next = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
         if (next) {
@@ -527,6 +527,15 @@ class CursorSession implements ProviderSession {
   }
 
   /** Board workers (threads only a page has written to) keep Cursor's own shell; the host says which these are. */
+  /** A fetch through web_fetch: the allowlist (limited) and the thread's grants, else the user is asked. */
+  private async gateFetch(url: string): Promise<{ allowed: boolean; message?: string }> {
+    const call = { kind: "fetch" as const, url };
+    const allowlist = this.thread.web === "limited" ? this.ctx.webAllowlist() : [];
+    if (webCallAllowed(call, this.thread.web, allowlist, this.thread.webGrants)) return { allowed: true };
+    if (!this.ctx.webRequest) return { allowed: false, message: "web access is off for this thread." };
+    return this.ctx.webRequest(this.thread.id, call);
+  }
+
   private hostShell(): boolean {
     return wantsHostShell(this.thread, this.ctx.cursorHostShell?.(this.thread.id) ?? false);
   }
@@ -536,7 +545,7 @@ class CursorSession implements ProviderSession {
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
     this.board ??= new BoardTools(this.ctx.boardMcp, t.id);
     const customTools: Record<string, SDKCustomTool> = { ...(await this.board.tools()) };
-    if (t.web === "limited") customTools.web_fetch = allowlistFetch(() => this.ctx.webAllowlist());
+    if (t.web !== "on") customTools.web_fetch = gatedFetch((url) => this.gateFetch(url));
     const hostShell = this.hostShell();
     if (hostShell) customTools[HOST_SHELL] = this.hostShellTool();
     return {

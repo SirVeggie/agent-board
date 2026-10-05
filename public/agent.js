@@ -61,8 +61,8 @@
   ];
   const WEB_MODES = [
     { id: "on", label: "Web", detail: "Web search and fetch on any site" },
-    { id: "limited", label: "Web: limited", detail: "Only the domains on the web allowlist, without asking" },
-    { id: "off", label: "Web off", detail: "No web search or fetch" },
+    { id: "limited", label: "Web: limited", detail: "The web allowlist's domains without asking; the agent asks for others" },
+    { id: "off", label: "Web off", detail: "The agent asks before each web search or fetch" },
   ];
   /** Providers that actually apply Limited and Off. */
   function webEnforced(provider) {
@@ -70,7 +70,7 @@
   }
   const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
   /** Cursor has no Limited search: the allowlist covers a fetch tool only. */
-  const CURSOR_LIMITED = "Fetch from the web allowlist's domains only; no web search";
+  const CURSOR_LIMITED = "Fetch from the web allowlist's domains; the agent asks for others; no web search";
   /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
   const CURSOR_REVIEW = "Cursor: Auto-review approves safe calls and denies the rest; it can't ask you yet";
   /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */

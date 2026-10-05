@@ -12,6 +12,7 @@ import type {
   ToolStatus,
   Usage,
 } from "../types.js";
+import type { WebCall, WebImportance } from "../webAccess.js";
 
 /** What the host hands a provider for one turn. */
 export type TurnInput = {
@@ -164,6 +165,11 @@ export type SessionContext = {
   followUp?(threadId: string, id: string): boolean;
   /** A tool approval with no turn running (a background agent at work): the thread's own rules, or a refusal. */
   approval?(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision>;
+  /**
+   * A web call the thread's web setting does not cover: allowed at once when the user granted it
+   * earlier, else the user is asked (see AgentHost.requestWeb). message says why it was refused.
+   */
+  webRequest?(threadId: string, call: WebCall, opts?: { importance?: WebImportance; reason?: string; signal?: AbortSignal }): Promise<{ allowed: boolean; message?: string }>;
 };
 
 export interface AgentProvider {

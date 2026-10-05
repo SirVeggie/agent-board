@@ -1344,6 +1344,7 @@ export async function startMcp(): Promise<void> {
   if (process.env.SCRIBE_THREAD) {
     registerBrowserTools(server);
     registerAsk(server);
+    registerWebRequest(server);
   }
 
   const transport = new StdioServerTransport();
@@ -1401,6 +1402,49 @@ function registerAsk(server: McpServer): void {
         return jsonResult(data);
       } catch (err) {
         return errorResult((err as Error).message || "page_ask failed");
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
+  );
+}
+
+/**
+ * web_request: ask the user for a web call the thread's web access does not cover, saying why and
+ * how much it matters. The importance sets how long a board worker's chat waits for an answer.
+ */
+function registerWebRequest(server: McpServer): void {
+  server.tool(
+    "web_request",
+    "Ask the user to allow a web fetch or search while web access for this chat is off or limited. Calling the web tools directly also asks, but this lets you say why and how important it is. The user can allow it once (the next matching call goes through), for its domain, or for the rest of the chat, or deny it. importance sets how long a chat run by a board worker waits for an answer before it is refused: necessary waits until answered, important about 2 hours, useful 15 minutes, trivial 2 minutes. When it is refused, carry on without the web and mention what you could not check. Returns allowed and a message.",
+    {
+      url: z.string().optional().describe("The URL you want to fetch. Leave out for a search."),
+      query: z.string().optional().describe("For a search: what you want to search for."),
+      domains: z.array(z.string()).optional().describe("For a search: the domains to limit it to, if any."),
+      importance: z.enum(["necessary", "important", "useful", "trivial"]).optional().describe("How much you need it. Default useful."),
+      reason: z.string().optional().describe("One or two lines on why you need it, shown to the user."),
+    },
+    { readOnlyHint: true },
+    async ({ url, query, domains, importance, reason }, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `Waiting for the user to allow web access (${seconds}s)` } })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api("POST", "/api/web-request", { url, query, domains, importance, reason }, { signal: extra.signal });
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "web_request failed");
       } finally {
         clearInterval(heartbeat);
       }

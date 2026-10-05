@@ -40,6 +40,7 @@ import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
 import { agentRouter } from "./agent/routes.js";
+import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
@@ -684,6 +685,45 @@ export async function startHttp(): Promise<http.Server> {
       })
       .catch((err: Error) => {
         if (!res.writableEnded) res.status(err.message.startsWith("tab not found") ? 404 : 400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
+  /** web_request from a Scribe chat's MCP: ask the user for a web call the thread's web setting does not cover. */
+  app.post("/api/web-request", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "web_request only works in Scribe chat threads." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    const url = typeof body.url === "string" ? body.url.trim() : "";
+    const domains = Array.isArray(body.domains) ? body.domains.filter((d): d is string => typeof d === "string") : [];
+    if (url && !/^https?:\/\//i.test(url)) {
+      res.status(400).json({ error: "url must be an absolute http(s) URL" });
+      return;
+    }
+    const call: WebCall = url ? { kind: "fetch", url } : { kind: "search", ...(typeof body.query === "string" && body.query.trim() ? { query: body.query.trim().slice(0, 300) } : {}), domains };
+    const importance = parseWebImportance(body.importance);
+    if (body.importance !== undefined && !importance) {
+      res.status(400).json({ error: "importance must be necessary, important, useful or trivial" });
+      return;
+    }
+    // necessary can wait for hours; the MCP side keeps the request open as long as it takes.
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .preRequestWeb(thread, call, { importance, ...(typeof body.reason === "string" ? { reason: body.reason.slice(0, 1000) } : {}), signal: abort.signal })
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
       })
       .finally(() => res.off("close", onClientGone));
   });
