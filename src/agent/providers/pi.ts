@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentSession, AgentSessionEvent, ExtensionAPI, ModelRuntime, ToolCallEvent, ToolCallEventResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Api, AssistantMessage, ImageContent, Model as PiModel, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
-
-type Model = PiModel<Api>;
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { dataDir } from "../../config.js";
@@ -13,6 +11,8 @@ import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
 import { isPlainRecord, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
 import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
+
+type Model = PiModel<Api>;
 
 /**
  * Pi (@earendil-works/pi-coding-agent) through its SDK, in this process: any model Pi can reach,
@@ -753,9 +753,11 @@ class PiSession implements ProviderSession {
       settingsManager,
       resourceLoader,
       sessionManager,
-      tools: [...(plan ? READ_TOOLS : builtinTools(this.thread.mode)), ...custom.map((t) => t.name)],
+      // Pi's tools list is an allowlist: Plan mode needs the Code tools in it to switch them on when its plan is accepted.
+      tools: [...builtinTools(plan ? "code" : this.thread.mode), ...custom.map((t) => t.name)],
       customTools: custom,
     });
+    if (plan) session.setActiveToolsByName([...READ_TOOLS, ...custom.map((t) => t.name)]);
     await session.bindExtensions({});
     session.subscribe((event) => this.onEvent(event));
     this.file = session.sessionFile ?? null;
