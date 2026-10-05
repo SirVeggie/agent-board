@@ -23,6 +23,7 @@ import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage
 import { isPlainRecord } from "../types.js";
 import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
+import { SqliteCursorStore } from "./cursorStore.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -65,13 +66,22 @@ function sdk(): Promise<Sdk> {
   return sdkLoad;
 }
 
-let agentStore: LocalAgentStore | null = null;
-/** Scribe's own store, so threads don't mix with the Cursor IDE's or another SDK host's agents. */
-async function store(): Promise<LocalAgentStore> {
-  if (!agentStore) {
-    const { JsonlLocalAgentStore } = await sdk();
-    agentStore = new JsonlLocalAgentStore(path.join(dataDir(), "cursor-agents"));
-  }
+let agentStore: Promise<LocalAgentStore> | null = null;
+/**
+ * Scribe's own store, so threads don't mix with the Cursor IDE's or another SDK host's agents.
+ * SQLite, not the SDK's JSONL store: that one rewrites whole files on every write (#212).
+ */
+function store(): Promise<LocalAgentStore> {
+  agentStore ??= (async () => {
+    const paging = await sdk();
+    const dir = path.join(dataDir(), "cursor-agents");
+    const opened = new SqliteCursorStore(path.join(dir, "store.sqlite"), paging);
+    await opened.importJsonl(dir).catch((err) => log(`Cursor store: JSONL import failed: ${(err as Error).message}`));
+    return opened;
+  })().catch((err) => {
+    agentStore = null;
+    throw err;
+  });
   return agentStore;
 }
 
