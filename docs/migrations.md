@@ -1,5 +1,14 @@
 # Migrations
 
+## Agent chat: OpenAI-compatible provider replaced by Pi (`agent.sqlite`, no schema change)
+
+- **What changed:** The `openai` agent provider was removed (#192). Its model sources (Agent settings) now feed the Pi provider (`pi`), which also reaches local and other providers' models.
+- **Affected data:** `threads.provider = "openai"` rows in `agent.sqlite`, and the saved `prefs` setting (`provider`, `models.openai`, `summarizer`, `favoriteModels` entries `openai:…`). Model sources (`openaiSources`) keep their shape and are read by Pi unchanged.
+- **Transform:** Model ids `<source>/<model>` become Pi's `src-<source>/<model>`. On daemon start, each `openai` thread becomes a `pi` thread with the mapped model and `nativeId = null`, so its next turn starts a new Pi session (Pi cannot read the old provider's history; the chat transcript in Scribe stays). Prefs are mapped each time they are read (not rewritten): `openai` → `pi` with mapped model ids; an existing `models.pi` wins over the mapped one.
+- **Where:** `src/agent/legacyOpenai.ts` (`migrateOpenaiThread`, `migrateOpenaiPrefs`), called once each from `src/agent/host.ts` (constructor thread load, `prefs()`).
+- **How to verify:** `openai threads and prefs move to Pi` in `src/agent/piProvider.test.ts`. By hand: an old OpenAI-compatible thread opens as Pi with the same model and answers in a new session.
+- **When to remove:** Once every install has started a build with Pi at least once (no `openai` rows or prefs left). Then delete `legacyOpenai.ts` and its two calls and test.
+
 ## `tabs.provenance` column (additive, schema still 3)
 
 - **What changed:** Agent page writes record who created the page and who last changed it (`provenance` on the tab: `{ created?, changed? }`, each `{ thread?, title?, at }`). In-app chats send `x-scribe-thread`; external MCP clients have no thread. Hovercards show it; the page menu **Open thread** opens the creating thread. Stored as `tabs.provenance TEXT` (JSON, nullable). Export files carry optional `provenance`.

@@ -20,6 +20,7 @@ import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from 
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { PiProvider } from "./providers/pi.js";
+import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
 import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
 import type {
   AgentProvider,
@@ -269,12 +270,7 @@ export class AgentHost {
     (this.providers.claude as ClaudeProvider).setModelCache(claudeModels);
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
     for (const thread of this.db.listThreads()) {
-      if ((thread.provider as string) === "openai") {
-        // The OpenAI-compatible provider is gone: its models run through Pi now, in a new session.
-        thread.provider = "pi";
-        thread.nativeId = null;
-        this.db.saveThread(thread);
-      }
+      if (migrateOpenaiThread(thread)) this.db.saveThread(thread);
       this.threads.set(thread.id, thread);
       // A turn cannot survive a daemon restart: mark leftovers as cancelled.
       const turns = this.db.listTurns(thread.id);
@@ -447,7 +443,7 @@ export class AgentHost {
   // ---------- prefs, providers, models ----------
 
   prefs(): Prefs {
-    const saved = this.db.getSetting<Partial<Prefs>>("prefs", {});
+    const saved = migrateOpenaiPrefs(this.db.getSetting<Partial<Prefs>>("prefs", {}));
     return {
       ...DEFAULT_PREFS,
       ...saved,
@@ -459,9 +455,6 @@ export class AgentHost {
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
-      // The OpenAI-compatible provider's models run through Pi now.
-      ...((saved.provider as string) === "openai" ? { provider: "pi" as const } : {}),
-      ...((saved.summarizer?.provider as string) === "openai" ? { summarizer: DEFAULT_PREFS.summarizer } : {}),
     };
   }
 
