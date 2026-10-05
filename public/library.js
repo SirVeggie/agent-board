@@ -289,18 +289,6 @@ window.createLibrary = function createLibrary(host) {
     title.className = "tab-title";
     title.textContent = page.title;
     text.appendChild(title);
-    const by = host.provenance?.(page);
-    if (by) {
-      const line = document.createElement(by.threadId ? "button" : "span");
-      line.className = "lib-by" + (by.threadId ? " lib-by-link" : "");
-      line.textContent = by.text;
-      if (by.threadId) {
-        line.type = "button";
-        line.dataset.thread = by.threadId;
-        line.title = "Open thread";
-      }
-      text.appendChild(line);
-    }
     if (extra.path) {
       const path = document.createElement("span");
       path.className = "lib-path";
@@ -999,6 +987,7 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const fromStrip = Boolean(event.target.closest?.(".tab"));
+    const madeThread = tab.provenance?.created?.thread;
     openMenu(point, [
       open
         ? { label: "Close tab", action: () => host.closeTab(id) }
@@ -1020,6 +1009,14 @@ window.createLibrary = function createLibrary(host) {
       },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
+      madeThread && {
+        label: "Open thread",
+        action: () => {
+          if (host.openThread?.(madeThread) === false) {
+            host.showNotice?.("That thread is gone.");
+          }
+        },
+      },
       "sep",
       { label: "Delete", danger: true, action: () => deletePage(id) },
     ]);
@@ -1225,7 +1222,7 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const row = event.target.closest(".lib-row");
-    if (!row || event.target.closest(".tab-close, .lib-by, input") || (query && row.dataset.kind === "folder")) {
+    if (!row || event.target.closest(".tab-close, input") || (query && row.dataset.kind === "folder")) {
       return;
     }
     press = {
@@ -1676,15 +1673,6 @@ window.createLibrary = function createLibrary(host) {
         deletePage(id);
         return;
       }
-      const byLink = event.target.closest(".lib-by-link");
-      if (byLink) {
-        event.stopPropagation();
-        event.preventDefault();
-        if (host.openThread?.(byLink.dataset.thread) === false) {
-          host.showNotice?.("That thread is gone.");
-        }
-        return;
-      }
       if (event.detail > 1) {
         return;
       }
@@ -1698,7 +1686,7 @@ window.createLibrary = function createLibrary(host) {
   );
   list.addEventListener("dblclick", (event) => {
     const row = event.target.closest(".lib-row");
-    if (!row || event.target.closest(".tab-close") || event.target.closest(".lib-by") || !event.target.closest(".tab-title, .lib-text")) {
+    if (!row || event.target.closest(".tab-close") || !event.target.closest(".tab-title, .lib-text")) {
       return;
     }
     if (row.dataset.kind === "folder") {

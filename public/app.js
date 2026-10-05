@@ -251,7 +251,6 @@
     hoverCard,
     stripSlot,
     clearStripSlot,
-    provenance: pageProvenanceLine,
     openThread: (id) => window.scribeChat?.openThread?.(id),
     pageStatus: (id) => window.scribeChat?.pageStatus?.(id) || null,
     icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE, folderInstructions: FOLDER_INSTRUCTIONS_SVG, folderInstructionsTitle: FOLDER_INSTRUCTIONS_TITLE },
@@ -2511,19 +2510,6 @@
     }
     const name = window.scribeChat?.threadTitle?.(actor.thread) || actor.title || "thread";
     return { text: `agent · ${name}`, threadId: actor.thread, at: actor.at };
-  }
-
-  function pageProvenanceLine(tab) {
-    const created = tab.provenance?.created;
-    const changed = tab.provenance?.changed;
-    const actor = created || changed;
-    const view = pageActorView(actor);
-    if (!view) {
-      return null;
-    }
-    const verb = created ? "made" : "changed";
-    const text = actor.thread ? `${verb} by agent · ${window.scribeChat?.threadTitle?.(actor.thread) || actor.title || "thread"}` : `${verb} by external agent`;
-    return { text, threadId: actor.thread, at: actor.at };
   }
 
   function choose(message, buttons) {

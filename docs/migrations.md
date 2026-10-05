@@ -2,7 +2,7 @@
 
 ## `tabs.provenance` column (additive, schema still 3)
 
-- **What changed:** Agent page writes record who created the page and who last changed it (`provenance` on the tab: `{ created?, changed? }`, each `{ thread?, title?, at }`). In-app chats send `x-scribe-thread`; external MCP clients have no thread. Library rows and hovercards show it. Stored as `tabs.provenance TEXT` (JSON, nullable). Export files carry optional `provenance`.
+- **What changed:** Agent page writes record who created the page and who last changed it (`provenance` on the tab: `{ created?, changed? }`, each `{ thread?, title?, at }`). In-app chats send `x-scribe-thread`; external MCP clients have no thread. Hovercards show it; the page menu **Open thread** opens the creating thread. Stored as `tabs.provenance TEXT` (JSON, nullable). Export files carry optional `provenance`.
 - **Why no version bump:** Existing rows are unchanged (null). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureProvenanceColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`. Older pages stay blank until an agent writes them.
 - **Export format:** No transform. Older exports have no `provenance` and import as unset. `EXPORT_VERSION` stays `1`.
 - **Protocol:** additive field on tab meta; `VERSION` stays `3.0.0`.
