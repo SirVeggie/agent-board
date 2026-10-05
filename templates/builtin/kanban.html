@@ -3571,6 +3571,9 @@
   var RESUME_DELAY_MS = 60 * 1000;
   /** Limit waits in a row before the worker gives up on a card and pauses. */
   var MAX_LIMIT_WAITS = 8;
+  /** Failed sends after a limit reset before the worker gives up and pauses; the first retry waits this long, doubling. */
+  var MAX_RESUME_TRIES = 5;
+  var RESUME_RETRY_MS = 60 * 1000;
   /** Times the worker asks one agent to fix a branch that won't merge before it pauses. */
   var MAX_MERGE_FIXES = 2;
   var MERGE_FIX_PROMPT = "Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes, run the checks, and commit, so the worktree is clean. Don't take another card. Then end your turn with a short summary; the board tries the merge again.";
@@ -3923,12 +3926,26 @@
     patchWorker(colId, { mergeCards: null });
   }
 
-  /** A plan limit stopped the agent and has reset since: send its chat on, keeping its card. */
+  /**
+   * A plan limit stopped the agent and has reset since: send its chat on, keeping its card. A send
+   * that fails (Scribe still coming up, a timeout) keeps the wait and tries again later: ending the
+   * run would let the sweep release the card as a failed turn.
+   */
   function resumeAgent(colId, threadId) {
     var w = worker(colId);
     return scribe.agent.send(threadId, RESUME_PROMPT).then(function (r) {
       if (!r || !r.ok) {
-        endRun(colId, "Could not send the agent on after its usage limit reset: " + launchError(r).replace(/^Could not launch: /, ""), false);
+        var cur = worker(colId) || {};
+        var wait = cur.wait || {};
+        var tries = (Number(wait.tries) || 0) + 1;
+        var why = launchError(r).replace(/^Could not launch: /, "");
+        if (cur.stop || (r && r.error === "denied") || tries > MAX_RESUME_TRIES) {
+          endRun(colId, "Could not send the agent on after its usage limit reset: " + why, false);
+          return;
+        }
+        // until + RESUME_DELAY_MS is when advanceWorkers tries again.
+        var backoff = Math.min(RESUME_RETRY_MS * Math.pow(2, tries - 1), 8 * 60 * 1000);
+        patchWorker(colId, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
         return;
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
