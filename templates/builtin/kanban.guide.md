@@ -21,9 +21,9 @@ If your thread fails or is stopped, Scribe moves your card back to the column it
 
 ## Agent workers
 
-The user can set up a worker for an agent column (its header's start button). While it runs, the board starts a fresh agent chat for each card, with the user's instructions and the card to take, so no chat carries the whole run's context. Its prompt says when it may take a closely related card in the same chat; otherwise it ends its turn and the board starts the next agent, or waits for cards itself. In a worktree, the agent commits and rebases onto the branch it came from before it ends; the board then merges the branch, so the next agent starts from the latest work. If the merge doesn't go through, the board sends you a message in the same chat saying why: rebase, resolve the conflicts, commit, and end your turn without taking another card; the board tries the merge again. If a plan usage limit stops your turn, your card stays yours and the board sends you on in the same chat once the limit resets: check the card and your work so far, then finish it. When the user asks it to stop after its card, `list` shows `stopRequested: true` on the column and the page logs `worker_stop`: take no more cards and end your turn. `worker_step` is the page's own bookkeeping; don't call it.
+Workers are assignees. The user sets them up under the board's **Workers** button: each has a name, a color, and agent settings, and a run switch. A running worker takes the cards in the agent (ready) columns that are assigned to its name, top first; several can run side by side on one ready column, each on its own cards (up to the board's max parallel setting). A ready card assigned to a stopped worker waits, and cards assigned to people or to nobody are left alone. The board starts a fresh agent chat for each card, with the user's instructions and the card to take, so no chat carries the whole run's context. Its prompt says when it may take a closely related card in the same chat; otherwise it ends its turn and the board starts the next agent, or waits for cards itself. In a worktree, the agent commits and rebases onto the branch it came from before it ends; the board then merges the branch, so the next agent starts from the latest work. If the merge doesn't go through, the board sends you a message in the same chat saying why: rebase, resolve the conflicts, commit, and end your turn without taking another card; the board tries the merge again. If a plan usage limit stops your turn, your card stays yours and the board sends you on in the same chat once the limit resets: check the card and your work so far, then finish it. `list` returns the workers (`workers: [{ id, name, running?, stopRequested? }]`). When the user asks yours to stop after its card, it shows `stopRequested: true` there and the page logs `worker_stop`: take no more cards and end your turn. `worker_step` is the page's own bookkeeping; don't call it.
 
-The user can also run the column's worker on one card from the card's right-click menu. That chat is separate from the column's run: it takes only its card, and the board holds the card for it (a claim with the new thread) until it claims it itself.
+The user can also run a worker on one ready card from the card's right-click menu. That chat is separate from the worker's run: it takes only its card, and the board holds the card for it (a claim with the new thread) until it claims it itself.
 
 ## Events
 
@@ -37,14 +37,14 @@ Wait with `page_wait`. Pass the returned `cursor` as `after` next time, so nothi
 | `changes` | The user requested changes. Their note is the card's last comment and the card is back in the column it came from. |
 | `claim_lost` | Scribe released a card because its agent's thread stopped. |
 | `claim_stale` | Scribe flagged a card whose agent went quiet. |
-| `worker_stop` | The user asked the column's agent worker to stop once its card is done. `data`: `{ column, columnId, role }`. |
+| `worker_stop` | The user asked an agent worker to stop once its card is done. `data`: `{ worker, workerId }` (worker is its name). |
 
 ## State
 
 You rarely need raw state; the actions cover the usual work. For anything they don't, read with `page_state` and a `path` (`cards/num=12`) and write with `page_update` ops.
 
 ```
-columns: [{ id, title, role?, wip? }]       // array order = board order
+columns: [{ id, title, role?, wip?, askAssignee? }]       // array order = board order
 labels:  [{ id, name, color }]
 cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             due?, assignee?, checklist: [{ id, text, done }],
@@ -52,8 +52,8 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             blockedBy: [cardId], status?, claim?, thread?, from?, archived?,
             cover?, createdAt, movedAt, doneAt? }]
 nextNum: number
-settings: { hideAddColumn?, showDoneDate?,    // the user's page settings; leave them alone
-            workers?: { [columnId]: { name?, instructions, context?, provider?, model?, effort?, fast?, mode?,
+settings: { hideAddColumn?, showDoneDate?, maxWorkers?,    // the user's page settings; leave them alone
+            workers?: { [workerId]: { name, color?, instructions, context?, provider?, model?, effort?, fast?, mode?,
                                       cwd?, approval?, worktree?, web?, show?,
                                       threadId?, run?, step?, stop?, merge?, error?, solo? } } }  // run..solo: the page's
 ```

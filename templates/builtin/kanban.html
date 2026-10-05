@@ -763,33 +763,98 @@
   .confirm-row .danger-solid:hover { background: #ff8592; }
   .confirm-row button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .settings-box { width: min(440px, 100%); }
-  /* Agent workers: a launch button in an agent column's header, its setup, and the stop choice. */
-  .worker-btn {
+  /* Agent workers: the Workers button and panel, assignees on cards, the assign picker, the setup dialog, and the stop choice. */
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .card-head .chips { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
+  .who-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 12px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    color: var(--who, var(--muted));
+  }
+  .who-name.person { color: var(--muted); font-weight: 600; }
+  .card.by-worker::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: 0 11px 11px 0;
+    background: var(--who);
+    pointer-events: none;
+  }
+  .waiting { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+  .waiting .who-name { display: inline; font-size: inherit; letter-spacing: 0; text-transform: none; font-weight: 600; }
+  .w-badge {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 11.5px;
-    line-height: 1;
-    padding: 4px 7px;
-    border-radius: 7px;
-    color: var(--agent);
-    background: rgba(224, 179, 74, .12);
+    justify-content: center;
+    font-size: 9.5px;
+    font-weight: 800;
+    color: #0f1115;
+    background: var(--who);
   }
-  .worker-btn:hover { background: rgba(224, 179, 74, .22); }
-  .worker-btn svg { width: 10px; height: 10px; fill: currentColor; }
-  .worker-btn:disabled { opacity: .6; }
-  .worker-btn.waiting { color: var(--muted); background: rgba(255, 255, 255, .05); }
-  .worker-btn.waiting .pulse { background: var(--muted); }
+  .w-badge.dot { width: 12px; height: 12px; border-radius: 4px; font-size: 0; margin-left: -4px; box-shadow: 0 0 0 2px var(--panel); }
+  .w-badge.dot:first-child { margin-left: 0; }
+  .workers-btn { gap: 7px; position: relative; }
+  .w-stack { display: inline-flex; }
+  .w-alert { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+  .note-r { margin-left: auto; padding-left: 10px; color: var(--muted); font-size: 11.5px; }
+  .assign-menu { min-width: 230px; }
+  .assign-menu > button .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .assign-menu > button.current .grow { font-weight: 700; }
+  .assign-menu .avatar { margin-left: 0; }
+  .assign-menu .menu-row .field { width: 100%; }
+  .workers-pop {
+    position: fixed;
+    z-index: 60;
+    width: min(460px, calc(100vw - 16px));
+    overflow-y: auto;
+    background: rgb(18, 22, 30);
+    border-radius: 13px;
+    box-shadow: var(--depth), 0 18px 40px rgba(0, 0, 0, .55);
+    padding: 8px;
+  }
+  .wp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 2px 6px 8px; }
+  .wp-head b { font-size: 14px; }
+  .wp-head span { color: var(--muted); font-size: 12px; text-align: right; }
+  .wrow { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; gap: 9px; align-items: center; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
+  .wrow:hover, .wrow.open { background: rgba(255, 255, 255, .05); }
+  .wrow .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wrow .sub { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wrow .cnt { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .tog { width: 30px; height: 17px; border-radius: 999px; background: #2c3546; position: relative; padding: 0; }
+  .tog::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--muted); transition: left 120ms var(--ease); }
+  .tog.on { background: color-mix(in srgb, var(--ok) 55%, #2c3546); }
+  .tog.on::after { left: 15px; background: #fff; }
+  .tog:disabled { opacity: .6; }
+  .tog:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wedit { margin: 2px 4px 8px 37px; }
+  .wedit-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .danger-text { color: var(--danger); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; padding: 3px 0; }
+  .swatch { width: 18px; height: 18px; border-radius: 50%; background: var(--who); padding: 0; }
+  .swatch.sel { box-shadow: 0 0 0 2px rgba(18, 22, 30, 1), 0 0 0 4px var(--who); }
+  .swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .wp-foot { display: flex; justify-content: space-between; align-items: center; padding: 8px 6px 2px; border-top: 1px solid var(--line); margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .wp-foot .add { color: var(--accent); padding: 4px 2px; }
+  .wp-foot .add:hover { text-decoration: underline; }
+  .wp-max { display: inline-flex; align-items: center; gap: 6px; }
   .worker-error { margin: -2px 10px 6px; font-size: 12px; color: var(--danger); }
   .worker-error button { color: var(--text); text-decoration: underline; padding: 0; margin-left: 4px; }
-  .workers-section { border-top: 1px solid rgba(255, 255, 255, .06); padding-top: 12px; }
-  .workers-section h4 { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
-  .workers-section > p { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
-  .worker-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
-  .worker-row .txt { flex: 1; min-width: 0; }
-  .worker-row .txt b { display: block; font-weight: 600; }
-  .worker-row .txt span { display: block; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .worker-box { width: min(560px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
   .worker-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; overflow-y: auto; padding: 10px 2px 2px; }
   .worker-form > label { color: var(--muted); font-size: 12.5px; }
@@ -814,6 +879,8 @@
     background: rgba(255, 255, 255, .04);
     border-radius: 8px;
   }
+  .worker-form.compact { grid-template-columns: 78px minmax(0, 1fr); gap: 7px 10px; padding: 4px 0 0; overflow: visible; }
+  .worker-form.compact textarea.field { min-height: 70px; }
   .worker-form .check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
   .worker-note { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
   .worker-note.warn { color: var(--agent); }
@@ -877,12 +944,14 @@
       </select>
       <button class="tool hidden" id="clearFilter" type="button">Clear filter</button>
       <span class="spacer"></span>
+      <button class="tool workers-btn hidden" id="workersBtn" type="button" aria-haspopup="dialog">Workers</button>
       <button class="tool" id="labelsBtn" type="button">Labels</button>
       <button class="tool" id="archiveBtn" type="button">Archive</button>
       <button class="tool icon" id="settingsBtn" type="button" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div>
   </header>
   <main class="board" id="board"></main>
+  <div class="workers-pop hidden" id="workersPop" role="dialog" aria-label="Workers"></div>
 
   <div class="overlay hidden" id="overlay">
     <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
@@ -971,7 +1040,6 @@
         <span class="txt"><b>Show done date on cards</b><span>Cards that are done show when they were completed.</span></span>
         <input class="switch" id="sShowDoneDate" type="checkbox">
       </label>
-      <div class="workers-section hidden" id="sWorkers"></div>
       <div class="confirm-row">
         <button class="ghost" id="settingsClose" type="button">Close</button>
       </div>
@@ -980,7 +1048,7 @@
   <div class="confirm-back hidden" id="workerBack">
     <div class="confirm-box worker-box" role="dialog" aria-modal="true" aria-labelledby="workerTitle">
       <h3 id="workerTitle">Agent worker</h3>
-      <p id="workerIntro">Takes this column's cards one by one, following your instructions, and waits for more.</p>
+      <p id="workerIntro">Takes the cards in the agent columns that are assigned to it, one by one, following your instructions, and waits for more.</p>
       <div class="worker-form" id="workerForm"></div>
       <p class="worker-note hidden" id="workerNote"></p>
       <div class="confirm-row">
@@ -1622,7 +1690,9 @@
     refreshWorkerThreads();
     scheduleWorkers();
     renderToolbar();
+    renderWorkersButton();
     renderBoard();
+    renderWorkersPanel();
     if (openId) renderModal();
     if (!archiveEl.classList.contains("hidden")) renderArchive();
     if (!settingsBack.classList.contains("hidden")) renderSettings();
@@ -1669,8 +1739,6 @@
         if (col.role && ROLE_TAG[col.role] && (AGENT_MODE || col.role === "done")) {
           head.appendChild(el("span", "role " + col.role, ROLE_TAG[col.role]));
         }
-        var workerBtn = AGENT_MODE && col.role === "agent" ? workerButton(col) : null;
-        if (workerBtn) head.appendChild(workerBtn);
       }
       var list = cardsIn(col.id);
       var visible = filtering ? list.filter(matches) : list;
@@ -1689,8 +1757,6 @@
       head.appendChild(menuBtn);
       head.addEventListener("pointerdown", function (e) { startColumnDrag(e, col.id, colEl); });
       colEl.appendChild(head);
-      var workerError = workerErrorRow(col);
-      if (workerError) colEl.appendChild(workerError);
 
       var ul = el("ul", "cards");
       ul.dataset.col = col.id;
@@ -1752,14 +1818,29 @@
     var labelMap = {};
     labels().forEach(function (l) { labelMap[l.id] = l; });
     var chosen = c.labels.map(function (id) { return labelMap[id]; }).filter(Boolean);
-    if (chosen.length) {
-      var chips = el("div", "chips");
-      chosen.forEach(function (l) {
-        var bar = el("span", "chip-bar");
-        bar.style.background = l.color;
-        bar.title = l.name;
-        chips.appendChild(bar);
-      });
+    var chips = el("div", "chips");
+    chosen.forEach(function (l) {
+      var bar = el("span", "chip-bar");
+      bar.style.background = l.color;
+      bar.title = l.name;
+      chips.appendChild(bar);
+    });
+    // The assignee: name in the top-right corner; a worker's color on the right edge as well.
+    var who = str(c.assignee).trim();
+    if (who) {
+      var wid = workerIdFor(who);
+      var head = el("div", "card-head");
+      head.appendChild(chips);
+      var nameEl = el("span", "who-name" + (wid ? "" : " person"), isAgent(who) ? "🤖 agent" : who);
+      nameEl.title = (wid ? "Worker: " : "Assigned to ") + who;
+      if (wid) {
+        nameEl.style.setProperty("--who", workerColor(wid));
+        li.classList.add("by-worker");
+        li.style.setProperty("--who", workerColor(wid));
+      }
+      head.appendChild(nameEl);
+      li.appendChild(head);
+    } else if (chosen.length) {
       li.appendChild(chips);
     }
     var titleEl = el("div", "card-title");
@@ -1810,12 +1891,9 @@
       bl.title = "Blocked by " + nums.join(", ");
       badges.appendChild(bl);
     }
-    if (str(c.assignee).trim()) {
-      var av = el("span", "avatar" + (isAgent(c.assignee) ? " agent" : ""), isAgent(c.assignee) ? "🤖" : initials(c.assignee));
-      av.title = c.assignee;
-      badges.appendChild(av);
-    }
     if (badges.childNodes.length) li.appendChild(badges);
+    var waiting = AGENT_MODE ? waitingHint(c, col) : null;
+    if (waiting) li.appendChild(waiting);
 
     if (AGENT_MODE && c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind === "working" ? "working" : "info";
@@ -1956,7 +2034,20 @@
       menuButton(menu, "Rename", function () { editingCol = col.id; render(); });
       menuButton(menu, "Move left", function () { moveColumn(col.id, idx - 1); }, idx <= 0);
       menuButton(menu, "Move right", function () { moveColumn(col.id, idx + 1); }, idx >= cols.length - 1);
-      if (AGENT_MODE && col.role === "agent") menuButton(menu, worker(col.id) ? "Agent worker…" : "Set up an agent worker…", function () { openWorker(col.id); });
+      if (AGENT_MODE && col.role === "agent") {
+        menuButton(menu, "Workers…", function () { openWorkersPanel(null); });
+        var ask = menuButton(menu, "", function () {
+          setColumns(columns().map(function (c) {
+            if (c.id !== col.id) return c;
+            var next = Object.assign({}, c);
+            if (c.askAssignee === false) delete next.askAssignee; else next.askAssignee = false;
+            return next;
+          }));
+        });
+        ask.appendChild(el("span", "check-mark", col.askAssignee === false ? "" : "✓"));
+        ask.appendChild(document.createTextNode("Ask for an assignee on drop"));
+        ask.title = "A card dropped here without an assignee opens the assignee picker";
+      }
 
       menu.appendChild(el("div", "sep"));
       menu.appendChild(el("div", "label", "Card limit"));
@@ -2221,6 +2312,7 @@
     enterColumn(moving, colId, Date.now());
     setCards(insertCard(cards, moving, colId, beforeId, top));
     afterMove(id, fromCol, colId);
+    if (fromCol !== colId) askAssigneeAfterMove(id, colId);
   }
 
   /** Dragging the board's background (between and under cards) pans it sideways. */
@@ -2802,7 +2894,10 @@
   function assigneeOptions() {
     var q = mAssignee.value.trim().toLowerCase();
     var names = assigneeNames().filter(function (n) { return !q || n.toLowerCase().indexOf(q) !== -1; });
-    var rows = names.map(function (n) { return { value: n, name: n }; });
+    // Workers first, in the order they were set up, then people.
+    var workerRows = workerIds().map(function (id) { return workerName(worker(id)); }).filter(function (n) { return n && (!q || n.toLowerCase().indexOf(q) !== -1); });
+    names = workerRows.concat(names.filter(function (n) { return !workerIdFor(n); }));
+    var rows = names.map(function (n) { return { value: n, name: n, worker: workerIdFor(n) }; });
     var exact = names.some(function (n) { return n.toLowerCase() === q; });
     if (q && !exact) rows.push({ value: mAssignee.value.trim(), create: true });
     return rows;
@@ -2829,6 +2924,10 @@
         b.appendChild(el("span", "avatar", "+"));
         b.appendChild(document.createTextNode("Assign to "));
         b.appendChild(el("b", null, row.value));
+      } else if (row.worker) {
+        b.appendChild(workerBadge(row.worker));
+        b.appendChild(document.createTextNode(row.name));
+        b.appendChild(el("span", "note-r", workerOn(worker(row.worker)) ? "running" : "stopped"));
       } else {
         b.appendChild(el("span", "avatar" + (isAgent(row.name) ? " agent" : ""), isAgent(row.name) ? "🤖" : initials(row.name)));
         b.appendChild(document.createTextNode(row.name));
@@ -3074,9 +3173,17 @@
     closeMenu();
     menuEl = el("div", "menu card-menu");
     menuButton(menuEl, "Open", function () { openCard(id); });
-    if (canRunSolo(c)) {
-      var runner = str(worker(colOf(c).id).name);
-      menuButton(menuEl, "Run " + (runner || "agent") + " on this card", function () { runSolo(id); });
+    if (AGENT_MODE && isReadyCol(colOf(c))) {
+      menuButton(menuEl, "Assign…", function () {
+        var at = boardEl.querySelector('.card[data-id="' + id + '"]');
+        if (at) openAssignPicker(id, at);
+      });
+      var assigned = workerIdFor(c.assignee);
+      var runners = assigned ? [assigned] : workerIds();
+      runners.filter(function (wid) { return canRunSolo(c, wid); }).forEach(function (wid) {
+        var b = menuButton(menuEl, "Run " + workerName(worker(wid)) + " on this card", function () { runSolo(id, wid); });
+        b.title = "A chat of its own for this card, beside the worker's run";
+      });
     }
     var thread = c.thread || (c.claim && c.claim.thread);
     if (thread && scribe.agent && typeof scribe.agent.show === "function") {
@@ -3580,7 +3687,6 @@
     var s = settings();
     sHideAddColumn.checked = Boolean(s.hideAddColumn);
     sShowDoneDate.checked = Boolean(s.showDoneDate);
-    renderWorkersSettings();
   }
   function openSettings() {
     closeMenu();
@@ -3596,7 +3702,7 @@
   }
   function saveSetting(key, on) {
     var next = Object.assign({}, settings());
-    if (on) next[key] = true;
+    if (on) next[key] = on;
     else delete next[key];
     scribe.set({ settings: next });
     render();
@@ -3620,18 +3726,20 @@
   }, true);
 
   // ---------- agent workers ----------
-  // An agent column can have a worker: while it runs (settings.workers[columnId].run), the board
-  // starts a fresh agent chat for each card, so a long run doesn't carry one ever-growing context.
-  // The agent may take a closely related card in the same chat, and ends its turn otherwise. When
-  // a chat ends, the board merges its worktree branch (if it has one), so the next agent starts
-  // from the latest work, then starts the next card or waits for one. Every open window runs this
-  // code: the worker_step action lets one of them take each step. Anything unexpected (a failed
-  // turn, an unfinished card, a merge that doesn't go through) pauses the worker with its reason.
-  // A branch that won't merge first goes back to its agent to rebase and commit (MAX_MERGE_FIXES
-  // times); if it still won't, the cards that chat finished come back to the column, blocked.
-  // "Stop when its card is done" sets stop on the worker (list shows it as stopRequested on the
-  // column) and logs worker_stop. When a plan usage limit stops the agent's turn, the worker keeps
-  // its chat and card (wait.until) and sends it on once the limit has reset.
+  // Workers are assignees. Each one (settings.workers[workerId]) has a name, a color, and agent
+  // settings, and is set up from the Workers button. While it runs (run), the board takes the cards
+  // in the agent (ready) columns assigned to its name, top first, and starts a fresh agent chat for
+  // each, so a long run doesn't carry one ever-growing context. The agent may take a closely related
+  // card of its own in the same chat, and ends its turn otherwise. When a chat ends, the board
+  // merges its worktree branch (if it has one), so the next agent starts from the latest work, then
+  // starts the worker's next card or waits for one. settings.maxWorkers caps how many work at once.
+  // Every open window runs this code: the worker_step action lets one of them take each step.
+  // Anything unexpected (a failed turn, an unfinished card, a merge that doesn't go through) pauses
+  // the worker with its reason. A branch that won't merge first goes back to its agent to rebase
+  // and commit (MAX_MERGE_FIXES times); if it still won't, the cards that chat finished come back
+  // to their ready column, blocked. "Stop when its card is done" sets stop on the worker (list
+  // shows it as stopRequested) and logs worker_stop. When a plan usage limit stops the agent's
+  // turn, the worker keeps its chat and card (wait.until) and sends it on once the limit has reset.
   var FOLDER_MODES = { code: true, plan: true };
   /** Cards one agent chat may take before the board starts a fresh one. */
   var MAX_CARDS_PER_AGENT = 3;
@@ -3649,7 +3757,7 @@
   var MERGE_FIX_PROMPT = "Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes, run the checks, and commit, so the worktree is clean. Don't take another card. Then end your turn with a short summary; the board tries the merge again.";
   var RESUME_PROMPT ="Your plan's usage limit has reset. Go on with your card where you left off: check the card and the work you have done so far, then finish it as before.";
   var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
-  var PLAY_SVG = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z"/></svg>';
+  var WORKER_COLORS = ["#f59e0b", "#22d3ee", "#a78bfa", "#34d399", "#f472b6", "#f87171", "#6ea8ff", "#94a3b8"];
   var agentOptions = null;
   /** Thread id -> { status, queued } as Scribe last reported it. */
   var threadStatus = {};
@@ -3660,9 +3768,10 @@
   var workerErrors = {};
   var workersTimer = 0;
   var waitTimer = 0;
-  var workerCol = null;
+  /** The worker in the full settings dialog. */
+  var workerEdit = null;
   var workerHintOpen = false;
-  var stopCol = null;
+  var stopWorkerId = null;
 
   function hasWorkerApi() {
     return Boolean(scribe.agent && typeof scribe.agent.options === "function");
@@ -3671,9 +3780,48 @@
     var w = settings().workers;
     return w && typeof w === "object" ? w : {};
   }
-  function worker(colId) {
-    var w = workers()[colId];
+  function worker(id) {
+    var w = id ? workers()[id] : null;
     return w && typeof w === "object" ? w : null;
+  }
+  function workerIds() {
+    return Object.keys(workers()).filter(function (id) { return worker(id); });
+  }
+  function workerName(w) { return str(w && w.name).trim(); }
+  function sameName(a, b) { return str(a).trim().toLowerCase() === str(b).trim().toLowerCase(); }
+  /** The worker a card's assignee names, if any. */
+  function workerIdFor(name) {
+    if (!str(name).trim()) return null;
+    return workerIds().filter(function (id) { return sameName(worker(id).name, name); })[0] || null;
+  }
+  function workerColor(id) {
+    var w = worker(id);
+    if (w && /^#[0-9a-f]{3,8}$/i.test(str(w.color))) return w.color;
+    var i = workerIds().indexOf(id);
+    return WORKER_COLORS[(i < 0 ? 0 : i) % WORKER_COLORS.length];
+  }
+  function isReadyCol(col) { return Boolean(AGENT_MODE && col && col.role === "agent"); }
+  /** The worker's cards in the agent (ready) columns, in board order. */
+  function workerCards(id) {
+    var w = worker(id);
+    if (!workerName(w)) return [];
+    var out = [];
+    columns().forEach(function (col) {
+      if (!isReadyCol(col)) return;
+      cardsIn(col.id).forEach(function (c) { if (sameName(c.assignee, w.name)) out.push(c); });
+    });
+    return out;
+  }
+  function maxWorkers() { return clamp(Math.floor(Number(settings().maxWorkers) || 0), 0, 99); }
+  /** Other workers are on cards (or starting one) up to the max parallel setting. */
+  function atLimit(id) {
+    var max = maxWorkers();
+    if (!max) return false;
+    var busy = workerIds().filter(function (other) {
+      var w = worker(other);
+      return other !== id && workerOn(w) && Boolean(w.threadId || advancing[other] || launching[other]);
+    }).length;
+    return busy >= max;
   }
   function workerMode(w) { return str(w && w.mode) || "code"; }
   function modelParamsOf(opts, provider, modelId) {
@@ -3686,7 +3834,7 @@
     return modelParamsOf(opts, provider, modelId).filter(function (p) { return p.id === "fast"; })[0] || null;
   }
   function workerReady(w) {
-    return Boolean(w && str(w.instructions).trim() && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
+    return Boolean(w && workerName(w) && str(w.instructions).trim() && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
   }
   function workerRunning(w) {
     var t = w && w.threadId ? threadStatus[w.threadId] : null;
@@ -3699,54 +3847,108 @@
   function limitTime(at) {
     return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
   }
-  function saveWorker(colId, patch) {
+  function saveWorker(id, patch) {
     var all = Object.assign({}, workers());
-    var next = Object.assign({}, all[colId] || {}, patch);
+    var next = Object.assign({}, all[id] || {}, patch);
     Object.keys(next).forEach(function (k) { if (next[k] == null || next[k] === "" || next[k] === false) delete next[k]; });
-    all[colId] = next;
+    all[id] = next;
     scribe.set({ settings: Object.assign({}, settings(), { workers: all }) });
   }
   /**
    * Change a worker's run fields on the latest state (null removes one), whatever this window has
    * seen: worker_step and other windows write them too.
    */
-  function patchWorker(colId, patch) {
-    if (!worker(colId)) return;
-    scribe.update([{ op: "merge", path: "settings/workers/" + colId, value: patch }]);
+  function patchWorker(id, patch) {
+    if (!worker(id)) return;
+    scribe.update([{ op: "merge", path: "settings/workers/" + id, value: patch }]);
   }
-  function removeWorker(colId) {
+  function removeWorker(id) {
     var all = Object.assign({}, workers());
-    delete all[colId];
+    delete all[id];
     var next = Object.assign({}, settings());
     if (Object.keys(all).length) next.workers = all; else delete next.workers;
     scribe.set({ settings: next });
   }
-  function workerSummary(w) {
-    if (!w) return "Not set up";
+  function addWorker() {
+    var ids = workerIds();
+    var used = ids.map(function (id) { return workerColor(id); });
+    var n = ids.length + 1;
+    while (ids.some(function (id) { return sameName(worker(id).name, "Worker " + n); })) n++;
+    var id = newId("w");
+    saveWorker(id, { name: "Worker " + n, color: WORKER_COLORS.filter(function (c) { return used.indexOf(c) === -1; })[0] || WORKER_COLORS[ids.length % WORKER_COLORS.length] });
+    return id;
+  }
+  /** A new name for a worker: refused when empty or taken; its cards follow it. */
+  function renameWorker(id, name) {
+    var w = worker(id);
+    name = str(name).trim().slice(0, 40);
+    if (!w || !name || name === workerName(w)) return true;
+    var taken = workerIds().some(function (other) { return other !== id && sameName(worker(other).name, name); });
+    if (taken) {
+      setHint("Another worker is called " + name + ".", true);
+      return false;
+    }
+    var old = workerName(w);
+    if (old) {
+      var changed = false;
+      var cards = allCards().map(function (c) {
+        if (!sameName(c.assignee, old)) return c;
+        changed = true;
+        return Object.assign({}, c, { assignee: name });
+      });
+      if (changed) scribe.set({ cards: cards });
+    }
+    saveWorker(id, { name: name });
+    return true;
+  }
+  function providerLabel(id) {
+    var list = (agentOptions && agentOptions.providers) || [];
+    return labelOf(list, id);
+  }
+  function modelLabel(w) {
+    var provider = str(w.provider) || str(agentOptions && agentOptions.defaults && agentOptions.defaults.provider);
+    var models = (agentOptions && agentOptions.models && agentOptions.models[provider]) || [];
+    var model = models.filter(function (m) { return m.id === str(w.model); })[0];
+    if (model) return model.label;
+    if (w.model) return str(w.model);
+    return w.provider ? providerLabel(w.provider) : "Default model";
+  }
+  /** One line of settings for the panel: model, reasoning, mode, folder, worktree, web. */
+  function workerSettingsLine(w) {
     var mode = workerMode(w);
-    var parts = [str(w.name) || "Agent", MODE_LABELS[mode] || mode];
+    var parts = [modelLabel(w)];
+    if (w.effort) parts.push(str(w.effort));
     if (w.fast === "true") parts.push("fast");
+    parts.push(MODE_LABELS[mode] || mode);
+    if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
+    if (FOLDER_MODES[mode] && w.worktree) parts.push("worktree");
     if (w.web === "limited") parts.push("web limited");
     else if (w.web === "off") parts.push("no web");
-    if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
-    if (!workerReady(w)) parts.push(FOLDER_MODES[mode] && !w.cwd ? "needs a folder" : "needs instructions");
-    else if (workerRunning(w)) parts.push(w.stop ? "stopping" : "working");
-    else if (workerWaitUntil(w)) parts.push("out of usage until " + limitTime(workerWaitUntil(w)));
-    else if (workerOn(w)) parts.push("waiting for cards");
+    else if (w.web === "on") parts.push("web on");
     return parts.join(" · ");
+  }
+  /** What the worker is doing, for the panel and the stop dialog. */
+  function workerState(id) {
+    var w = worker(id);
+    if (!workerReady(w)) return !workerName(w) ? "needs a name" : FOLDER_MODES[workerMode(w)] && !str(w.cwd).trim() ? "needs a folder" : "needs instructions";
+    if (launching[id]) return "starting";
+    if (workerRunning(w)) return (w.stop ? "stopping after " : "working on ") + (w.run && w.run.card ? "#" + w.run.card : "a card");
+    if (workerWaitUntil(w)) return "out of usage until " + limitTime(workerWaitUntil(w));
+    if (workerOn(w)) return w.stop ? "stopping" : atLimit(id) && nextCard(id) ? "waiting for a free slot" : "waiting for cards";
+    return "stopped";
   }
 
   /** Ask Scribe how each worker's last thread is doing, once per thread; onChange keeps it current. */
   function refreshWorkerThreads() {
     if (!hasWorkerApi()) return;
-    Object.keys(workers()).forEach(function (colId) {
-      var w = worker(colId);
-      [w.threadId].concat(Object.keys(soloRuns(w))).forEach(function (id) {
-        if (!id || threadStatus[id]) return;
-        threadStatus[id] = { status: "idle", queued: 0, unknown: true };
-        scribe.agent.get(id).then(function (r) {
-          if (r && r.ok && r.thread) threadStatus[id] = { status: r.thread.status, queued: r.thread.queued || 0 };
-          else if (r && r.error === "not_found") threadStatus[id] = { status: "idle", queued: 0 };
+    workerIds().forEach(function (id) {
+      var w = worker(id);
+      [w.threadId].concat(Object.keys(soloRuns(w))).forEach(function (tid) {
+        if (!tid || threadStatus[tid]) return;
+        threadStatus[tid] = { status: "idle", queued: 0, unknown: true };
+        scribe.agent.get(tid).then(function (r) {
+          if (r && r.ok && r.thread) threadStatus[tid] = { status: r.thread.status, queued: r.thread.queued || 0 };
+          else if (r && r.error === "not_found") threadStatus[tid] = { status: "idle", queued: 0 };
           render();
         });
       });
@@ -3763,11 +3965,10 @@
     var h = document.querySelector("h1");
     return h ? h.textContent.trim() : "Board";
   }
-  function workerPrompt(col, w, c, fallbackInstructions, solo) {
-    var name = str(w.name).trim();
-    var colRef = JSON.stringify(col.id);
+  function workerPrompt(w, c, fallbackInstructions, solo) {
+    var name = workerName(w) || "Agent";
     var lines = [
-      "You are an agent worker for the \"" + col.title + "\" column of the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + ").",
+      "You are the agent worker \"" + name + "\" on the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + "). You take the cards in the board's agent (ready) columns that are assigned to \"" + name + "\".",
       "",
       "The user's instructions:",
       str(w.instructions).trim() || fallbackInstructions || "",
@@ -3776,7 +3977,7 @@
       "",
       "How to work:",
       "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with this message (or with your first page_action result); follow it.",
-      "- get the card, claim it" + (name ? " with assignee \"" + name + "\"" : "") + ", do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
+      "- get the card, claim it with assignee \"" + name + "\", do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
     ];
     if (FOLDER_MODES[workerMode(w)] && w.worktree) {
       lines.push("- You work in a git worktree, on a branch of your own. Commit your work. Before you end your turn, rebase onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list) and resolve any conflicts, so it merges cleanly. When your turn ends, the board merges your branch, and the next agent starts from there.");
@@ -3786,7 +3987,7 @@
     } else if (w.context === "fresh") {
       lines.push("- Work on this card only, then end your turn. The board starts a fresh agent for the next card.");
     } else {
-      lines.push("- When it is finished, list the column (list { column: " + colRef + " }). If the column shows stopRequested: true, end your turn. If one of its cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way, up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
+      lines.push("- When it is finished, list your cards (list { column: \"agent\", assignee: " + JSON.stringify(name) + " }). If the list's workers show stopRequested: true on \"" + name + "\", end your turn. If one of those cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way, up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
     }
     lines.push("- Don't wait for new cards; the board does that. End your turn with a short summary.");
     return lines.join("\n");
@@ -3800,20 +4001,36 @@
     if (/^(unknown_|needs_folder|no_provider)/.test(str(error))) return "Check the worker's setup (" + error + ").";
     return error ? "Could not launch: " + error : "Could not launch the agent.";
   }
-  /** The column's next card for a worker: top first, skipping held ones, blocked ones the user hasn't answered, and ones waiting on unfinished cards. */
-  function nextCard(colId) {
-    return cardsIn(colId).filter(function (c) {
-      if ((c.claim && !c.claim.stale) || soloStarting[c.id]) return false;
-      if (c.status && c.status.kind === "blocked") {
-        var last = c.comments[c.comments.length - 1];
-        if (!last || last.by !== "user") return false;
-      }
-      return !c.blockedBy.some(function (id) {
-        var b = card(id);
-        var bCol = b && colOf(b);
-        return b && !b.archived && !(bCol && (bCol.role === "done" || bCol.role === "review"));
-      });
-    })[0] || null;
+  /** Whether a worker would take the card now: not held, not blocked unanswered, not waiting on unfinished cards. */
+  function cardTakeable(c) {
+    if ((c.claim && !c.claim.stale) || soloStarting[c.id]) return false;
+    if (c.status && c.status.kind === "blocked") {
+      var last = c.comments[c.comments.length - 1];
+      if (!last || last.by !== "user") return false;
+    }
+    return !c.blockedBy.some(function (bid) {
+      var b = card(bid);
+      var bCol = b && colOf(b);
+      return b && !b.archived && !(bCol && (bCol.role === "done" || bCol.role === "review"));
+    });
+  }
+  /** The worker's next card: its first takeable one in the ready columns. */
+  function nextCard(id) {
+    return workerCards(id).filter(cardTakeable)[0] || null;
+  }
+  function workerOpts(w, c) {
+    var mode = workerMode(w);
+    var opts = { title: ((workerName(w) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
+    ["provider", "model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    if (w.fast === "true") opts.fast = true;
+    else if (w.fast === "false") opts.fast = false;
+    else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
+    if (FOLDER_MODES[mode]) {
+      opts.cwd = w.cwd;
+      if (w.approval) opts.approval = w.approval;
+      if (w.worktree) opts.worktree = true;
+    }
+    return opts;
   }
 
   function scheduleWorkers() {
@@ -3825,10 +4042,10 @@
     if (!AGENT_MODE || !hasWorkerApi()) return;
     clearTimeout(waitTimer);
     var soonest = 0;
-    Object.keys(workers()).forEach(wrapUpSolos);
-    Object.keys(workers()).forEach(function (colId) {
-      var col = column(colId), w = worker(colId);
-      if (!col || col.role !== "agent" || !workerOn(w) || advancing[colId] || launching[colId]) return;
+    workerIds().forEach(wrapUpSolos);
+    workerIds().forEach(function (id) {
+      var w = worker(id);
+      if (!workerOn(w) || advancing[id] || launching[id]) return;
       if (w.step && Number(w.step.at) > Date.now() - STEP_LEASE_MS) return;
       var due = workerWaitUntil(w) ? workerWaitUntil(w) + RESUME_DELAY_MS : 0;
       if (due > Date.now()) {
@@ -3838,38 +4055,38 @@
       if (w.threadId) {
         var t = threadStatus[w.threadId];
         if (!t || t.unknown || t.status !== "idle" || t.queued > 0) return;
-      } else if (!w.stop && !nextCard(colId)) {
+      } else if (!w.stop && (!nextCard(id) || atLimit(id))) {
         return;
       }
-      stepWorker(colId, false);
+      stepWorker(id, false);
     });
     // Come back when a limit wait is over; at most an hour at a time, so a sleeping machine catches up.
     if (soonest) waitTimer = setTimeout(scheduleWorkers, Math.min(Math.max(soonest - Date.now(), 1000), 60 * 60 * 1000));
   }
 
   /** One step, held through worker_step: wrap up the last agent (check, merge), then start the next card, wait, or stop. */
-  function stepWorker(colId, start) {
-    var w = worker(colId);
+  function stepWorker(id, start) {
+    var w = worker(id);
     var from = str(w && w.threadId) || null;
     // A click goes on from a pause; it only wraps up a chat whose merge didn't go through.
     var wrap = Boolean(from && (!start || w.merge === from));
     var resume = Boolean(from && !start && workerWaitUntil(w));
-    advancing[colId] = true;
+    advancing[id] = true;
     var since = start ? Date.now() : Number(w.run.since) || Date.now();
-    return scribe.action("worker_step", { column: colId, from: from, token: newId("st"), start: Boolean(start) }).then(
+    return scribe.action("worker_step", { worker: id, from: from, token: newId("st"), start: Boolean(start) }).then(
       function (r) {
-        if (resume) return resumeAgent(colId, from);
-        return (wrap ? wrapUp(colId, from, start ? null : r) : Promise.resolve(true)).then(function (ok) {
-          if (ok) return nextStep(colId, since, start);
+        if (resume) return resumeAgent(id, from);
+        return (wrap ? wrapUp(id, from, start ? null : r) : Promise.resolve(true)).then(function (ok) {
+          if (ok) return nextStep(id, since, start);
         });
       },
       function (err) {
         // Another window took the step, or the agent isn't done after all. A click says why.
-        if (start) workerErrors[colId] = "Could not start: " + str(err && err.message);
+        if (start) workerErrors[id] = "Could not start: " + str(err && err.message);
       }
     ).then(function () {
-      delete advancing[colId];
-      delete launching[colId];
+      delete advancing[id];
+      delete launching[id];
       render();
     });
   }
@@ -3878,53 +4095,53 @@
    * The last agent's chat ended: pause on a failed turn or a card it didn't finish (r is null on
    * a click, which goes on from such a pause), else merge its worktree. Resolves whether to go on.
    */
-  function wrapUp(colId, threadId, r) {
-    var w = worker(colId), run = w.run || {};
+  function wrapUp(id, threadId, r) {
+    var w = worker(id), run = w.run || {};
     if (r) {
       var turn = r.lastTurn;
       if (turn && turn.status === "error" && turn.limitResetsAt) {
         var waits = (Number(w.wait && w.wait.count) || 0) + 1;
         if (waits > MAX_LIMIT_WAITS) {
-          endRun(colId, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true);
+          endRun(id, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true);
         } else {
-          patchWorker(colId, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
+          patchWorker(id, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
         }
         return Promise.resolve(false);
       }
       var fixing = Boolean(w.fix && w.fix.thread === threadId);
       if (fixing && turn && (turn.status === "error" || turn.status === "cancelled")) {
         // Its card is finished; only the branch is left, so keep the merge pending.
-        pauseOnMerge(colId, threadId, "the agent's turn to fix it " + (turn.status === "error" ? "failed" + (turn.error ? " (" + turn.error + ")" : "") : "was stopped") + ".");
+        pauseOnMerge(id, threadId, "the agent's turn to fix it " + (turn.status === "error" ? "failed" + (turn.error ? " (" + turn.error + ")" : "") : "was stopped") + ".");
         return Promise.resolve(false);
       }
       if (turn && (turn.status === "error" || turn.status === "cancelled")) {
-        endRun(colId, "The agent's turn " + (turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped") + ". Its chat is kept; press ▶ to go on with the next card.", true);
+        endRun(id, "The agent's turn " + (turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped") + ". Its chat is kept; press ▶ to go on with the next card.", true);
         return Promise.resolve(false);
       }
       var held = liveCards().filter(function (c) { return c.claim && !c.claim.stale && c.claim.thread === threadId; });
       if (held.length) {
-        endRun(colId, "The agent ended without finishing #" + held.map(function (c) { return c.num; }).join(", #") + ". Its chat is kept; press ▶ to go on with the next card.", true);
+        endRun(id, "The agent ended without finishing #" + held.map(function (c) { return c.num; }).join(", #") + ". Its chat is kept; press ▶ to go on with the next card.", true);
         return Promise.resolve(false);
       }
       var given = run.card ? byNum(run.card) : null;
-      if (given && given.col === colId && (Number(given.movedAt) || 0) <= (Number(run.startedAt) || 0)) {
-        endRun(colId, "The agent didn't take #" + given.num + ". Its chat is kept; press ▶ to try again.", true);
+      if (given && isReadyCol(column(given.col)) && (Number(given.movedAt) || 0) <= (Number(run.startedAt) || 0)) {
+        endRun(id, "The agent didn't take #" + given.num + ". Its chat is kept; press ▶ to try again.", true);
         return Promise.resolve(false);
       }
     }
     if (!FOLDER_MODES[workerMode(w)]) return Promise.resolve(true);
     return scribe.agent.merge(threadId).then(function (m) {
       if (m && (m.ok || m.error === "not_found")) {
-        restoreMergeCards(colId);
+        restoreMergeCards(id);
         return true;
       }
       var why = m && m.error === "merge_failed" ? m.message : launchError(m);
-      var cur = worker(colId) || {};
+      var cur = worker(id) || {};
       var asked = cur.fix && cur.fix.thread === threadId ? Number(cur.fix.count) || 0 : 0;
       if (m && m.error === "merge_failed" && asked < MAX_MERGE_FIXES && agentCanFixMerge(why)) {
-        return askToFixMerge(colId, threadId, why, asked + 1).then(function () { return false; });
+        return askToFixMerge(id, threadId, why, asked + 1).then(function () { return false; });
       }
-      pauseOnMerge(colId, threadId, why);
+      pauseOnMerge(id, threadId, why);
       return false;
     });
   }
@@ -3934,58 +4151,60 @@
     return !/main checkout is on|detached HEAD/i.test(str(why));
   }
   /** The branch didn't merge: send the agent's chat on to rebase and commit; its next idle retries the merge. */
-  function askToFixMerge(colId, threadId, why, count) {
+  function askToFixMerge(id, threadId, why, count) {
     var prompt = "The board could not merge your branch: " + why + "\n\n" + MERGE_FIX_PROMPT;
     return scribe.agent.send(threadId, prompt).then(function (r) {
       if (!r || !r.ok) {
-        pauseOnMerge(colId, threadId, why);
+        pauseOnMerge(id, threadId, why);
         return;
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
-      patchWorker(colId, { step: null, fix: { thread: threadId, count: count } });
+      patchWorker(id, { step: null, fix: { thread: threadId, count: count } });
     });
   }
   /**
-   * Pause on a branch that won't merge. The cards its chat finished go back to this column, blocked,
-   * so it shows which work isn't in; a later ▶ that merges it sends them on to review again.
+   * Pause on a branch that won't merge. The cards its chat finished go back to their ready column,
+   * blocked, so it shows which work isn't in; a later ▶ that merges it sends them on to review again.
    */
-  function pauseOnMerge(colId, threadId, why) {
-    var col = column(colId);
+  function pauseOnMerge(id, threadId, why) {
     var now = Date.now();
     var ids = [];
     var nums = [];
+    var backTo = null;
     var cards = allCards().map(function (c) {
       var at = colOf(c);
-      if (c.archived || c.thread !== threadId || (c.claim && !c.claim.stale) || !at || (at.role !== "review" && at.role !== "done")) return c;
+      var target = returnColumn(c);
+      if (c.archived || c.thread !== threadId || (c.claim && !c.claim.stale) || !at || (at.role !== "review" && at.role !== "done") || !target) return c;
       ids.push(c.id);
       nums.push("#" + c.num);
+      backTo = backTo || target;
       var next = Object.assign({}, c);
       next.comments = next.comments.concat([{ id: newId("cm"), by: "agent", at: now, text: "The board could not merge this card's branch, so its work isn't in yet: " + why }]);
       next.status = { kind: "blocked", text: "Branch didn't merge" };
-      return enterColumn(next, colId, now);
+      return enterColumn(next, target.id, now);
     });
     if (ids.length) {
-      // Keep each column's cards together: the moved ones go to the top of this column.
+      // Keep each column's cards together: the moved ones go to the top of their column.
       var moved = cards.filter(function (c) { return ids.indexOf(c.id) !== -1; });
       cards = cards.filter(function (c) { return ids.indexOf(c.id) === -1; });
-      moved.reverse().forEach(function (c) { insertCard(cards, c, colId, null, true); });
+      moved.reverse().forEach(function (c) { insertCard(cards, c, c.col, null, true); });
       scribe.set({ cards: cards });
     }
     var which = nums.length ? "the branch of " + nums.join(", ") : "the agent's branch";
-    var back = nums.length && col ? " " + nums.join(", ") + (nums.length === 1 ? " is" : " are") + " back in " + col.title + "." : "";
-    endRun(colId, "Could not merge " + which + ": " + why + back + " Sort it out from its chat's branch menu, or press ▶ to try again.", false);
-    if (ids.length) patchWorker(colId, { mergeCards: ids });
+    var back = nums.length && backTo ? " " + nums.join(", ") + (nums.length === 1 ? " is" : " are") + " back in " + backTo.title + "." : "";
+    endRun(id, "Could not merge " + which + ": " + why + back + " Sort it out from its chat's branch menu, or press ▶ to try again.", false);
+    if (ids.length) patchWorker(id, { mergeCards: ids });
   }
   /** The branch merged after a pause: send the cards it sent back on to review (or done) again. */
-  function restoreMergeCards(colId) {
-    var w = worker(colId);
+  function restoreMergeCards(id) {
+    var w = worker(id);
     var ids = w && Array.isArray(w.mergeCards) ? w.mergeCards : [];
     if (!ids.length) return;
     var target = firstRole("review") || firstRole("done");
     var now = Date.now();
     var moved = [];
     var cards = allCards().filter(function (c) {
-      if (ids.indexOf(c.id) === -1 || c.col !== colId || (c.claim && !c.claim.stale) || !target) return true;
+      if (ids.indexOf(c.id) === -1 || !isReadyCol(column(c.col)) || (c.claim && !c.claim.stale) || !target) return true;
       var next = Object.assign({}, c);
       delete next.status;
       moved.push(enterColumn(next, target.id, now));
@@ -3993,7 +4212,7 @@
     });
     moved.forEach(function (c) { insertCard(cards, c, target.id, null, target.role === "done"); });
     if (moved.length) scribe.set({ cards: cards });
-    patchWorker(colId, { mergeCards: null });
+    patchWorker(id, { mergeCards: null });
   }
 
   /**
@@ -4001,95 +4220,73 @@
    * that fails (Scribe still coming up, a timeout) keeps the wait and tries again later: ending the
    * run would let the sweep release the card as a failed turn.
    */
-  function resumeAgent(colId, threadId) {
-    var w = worker(colId);
+  function resumeAgent(id, threadId) {
+    var w = worker(id);
     return scribe.agent.send(threadId, RESUME_PROMPT).then(function (r) {
       if (!r || !r.ok) {
-        var cur = worker(colId) || {};
+        var cur = worker(id) || {};
         var wait = cur.wait || {};
         var tries = (Number(wait.tries) || 0) + 1;
         var why = launchError(r).replace(/^Could not launch: /, "");
         if (cur.stop || (r && r.error === "denied") || tries > MAX_RESUME_TRIES) {
-          endRun(colId, "Could not send the agent on after its usage limit reset: " + why, false);
+          endRun(id, "Could not send the agent on after its usage limit reset: " + why, false);
           return;
         }
         // until + RESUME_DELAY_MS is when advanceWorkers tries again.
         var backoff = Math.min(RESUME_RETRY_MS * Math.pow(2, tries - 1), 8 * 60 * 1000);
-        patchWorker(colId, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
+        patchWorker(id, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
         return;
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
-      patchWorker(colId, { step: null, wait: { count: Number(w && w.wait && w.wait.count) || 1 } });
+      patchWorker(id, { step: null, wait: { count: Number(w && w.wait && w.wait.count) || 1 } });
     });
   }
 
   /** start: the step began with a click, which already cleared stop in the daemon (this window may not have that yet). */
-  function nextStep(colId, since, start) {
-    var w = worker(colId);
+  function nextStep(id, since, start) {
+    var w = worker(id);
     if (!w) return;
-    if (w.stop && !start) { endRun(colId, null, true); return; }
-    var c = nextCard(colId);
-    if (!c) {
-      patchWorker(colId, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since: since } });
+    if (w.stop && !start) { endRun(id, null, true); return; }
+    var c = nextCard(id);
+    if (!c || atLimit(id)) {
+      patchWorker(id, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since: since } });
       return;
     }
-    return startCard(colId, c, since);
+    return startCard(id, c, since);
   }
 
-  function startCard(colId, c, since) {
-    var col = column(colId), w = worker(colId);
-    var mode = workerMode(w);
-    var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
-    ["provider", "model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
-    if (w.fast === "true") opts.fast = true;
-    else if (w.fast === "false") opts.fast = false;
-    else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
-    if (FOLDER_MODES[mode]) {
-      opts.cwd = w.cwd;
-      if (w.approval) opts.approval = w.approval;
-      if (w.worktree) opts.worktree = true;
-    }
+  function startCard(id, c, since) {
+    var w = worker(id);
     var startedAt = Date.now();
-    return scribe.agent.start(workerPrompt(col, w, c), opts).then(function (r) {
+    return scribe.agent.start(workerPrompt(w, c), workerOpts(w, c)).then(function (r) {
       if (!r || !r.ok) {
-        endRun(colId, launchError(r), true);
+        endRun(id, launchError(r), true);
         return;
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
-      patchWorker(colId, { threadId: r.threadId, step: null, merge: null, wait: null, fix: null, run: { since: since, card: c.num, startedAt: startedAt } });
+      patchWorker(id, { threadId: r.threadId, step: null, merge: null, wait: null, fix: null, run: { since: since, card: c.num, startedAt: startedAt } });
     });
   }
 
   // ---------- one-card runs ----------
-  // Started from a card's menu with the column worker's settings, beside its own run: the worker
-  // doesn't wait on them, and they don't take other cards. settings.workers[col].solo keeps the
-  // ones still going ({ [threadId]: { card, at } }) so any window can merge them once they end.
+  // Started from a card's menu with a worker's settings, beside its own run: the worker doesn't
+  // wait on them, and they don't take other cards. settings.workers[id].solo keeps the ones still
+  // going ({ [threadId]: { card, at } }) so any window can merge them once they end.
   function soloRuns(w) {
     return w && w.solo && typeof w.solo === "object" ? w.solo : {};
   }
-  function canRunSolo(c) {
-    var col = colOf(c), w = col && worker(col.id);
-    return Boolean(AGENT_MODE && hasWorkerApi() && col && col.role === "agent" && workerReady(w) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]);
+  function canRunSolo(c, id) {
+    return Boolean(hasWorkerApi() && isReadyCol(colOf(c)) && workerReady(worker(id)) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]);
   }
-  function runSolo(id) {
-    var c = card(id);
-    if (!c || !canRunSolo(c)) return;
-    var col = colOf(c), w = worker(col.id);
-    var mode = workerMode(w);
-    var opts = { title: ((str(w.name) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
-    ["provider", "model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
-    if (w.fast === "true") opts.fast = true;
-    else if (w.fast === "false") opts.fast = false;
-    else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
-    if (FOLDER_MODES[mode]) {
-      opts.cwd = w.cwd;
-      if (w.approval) opts.approval = w.approval;
-      if (w.worktree) opts.worktree = true;
-    }
-    soloStarting[id] = true;
-    setHint("Starting an agent on #" + c.num + "…");
-    scribe.agent.start(workerPrompt(col, w, c, null, true), opts).then(function (r) {
-      delete soloStarting[id];
+  function runSolo(cardId, id) {
+    var c = card(cardId);
+    if (!c || !canRunSolo(c, id)) return;
+    var col = colOf(c), w = worker(id);
+    var name = workerName(w);
+    soloStarting[cardId] = true;
+    setHint("Starting " + name + " on #" + c.num + "…");
+    scribe.agent.start(workerPrompt(w, c, null, true), workerOpts(w, c)).then(function (r) {
+      delete soloStarting[cardId];
       if (!r || !r.ok) {
         setHint(launchError(r));
         render();
@@ -4097,64 +4294,65 @@
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
       var now = Date.now();
-      var latest = card(id);
-      // Hold the card for the new chat at once, so the column's worker doesn't take it before the agent claims it.
+      var latest = card(cardId);
+      // Hold the card for the new chat at once, so a running worker doesn't take it before the agent claims it.
       if (latest && !(latest.claim && !latest.claim.stale)) {
-        scribe.update([{ op: "merge", path: "cards/id=" + id, value: {
-          claim: { holder: str(w.name) || "agent", thread: r.threadId, at: now, seenAt: now, from: col.id },
+        scribe.update([{ op: "merge", path: "cards/id=" + cardId, value: {
+          assignee: name,
+          claim: { holder: name, thread: r.threadId, at: now, seenAt: now, from: col.id },
           status: { kind: "working", text: "Agent starting" }
         } }]);
       }
-      addSolo(col.id, r.threadId, { card: c.num, at: now });
-      setHint("Agent started on #" + c.num + ".");
+      addSolo(id, r.threadId, { card: c.num, at: now });
+      setHint(name + " started on #" + c.num + ".");
       render();
     });
     render();
   }
-  function addSolo(colId, threadId, entry) {
-    var cur = worker(colId);
+  function addSolo(id, threadId, entry) {
+    var cur = worker(id);
     if (cur && cur.solo && typeof cur.solo === "object") {
       var add = {};
       add[threadId] = entry;
-      scribe.update([{ op: "merge", path: "settings/workers/" + colId + "/solo", value: add }]);
+      scribe.update([{ op: "merge", path: "settings/workers/" + id + "/solo", value: add }]);
     } else {
       var solo = {};
       solo[threadId] = entry;
-      patchWorker(colId, { solo: solo });
+      patchWorker(id, { solo: solo });
     }
   }
   /**
    * Continue sent a card's earlier chat back to work: its branch was merged when it ended, and Scribe
-   * gives it a worktree again (#184). Keep it with the one-card runs of the worker it came from, so
-   * any window merges it once it ends. The worker's own running chat it wraps up itself.
+   * gives it a worktree again (#184). Keep it with the one-card runs of the card's worker (else the
+   * first worker with a folder), so any window merges it once it ends. A worker's own running chat
+   * it wraps up itself.
    */
   function mergeWhenDone(c, threadId) {
-    var colId = c.from && worker(c.from) ? c.from : null;
-    if (!colId) {
-      var col = columns().filter(function (x) { return x.role === "agent" && worker(x.id); })[0];
-      colId = col ? col.id : null;
+    var id = workerIdFor(c.assignee);
+    if (!id || !FOLDER_MODES[workerMode(worker(id))]) {
+      id = workerIds().filter(function (x) { return FOLDER_MODES[workerMode(worker(x))]; })[0] || null;
     }
-    var w = colId && worker(colId);
+    var w = id && worker(id);
     if (!w || !FOLDER_MODES[workerMode(w)] || soloRuns(w)[threadId] || (workerOn(w) && w.threadId === threadId)) return;
     if (!threadStatus[threadId] || threadStatus[threadId].status === "idle") threadStatus[threadId] = { status: "running", queued: 0 };
-    addSolo(colId, threadId, { card: c.num, at: Date.now() });
+    addSolo(id, threadId, { card: c.num, at: Date.now() });
   }
-  /** Merge each finished one-card run's worktree and forget it; a failed merge shows on the column. */
-  function wrapUpSolos(colId) {
-    var w = worker(colId), runs = soloRuns(w);
+  /** Merge each finished one-card run's worktree and forget it; a failed merge shows on the worker. */
+  function wrapUpSolos(id) {
+    var w = worker(id), runs = soloRuns(w);
     Object.keys(runs).forEach(function (tid) {
       var t = threadStatus[tid];
       if (soloMerging[tid] || !t || t.unknown || t.status !== "idle" || t.queued > 0) return;
       soloMerging[tid] = true;
       var done = function (error) {
-        var left = Object.keys(soloRuns(worker(colId))).filter(function (k) { return k !== tid; });
-        if (!left.length) patchWorker(colId, { solo: null });
+        var left = Object.keys(soloRuns(worker(id))).filter(function (k) { return k !== tid; });
+        if (!left.length) patchWorker(id, { solo: null });
         else {
           var gone = {};
           gone[tid] = null;
-          scribe.update([{ op: "merge", path: "settings/workers/" + colId + "/solo", value: gone }]);
+          scribe.update([{ op: "merge", path: "settings/workers/" + id + "/solo", value: gone }]);
         }
-        if (error) patchWorker(colId, { error: error });
+        if (error) patchWorker(id, { error: error });
         delete soloMerging[tid];
         render();
       };
@@ -4169,84 +4367,41 @@
   }
 
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
-  function endRun(colId, error, clearThread) {
-    var w = worker(colId);
+  function endRun(id, error, clearThread) {
+    var w = worker(id);
     var patch = { run: null, step: null, stop: null, error: error || null, merge: null, wait: null, fix: null };
     if (clearThread) patch.threadId = null;
     else if (w && w.threadId) patch.merge = w.threadId;
-    patchWorker(colId, patch);
+    patchWorker(id, patch);
   }
 
-  function launchWorker(col) {
-    var w = worker(col.id);
-    if (!workerReady(w)) { openWorker(col.id); return; }
-    launching[col.id] = true;
-    delete workerErrors[col.id];
+  function launchWorker(id) {
+    var w = worker(id);
+    if (!workerReady(w) || !hasWorkerApi()) { openWorkersPanel(id); return; }
+    launching[id] = true;
+    delete workerErrors[id];
     render();
-    stepWorker(col.id, true);
+    stepWorker(id, true);
   }
-  function workerButton(col) {
-    var w = worker(col.id);
-    if (!w || !workerReady(w) || !hasWorkerApi()) return null;
-    var running = workerRunning(w);
-    var btn = el("button", "worker-btn");
-    btn.type = "button";
-    if (launching[col.id]) {
-      btn.disabled = true;
-      btn.appendChild(el("span", "pulse"));
-      btn.appendChild(document.createTextNode("Starting"));
-    } else if (running) {
-      btn.appendChild(el("span", "pulse"));
-      btn.appendChild(document.createTextNode(w.stop ? "Stopping" : str(w.name) || "Working"));
-      btn.title = (w.stop ? "Stops when its card is done. " : "") + "Click to stop the agent";
-    } else if (workerOn(w)) {
-      btn.classList.add("waiting");
-      btn.appendChild(el("span", "pulse"));
-      btn.appendChild(document.createTextNode(w.stop ? "Stopping" : workerWaitUntil(w) ? "Out of usage" : "Waiting"));
-      btn.title = workerWaitUntil(w)
-        ? str(w.name || "The agent") + " ran out of plan usage and goes on with its card after the limit resets (" + limitTime(workerWaitUntil(w)) + "). Click to stop."
-        : str(w.name || "The agent") + " starts on the next card that comes in. Click to stop.";
-    } else {
-      btn.innerHTML = PLAY_SVG;
-      btn.appendChild(document.createTextNode(str(w.name) || "Start"));
-      btn.title = "Start the agent on this column";
-    }
-    btn.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var now = worker(col.id);
-      if (workerRunning(now) || workerOn(now)) openStop(col.id);
-      else launchWorker(col);
-    });
-    return btn;
-  }
-  function workerErrorRow(col) {
-    var w = worker(col.id);
-    var text = workerErrors[col.id] || str(w && w.error);
-    if (!text) return null;
-    var row = el("div", "worker-error", text);
-    var dismiss = el("button", null, "Dismiss");
-    dismiss.type = "button";
-    dismiss.addEventListener("click", function () {
-      delete workerErrors[col.id];
-      if (worker(col.id) && worker(col.id).error) patchWorker(col.id, { error: null });
-      render();
-    });
-    row.appendChild(dismiss);
-    return row;
+  /** The panel's run switch: start a stopped worker, or offer to stop a running one. */
+  function toggleWorker(id) {
+    var w = worker(id);
+    if (!w || launching[id]) return;
+    if (workerRunning(w) || workerOn(w)) openStop(id);
+    else launchWorker(id);
   }
 
   // The stop choice.
   var stopBack = $("stopBack");
-  function openStop(colId) {
-    var col = column(colId), w = worker(colId);
-    if (!col || !w) return;
-    stopCol = colId;
+  function openStop(id) {
+    var w = worker(id);
+    if (!w) return;
+    stopWorkerId = id;
     var working = workerRunning(w);
-    var who = "\"" + (str(w.name) || "The agent") + "\"";
+    var who = "\"" + (workerName(w) || "The agent") + "\"";
     $("stopText").textContent = working
-      ? who + " is working on " + col.title + ". Stopping now cancels its turn; a card it holds goes back to the column, and its chat keeps any worktree for you to merge or leave."
-      : who + " is waiting for cards in " + col.title + ".";
+      ? who + " is working on " + (w.run && w.run.card ? "#" + w.run.card : "a card") + ". Stopping now cancels its turn; a card it holds goes back to its ready column, and its chat keeps any worktree for you to merge or leave."
+      : who + " is waiting for cards assigned to it.";
     $("stopLater").classList.toggle("hidden", Boolean(w.stop) || !working);
     $("stopNow").textContent = working ? "Stop now" : "Stop";
     stopBack.classList.remove("hidden");
@@ -4254,48 +4409,312 @@
   }
   function closeStop() {
     stopBack.classList.add("hidden");
-    stopCol = null;
+    stopWorkerId = null;
   }
   $("stopCancel").addEventListener("click", closeStop);
   stopBack.addEventListener("pointerdown", function (e) { if (e.target === stopBack) closeStop(); });
   $("stopLater").addEventListener("click", function () {
-    var col = column(stopCol);
-    if (col) {
-      patchWorker(col.id, { stop: true });
-      scribe.signal("worker_stop", { column: col.title, columnId: col.id, role: "agent" });
+    var w = worker(stopWorkerId);
+    if (w) {
+      patchWorker(stopWorkerId, { stop: true });
+      scribe.signal("worker_stop", { worker: workerName(w), workerId: stopWorkerId });
     }
     closeStop();
     render();
   });
   $("stopNow").addEventListener("click", function () {
-    var w = worker(stopCol);
-    var colId = stopCol;
+    var id = stopWorkerId;
+    var w = worker(id);
     closeStop();
     if (!w) return;
     var threadId = workerRunning(w) ? w.threadId : null;
-    endRun(colId, null, true);
+    endRun(id, null, true);
     render();
     if (!threadId) return;
     scribe.agent.stop(threadId).then(function (r) {
-      if (!r || !r.ok) workerErrors[colId] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
+      if (!r || !r.ok) workerErrors[id] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
       render();
     });
   });
 
-  // The worker's setup.
+  // ---------- assignee looks ----------
+  /** A worker's square badge: its color and initials. */
+  function workerBadge(id, cls) {
+    var b = el("span", "w-badge" + (cls ? " " + cls : ""), initials(workerName(worker(id))) || "?");
+    b.style.setProperty("--who", workerColor(id));
+    return b;
+  }
+  /** What a ready card assigned to a worker is waiting on, or null. */
+  function waitingHint(c, col) {
+    if (!isReadyCol(col) || (c.claim && !c.claim.stale) || (c.status && str(c.status.text).trim())) return null;
+    var id = workerIdFor(c.assignee);
+    if (!id) return null;
+    var w = worker(id);
+    var row = el("div", "waiting");
+    var name = el("span", "who-name", workerName(w));
+    name.style.setProperty("--who", workerColor(id));
+    if (!workerOn(w)) {
+      row.appendChild(document.createTextNode("⏸ "));
+      row.appendChild(name);
+      row.appendChild(document.createTextNode(" is stopped"));
+    } else if (w.threadId && w.run && w.run.card === c.num) {
+      row.appendChild(document.createTextNode("Starting for "));
+      row.appendChild(name);
+    } else if (!cardTakeable(c)) {
+      return null;
+    } else if (nextCard(id) === c && !workerRunning(w) && !w.threadId) {
+      row.appendChild(document.createTextNode(atLimit(id) ? "Next for " : "Starting for "));
+      row.appendChild(name);
+      if (atLimit(id)) row.appendChild(document.createTextNode(", waiting for a free slot"));
+    } else {
+      row.appendChild(document.createTextNode("Queued for "));
+      row.appendChild(name);
+    }
+    return row;
+  }
+
+  // ---------- assign picker ----------
+  // Opens next to a card: workers first (color, running or stopped), then people. A card dropped
+  // into an agent column without an assignee opens it, unless the column turned that off (askAssignee: false).
+  function openAssignPicker(cardId, anchor) {
+    var c = card(cardId);
+    if (!c || !anchor) return;
+    openMenu(anchor, function (menu) {
+      menu.classList.add("assign-menu");
+      var current = str(c.assignee).trim();
+      var pick = function (name) {
+        updateCard(cardId, function (x) { if (name) x.assignee = name; else delete x.assignee; return x; });
+      };
+      var ids = workerIds().filter(function (id) { return workerName(worker(id)); });
+      if (ids.length) {
+        menu.appendChild(el("div", "label", "Workers"));
+        ids.forEach(function (id) {
+          var w = worker(id);
+          var b = menuButton(menu, "", function () { pick(workerName(w)); });
+          b.appendChild(workerBadge(id));
+          b.appendChild(el("span", "grow", workerName(w)));
+          b.appendChild(el("span", "note-r", workerOn(w) ? "running" : "stopped"));
+          if (sameName(current, w.name)) b.classList.add("current");
+        });
+      }
+      var people = assigneeNames().filter(function (n) { return !workerIdFor(n); });
+      if (people.length) {
+        menu.appendChild(el("div", "label", "People"));
+        people.forEach(function (n) {
+          var b = menuButton(menu, "", function () { pick(n); });
+          b.appendChild(el("span", "avatar" + (isAgent(n) ? " agent" : ""), isAgent(n) ? "🤖" : initials(n)));
+          b.appendChild(el("span", "grow", n));
+          if (sameName(current, n)) b.classList.add("current");
+        });
+      }
+      var row = el("div", "menu-row");
+      var input = el("input", "field");
+      input.placeholder = "Someone else…";
+      input.maxLength = 60;
+      input.addEventListener("click", function (e) { e.stopPropagation(); });
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && input.value.trim()) { pick(input.value.trim()); closeMenu(); }
+      });
+      row.appendChild(input);
+      menu.appendChild(row);
+      if (current) {
+        menu.appendChild(el("div", "sep"));
+        menuButton(menu, "Unassign", function () { pick(""); });
+      }
+    }, true);
+  }
+  /** After a drop into an agent column: ask for an assignee when the card has none. */
+  function askAssigneeAfterMove(cardId, toCol) {
+    var col = column(toCol);
+    var c = card(cardId);
+    if (!isReadyCol(col) || col.askAssignee === false || !c || str(c.assignee).trim()) return;
+    setTimeout(function () {
+      var cardEl = boardEl.querySelector('.card[data-id="' + cardId + '"]');
+      if (cardEl) openAssignPicker(cardId, cardEl);
+    }, 0);
+  }
+
+  // ---------- the Workers button and panel ----------
+  var workersBtn = $("workersBtn"), workersPop = $("workersPop");
+  /** The worker whose settings are open in the panel, and its editor (kept across renders so typing isn't lost). */
+  var panelOpen = null;
+  var panelEditor = null;
+  function renderWorkersButton() {
+    workersBtn.classList.toggle("hidden", !AGENT_MODE);
+    if (!AGENT_MODE) return;
+    workersBtn.replaceChildren();
+    var running = workerIds().filter(function (id) { return workerOn(worker(id)); });
+    if (running.length) {
+      var stack = el("span", "w-stack");
+      running.slice(0, 4).forEach(function (id) { stack.appendChild(workerBadge(id, "dot")); });
+      workersBtn.appendChild(stack);
+    }
+    workersBtn.appendChild(document.createTextNode(running.length ? "Workers · " + running.length + " running" : "Workers"));
+    var failed = workerIds().some(function (id) { return workerErrors[id] || str(worker(id).error); });
+    if (failed) workersBtn.appendChild(el("span", "w-alert"));
+    workersBtn.title = failed ? "A worker paused with an error" : "Agent workers: they take the ready cards assigned to them";
+    workersBtn.classList.toggle("on", !workersPop.classList.contains("hidden"));
+  }
+  function openWorkersPanel(id) {
+    closeMenu();
+    if (id && id !== panelOpen) {
+      flushWorker();
+      panelOpen = id;
+      panelEditor = null;
+    }
+    workersPop.classList.remove("hidden");
+    renderWorkersButton();
+    renderWorkersPanel();
+    placeWorkersPanel();
+  }
+  function closeWorkersPanel() {
+    if (workersPop.classList.contains("hidden")) return;
+    flushWorker();
+    workersPop.classList.add("hidden");
+    panelOpen = null;
+    panelEditor = null;
+    render();
+  }
+  function placeWorkersPanel() {
+    var r = workersBtn.getBoundingClientRect();
+    workersPop.style.top = r.bottom + 8 + "px";
+    workersPop.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+    workersPop.style.maxHeight = Math.max(200, window.innerHeight - r.bottom - 20) + "px";
+  }
+  function renderWorkersPanel() {
+    if (workersPop.classList.contains("hidden")) return;
+    var scroll = workersPop.scrollTop;
+    var keep = panelEditor && panelEditor.contains(document.activeElement) ? document.activeElement : null;
+    workersPop.replaceChildren();
+    var head = el("div", "wp-head");
+    head.appendChild(el("b", null, "Workers"));
+    var ready = columns().filter(isReadyCol).map(function (c) { return c.title; });
+    head.appendChild(el("span", null, ready.length ? "take their cards in " + ready.join(", ") : "add an agent column for their cards"));
+    workersPop.appendChild(head);
+    if (!hasWorkerApi()) workersPop.appendChild(el("p", "worker-note", "Restart Scribe to run agent workers."));
+    var ids = workerIds();
+    if (!ids.length) workersPop.appendChild(el("p", "worker-note", "No workers yet. Add one, give it instructions, then assign cards to it and start it."));
+    if (panelOpen && !worker(panelOpen)) { panelOpen = null; panelEditor = null; }
+    ids.forEach(function (id) {
+      var w = worker(id);
+      var row = el("div", "wrow" + (panelOpen === id ? " open" : ""));
+      row.appendChild(workerBadge(id));
+      var txt = el("div", "wtxt");
+      txt.appendChild(el("div", "nm", workerName(w) || "Unnamed"));
+      txt.appendChild(el("div", "sub", workerState(id) + " · " + workerSettingsLine(w)));
+      row.appendChild(txt);
+      var count = workerCards(id).length;
+      row.appendChild(el("span", "cnt", count === 1 ? "1 card" : count + " cards"));
+      var tog = el("button", "tog" + (workerOn(w) || launching[id] ? " on" : ""));
+      tog.type = "button";
+      tog.setAttribute("role", "switch");
+      tog.setAttribute("aria-checked", workerOn(w) ? "true" : "false");
+      tog.setAttribute("aria-label", (workerOn(w) ? "Stop " : "Start ") + (workerName(w) || "worker"));
+      tog.title = !workerReady(w) ? "Set it up first: " + workerState(id) : workerOn(w) ? "Running. Click to stop." : "Stopped. Click to start.";
+      tog.disabled = Boolean(launching[id]);
+      tog.addEventListener("click", function (e) { e.stopPropagation(); toggleWorker(id); });
+      row.appendChild(tog);
+      row.addEventListener("click", function () {
+        flushWorker();
+        panelOpen = panelOpen === id ? null : id;
+        panelEditor = null;
+        renderWorkersPanel();
+      });
+      workersPop.appendChild(row);
+      var error = workerErrors[id] || str(w.error);
+      if (error) {
+        var er = el("div", "worker-error", error);
+        var dismiss = el("button", null, "Dismiss");
+        dismiss.type = "button";
+        dismiss.addEventListener("click", function () {
+          delete workerErrors[id];
+          if (worker(id) && worker(id).error) patchWorker(id, { error: null });
+          render();
+        });
+        er.appendChild(dismiss);
+        workersPop.appendChild(er);
+      }
+      if (panelOpen === id) {
+        if (!panelEditor) {
+          panelEditor = el("div", "wedit");
+          if (agentOptions) buildWorkerForm(id, panelEditor, true);
+          else if (!hasWorkerApi() || optionsFailed) panelEditor.appendChild(el("p", "worker-note", "Open this board in Scribe to set up workers."));
+          else {
+            panelEditor.appendChild(el("p", "worker-note", "Loading…"));
+            loadAgentOptions().then(function () { if (panelOpen === id) { panelEditor = null; renderWorkersPanel(); } });
+          }
+        }
+        workersPop.appendChild(panelEditor);
+      }
+    });
+    var foot = el("div", "wp-foot");
+    var add = el("button", "add", "+ Add worker");
+    add.type = "button";
+    add.addEventListener("click", function () {
+      flushWorker();
+      panelOpen = addWorker();
+      panelEditor = null;
+      renderWorkersPanel();
+      var name = workersPop.querySelector(".wedit input");
+      if (name) { name.focus(); name.select(); }
+    });
+    foot.appendChild(add);
+    var maxWrap = el("label", "wp-max", "Max parallel ");
+    var maxSel = el("select", "field");
+    maxSel.setAttribute("aria-label", "Max parallel workers");
+    [["0", "Any"], ["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"]].forEach(function (o) {
+      var opt = el("option", null, o[1]);
+      opt.value = o[0];
+      maxSel.appendChild(opt);
+    });
+    maxSel.value = String(maxWorkers());
+    if (maxSel.value !== String(maxWorkers())) {
+      var extra = el("option", null, String(maxWorkers()));
+      extra.value = String(maxWorkers());
+      maxSel.appendChild(extra);
+      maxSel.value = extra.value;
+    }
+    maxSel.title = "How many workers may be on a card at once";
+    maxSel.addEventListener("change", function () { saveSetting("maxWorkers", Number(maxSel.value) || null); });
+    maxWrap.appendChild(maxSel);
+    enhanceSelect(maxSel);
+    foot.appendChild(maxWrap);
+    workersPop.appendChild(foot);
+    workersPop.scrollTop = scroll;
+    if (keep && document.activeElement !== keep && document.contains(keep)) keep.focus();
+  }
+  workersBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (workersPop.classList.contains("hidden")) openWorkersPanel(null);
+    else closeWorkersPanel();
+  });
+  document.addEventListener("pointerdown", function (e) {
+    if (workersPop.classList.contains("hidden")) return;
+    if (workersPop.contains(e.target) || workersBtn.contains(e.target)) return;
+    // A themed dropdown's list, the stop choice, or a confirm opened from the panel live outside it.
+    if (e.target.closest && e.target.closest(".select-list, .confirm-back, .menu")) return;
+    closeWorkersPanel();
+  });
+  window.addEventListener("resize", function () { if (!workersPop.classList.contains("hidden")) placeWorkersPanel(); });
+
+  // The worker's settings: compact in the panel, all of them in the dialog.
   var workerBack = $("workerBack"), workerForm = $("workerForm");
   var workerSaveTimer = 0;
   /** Typing is saved a moment later, all fields together, so one field's pause doesn't drop another's. */
   var workerPending = null;
   function flushWorker() {
     clearTimeout(workerSaveTimer);
-    if (workerPending && workerPending.colId) saveWorker(workerPending.colId, workerPending.patch);
+    if (workerPending && workerPending.id && worker(workerPending.id)) saveWorker(workerPending.id, workerPending.patch);
     workerPending = null;
   }
+  /** Scribe couldn't give the agent options (the board isn't open in Scribe). */
+  var optionsFailed = false;
   function loadAgentOptions() {
     if (agentOptions) return Promise.resolve(agentOptions);
+    if (!hasWorkerApi()) return Promise.resolve(null);
     return scribe.agent.options().then(function (r) {
       if (r && r.ok) agentOptions = r;
+      else optionsFailed = true;
       return agentOptions;
     });
   }
@@ -4312,62 +4731,67 @@
     sel.addEventListener("change", function () { onChange(sel.value); });
     return sel;
   }
-  function openWorker(colId) {
+  function openWorker(id) {
     closeMenu();
-    if (settingsBack && !settingsBack.classList.contains("hidden")) closeSettings();
-    var col = column(colId);
-    if (!col) return;
-    workerCol = colId;
-    $("workerTitle").textContent = "Agent worker · " + col.title;
+    if (!worker(id)) return;
+    flushWorker();
+    workerEdit = id;
+    $("workerTitle").textContent = "Worker · " + (workerName(worker(id)) || "Unnamed");
     workerForm.replaceChildren(el("p", "worker-note", hasWorkerApi() ? "Loading…" : "Restart Scribe to set up agent workers."));
     $("workerNote").textContent = "";
     $("workerNote").classList.add("hidden");
     $("workerNote").classList.remove("warn");
-    $("workerRemove").classList.toggle("hidden", !worker(colId));
     workerBack.classList.remove("hidden");
     $("workerClose").focus();
     if (!hasWorkerApi()) return;
     loadAgentOptions().then(function (opts) {
-      if (workerCol !== colId) return;
+      if (workerEdit !== id) return;
       if (!opts) {
         workerForm.replaceChildren(el("p", "worker-note", "Open this board in Scribe to set up agent workers."));
         return;
       }
-      renderWorkerForm(colId);
+      buildWorkerForm(id, workerForm, false);
     });
   }
   function closeWorker() {
     flushWorker();
     workerBack.classList.add("hidden");
-    workerCol = null;
+    var id = workerEdit;
+    workerEdit = null;
+    // The panel's editor shows the same worker: build it again with what the dialog changed.
+    if (id && panelOpen === id) panelEditor = null;
     render();
   }
-  function renderWorkerForm(colId) {
-    var w = worker(colId) || {};
+  /** The worker's settings form in box: compact (the panel) leaves the rarer settings and help to the dialog. */
+  function buildWorkerForm(id, box, compact) {
+    var w = worker(id);
+    if (!w) return;
     var opts = agentOptions;
     var defaults = opts.defaults || {};
+    var rebuild = function () { buildWorkerForm(id, box, compact); };
     var set = function (patch) {
-      if (workerPending && workerPending.colId === colId) patch = Object.assign(workerPending.patch, patch);
+      if (workerPending && workerPending.id === id) patch = Object.assign(workerPending.patch, patch);
       workerPending = null;
       clearTimeout(workerSaveTimer);
-      saveWorker(colId, patch);
-      $("workerRemove").classList.remove("hidden");
-      renderWorkerNote(colId);
-      refreshWorkerHint(colId);
+      saveWorker(id, patch);
+      updateNote();
+      refreshWorkerHint(id);
     };
     var setLater = function (patch) {
-      if (!workerPending || workerPending.colId !== colId) workerPending = { colId: colId, patch: {} };
+      if (!workerPending || workerPending.id !== id) workerPending = { id: id, patch: {} };
       Object.assign(workerPending.patch, patch);
       clearTimeout(workerSaveTimer);
       workerSaveTimer = setTimeout(function () { set({}); }, 300);
-      refreshWorkerHint(colId);
+      refreshWorkerHint(id);
     };
-    workerForm.replaceChildren();
+    box.replaceChildren();
+    var form = compact ? el("div", "worker-form compact") : box;
+    if (compact) box.appendChild(form);
     function row(label, control, help, top) {
       var l = el("label", top ? "top" : null, label);
-      workerForm.appendChild(l);
-      workerForm.appendChild(control);
-      if (help) workerForm.appendChild(el("p", "help", help));
+      form.appendChild(l);
+      form.appendChild(control);
+      if (help && !compact) form.appendChild(el("p", "help", help));
       return control;
     }
     function enhanced(sel) {
@@ -4378,36 +4802,59 @@
     }
 
     var name = el("input", "field");
-    name.value = str(w.name);
+    name.value = workerName(w);
     name.placeholder = "e.g. Opus";
     name.maxLength = 40;
-    name.addEventListener("input", function () { setLater({ name: name.value.trim() }); });
-    row("Name", name, "Set as the assignee of the cards it takes, and shown on the column's button.");
+    name.addEventListener("change", function () {
+      if (!renameWorker(id, name.value)) name.value = workerName(worker(id));
+      updateNote();
+      refreshWorkerHint(id);
+      if (!compact) $("workerTitle").textContent = "Worker · " + (workerName(worker(id)) || "Unnamed");
+      render();
+    });
+    name.addEventListener("keydown", function (e) { if (e.key === "Enter") name.blur(); });
+    row("Name", name, "Assign cards to this name. The worker takes the ones in the agent columns, and claims them under it.");
+
+    var swatches = el("div", "swatches");
+    WORKER_COLORS.forEach(function (color) {
+      var s = el("button", "swatch" + (workerColor(id) === color ? " sel" : ""));
+      s.type = "button";
+      s.style.setProperty("--who", color);
+      s.setAttribute("aria-label", "Color " + color);
+      s.addEventListener("click", function () {
+        set({ color: color });
+        swatches.querySelectorAll(".swatch").forEach(function (x) { x.classList.toggle("sel", x === s); });
+        render();
+      });
+      swatches.appendChild(s);
+    });
+    row("Color", swatches);
 
     var instructions = el("textarea", "field");
     instructions.value = str(w.instructions);
     instructions.placeholder = "What it should do with each card: where the code is, how to test, commit rules, when to ask you…";
     instructions.addEventListener("input", function () { setLater({ instructions: instructions.value }); });
     row("Instructions", instructions, null, true);
-    workerForm.appendChild(workerGuideHint(column(colId), w));
-
-    row("Context", enhanced(workerSelect([
-      ["", "Fresh for each card, kept for related ones"],
-      ["fresh", "Fresh for every card"],
-    ], str(w.context), "Context", function (v) { set({ context: v }); })),
-      "Each card gets a new agent chat with a clean context, so a long run doesn't pay for an ever-growing one. With the first choice, the agent decides to take a closely related card in the same chat (up to " + MAX_CARDS_PER_AGENT + ").");
+    if (!compact) {
+      form.appendChild(workerGuideHint(w));
+      row("Context", enhanced(workerSelect([
+        ["", "Fresh for each card, kept for related ones"],
+        ["fresh", "Fresh for every card"],
+      ], str(w.context), "Context", function (v) { set({ context: v }); })),
+        "Each card gets a new agent chat with a clean context, so a long run doesn't pay for an ever-growing one. With the first choice, the agent decides to take a closely related card in the same chat (up to " + MAX_CARDS_PER_AGENT + ").");
+    }
 
     var providers = (opts.providers || []).filter(function (p) { return p.available; });
     var provider = str(w.provider);
     var effectiveProvider = provider || str(defaults.provider);
     row("Provider", enhanced(workerSelect([["", "Default" + (defaults.provider ? " (" + labelOf(providers, defaults.provider) + ")" : "")]].concat(providers.map(function (p) { return [p.id, p.label]; })), provider, "Provider", function (v) {
       set({ provider: v, model: null, effort: null, fast: null });
-      renderWorkerForm(colId);
+      rebuild();
     })));
     var models = (opts.models && opts.models[effectiveProvider]) || [];
     row("Model", enhanced(workerSelect([["", "Default"]].concat(models.map(function (m) { return [m.id, m.label]; })), str(w.model), "Model", function (v) {
       set({ model: v, effort: null });
-      renderWorkerForm(colId);
+      rebuild();
     })));
     var model = models.filter(function (m) { return m.id === str(w.model); })[0];
     var efforts = model ? model.efforts || [] : [];
@@ -4425,7 +4872,7 @@
     var mode = workerMode(w);
     row("Mode", enhanced(workerSelect((opts.modes || []).map(function (m) { return [m.id, m.label]; }), mode, "Mode", function (v) {
       set({ mode: v });
-      renderWorkerForm(colId);
+      rebuild();
     })), ((opts.modes || []).filter(function (m) { return m.id === mode; })[0] || {}).detail);
     if (FOLDER_MODES[mode]) {
       var folderRow = el("div", "row");
@@ -4446,101 +4893,100 @@
       folderRow.appendChild(folder);
       folderRow.appendChild(browse);
       row("Folder", folderRow, "Scribe asks you once before the board may run agents with file and shell access here.");
-      var approvals = opts.approvals || [];
-      row("Approval", enhanced(workerSelect([["", "Default" + (defaults.approval ? " (" + labelOf(approvals, defaults.approval) + ")" : "")]].concat(approvals.map(function (a) { return [a.id, a.label]; })), str(w.approval), "Approval", function (v) { set({ approval: v }); })));
       var wt = el("label", "check");
       var wtBox = el("input", "switch");
       wtBox.type = "checkbox";
       wtBox.checked = Boolean(w.worktree);
       wtBox.addEventListener("change", function () { set({ worktree: wtBox.checked }); });
       wt.appendChild(wtBox);
-      wt.appendChild(document.createTextNode("Give each agent a git worktree of its own"));
-      row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through goes back to the agent to fix; if it still fails, the worker pauses and the card comes back here, blocked.");
+      wt.appendChild(document.createTextNode(compact ? "Git worktree per agent" : "Give each agent a git worktree of its own"));
+      row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through goes back to the agent to fix; if it still fails, the worker pauses and the card comes back to its ready column, blocked.");
+      if (!compact) {
+        var approvals = opts.approvals || [];
+        row("Approval", enhanced(workerSelect([["", "Default" + (defaults.approval ? " (" + labelOf(approvals, defaults.approval) + ")" : "")]].concat(approvals.map(function (a) { return [a.id, a.label]; })), str(w.approval), "Approval", function (v) { set({ approval: v }); })));
+      }
     }
     var webModes = { on: "On", limited: "Limited", off: "Off" };
-    var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (id) { return [id, webModes[id]]; }));
+    var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (k) { return [k, webModes[k]]; }));
     row("Web", enhanced(workerSelect(webOptions, str(w.web), "Web", function (v) { set({ web: v }); })),
       "Web search and fetch. Limited keeps Claude agents to the web allowlist in Agent settings. Default follows your chat settings.");
-    row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
-    renderWorkerNote(colId);
+    if (!compact) {
+      row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
+    }
+    var note = compact ? el("p", "worker-note hidden") : $("workerNote");
+    if (compact) {
+      box.appendChild(note);
+      var actions = el("div", "wedit-actions");
+      var more = el("button", "tool", "All settings…");
+      more.type = "button";
+      more.title = "Context, approval, chat, and what the board sends the agent";
+      more.addEventListener("click", function () { flushWorker(); openWorker(id); });
+      var remove = el("button", "ghost danger-text", "Remove");
+      remove.type = "button";
+      remove.addEventListener("click", function () { askRemoveWorker(id); });
+      actions.appendChild(more);
+      actions.appendChild(remove);
+      box.appendChild(actions);
+    }
+    function updateNote() {
+      var cur = worker(id);
+      var text = "";
+      if (!workerReady(cur)) {
+        text = !workerName(cur) ? "Give it a name to assign cards to it."
+          : FOLDER_MODES[workerMode(cur)] && str(cur && cur.instructions).trim() ? "Pick a folder so it can start."
+          : "Write instructions so it can start.";
+      }
+      note.classList.toggle("warn", Boolean(text));
+      note.classList.toggle("hidden", !text);
+      note.textContent = text;
+    }
+    updateNote();
   }
   function labelOf(list, id) {
     var found = list.filter(function (x) { return x.id === id; })[0];
     return found ? found.label : id;
   }
-  function workerDraft(colId) {
-    var w = Object.assign({}, worker(colId) || {});
-    if (workerPending && workerPending.colId === colId) Object.assign(w, workerPending.patch);
+  function workerDraft(id) {
+    var w = Object.assign({}, worker(id) || {});
+    if (workerPending && workerPending.id === id) Object.assign(w, workerPending.patch);
     return w;
   }
-  function workerGuideHint(col, w) {
+  function workerGuideHint(w) {
     var hint = el("details", "worker-hint");
     if (workerHintOpen) hint.open = true;
     hint.appendChild(el("summary", null, "What the board also sends the agent"));
     hint.appendChild(el("p", null, "Each card is wrapped with the text below. The Kanban agent guide (claim, finish, actions) is attached to the thread as well."));
-    hint.appendChild(el("pre", null, col ? workerPrompt(col, w, { num: "N", title: "…" }, "« your instructions above »") : ""));
+    hint.appendChild(el("pre", null, workerPrompt(w, { num: "N", title: "…" }, "« your instructions above »")));
     hint.addEventListener("toggle", function () { workerHintOpen = hint.open; });
     return hint;
   }
-  function refreshWorkerHint(colId) {
-    var pre = workerForm.querySelector(".worker-hint pre");
-    var col = column(colId);
-    if (!pre || !col) return;
-    pre.textContent = workerPrompt(col, workerDraft(colId), { num: "N", title: "…" }, "« your instructions above »");
+  function refreshWorkerHint(id) {
+    var pre = workerEdit === id ? workerForm.querySelector(".worker-hint pre") : null;
+    if (!pre) return;
+    pre.textContent = workerPrompt(workerDraft(id), { num: "N", title: "…" }, "« your instructions above »");
   }
-  function renderWorkerNote(colId) {
-    var w = worker(colId);
-    var note = $("workerNote");
-    var text = "";
-    if (!workerReady(w)) {
-      text = FOLDER_MODES[workerMode(w)] && w && str(w.instructions).trim()
-        ? "Pick a folder to show the start button."
-        : "Write instructions to show the start button on the column.";
-    }
-    note.classList.toggle("warn", Boolean(text));
-    note.classList.toggle("hidden", !text);
-    note.textContent = text;
+  function askRemoveWorker(id) {
+    var w = worker(id);
+    if (!w) return;
+    askConfirm({ title: "Remove " + (workerName(w) || "this worker") + "?", text: "Its setup is deleted. Cards assigned to it keep the name. A running agent keeps going until you stop it from the chat.", ok: "Remove" }).then(function (ok) {
+      if (!ok) return;
+      if (workerPending && workerPending.id === id) workerPending = null;
+      if (workerEdit === id) closeWorker();
+      if (panelOpen === id) { panelOpen = null; panelEditor = null; }
+      removeWorker(id);
+      render();
+    });
   }
   $("workerClose").addEventListener("click", closeWorker);
   workerBack.addEventListener("pointerdown", function (e) { if (e.target === workerBack) closeWorker(); });
-  $("workerRemove").addEventListener("click", function () {
-    var colId = workerCol;
-    askConfirm({ title: "Remove this worker?", text: "Its setup is deleted. A running agent keeps going until you stop it from the chat.", ok: "Remove" }).then(function (ok) {
-      if (!ok) return;
-      workerPending = null;
-      removeWorker(colId);
-      closeWorker();
-    });
-  });
-
-  function renderWorkersSettings() {
-    var box = $("sWorkers");
-    var agentCols = AGENT_MODE ? columns().filter(function (c) { return c.role === "agent"; }) : [];
-    box.classList.toggle("hidden", !agentCols.length);
-    box.replaceChildren();
-    if (!agentCols.length) return;
-    box.appendChild(el("h4", null, "Agent workers"));
-    box.appendChild(el("p", null, "Start an agent from an agent column's header to work its cards."));
-    agentCols.forEach(function (col) {
-      var w = worker(col.id);
-      var line = el("div", "worker-row");
-      var txt = el("span", "txt");
-      txt.appendChild(el("b", null, col.title));
-      txt.appendChild(el("span", null, workerSummary(w)));
-      var edit = el("button", "tool", w ? "Edit" : "Set up");
-      edit.type = "button";
-      edit.addEventListener("click", function () { openWorker(col.id); });
-      line.appendChild(txt);
-      line.appendChild(edit);
-      box.appendChild(line);
-    });
-  }
+  $("workerRemove").addEventListener("click", function () { if (workerEdit) askRemoveWorker(workerEdit); });
 
   // Capture phase: Esc closes only the top dialog.
   window.addEventListener("keydown", function (e) {
     if (e.key !== "Escape" || confirmDone || openSelect) return;
     if (!stopBack.classList.contains("hidden")) closeStop();
     else if (!workerBack.classList.contains("hidden")) closeWorker();
+    else if (!workersPop.classList.contains("hidden") && !menuEl) closeWorkersPanel();
     else return;
     e.preventDefault();
     e.stopImmediatePropagation();
