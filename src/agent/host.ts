@@ -130,7 +130,7 @@ type QueuedMessage = {
   /** Where the images and files were saved, in the same order. */
   saved: { images: FileRef[]; files: FileRef[] };
   context: ContextChip[];
-  from?: "page";
+  from?: "page" | "scribe";
   /** A Kanban card the board sent this about (a comment on it, or Continue). */
   card?: CardRef;
 };
@@ -140,7 +140,7 @@ export type CardRef = { num: number; title?: string; board: string; boardKey?: s
 
 /** Where a board message about a card came from; the host words it, so a page cannot pass one off as the user's. */
 function cardOrigin(card: CardRef): string {
-  const board = `the Kanban board "${card.board}"${card.boardKey ? ` (${card.boardKey})` : ""}`;
+  const board = card.board ? `the Kanban board "${card.board}"${card.boardKey ? ` (${card.boardKey})` : ""}` : "its Kanban board";
   const name = `card #${card.num}${card.title ? ` "${card.title}"` : ""}`;
   const why = card.resume
     ? `The user pressed Continue on ${name} of ${board}, which you worked on before. The board sent this, not the user in this chat.`
@@ -148,13 +148,28 @@ function cardOrigin(card: CardRef): string {
   return `<context>\n${why}\n</context>\n\n`;
 }
 
+/** How many restarts in a row may cut off a thread's turns before Scribe stops sending it on (a turn that crashes Scribe would loop). */
+const MAX_RESUMES = 3;
+
+/** The turns at the end that a restart cut off, in a row. */
+function interruptedRun(turns: Turn[]): number {
+  let n = 0;
+  for (let i = turns.length - 1; i >= 0 && turns[i].interrupted; i--) n++;
+  return n;
+}
+
+const RESUME_NOTE =
+  "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (a question, an approval, a background command) is gone. Check where you left off (files, git status, the pages or card you were working on) and go on from there to finish the task. If you were waiting for the user's answer, ask again.";
+
 /** What the model reads for a message: where it came from, its context chips, the guides of the pages it brings up, its files, then the text. */
 function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdits = ""): string {
   const origin = msg.card
     ? cardOrigin(msg.card)
     : msg.from === "page"
       ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n"
-      : "";
+      : msg.from === "scribe"
+        ? "<context>\nSent by Scribe itself, not typed by the user.\n</context>\n\n"
+        : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
   const recap = !thread.rewind?.recap
@@ -234,7 +249,7 @@ export type PageAskResult =
   | { skipped: true; note?: string; page: { id: string; key: string } }
   | { cancelled: true; page: { id: string; key: string } };
 
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page"; card?: CardRef };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe"; card?: CardRef };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -259,6 +274,8 @@ export class AgentHost {
   private activitySent = new Map<string, string>();
   private activityTimers = new Map<string, NodeJS.Timeout>();
   private flushTimer: NodeJS.Timeout | null = null;
+  /** Threads whose turn a restart cut off, until resumeInterrupted sends them on. They count as running meanwhile. */
+  private resuming = new Set<string>();
   private ctx: SessionContext;
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
@@ -272,15 +289,17 @@ export class AgentHost {
     for (const thread of this.db.listThreads()) {
       if (migrateOpenaiThread(thread)) this.db.saveThread(thread);
       this.threads.set(thread.id, thread);
-      // A turn cannot survive a daemon restart: mark leftovers as cancelled.
+      // A turn cannot survive a daemon restart: mark leftovers as cancelled, and send the thread on once Scribe is up.
       const turns = this.db.listTurns(thread.id);
       for (const turn of turns) {
         if (turn.status === "running") {
           turn.status = "cancelled";
+          turn.interrupted = true;
           turn.endedAt = turn.endedAt ?? Date.now();
           this.db.saveTurn(turn);
         }
       }
+      if (turns.at(-1)?.interrupted && interruptedRun(turns) <= MAX_RESUMES) this.resuming.add(thread.id);
     }
     // Worktrees left behind by a crash or a lost thread: cut their node_modules links, so removing them by hand is safe.
     const openWorktrees = [...this.threads.values()].flatMap((t) => openWorktree(t)?.path ?? []);
@@ -534,11 +553,58 @@ export class AgentHost {
     const asking = status === "waiting" ? this.asking(id) : undefined;
     return {
       exists: true,
-      running: status !== "idle",
+      running: status !== "idle" || this.resuming.has(id),
       title: thread.title,
       ...(asking ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
       ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}) } } : {}),
     };
+  }
+
+  /**
+   * Send on the threads whose turn the last restart cut off: a note from Scribe starts a turn in the
+   * same session, and messages that were queued behind the cut-off turn queue again behind it (ones
+   * with attachments stay in the transcript as not sent). Call once Scribe is listening, so the
+   * agents' MCP servers can reach it.
+   */
+  resumeInterrupted(): string[] {
+    const resumed: string[] = [];
+    for (const threadId of [...this.resuming]) {
+      this.resuming.delete(threadId);
+      if (!this.threads.has(threadId) || this.runs.has(threadId)) continue;
+      const leftovers = this.loadItems(threadId).filter((item): item is Item & { kind: "user" } => item.kind === "user" && item.turnId === null && !item.dropped);
+      try {
+        this.send(threadId, { text: RESUME_NOTE, from: "scribe" });
+      } catch (err) {
+        log(`Could not resume thread ${threadId} after the restart: ${(err as Error).message}`);
+        this.addItem(threadId, null, { kind: "notice", level: "error", text: `Scribe restarted during this thread's turn and could not send it on: ${(err as Error).message}` });
+        this.emitThread(threadId);
+        continue;
+      }
+      resumed.push(threadId);
+      const queue: QueuedMessage[] = [];
+      for (const item of leftovers) {
+        delete item.steer;
+        if (item.images?.length || item.files?.length) {
+          item.dropped = true;
+        } else {
+          queue.push({
+            text: item.text,
+            images: [],
+            files: [],
+            saved: { images: [], files: [] },
+            context: item.context ?? [],
+            ...(item.from ? { from: item.from } : {}),
+            // The board's name went with the message, not the transcript: the agent finds the board from the card.
+            ...(item.card ? { card: { ...item.card, board: "" } } : {}),
+          });
+        }
+        this.touch(item);
+      }
+      if (queue.length) this.queues.set(threadId, queue);
+      if (leftovers.length) this.emitThread(threadId);
+    }
+    if (resumed.length) log(`Resumed ${resumed.length} thread(s) whose turn a restart cut off`);
+    return resumed;
   }
 
   getThread(id: string): Thread | null {
@@ -1087,7 +1153,7 @@ export class AgentHost {
       files,
       saved: { images: saveFiles(threadId, images), files: saveFiles(threadId, files) },
       context,
-      ...(input.from === "page" ? { from: "page" as const } : {}),
+      ...(input.from ? { from: input.from } : {}),
       ...(input.card ? { card: input.card } : {}),
     };
     if (this.runs.has(threadId)) {

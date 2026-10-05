@@ -1975,6 +1975,7 @@
       bubble.append(el("div", "ag-user-text", item.text));
       if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
+      else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);

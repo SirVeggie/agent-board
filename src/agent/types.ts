@@ -188,6 +188,8 @@ export type Turn = {
   files?: FileChange[];
   usage?: Usage;
   error?: string;
+  /** Scribe stopped (or crashed) while this turn ran; the next start sends the thread on. */
+  interrupted?: boolean;
   /** The turn failed on a plan usage limit: when the plan should let it go again. */
   limitResetsAt?: number;
   reverted?: boolean;
@@ -269,8 +271,8 @@ export type ItemBody =
       dropped?: boolean;
       /** Sent into a running turn: "waiting" until the agent takes it in, then "folded" (it belongs to that turn). */
       steer?: "waiting" | "folded";
-      /** Sent by the code of the thread's page (board.agent), not typed by the user. */
-      from?: "page";
+      /** Sent by the code of the thread's page (board.agent), or by Scribe itself (going on after a restart); not typed by the user. */
+      from?: "page" | "scribe";
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
       card?: { num: number; title?: string; resume?: boolean };
     }

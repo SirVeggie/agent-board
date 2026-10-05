@@ -14,6 +14,8 @@ export function pageOwned(items: Userish[]): boolean {
       fromPage = true;
       continue;
     }
+    // Scribe's own note (going on after a restart) makes a thread neither the page's nor the user's.
+    if (item.from === "scribe") continue;
     if (item.text?.trim()) return false;
   }
   return fromPage;

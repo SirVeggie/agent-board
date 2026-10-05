@@ -1313,6 +1313,7 @@ export async function startHttp(): Promise<http.Server> {
   await listen(contentServer, PORT, CONTENT_HOST);
 
   log(`Scribe listening on ${baseUrl()} (tab pages on ${contentBaseUrl()})`);
+  agentHost?.resumeInterrupted();
   return server;
 }
 
