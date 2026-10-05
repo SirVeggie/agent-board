@@ -2220,6 +2220,22 @@
     afterMove(id, fromCol, colId);
   }
 
+  /** Dragging the board's background (between and under cards) pans it sideways. */
+  boardEl.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0 || e.pointerType === "touch" || isInteractive(e.target)) return;
+    if (e.target.closest(".card, .col-head, .composer, .worker-error, .need-reload")) return;
+    if (boardEl.scrollWidth <= boardEl.clientWidth) return;
+    // Clicks on a scrollbar land on the scrolling element itself; leave those to the browser.
+    if (e.offsetX >= e.target.clientWidth || e.offsetY >= e.target.clientHeight) return;
+    var startX = e.clientX;
+    var startLeft = boardEl.scrollLeft;
+    trackDrag(e, {
+      begin: function () {},
+      frame: function (x) { boardEl.scrollLeft = startLeft - (x - startX); },
+      end: function () {}
+    });
+  });
+
   function startColumnDrag(e, colId, colEl) {
     if (e.button !== 0 || isInteractive(e.target) || editingCol) return;
     var ghost, slot, offX, offY;
