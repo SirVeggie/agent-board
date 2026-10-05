@@ -72,12 +72,18 @@
   /** Cursor and Pi have no Limited search: the allowlist covers a fetch tool only. */
   const CURSOR_LIMITED = "Fetch from the web allowlist's domains; the agent asks for others; no web search";
   /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
-  const CURSOR_REVIEW = "Cursor: Auto-review approves safe calls and denies the rest; it can't ask you yet";
+  const CURSOR_ASK = "Would ask first; Cursor Auto-reviews instead (can't ask yet)";
+  const CURSOR_EDITS = "Would auto-edit; Cursor Auto-reviews instead (can't ask yet)";
+  const CURSOR_REVIEW = "Auto-review approves safe calls and denies the rest; Cursor can't ask you yet";
   /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */
-  const CURSOR_HOST_SHELL = "Cursor: asks before each shell command (Scribe runs it); other tools go through Auto-review";
+  const CURSOR_HOST_ASK = "Would ask first; Cursor asks before each shell command, Auto-reviews other tools";
+  const CURSOR_HOST_EDITS = "Would auto-edit; Cursor asks before each shell command, Auto-reviews other tools";
   function approvalDetail(a, provider) {
-    if (provider === "cursor" && (a.id === "ask" || a.id === "edits") && prefs().cursorHostShell) return CURSOR_HOST_SHELL;
-    if (provider === "cursor" && a.id !== "full") return CURSOR_REVIEW;
+    if (provider === "cursor" && a.id === "ask" && prefs().cursorHostShell) return CURSOR_HOST_ASK;
+    if (provider === "cursor" && a.id === "edits" && prefs().cursorHostShell) return CURSOR_HOST_EDITS;
+    if (provider === "cursor" && a.id === "ask") return CURSOR_ASK;
+    if (provider === "cursor" && a.id === "edits") return CURSOR_EDITS;
+    if (provider === "cursor" && a.id === "auto") return CURSOR_REVIEW;
     if (a.id === "auto" && provider === "pi") return "Like Edits, plus read-only commands and tests without asking";
     if (a.id === "auto" && provider !== "claude") return "Claude only";
     return a.detail;
@@ -708,9 +714,18 @@
         if (search) row.tabIndex = -1;
         if (item.icon) row.append(icon(item.icon));
         const text = el("span", "ag-menu-text");
-        text.append(el("span", "ag-menu-label", item.label));
+        const labelEl = el("span", "ag-menu-label", item.label);
+        text.append(labelEl);
         if (item.detail) text.append(el("span", "ag-menu-detail", item.detail));
         row.append(text);
+        // Ellipsis on the label or hint: hover shows the full string.
+        row.addEventListener("pointerenter", () => {
+          const cut = (node) => node && node.scrollWidth > node.clientWidth + 1;
+          const detailEl = text.querySelector(".ag-menu-detail");
+          if (cut(detailEl)) row.title = item.detail;
+          else if (cut(labelEl)) row.title = item.label;
+          else row.removeAttribute("title");
+        });
         if (item.checked) row.append(icon("check", "ag-ico ag-menu-check"));
         if (item.star) {
           const star = el("span", `ag-star${item.star.on ? " on" : ""}`, item.star.on ? "★" : "☆");
