@@ -239,7 +239,14 @@
   }
 
   function prefs() {
-    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, mode: "code", approval: "ask", approvals: {}, web: "on", recentWorkspaces: [], scopeWorkspaces: {} };
+    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, modelSettings: {}, mode: "code", approval: "ask", approvals: {}, web: "on", recentWorkspaces: [], scopeWorkspaces: {} };
+  }
+
+  /** The effort and params last picked for this model, else its defaults. Same as modelChoice in src/agent/prefs.ts. */
+  function modelChoice(provider, model, p = prefs()) {
+    const saved = p.modelSettings?.[`${provider}:${model}`];
+    if (saved) return { effort: saved.effort ?? null, modelParams: { ...(saved.modelParams || {}) } };
+    return { effort: null, modelParams: provider === "cursor" ? { fast: "false" } : {} };
   }
 
   /** "on" | "limited" | "off". Older threads and prefs, and pages, may pass a boolean. */
@@ -1348,12 +1355,14 @@
       const provider = d.settings.provider || (providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id || "cursor");
       const scopeKey = d.scope.kind === "global" ? "global" : `${d.scope.kind}:${d.scope.ref}`;
       const cwd = d.settings.cwd !== undefined ? d.settings.cwd : d.scope.kind === "workspace" ? d.scope.ref : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null;
+      const model = d.settings.model || p.models?.[provider] || "default";
+      const choice = modelChoice(provider, model, p);
       return {
         id: null,
         provider,
-        model: d.settings.model || p.models?.[provider] || "default",
-        effort: d.settings.effort !== undefined ? d.settings.effort : p.efforts?.[provider] ?? null,
-        modelParams: d.settings.modelParams || p.modelParams?.[provider] || {},
+        model,
+        effort: d.settings.effort !== undefined ? d.settings.effort : choice.effort,
+        modelParams: d.settings.modelParams || choice.modelParams,
         mode: d.settings.mode || (d.scope.kind === "page" || d.scope.kind === "folder" ? "board" : p.mode || "code"),
         approval: d.settings.approval || approvalFor(provider),
         web: webMode(d.settings.web, webMode(p.web)),
@@ -1372,12 +1381,17 @@
       if (!t) {
         this.draft = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
         Object.assign(this.draft.settings, patch);
+        const p = prefs();
         if (patch.provider) {
-          const p = prefs();
           this.draft.settings.model = patch.model || p.models?.[patch.provider] || modelsOf(patch.provider)[0]?.id || "default";
-          this.draft.settings.effort = p.efforts?.[patch.provider] ?? null;
-          this.draft.settings.modelParams = p.modelParams?.[patch.provider] || {};
           if (patch.approval === undefined) this.draft.settings.approval = approvalFor(patch.provider, p);
+        }
+        if (patch.provider || patch.model) {
+          // Each model comes back with the effort and fast setting last picked for it.
+          const s = this.settings();
+          const choice = modelChoice(s.provider, s.model, p);
+          if (patch.effort === undefined) this.draft.settings.effort = choice.effort;
+          if (patch.modelParams === undefined) this.draft.settings.modelParams = choice.modelParams;
         }
         await this.rememberDraftPrefs();
         this.renderComposerBar();
@@ -6337,6 +6351,7 @@
         )
     );
     const provider = providerAvailable(p.provider) ? p.provider : available[0]?.id || null;
+    const defaultChoice = provider ? modelChoice(provider, p.models?.[provider] || "default", p) : null;
     return {
       ok: true,
       providers: S.config.providers.map((x) => ({ id: x.id, label: x.label, available: Boolean(x.available) })),
@@ -6364,10 +6379,10 @@
         ? {
             provider,
             model: p.models?.[provider] || "default",
-            effort: p.efforts?.[provider] ?? null,
+            effort: defaultChoice.effort,
             approval: approvalFor(provider, p),
             web: webMode(p.web),
-            fast: p.modelParams?.[provider]?.fast === "true",
+            fast: defaultChoice.modelParams.fast === "true",
           }
         : null,
     };
@@ -6394,7 +6409,7 @@
     const folderMode = FOLDER_MODES.has(mode);
     const cwd = folderMode && typeof data.cwd === "string" ? data.cwd.trim() : "";
     if (folderMode && !cwd) return { error: "needs_folder" };
-    const modelParams = { ...(own ? {} : p.modelParams?.[provider] || {}) };
+    const modelParams = { ...(own ? {} : modelChoice(provider, model, p).modelParams) };
     if (data.modelParams && typeof data.modelParams === "object" && !Array.isArray(data.modelParams)) {
       for (const [key, value] of Object.entries(data.modelParams)) {
         if (value != null && value !== "") modelParams[key] = String(value);
@@ -6405,7 +6420,7 @@
     return {
       provider,
       model,
-      effort: data.effort || (own ? null : p.efforts?.[provider] ?? null),
+      effort: data.effort || (own ? null : modelChoice(provider, model, p).effort),
       modelParams,
       mode,
       approval: data.approval || approvalFor(provider, p),
@@ -6493,8 +6508,10 @@
           if (!folder.ok) return folder;
         }
         const title = typeof data.title === "string" && data.title.trim() ? data.title.trim().slice(0, 120) : undefined;
+        // Threads a page starts (board workers) leave the user's chat defaults alone.
         const { thread: created } = await api("POST", "/threads", {
           ...settings,
+          remember: false,
           scope: { kind: "page", ref: tab.id },
           ...(title ? { title } : {}),
         });
@@ -6908,7 +6925,7 @@
     }
     const title = (action.thread?.title ? actionText(action.thread.title, values) : "") || action.label;
     try {
-      const { thread } = await api("POST", "/threads", { ...settings, scope: { kind: "page", ref: tab.id }, title: title.slice(0, 120) });
+      const { thread } = await api("POST", "/threads", { ...settings, remember: false, scope: { kind: "page", ref: tab.id }, title: title.slice(0, 120) });
       S.threads.set(thread.id, thread);
       S.details.set(thread.id, { items: [], byId: new Map(), turns: new Map() });
       showInView(target, thread.id);

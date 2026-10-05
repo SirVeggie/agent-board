@@ -109,10 +109,13 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
       return {
-        thread: host.createThread({
-          ...threadPatch(body),
-          ...(body.scope ? { scope: parseScope(body.scope) } : {}),
-        }),
+        thread: host.createThread(
+          {
+            ...threadPatch(body),
+            ...(body.scope ? { scope: parseScope(body.scope) } : {}),
+          },
+          { remember: body.remember !== false }
+        ),
       };
     })
   );

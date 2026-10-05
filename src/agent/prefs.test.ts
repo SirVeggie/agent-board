@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey } from "./prefs.js";
+import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey } from "./prefs.js";
 
 const grok = {
   provider: "cursor" as const,
@@ -40,4 +40,19 @@ test("a model-only change still stores the provider so the next thread uses that
   assert.equal(patch.provider, "cursor");
   assert.equal(patch.models?.cursor, "cursor-grok-4.6");
   assert.equal(patch.mode, undefined);
+});
+
+test("effort and model params are remembered per model", () => {
+  const patch = prefsPatchFromChoices(DEFAULT_PREFS, grok, { modelParams: { fast: "true" } });
+  const prefs = { ...DEFAULT_PREFS, ...patch };
+  assert.deepEqual(prefs.modelSettings["cursor:cursor-grok-4.6"], { effort: "high", modelParams: { context: "1m", fast: "false" } });
+  // Another model of the same provider starts from its own defaults, not grok's.
+  assert.deepEqual(modelChoice(prefs, "cursor", "composer-2.5"), { effort: null, modelParams: { fast: "false" } });
+  assert.equal(modelChoice(prefs, "cursor", "cursor-grok-4.6").effort, "high");
+});
+
+test("prefs from before per-model settings seed each provider's last model", () => {
+  const seeded = seedModelSettings({ models: { cursor: "grok" }, efforts: { cursor: "low" }, modelParams: { cursor: { fast: "true" } } });
+  assert.deepEqual(seeded, { "cursor:grok": { effort: "low", modelParams: { fast: "true" } } });
+  assert.deepEqual(seedModelSettings({ modelSettings: {} }), {});
 });

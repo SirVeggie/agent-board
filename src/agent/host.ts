@@ -40,7 +40,7 @@ import type {
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
-import { DEFAULT_PREFS, prefsPatchFromChoices, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
+import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
@@ -468,6 +468,7 @@ export class AgentHost {
       ...saved,
       models: { ...DEFAULT_PREFS.models, ...saved.models },
       modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams },
+      modelSettings: seedModelSettings(saved),
       approvals: { ...DEFAULT_PREFS.approvals, ...saved.approvals },
       // Older prefs kept web as a boolean.
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
@@ -639,7 +640,8 @@ export class AgentHost {
     this.providers[draft.provider].prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
   }
 
-  createThread(input: Partial<Thread> & { scope?: ThreadScope }): ThreadView {
+  /** remember: false for threads a page starts (board workers), so they leave the user's defaults alone. */
+  createThread(input: Partial<Thread> & { scope?: ThreadScope }, { remember = true }: { remember?: boolean } = {}): ThreadView {
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
     const spareId = this.providers[thread.provider].spareThreadId?.(thread, this.ctx);
@@ -651,7 +653,7 @@ export class AgentHost {
     this.turns.set(thread.id, []);
     this.seq.set(thread.id, 0);
     this.db.saveThread(thread);
-    this.rememberChoices(thread, settingPatch(thread));
+    if (remember) this.rememberChoices(thread, settingPatch(thread));
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
     return view;
@@ -676,15 +678,17 @@ export class AgentHost {
         : scope.kind === "workspace"
           ? scope.ref
           : prefs.scopeWorkspaces[scopeKey] ?? prefs.recentWorkspaces[0] ?? null;
+    const model = input.model ?? prefs.models[provider] ?? "default";
+    const choice = modelChoice(prefs, provider, model);
     const now = Date.now();
     const thread: Thread = {
       id: `th_${crypto.randomBytes(6).toString("hex")}`,
       title: input.title?.trim() || "New thread",
       titleLocked: Boolean(input.title?.trim()),
       provider,
-      model: input.model ?? prefs.models[provider] ?? "default",
-      effort: input.effort !== undefined ? input.effort : prefs.efforts[provider] ?? null,
-      modelParams: input.modelParams ?? prefs.modelParams[provider] ?? {},
+      model,
+      effort: input.effort !== undefined ? input.effort : choice.effort,
+      modelParams: input.modelParams ?? choice.modelParams,
       mode: input.mode ?? (scope.kind === "page" || scope.kind === "folder" ? "board" : prefs.mode),
       approval: input.approval ?? approvalFor(prefs, provider),
       web: input.web ?? prefs.web,
@@ -715,8 +719,6 @@ export class AgentHost {
       next.provider = patch.provider;
       const prefs = this.prefs();
       next.model = patch.model ?? prefs.models[patch.provider] ?? "default";
-      next.effort = prefs.efforts[patch.provider] ?? null;
-      next.modelParams = prefs.modelParams[patch.provider] ?? {};
       next.approval = patch.approval ?? approvalFor(prefs, patch.provider);
       next.nativeId = null;
       this.sessions.get(id)?.dispose();
@@ -724,6 +726,12 @@ export class AgentHost {
       forgetGuides(id);
     }
     if (typeof patch.model === "string") next.model = patch.model;
+    if (next.provider !== thread.provider || next.model !== thread.model) {
+      // A new model starts with the effort and params last picked for it.
+      const choice = modelChoice(this.prefs(), next.provider, next.model);
+      next.effort = choice.effort;
+      next.modelParams = choice.modelParams;
+    }
     if (patch.effort !== undefined) next.effort = patch.effort;
     if (patch.modelParams && typeof patch.modelParams === "object") next.modelParams = { ...next.modelParams, ...patch.modelParams };
     if (patch.mode) next.mode = patch.mode;

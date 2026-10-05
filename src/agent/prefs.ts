@@ -2,12 +2,19 @@ import path from "node:path";
 import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope, WebAccess } from "./types.js";
 import { DEFAULT_WEB_ALLOWLIST } from "./webAccess.js";
 
+export type ModelChoice = { effort: string | null; modelParams: Record<string, string> };
+
 /** Last-used chat settings. New threads and drafts start from these. */
 export type Prefs = {
   provider: ProviderId;
   models: Partial<Record<ProviderId, string>>;
   efforts: Partial<Record<ProviderId, string | null>>;
   modelParams: Partial<Record<ProviderId, Record<string, string>>>;
+  /**
+   * Last effort and model params (fast, context) per model, keyed "provider:modelId". Switching to a
+   * model brings back its own; efforts and modelParams above are the last used per provider.
+   */
+  modelSettings: Record<string, ModelChoice>;
   mode: ThreadMode;
   approval: ApprovalPolicy;
   /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
@@ -41,6 +48,7 @@ export const DEFAULT_PREFS: Prefs = {
   models: { cursor: "composer-2.5", claude: "default" },
   efforts: {},
   modelParams: { cursor: { fast: "false" } },
+  modelSettings: {},
   mode: "code",
   approval: "ask",
   approvals: {},
@@ -58,6 +66,28 @@ export const DEFAULT_PREFS: Prefs = {
 /** Same as dirKey in public/agent.js, which looks up these keys for new threads. */
 export function workspaceKey(dir: string): string {
   return dir.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+}
+
+export function modelKey(provider: ProviderId, model: string): string {
+  return `${provider}:${model}`;
+}
+
+/** The effort and params a thread switching to this model starts with: its last ones, else the model's defaults. */
+export function modelChoice(prefs: Prefs, provider: ProviderId, model: string): ModelChoice {
+  const saved = prefs.modelSettings[modelKey(provider, model)];
+  if (saved) return { effort: saved.effort ?? null, modelParams: { ...(saved.modelParams || {}) } };
+  return { effort: null, modelParams: { ...(DEFAULT_PREFS.modelParams[provider] || {}) } };
+}
+
+/** Prefs saved before modelSettings existed: each provider's last model keeps the effort and params it had. */
+export function seedModelSettings(saved: Partial<Prefs>): Prefs["modelSettings"] {
+  if (saved.modelSettings) return saved.modelSettings;
+  const seeded: Prefs["modelSettings"] = {};
+  for (const [provider, model] of Object.entries(saved.models || {}) as [ProviderId, string][]) {
+    if (!model) continue;
+    seeded[modelKey(provider, model)] = { effort: saved.efforts?.[provider] ?? null, modelParams: { ...(saved.modelParams?.[provider] || {}) } };
+  }
+  return seeded;
 }
 
 type ChoiceThread = {
@@ -100,6 +130,12 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
   }
   if (patch.effort !== undefined) next.efforts = { ...prefs.efforts, [thread.provider]: thread.effort };
   if (patch.modelParams) next.modelParams = { ...prefs.modelParams, [thread.provider]: thread.modelParams };
+  if (patch.model || patch.provider || patch.effort !== undefined || patch.modelParams) {
+    next.modelSettings = {
+      ...prefs.modelSettings,
+      [modelKey(thread.provider, thread.model)]: { effort: thread.effort, modelParams: { ...thread.modelParams } },
+    };
+  }
   if (patch.mode && thread.scope.kind !== "page" && thread.scope.kind !== "folder") next.mode = thread.mode;
   if (patch.approval) {
     next.approval = thread.approval;
