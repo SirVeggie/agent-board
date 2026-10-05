@@ -3212,7 +3212,7 @@ button.ag-user-copy.done {
   color: var(--ag-ok);
 }
 
-/* Plan usage: a compact chip in the chat header (sidebar/full) or the floating chat's settings bar. */
+/* Plan usage: compact (one percent) on the floating and sidebar composer, full windows on the fullscreen composer. */
 .ag-bar button.ag-usage {
   margin-left: auto;
 }

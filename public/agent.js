@@ -396,10 +396,7 @@
       }
       case "agent_limits": {
         S.config.limits = msg.limits || {};
-        for (const view of views()) {
-          view.renderComposerBar();
-          view.renderHeader();
-        }
+        for (const view of views()) view.renderComposerBar();
         agentSettings.renderUsage();
         armUsageTick();
         return;
@@ -1530,8 +1527,6 @@
         titleWrap.append(ch);
       }
       this.header.append(titleWrap);
-      const meter = usageChip(s.provider);
-      if (meter) this.header.append(meter);
       const acts = el("div", "ag-thead-actions");
       if (s.cwd && s.mode !== "board") {
         const onBranch = openWorktree(t);
@@ -3029,10 +3024,8 @@
         web.setAttribute("aria-label", `${wm.label}: ${detail}`);
         bar.append(web);
       }
-      if (this.variant === "dock") {
-        const meter = usageChip(s.provider, true);
-        if (meter) bar.append(meter);
-      }
+      const meter = usageChip(s.provider, this.variant !== "full");
+      if (meter) bar.append(meter);
       this.ctxMeter = contextMeter(this);
       bar.append(this.ctxMeter);
       const tail = this.sendSlot;
@@ -5329,10 +5322,7 @@
   let usageTick = 0;
 
   function refreshUsageUi() {
-    for (const view of views()) {
-      view.renderComposerBar();
-      view.renderHeader();
-    }
+    for (const view of views()) view.renderComposerBar();
     agentSettings.renderUsage();
   }
 
@@ -5551,7 +5541,7 @@
     return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "cursor_included") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
   }
 
-  /** Plan usage in the header as "5h 84% · wk 76%", or one percent in the floating chat. Nothing until the provider has reported. */
+  /** Plan usage on the composer: one percent in the floating chat and sidebar, or "5h 84%" windows in the full window. Nothing until the provider has reported. */
   function usageChip(provider, compact = false) {
     const limits = planLimits(provider);
     if (!limits) return null;
