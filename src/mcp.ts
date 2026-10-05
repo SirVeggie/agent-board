@@ -1540,10 +1540,14 @@ function registerBrowserTools(server: McpServer): void {
 
   server.tool(
     "browser_eval",
-    "Evaluate JavaScript in the current tab of your browser and return the result as JSON: an expression, or a function body that uses return (await works). For inspecting state the snapshot does not show; act on the page with browser_act, not with scripts.",
+    "Evaluate JavaScript in the current tab of your browser and return the result as JSON: an expression, or a function body that uses return (await works). For inspecting state the snapshot does not show; act on the page with browser_act, not with scripts. Pass frame to run it inside a frame, e.g. a Scribe page shown in the Scribe shell (with its live state and links), which the shell's own scripts can't reach.",
     {
       ...tabShape,
       script: z.string().describe("An expression like document.title, or a body like: const r = await fetch(\"/api\"); return r.status;"),
+      frame: z
+        .string()
+        .optional()
+        .describe("Run in a frame instead of the top page: a Scribe page key or id (the frame showing it, e.g. scribe:sprint-notes) or a CSS selector of an iframe."),
     },
     async (args) => browserCall("eval", args)
   );

@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { after, test } from "node:test";
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-browser-"));
+process.env.SCRIBE_HOME = home;
+const { store } = await import("./store.js");
+store.load();
+const framed = store.upsert({ key: "framed", title: "Framed", html: "<p>framed</p>" }).tab;
 
 const {
   allowedBrowserUrl,
@@ -127,6 +136,17 @@ const server = http.createServer((req, res) => {
     res.end(FIXTURE);
     return;
   }
+  if (req.url === "/shell") {
+    // Like the Scribe shell: the page iframe is on another origin, so the shell can't script it.
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<!DOCTYPE html><title>Shell</title><iframe id="page" src="http://localhost:${port()}/view/${encodeURIComponent(framed.id)}"></iframe>`);
+    return;
+  }
+  if (req.url?.startsWith("/view/")) {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<!DOCTYPE html><title>View</title><script>window.inside = "page " + location.host;</script>`);
+    return;
+  }
   if (req.url === "/drag") {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(DRAG_FIXTURE);
@@ -136,11 +156,14 @@ const server = http.createServer((req, res) => {
   res.end("nope");
 });
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+const port = () => (server.address() as AddressInfo).port;
+const base = `http://127.0.0.1:${port()}`;
 
 after(async () => {
   await closeAgentBrowser();
   server.close();
+  store.closeDb();
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 let launched = true;
@@ -187,6 +210,23 @@ test("a thread opens a page, acts on refs, and reads console and network", async
 
   const part = await browserSnapshot("thr_a", { selector: "h1" });
   assert.match(part.snapshot as string, /Counter/);
+});
+
+test("browser_eval reaches a cross-origin page frame by page key or iframe selector", async (t) => {
+  if (!launched) {
+    t.skip("no Chromium browser installed");
+    return;
+  }
+  await browserOpen("thr_frame", { url: `${base}/shell`, snapshot: false });
+  const expected = JSON.stringify(`page localhost:${port()}`);
+  assert.equal((await browserEval("thr_frame", { script: "window.inside ?? null" })).result, "null");
+  const byKey = await browserEval("thr_frame", { script: "window.inside", frame: "scribe:framed" });
+  assert.equal(byKey.result, expected);
+  assert.match(byKey.frame ?? "", /\/view\//);
+  assert.equal((await browserEval("thr_frame", { script: "window.inside", frame: framed.id })).result, expected);
+  assert.equal((await browserEval("thr_frame", { script: "window.inside", frame: "#page" })).result, expected);
+  await assert.rejects(browserEval("thr_frame", { script: "1", frame: "#nope" }), /frame not found/);
+  await closeThreadBrowser("thr_frame");
 });
 
 test("links off loopback are blocked, and threads get their own browser", async (t) => {

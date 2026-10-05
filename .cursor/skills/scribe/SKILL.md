@@ -287,6 +287,7 @@ browser_network({ failedOnly: true })
 browser_screenshot({})                           // or { ref }, { selector }, { fullPage: true }
 browser_viewport({ width: 390, height: 844, colorScheme: "dark" })
 browser_eval({ script: "document.title" })       // inspect only; act with browser_act
+browser_eval({ script: "scribe.state", frame: "scribe:hero" })  // inside the page's frame in the Scribe shell
 browser_tabs({ closeAll: true })                 // when you are done testing
 ```
 
@@ -295,7 +296,7 @@ browser_tabs({ closeAll: true })                 // when you are done testing
 
 - Writes and signals from that page go to the **real page**. Do not test destructive interactions on a page the user relies on (their todo list). Show a copy under a temp key with `background: true`, test its `viewUrl`, then delete it with `page_close({ key, permanent: true })`.
 - Looking without changing anything (snapshot, reading the DOM, a script that only reads) is fine on the real page.
-- Loaded directly, the page does not receive live updates from `page_update` or other viewers. Reload it to see them.
+- Loaded directly, the page does not receive live updates from `page_update` or other viewers, and links to other pages show no titles. Reload it to see updates. To check live behaviour (state arriving from elsewhere, link titles, flicker or scroll jumps as it re-renders), open the Scribe shell itself with the page in front (`browser_open({ url: "<Scribe address>/#<page id>" })`) and pass `frame: "<page key or id>"` to `browser_eval`: the page's iframe is on another origin, so a script without `frame` only reaches the shell. `frame` also takes a CSS selector of any iframe.
 - This is for testing behavior. For a picture of the layout, `page_screenshot` is still the tool.
 
 ## Interactive pages

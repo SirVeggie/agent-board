@@ -1,6 +1,7 @@
-import type { Browser, BrowserContext, CDPSession, Locator, Page } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Frame, Locator, Page } from "playwright-core";
 import { BROWSER_ACTIONS, type BrowserAction } from "./browserActions.js";
 import { launchChromium } from "./chromium.js";
+import { embedUrlFromHtml } from "./embed.js";
 import { log } from "./log.js";
 import { pngOrJpeg, screenshotUrl, shotOptions } from "./screenshot.js";
 import { store } from "./store.js";
@@ -149,7 +150,12 @@ export function resolveBrowserUrl(input: { url?: string; key?: string }): string
 }
 
 export function browserHttpStatus(message: string): number {
-  if (message.startsWith("tab not found") || message.startsWith("no browser tab")) {
+  if (
+    message.startsWith("tab not found") ||
+    message.startsWith("no browser tab") ||
+    message.startsWith("frame not found") ||
+    message.startsWith("no frame shows")
+  ) {
     return 404;
   }
   if (message.includes("Could not launch")) {
@@ -327,14 +333,15 @@ export async function browserScreenshot(threadId: string, input: Target & { tab?
   };
 }
 
-export async function browserEval(threadId: string, input: { tab?: string; script: string }) {
+export async function browserEval(threadId: string, input: { tab?: string; script: string; frame?: string }) {
   const tab = pickTab(await requireSession(threadId), input.tab);
   if (!input.script?.trim()) {
     throw new Error("Provide script");
   }
+  const frame = input.frame?.trim() ? await findFrame(tab.page, input.frame.trim()) : tab.page.mainFrame();
   // An expression, or a function body when it uses return.
   const body = /\breturn\b/.test(input.script) ? input.script : `return (${input.script});`;
-  const value = await tab.page.evaluate(
+  const value = await frame.evaluate(
     async (source) => {
       const fn = new Function(`return (async () => { ${source} })();`) as () => Promise<unknown>;
       const result = await fn();
@@ -350,6 +357,7 @@ export async function browserEval(threadId: string, input: { tab?: string; scrip
   const text = "undefined" in value ? "undefined" : value.json ?? "null";
   return {
     tab: tab.id,
+    ...(frame !== tab.page.mainFrame() ? { frame: frame.url() } : {}),
     result: text.length > MAX_EVAL_CHARS ? `${text.slice(0, MAX_EVAL_CHARS)}… (${text.length} chars)` : text,
   };
 }
@@ -733,6 +741,46 @@ function locate(page: Page, target: Target): Locator {
     return page.getByText(target.text).first();
   }
   throw new Error("Provide ref (from browser_snapshot), selector, or text");
+}
+
+/**
+ * A frame inside the tab, so browser_eval reaches a Scribe page shown in the shell (its iframe is
+ * on the content origin, out of reach of the shell's own scripts). which is a Scribe page key or
+ * id (the frame that loads its /view/<id>, the visible one first), or a CSS selector of an iframe.
+ */
+async function findFrame(page: Page, which: string): Promise<Frame> {
+  const scribeTab = store.get(which);
+  if (scribeTab) {
+    const viewPath = `/view/${encodeURIComponent(scribeTab.id)}`;
+    const embedUrl = embedUrlFromHtml(scribeTab.html);
+    const matches = page.frames().filter((frame) => {
+      if (frame === page.mainFrame()) return false;
+      const url = frame.url();
+      if (embedUrl && url === embedUrl) return true;
+      try {
+        return new URL(url).pathname === viewPath;
+      } catch {
+        return false;
+      }
+    });
+    for (const frame of matches) {
+      const element = await frame.frameElement().catch(() => null);
+      if (element && (await element.isVisible().catch(() => false))) {
+        return frame;
+      }
+    }
+    if (matches[0]) {
+      return matches[0];
+    }
+    throw new Error(`no frame shows ${scribeTab.key} in this browser tab; open it in the Scribe shell first`);
+  }
+  // No auto-wait: a selector that matches nothing fails now, not after the action timeout.
+  const element = await page.$(which).catch(() => null);
+  const frame = await element?.contentFrame();
+  if (!frame) {
+    throw new Error(`frame not found: ${which} is not a Scribe page key or id, nor an iframe on this tab`);
+  }
+  return frame;
 }
 
 async function snapshotOf(page: Page, selector: string | undefined, maxChars: number) {
