@@ -2376,15 +2376,16 @@ kbd {
 .hover-card {
   position: fixed;
   z-index: 80;
-  max-width: 320px;
+  width: max-content;
+  max-width: 300px;
   padding: 10px 12px;
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
-  pointer-events: none;
-  box-shadow: var(--shadow), 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   animation: hover-card-in 110ms var(--ease);
 }
 
@@ -2427,7 +2428,7 @@ kbd {
 
 .hover-card-rows {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 3px 10px;
   margin: 8px 0 0;
 }
@@ -2438,30 +2439,48 @@ kbd {
 
 .hover-card-rows dd {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0 6px;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
   margin: 0;
 }
 
 .hover-card-abs {
+  flex: none;
   color: var(--muted);
+  white-space: nowrap;
 }
 
-.hover-card-thread {
+.hover-card-actor {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.hover-card-thread {
+  display: block;
+  height: auto;
   margin: 0;
   padding: 0;
   border: 0;
+  border-radius: 0;
   background: none;
+  box-shadow: none;
   color: inherit;
   font: inherit;
+  line-height: inherit;
   cursor: pointer;
   text-align: left;
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
   text-underline-offset: 2px;
 }
 
-.hover-card-thread:hover {
+button.hover-card-thread:hover {
+  background: none;
   color: var(--heading, var(--text));
+  text-decoration-color: currentColor;
 }
 
 .hover-card-folder {

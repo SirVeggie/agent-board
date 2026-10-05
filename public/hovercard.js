@@ -174,14 +174,16 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
     if (actor.threadId) {
       const link = document.createElement("button");
       link.type = "button";
-      link.className = "hover-card-thread";
+      link.className = "hover-card-thread hover-card-actor";
       link.dataset.thread = actor.threadId;
       link.textContent = actor.text;
-      link.title = "Open thread";
+      link.title = `Open thread: ${actor.text}`;
       dd.appendChild(link);
     } else {
       const text = document.createElement("span");
+      text.className = "hover-card-actor";
       text.textContent = actor.text;
+      text.title = actor.text;
       dd.appendChild(text);
     }
     if (actor.at) {
