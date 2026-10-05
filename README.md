@@ -201,12 +201,13 @@ A Kanban agent column can also have an **agent worker** (Board settings → Agen
 
 ## Agent chat
 
-Scribe has its own chat with coding agents, so Claude and Cursor run from one place. The daemon runs the agents; the browser only shows them.
+Scribe has its own chat with coding agents, so Claude, Cursor, and Native run from one place. The daemon runs the agents; the browser only shows them.
 
 | Provider | How it runs | Login |
 | --- | --- | --- |
 | **Cursor** | The Cursor SDK (`@cursor/sdk`) in the daemon: one local agent per thread, kept under the data folder's `cursor-agents`. Each thread's mode and web setting become the agent's tool list; the board's page tools reach it as SDK custom tools. The SDK has no approval callback, so Cursor can't ask yet: every approval but Full access runs Cursor's Auto-review, which denies risky calls instead. Threads from the older ACP integration start a new agent with a recap of the conversation on their next message. | **Log in** under Agent settings (a browser login that saves a key to `~/.cursor/sdk/auth.json`), or `CURSOR_API_KEY` |
 | **Claude** | The Claude Agent SDK, one long-lived query per active thread. | Your Claude Code login (`claude` → `/login`) or `ANTHROPIC_API_KEY` |
+| **Native** | Scribe's own harness. Model sources in Agent settings (any OpenAI-compatible endpoint: OpenRouter, LM Studio, Ollama, vLLM, llama.cpp, …) plus models of providers whose API key is set in the environment. | Model-source keys in Agent settings, or `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / … |
 
 Three ways to open it:
 

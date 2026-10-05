@@ -16,10 +16,11 @@ type Model = PiModel<Api>;
 
 /**
  * Pi (@earendil-works/pi-coding-agent) through its SDK, in this process: any model Pi can reach,
- * local ones included. Scribe keeps its own Pi folder (data/agent/pi), so the user's ~/.pi
- * extensions, keys and settings stay out. Models come from the "Model sources" in Agent settings
- * (compatible endpoints, registered as Pi providers) and from Pi's built-in providers that have a
- * key in the environment or in Scribe's Pi auth.json.
+ * local ones included. Shown to the user as Native (the native harness); the provider id stays "pi".
+ * Scribe keeps its own Pi folder (data/agent/pi), so the user's ~/.pi extensions, keys and settings
+ * stay out. Models come from the "Model sources" in Agent settings (OpenAI-compatible endpoints,
+ * registered as Pi providers) and from Pi's built-in providers that have a key in the environment
+ * or in Scribe's Pi auth.json.
  *
  * Pi ships no approvals, questions, plan review, todos or web tools. Scribe adds them: a tool_call
  * hook asks the user before edits and commands (by the thread's approval level), and custom tools
@@ -193,7 +194,7 @@ function textOf(content: unknown): string {
 
 export class PiProvider implements AgentProvider {
   readonly id = "pi" as const;
-  readonly label = "Pi";
+  readonly label = "Native";
   private runtimeLoad: Promise<ModelRuntime> | null = null;
   private modelCache: { at: number; models: ModelOption[] } | null = null;
   private modelLoad: Promise<ModelOption[]> | null = null;
@@ -223,7 +224,7 @@ export class PiProvider implements AgentProvider {
       if (!models.length) return { id: this.id, label: this.label, available: false, detail: "No models: add a model source in Agent settings, or set a provider's API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, …)." };
       return { id: this.id, label: this.label, available: true, detail: models.length === 1 ? "1 model" : `${models.length} models` };
     } catch (err) {
-      return { id: this.id, label: this.label, available: false, detail: `Pi failed to load: ${(err as Error).message}` };
+      return { id: this.id, label: this.label, available: false, detail: `Native harness failed to load: ${(err as Error).message}` };
     }
   }
 
@@ -329,7 +330,7 @@ export class PiProvider implements AgentProvider {
     const target = await this.resolveModel(model);
     if (!target) throw new Error(`Unknown model: ${model}`);
     const reply = await runtime.completeSimple(target, { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] }, { signal });
-    if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage || "Pi: the model failed");
+    if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage || "Native: the model failed");
     return reply.content.map((block) => (block.type === "text" ? block.text : "")).join("");
   }
 
@@ -717,7 +718,7 @@ class PiSession implements ProviderSession {
     const runtime = await this.provider.runtime();
     const cwd = this.cwd();
     const model = await this.provider.resolveModel(this.thread.model);
-    if (!model) throw new Error("No Pi model: add a model source in Agent settings, or set a provider's API key, then pick a model.");
+    if (!model) throw new Error("No Native model: add a model source in Agent settings, or set a provider's API key, then pick a model.");
     fs.mkdirSync(sessionDir(), { recursive: true });
     const settingsManager = sdk.SettingsManager.inMemory({});
     const resourceLoader = new sdk.DefaultResourceLoader({
@@ -737,7 +738,7 @@ class PiSession implements ProviderSession {
         sessionManager = sdk.SessionManager.open(this.file, sessionDir(), cwd);
       } catch (err) {
         log(`Pi session resume failed, starting a new session: ${(err as Error).message}`);
-        this.sink?.notice("warn", "Could not resume the Pi session; this turn starts a new one without the earlier conversation.");
+        this.sink?.notice("warn", "Could not resume the Native session; this turn starts a new one without the earlier conversation.");
         this.file = null;
       }
     }
@@ -873,7 +874,7 @@ class PiSession implements ProviderSession {
       if (this.cancelled) return this.endTurn({ status: "cancelled" });
       const last = [...session.messages].reverse().find((m) => m.role === "assistant") as AssistantMessage | undefined;
       if (last?.stopReason === "aborted") return this.endTurn({ status: "cancelled" });
-      if (last?.stopReason === "error") return this.endTurn({ status: "error", error: last.errorMessage || "Pi: the model failed" });
+      if (last?.stopReason === "error") return this.endTurn({ status: "error", error: last.errorMessage || "Native: the model failed" });
       return this.endTurn({ status: "done" });
     } catch (err) {
       if (this.cancelled) return this.endTurn({ status: "cancelled" });
@@ -979,8 +980,8 @@ class PiSession implements ProviderSession {
         return;
       }
       case "compaction_end":
-        if (!event.aborted && event.result) sink.notice("info", "Pi summarized the conversation to make room.");
-        else if (event.errorMessage) sink.notice("warn", `Pi could not summarize the conversation: ${event.errorMessage}`);
+        if (!event.aborted && event.result) sink.notice("info", "Native summarized the conversation to make room.");
+        else if (event.errorMessage) sink.notice("warn", `Native could not summarize the conversation: ${event.errorMessage}`);
         return;
       case "auto_retry_start":
         sink.notice("info", `The model failed (${event.errorMessage}); retrying (${event.attempt}/${event.maxAttempts}).`);

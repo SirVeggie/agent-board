@@ -488,9 +488,9 @@ export class AgentHost {
     return next;
   }
 
-  // ---------- Pi's model sources ----------
+  // ---------- Native harness model sources ----------
 
-  /** Compatible endpoints for Pi. Kept under the setting the old OpenAI-compatible provider used. */
+  /** OpenAI-compatible endpoints for the native harness (Pi). Kept under the setting the old openai provider used. */
   private modelSources(): OpenAISource[] {
     return this.db.getSetting<OpenAISource[]>("openai.sources", []);
   }

@@ -2,8 +2,8 @@ import { isPlainRecord } from "./types.js";
 
 /**
  * OpenAI-compatible endpoints the user added (OpenAI, OpenRouter, LM Studio, Ollama, vLLM, …).
- * Each one is a source of models for the "openai" provider; a model id there is
- * "<source id>/<model id>". Stored in agent.sqlite on this PC. The API key never leaves the daemon:
+ * Each one is a source of models for the native harness (provider id "pi"); a model id there is
+ * "src-<source id>/<model id>". Stored in agent.sqlite on this PC. The API key never leaves the daemon:
  * the board only sees whether one is set.
  */
 export type OpenAISource = {

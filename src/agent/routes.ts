@@ -88,7 +88,7 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
-  // Pi's model sources (compatible endpoints). API keys go in, never out: the list only says whether one is set.
+  // Native harness model sources (OpenAI-compatible endpoints). API keys go in, never out: the list only says whether one is set.
   router.get("/model-sources", wrap(() => ({ sources: host.modelSourceViews() })));
   router.post("/model-sources", wrap((req) => ({ source: host.saveModelSource(null, req.body) })));
   router.put("/model-sources/:id", wrap((req) => ({ source: host.saveModelSource(req.params.id, req.body) })));

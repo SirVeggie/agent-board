@@ -90,8 +90,8 @@
     { name: "workspace", description: "Set the workspace folder" },
     { name: "global", description: "Not tied to a page or folder" },
   ];
-  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", pi: "Pi" };
-  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", pi: "π" };
+  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", pi: "Native" };
+  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", pi: "N" };
   const PROVIDERS = ["cursor", "claude", "pi"];
 
   /* ---------- state ---------- */
@@ -928,7 +928,7 @@
     });
   }
 
-  /* ---------- Pi's model sources ---------- */
+  /* ---------- Native harness model sources ---------- */
 
   /** Add (source null) or edit an endpoint. The API key field only sends a new key; it never shows the old one. */
   function editSource(source) {
@@ -994,9 +994,9 @@
     actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), button(source ? "Save" : "Add", "ag-btn primary", save));
     panel.append(
       el("h2", "ag-modal-title", source ? `Edit ${source.name}` : "Add a model source"),
-      el("p", "ag-modal-hint", "Any endpoint that speaks the OpenAI Chat Completions API. Its models run through Pi. The key is stored on this PC and never shown again."),
+      el("p", "ag-modal-hint", "Any endpoint that speaks the OpenAI Chat Completions API. Its models run through the native harness. The key is stored on this PC and never shown again."),
       field("Name", name),
-      field("Base URL", baseUrl, "Up to the version, e.g. …/v1. Pi calls /chat/completions under it, and Scribe /models when the list below is empty."),
+      field("Base URL", baseUrl, "Up to the version, e.g. …/v1. The native harness calls /chat/completions under it, and Scribe /models when the list below is empty."),
       field("API key", key, source?.hasKey ? "Leave empty to keep the saved key." : "Leave empty for local servers that need none."),
       field("Models", models),
       reasoning,
@@ -3103,7 +3103,7 @@
           items.push({
             label: m.label,
             detail: m.id !== m.label ? m.id : m.description,
-            search: `${provider} ${m.id}`,
+            search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
             checked: s.provider === provider && s.model === m.id,
             disabled: !status?.available,
             star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
@@ -5926,7 +5926,7 @@
       sourceActions.append(button("Add source…", null, () => editSource(null)));
       sources.append(
         el("h3", null, "Model sources"),
-        el("p", "settings-hint", "OpenAI-compatible endpoints (OpenRouter, LM Studio, Ollama, vLLM, llama.cpp…) for Pi threads. Pi also offers the models of providers whose API key is set in the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, …)."),
+        el("p", "settings-hint", "OpenAI-compatible endpoints (OpenRouter, LM Studio, Ollama, vLLM, llama.cpp…) for the native harness. Native also offers the models of providers whose API key is set in the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, …)."),
         this.sources,
         sourceActions
       );
@@ -6015,7 +6015,7 @@
       const about = el(
         "p",
         "settings-hint",
-        "Cursor runs through the Cursor SDK (log in above, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login."
+        "Cursor runs through the Cursor SDK (log in above, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login. Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
       );
       panel.append(title, providers, cursor, sources, usage, chat, keys, about);
       root.append(backdrop, panel);
@@ -6115,7 +6115,7 @@
             items.push({
               label: m.label,
               detail: m.id !== m.label ? m.id : m.description,
-              search: `${provider} ${m.id}`,
+              search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
               checked: cur.provider === provider && cur.model === m.id,
               run: async () => {
                 try {
