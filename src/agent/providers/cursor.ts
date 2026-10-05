@@ -449,6 +449,12 @@ class CursorSession implements ProviderSession {
   /** What the open agent was created or resumed with; a change reopens it before the next turn. */
   private agentKey: string | null = null;
   private opening: Promise<SDKAgent> | null = null;
+  /**
+   * The open agent was resumed and has not sent yet. Agent.create queues the first run and only that
+   * agent object knows to use it, so a resumed agent (a spare reopened for its thread, or one a crash
+   * left mid-run) still has an active run on record and its first send is refused without force.
+   */
+  private resumed = false;
   private agentId: string | null;
   /** The agent id last reported to the host; the host clearing it (rewind) means start over. */
   private reported: string | null = null;
@@ -572,6 +578,7 @@ class CursorSession implements ProviderSession {
     if (this.agentId) {
       try {
         agent = await Agent.resume(this.agentId, options);
+        this.resumed = true;
         this.lastInstructions = "";
       } catch (err) {
         log(`Cursor agent resume failed, starting a new agent: ${errorText(err)}`);
@@ -584,6 +591,7 @@ class CursorSession implements ProviderSession {
         throw new Error(errorText(err));
       });
       this.agentId = agent.agentId;
+      this.resumed = false;
       this.lastInstructions = "";
     }
     this.agent = agent;
@@ -688,8 +696,10 @@ class CursorSession implements ProviderSession {
           model: modelSelection(this.thread, models),
           mode: this.thread.mode === "plan" ? "plan" : "agent",
           onDelta: ({ update }) => this.onDelta(update, sink),
+          ...(this.resumed ? { local: { force: true } } : {}),
         }
       );
+      this.resumed = false;
       this.current = run;
       this.lastInstructions = input.instructions;
       for (const id of this.steers.keys()) this.sendSteer(id);
