@@ -4480,7 +4480,7 @@
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
       else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
-    /** The hidden handle shows one line at a time; a new step slides the previous one up and out. */
+    /** The hidden handle shows one line at a time; a new step slides the previous one up with a short motion blur. */
     setHandleText(text, key) {
       const box = this.handleText;
       const cur = box.lastElementChild;
@@ -4493,15 +4493,28 @@
       for (const old of [...box.children]) if (old !== cur) old.remove();
       const next = el("span", "dock-handle-line", text);
       box.append(next);
-      const animate = cur && !S.dockShown && this.handle.classList.contains("busy") && Date.now() - (this.handleAt || 0) > 600;
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const animate = !reduce && cur && !S.dockShown && this.handle.classList.contains("busy") && Date.now() - (this.handleAt || 0) > 600;
       this.handleAt = Date.now();
       if (!animate) {
         for (const old of [...box.children]) if (old !== next) old.remove();
         return;
       }
-      const ease = { duration: 340, easing: "cubic-bezier(.2,.8,.2,1)" };
-      next.animate([{ transform: "translateY(100%)", opacity: 0 }, { transform: "none", opacity: 1 }], ease);
-      cur.animate([{ transform: "none", opacity: 1 }, { transform: "translateY(-100%)", opacity: 0 }], { ...ease, fill: "forwards" });
+      const ease = { duration: 460, easing: "cubic-bezier(.42,0,.58,1)" };
+      next.animate(
+        [
+          { transform: "translateY(100%)", filter: "blur(5px)", opacity: 0.75 },
+          { transform: "none", filter: "blur(0px)", opacity: 1 },
+        ],
+        ease,
+      );
+      cur.animate(
+        [
+          { transform: "none", filter: "blur(0px)", opacity: 1 },
+          { transform: "translateY(-100%)", filter: "blur(5px)", opacity: 0.5 },
+        ],
+        { ...ease, fill: "forwards" },
+      );
       // A timer rather than onfinish: animations stall in a hidden window, and the old line must still go.
       setTimeout(() => cur.remove(), ease.duration + 20);
     },

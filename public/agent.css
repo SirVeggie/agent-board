@@ -3728,11 +3728,14 @@ button.dock-handle.busy .dock-handle-sep {
   background: var(--border);
 }
 
-/* One line at a time; lines stack in one cell so a new step can slide the old one out. */
+/* One line at a time; lines stack in one cell so a new step can slide the old one out.
+   A little taller than the glyphs so the motion blur can bloom without clipping into fog. */
 .dock-handle-text {
   display: grid;
   overflow: hidden;
+  align-items: center;
   min-width: 0;
+  height: 20px;
 }
 
 .dock-handle-line {
@@ -3740,6 +3743,8 @@ button.dock-handle.busy .dock-handle-sep {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 16px;
+  filter: blur(0px);
 }
 
 button.dock-handle.busy .dock-handle-text {
