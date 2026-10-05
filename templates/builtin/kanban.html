@@ -1049,6 +1049,7 @@
   var openId = null;
   // Comments opened from their folded preview, for the card that is open (reset when it closes).
   var expandedFor = null, expandedComments = {};
+  var coverEls = {};
   var COMMENT_FOLD_PX = 220;
   var composerCol = null;
   var composerText = "";
@@ -1735,10 +1736,14 @@
     var done = col && col.role === "done";
     if (done) li.classList.add("is-done");
     if (c.images.length && c.cover !== false) {
-      var cover = el("img", "cover");
-      cover.src = c.images[0].data;
-      cover.alt = "";
-      cover.draggable = false;
+      // The board is rebuilt on every change; reusing the loaded image keeps its height, so the column keeps its scroll.
+      var cover = coverEls[c.id];
+      if (!cover || cover._src !== c.images[0].data) {
+        cover = coverEls[c.id] = el("img", "cover");
+        cover.src = cover._src = c.images[0].data;
+        cover.alt = "";
+        cover.draggable = false;
+      }
       li.appendChild(cover);
     }
     var labelMap = {};
@@ -2301,6 +2306,30 @@
     render();
   }
 
+  // Sets markup only when it changed, so a re-render keeps rendered nodes: loaded images and resolved page links.
+  function setHtml(node, html) {
+    if (node._html === html) return;
+    node._html = html;
+    var old = loadedImages(node);
+    node.innerHTML = html;
+    keepImages(node, old);
+  }
+  // A rebuilt section's new <img>s have no height until they decode, which can clamp the dialog's scroll; the
+  // old, loaded ones with the same source take their place.
+  function loadedImages(root) {
+    var bySrc = {};
+    root.querySelectorAll("img").forEach(function (img) {
+      if (img.complete && img.naturalHeight) (bySrc[img.getAttribute("src")] = bySrc[img.getAttribute("src")] || []).push(img);
+    });
+    return bySrc;
+  }
+  function keepImages(root, bySrc) {
+    root.querySelectorAll("img").forEach(function (img) {
+      var same = bySrc[img.getAttribute("src")];
+      if (same && same.length) img.replaceWith(same.shift());
+    });
+  }
+
   function renderModal() {
     var c = card(openId);
     if (!c) {
@@ -2308,10 +2337,12 @@
       overlay.classList.add("hidden");
       return;
     }
+    // Rebuilding sections can shrink the dialog for a layout (folding comments measures them), which clamps the scroll.
+    var scrollTop = overlay.scrollTop;
     var col = colOf(c);
     mNum.textContent = "#" + c.num + (c.archived ? " · archived" : "") + (col ? " · in " + col.title : "");
     if (!editingTitle) {
-      mTitle.innerHTML = linkText(c.title);
+      setHtml(mTitle, linkText(c.title));
       mTitle.classList.remove("hidden");
       mTitleInput.classList.add("hidden");
     }
@@ -2333,10 +2364,10 @@
     if (!editingDesc) {
       if (c.description.trim()) {
         mdPreview.className = "md-preview";
-        mdPreview.innerHTML = renderMarkdown(c.description, c.images);
+        setHtml(mdPreview, renderMarkdown(c.description, c.images));
       } else {
         mdPreview.className = "md-preview placeholder";
-        mdPreview.textContent = "Click to add a description. Markdown works; paste an image to embed it.";
+        setHtml(mdPreview, escapeHtml("Click to add a description. Markdown works; paste an image to embed it."));
       }
     }
 
@@ -2376,9 +2407,25 @@
     });
 
     // images
-    galleryEl.replaceChildren();
     coverToggle.classList.toggle("hidden", !c.images.length);
     coverSwitch.checked = c.cover !== false;
+    var imagesSig = c.id + "|" + c.images.map(function (im) { return im.id + ":" + str(im.data).length; }).join(",");
+    if (galleryEl._sig !== imagesSig) renderGallery(c, imagesSig);
+
+    // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
+    if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
+    var commentsSig = JSON.stringify([c.id, c.title, c.thread, imagesSig, c.comments.map(function (cm) {
+      return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp];
+    })]);
+    if (commentsEl._sig !== commentsSig) renderComments(c, commentsSig);
+
+    renderModalSide(c, col);
+    if (overlay.scrollTop !== scrollTop) overlay.scrollTop = scrollTop;
+  }
+
+  function renderGallery(c, sig) {
+    galleryEl._sig = sig;
+    galleryEl.replaceChildren();
     c.images.forEach(function (im) {
       var t = el("div", "thumb");
       var img = el("img");
@@ -2403,9 +2450,11 @@
     addImg.title = "Add images (or paste / drop them on the card)";
     addImg.addEventListener("click", function () { fileEl.click(); });
     galleryEl.appendChild(addImg);
+  }
 
-    // comments
-    if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; }
+  function renderComments(c, sig) {
+    commentsEl._sig = sig;
+    var oldImages = loadedImages(commentsEl);
     commentsEl.replaceChildren();
     c.comments.forEach(function (cm, i) {
       var box = el("div", "comment" + (cm.by === "agent" ? " agent" : ""));
@@ -2413,6 +2462,7 @@
       // Markdown, like the description: #12 card links, [[page]] links and the card's images work too.
       var body = el("div", "body md-preview");
       body.innerHTML = renderMarkdown(cm.text, c.images);
+      keepImages(body, oldImages);
       box.appendChild(body);
       commentsEl.appendChild(box);
       if (i === c.comments.length - 1 && cm.by === "user" && cm.followUp === "offer" && c.thread) box.appendChild(followUpButtons(c, cm));
@@ -2426,8 +2476,9 @@
       }
     });
     if (!c.comments.length) commentsEl.appendChild(el("div", "who", "No comments yet."));
+  }
 
-    // side fields
+  function renderModalSide(c, col) {
     fillSelect(mColumn, columns().map(function (x) { return [x.id, x.title]; }), col ? col.id : "");
     fillSelect(mPriority, PRIORITIES.map(function (p, i) { return [String(i), p]; }), c.priority);
     if (document.activeElement !== mDue) mDue.value = str(c.due);

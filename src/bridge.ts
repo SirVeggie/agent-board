@@ -746,6 +746,35 @@ export const BOARD_BRIDGE_JS = `
 
   /** Mark links to pages that don't exist, and fill in empty link text with the page's title. */
   var labelQueued = false;
+  // Titles from the last resolve (null: missing), so a page that re-renders its links shows them at once, not blank
+  // until the next resolve. labelLinks still checks each one.
+  var knownTitles = Object.create(null);
+  function labelLink(el, raw, page) {
+    el.classList.toggle("scribe-link-missing", !page);
+    // An empty link shows its page's title, kept current on each recheck; the target itself while the page is missing.
+    if (el.hasAttribute("data-scribe-autotitle") || (!el.textContent.trim() && !el.children.length)) {
+      el.setAttribute("data-scribe-autotitle", "");
+      var text = page ? page.title : raw;
+      if (el.textContent !== text) {
+        el.textContent = text;
+      }
+    }
+    if (page && !el.getAttribute("title")) {
+      el.setAttribute("title", page.title);
+    }
+  }
+  function labelKnownLinks(root) {
+    var els = root.matches && root.matches("[data-scribe-open]") ? [root] : [];
+    if (root.querySelectorAll) {
+      els = els.concat(Array.prototype.slice.call(root.querySelectorAll("[data-scribe-open]")));
+    }
+    for (var i = 0; i < els.length; i += 1) {
+      var raw = (els[i].getAttribute("data-scribe-open") || "").split("#")[0].trim();
+      if (raw in knownTitles) {
+        labelLink(els[i], raw, knownTitles[raw] === null ? null : { title: knownTitles[raw] });
+      }
+    }
+  }
   function labelLinks() {
     labelQueued = false;
     if (!embedded) {
@@ -768,15 +797,8 @@ export const BOARD_BRIDGE_JS = `
           continue;
         }
         var page = pages[raw];
-        el.classList.toggle("scribe-link-missing", !page);
-        // An empty link shows its page's title, kept current on each recheck; the target itself while the page is missing.
-        if (el.hasAttribute("data-scribe-autotitle") || (!el.textContent.trim() && !el.children.length)) {
-          el.setAttribute("data-scribe-autotitle", "");
-          el.textContent = page ? page.title : raw;
-        }
-        if (page && !el.getAttribute("title")) {
-          el.setAttribute("title", page.title);
-        }
+        knownTitles[raw] = page ? page.title : null;
+        labelLink(el, raw, page);
       }
     });
   }
@@ -808,6 +830,9 @@ export const BOARD_BRIDGE_JS = `
           records[i].target.removeAttribute("data-scribe-link-checked");
           changed = true;
         } else if (records[i].addedNodes.length) {
+          for (var k = 0; k < records[i].addedNodes.length; k += 1) {
+            labelKnownLinks(records[i].addedNodes[k]);
+          }
           changed = true;
         }
       }
