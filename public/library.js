@@ -174,9 +174,9 @@ window.createLibrary = function createLibrary(host) {
     return n;
   }
 
-  function hasOpenPage(folderId) {
+  function hasUnreadPage(folderId) {
     for (const id of subtree(folderId)) {
-      if (pagesOf(id).some((page) => host.isOpen(page.id))) {
+      if (pagesOf(id).some((page) => host.isUnread(page.id))) {
         return true;
       }
     }
@@ -328,14 +328,14 @@ window.createLibrary = function createLibrary(host) {
 
   function folderRow(folder, depth, open) {
     const el = document.createElement("div");
-    const openInside = !open && hasOpenPage(folder.id);
+    const unreadInside = !open && hasUnreadPage(folder.id);
     el.className =
       "side-row lib-row lib-folder" +
       (open ? " expanded" : "") +
       (drag?.id === folder.id && drag.kind === "folder" ? " lib-drag-source" : "");
     el.role = "treeitem";
     el.tabIndex = 0;
-    el.ariaLabel = `${folder.name} (folder)`;
+    el.ariaLabel = `${folder.name} (folder)` + (unreadInside ? " (unread)" : "");
     el.ariaLevel = String(depth + 1);
     el.dataset.kind = "folder";
     el.dataset.id = folder.id;
@@ -361,10 +361,10 @@ window.createLibrary = function createLibrary(host) {
     text.appendChild(title);
     el.appendChild(text);
 
-    if (openInside) {
+    if (unreadInside) {
       const dot = document.createElement("span");
-      dot.className = "lib-open-dot";
-      dot.title = "Has open tabs";
+      dot.className = "lib-unread-dot";
+      dot.title = "Has unread pages";
       el.appendChild(dot);
     }
     const count = document.createElement("span");
