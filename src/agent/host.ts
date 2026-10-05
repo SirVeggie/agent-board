@@ -43,6 +43,7 @@ import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCurso
 import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
+import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -1395,6 +1396,217 @@ export class AgentHost {
       return { allowed: true, message: `Allowed once: make the ${call.kind === "fetch" ? "fetch" : "search"} now.` };
     }
     return { allowed: true, message: "Allowed: make the call." };
+  }
+
+  /** The store's folder and page lookups, for thread access scopes. */
+  private scopeLookup(): ScopeLookup {
+    return {
+      pageFolder: (id) => store.get(id, "agent")?.folderId ?? null,
+      folderInside: (folderId, rootId) => store.folderInside(folderId, rootId),
+      pageTitle: (id) => store.get(id, "agent")?.title ?? null,
+      folderPath: (id) => store.folderPath(id),
+    };
+  }
+
+  /**
+   * Ask the user to let a thread read other threads in its scopes (its workspace, its page or folder;
+   * any thread for a global thread). Grants last for the rest of the thread; only narrows the ask to
+   * some of those scopes. Like web requests, a board worker's chat stops waiting after the importance's wait.
+   */
+  async requestThreadAccess(
+    threadId: string,
+    opts: { only?: Array<AccessScope["kind"]>; importance?: WebImportance; reason?: string; signal?: AbortSignal } = {}
+  ): Promise<{ allowed: boolean; message: string; scopes: string[] }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Reading other threads only works in Scribe chat threads.");
+    const lookup = this.scopeLookup();
+    const labels = (scopes: AccessScope[]) => scopes.map((s) => scopeLabel(s, lookup));
+    const granted = () => {
+      const t = this.threads.get(threadId) ?? thread;
+      return allowedGrants(t, t.threadGrants ?? []);
+    };
+    let want = requestableScopes(thread);
+    if (opts.only?.length) want = want.filter((s) => opts.only!.includes(s.kind));
+    if (!want.length) return { allowed: false, message: "This thread has no such scope to ask for: it can ask for its workspace, its page or folder, or (a global thread) all threads.", scopes: labels(granted()) };
+    if (scopesGranted(granted(), want)) return { allowed: true, message: "Already allowed.", scopes: labels(granted()) };
+    const run = this.runs.get(threadId);
+    if (!run) return { allowed: false, message: "With no turn running the user cannot be asked.", scopes: labels(granted()) };
+    const importance = opts.importance ?? "useful";
+    const waitMs = pageOwned(this.loadItems(threadId)) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const detail = [
+      `The agent asks to read the transcripts of other threads: ${labels(want).join("; ")}. Importance: ${importance}.`,
+      opts.reason?.trim(),
+      waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const short: Record<AccessScope["kind"], string> = { workspace: "workspace", page: "page", folder: "folder", all: "all threads" };
+    const options: ApprovalOption[] = [
+      { id: "all", label: want.length === 1 ? "Allow for this thread" : "Allow all of these", kind: "allow_always" },
+      ...(want.length > 1 ? want.map((s, i) => ({ id: `s${i}`, label: `Only ${short[s.kind]}`, kind: "allow_always" as const })) : []),
+      { id: "deny", label: "Deny", kind: "reject_once" },
+    ];
+    this.closeBlocks(run);
+    const title = `Read other threads: ${labels(want).join("; ")}`;
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", title: title.slice(0, 300), detail, options, status: "pending" });
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    opts.signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer =
+      waitMs === null
+        ? null
+        : setTimeout(() => {
+            timedOut = true;
+            abort.abort();
+          }, waitMs);
+    try {
+      const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", item.id, abort.signal);
+      if (decision.optionId === "deny") {
+        return { allowed: false, message: decision.note ? `The user denied reading other threads: ${decision.note}` : "The user denied reading other threads. Carry on without them.", scopes: labels(granted()) };
+      }
+      const picked = decision.optionId === "all" ? want : want.filter((_, i) => decision.optionId === `s${i}`);
+      const t = this.threads.get(threadId);
+      if (t) {
+        t.threadGrants = grantScopes(t.threadGrants, picked);
+        this.db.saveThread(t);
+        this.emitThread(threadId);
+      }
+      return { allowed: true, message: `Allowed: ${labels(picked).join("; ")}.`, scopes: labels(granted()) };
+    } catch {
+      return {
+        allowed: false,
+        message: timedOut ? "Nobody answered in time. Carry on without reading other threads." : "The request was cancelled.",
+        scopes: labels(granted()),
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** A thread's items without caching them, so a search over many threads does not keep them all in memory. */
+  private peekItems(threadId: string): Item[] {
+    return this.items.get(threadId) ?? this.db.listItems(threadId);
+  }
+
+  /** A thread's turns, from the cache when loaded, else straight from the database. */
+  private peekTurns(threadId: string): Turn[] {
+    return this.turns.get(threadId) ?? this.db.listTurns(threadId);
+  }
+
+  /** Threads reader may read, asking for access first when it has none yet. */
+  private async readableThreads(readerId: string, opts: { importance?: WebImportance; signal?: AbortSignal }): Promise<{ reader: Thread; threads: Thread[]; lookup: ScopeLookup }> {
+    let reader = this.threads.get(readerId);
+    if (!reader) throw new Error("Reading other threads only works in Scribe chat threads.");
+    if (!allowedGrants(reader, reader.threadGrants ?? []).length) {
+      const asked = await this.requestThreadAccess(readerId, { importance: opts.importance, signal: opts.signal });
+      if (!asked.allowed) throw new Error(asked.message);
+      reader = this.threads.get(readerId) ?? reader;
+    }
+    const lookup = this.scopeLookup();
+    const threads = [...this.threads.values()].filter((t) => canReadThread(reader, t, lookup));
+    return { reader, threads, lookup };
+  }
+
+  private threadStatus(t: Thread, turns: Turn[]): string {
+    return this.runs.has(t.id) ? "running" : turns.at(-1)?.status ?? "new";
+  }
+
+  /** thread_list: threads this one may read, newest first; q searches titles and transcripts. */
+  async listReadableThreads(
+    readerId: string,
+    opts: { q?: string; limit?: number; archived?: boolean; importance?: WebImportance; signal?: AbortSignal } = {}
+  ): Promise<{ scopes: string[]; threads: Array<Record<string, unknown>>; more: number }> {
+    const { reader, threads, lookup } = await this.readableThreads(readerId, opts);
+    const words = queryWords(opts.q);
+    const limit = Math.max(1, Math.min(100, Math.floor(opts.limit ?? 20)));
+    const rows: Array<Record<string, unknown>> = [];
+    let more = 0;
+    const sorted = threads.filter((t) => opts.archived || !t.archived).sort((a, b) => b.activityAt - a.activityAt);
+    for (const t of sorted) {
+      let hits: number | undefined;
+      let match: string | undefined;
+      if (words.length) {
+        const titleHit = words.every((w) => t.title.toLowerCase().includes(w));
+        const found = this.peekItems(t.id).filter((it) => itemMatches(it, words));
+        if (!titleHit && !found.length) continue;
+        hits = found.length;
+        const first = found[0] ? itemText(found[0]) : null;
+        if (first) match = first.length > 300 ? `${first.slice(0, 300)}…` : first;
+      }
+      if (rows.length >= limit) {
+        more += 1;
+        continue;
+      }
+      const turns = this.peekTurns(t.id);
+      const wt = t.worktree;
+      rows.push({
+        id: t.id,
+        title: t.title,
+        provider: t.provider,
+        model: t.model,
+        mode: t.mode,
+        scope: threadScopeLabel(t, lookup),
+        ...(t.cwd ? { cwd: t.cwd } : {}),
+        ...(wt ? { branch: wt.branch, ...(wt.closed ? { worktree: wt.closed.how } : {}) } : {}),
+        status: this.threadStatus(t, turns),
+        turns: turns.length,
+        createdAt: new Date(t.createdAt).toISOString(),
+        activityAt: new Date(t.activityAt).toISOString(),
+        ...(t.archived ? { archived: true } : {}),
+        ...(hits !== undefined ? { hits } : {}),
+        ...(match ? { match } : {}),
+      });
+    }
+    return { scopes: allowedGrants(reader, reader.threadGrants ?? []).map((s) => scopeLabel(s, lookup)), threads: rows, more };
+  }
+
+  /**
+   * thread_read: one readable thread's transcript as compact text. Without from, the last limit
+   * items; q keeps items that mention every word; kinds keeps only those item kinds (user, text, tool, …).
+   */
+  async readOtherThread(
+    readerId: string,
+    opts: { thread: string; from?: number; limit?: number; q?: string; kinds?: string[]; full?: boolean; importance?: WebImportance; signal?: AbortSignal }
+  ): Promise<Record<string, unknown>> {
+    const { threads, lookup } = await this.readableThreads(readerId, opts);
+    const target = threads.find((t) => t.id === opts.thread);
+    if (!target) {
+      const outside = this.threads.has(opts.thread) && opts.thread !== readerId;
+      throw new Error(outside ? "That thread is outside the scopes this thread may read; thread_access asks for the rest of its scopes." : `No readable thread ${opts.thread}. thread_list shows the ones you can read.`);
+    }
+    const words = queryWords(opts.q);
+    const kinds = opts.kinds?.length ? new Set(opts.kinds) : null;
+    const pool = this.peekItems(target.id).filter((it) => (!kinds || kinds.has(it.kind)) && itemMatches(it, words) && itemText(it) !== null);
+    const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 40)));
+    const start = opts.from !== undefined ? pool.findIndex((it) => it.seq >= opts.from!) : Math.max(0, pool.length - limit);
+    const page = start < 0 ? [] : pool.slice(start, start + limit);
+    const turns = this.peekTurns(target.id);
+    const turnNo = new Map(turns.map((t, i) => [t.id, i + 1]));
+    const wt = target.worktree;
+    return {
+      thread: {
+        id: target.id,
+        title: target.title,
+        provider: target.provider,
+        model: target.model,
+        scope: threadScopeLabel(target, lookup),
+        ...(target.cwd ? { cwd: target.cwd } : {}),
+        ...(wt ? { branch: wt.branch, base: wt.base, ...(wt.closed ? { worktree: wt.closed.how } : {}) } : {}),
+        status: this.threadStatus(target, turns),
+        turns: turns.length,
+      },
+      total: pool.length,
+      items: page.map((it) => ({
+        seq: it.seq,
+        ...(it.turnId && turnNo.has(it.turnId) ? { turn: turnNo.get(it.turnId) } : {}),
+        at: new Date(it.createdAt).toISOString(),
+        text: itemText(it, { full: opts.full }),
+      })),
+      ...(start > 0 && page.length ? { earlier: { from: pool[Math.max(0, start - limit)].seq } } : {}),
+      ...(start >= 0 && start + limit < pool.length ? { later: { from: pool[start + limit].seq } } : {}),
+    };
   }
 
   /** Use up an "Allow once" pass from web_request that covers this call. */

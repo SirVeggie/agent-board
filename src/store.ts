@@ -302,6 +302,11 @@ export class BoardStore extends EventEmitter {
     return [...this.folders.values()].sort((a, b) => a.pos - b.pos);
   }
 
+  /** Whether folderId is rootId or one of its subfolders. */
+  folderInside(folderId: string, rootId: string): boolean {
+    return this.folderAncestors(folderId).includes(rootId);
+  }
+
   /** Library path like "CLIMS/Releases", or null for the root. */
   folderPath(folderId: string | undefined | null): string | null {
     const names: string[] = [];

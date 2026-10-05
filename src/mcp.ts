@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { safeStem } from "./boardExport.js";
@@ -1345,6 +1347,7 @@ export async function startMcp(): Promise<void> {
     registerBrowserTools(server);
     registerAsk(server);
     registerWebRequest(server);
+    registerThreadTools(server);
   }
 
   const transport = new StdioServerTransport();
@@ -1449,6 +1452,85 @@ function registerWebRequest(server: McpServer): void {
         clearInterval(heartbeat);
       }
     }
+  );
+}
+
+/**
+ * thread_access, thread_list, thread_read: search and read other Scribe chat threads in this chat's
+ * scopes (its workspace, its page or folder; any thread for a global chat), once the user allows it.
+ */
+function registerThreadTools(server: McpServer): void {
+  const importance = z
+    .enum(["necessary", "important", "useful", "trivial"])
+    .optional()
+    .describe("If the user has to be asked first: how much you need it (as for web_request). Default useful.");
+  const call = async (op: string, body: Record<string, unknown>, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
+    const progressToken = extra._meta?.progressToken;
+    const startedAt = Date.now();
+    const heartbeat =
+      progressToken === undefined
+        ? undefined
+        : setInterval(() => {
+            const seconds = Math.round((Date.now() - startedAt) / 1000);
+            extra
+              .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `Waiting for the user to allow reading other threads (${seconds}s)` } })
+              .catch(() => {});
+          }, WAIT_HEARTBEAT_MS);
+    try {
+      const { status, data } = await api("POST", `/api/thread-access/${op}`, body, { signal: extra.signal });
+      if (status >= 400) {
+        return errorResult((data as ApiError).error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    } catch (err) {
+      return errorResult((err as Error).message || `thread_${op} failed`);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  };
+
+  server.tool(
+    "thread_access",
+    "Ask the user to let this chat read other Scribe chat threads: earlier work, commands they ran and their output, decisions. A chat can only ask for threads in its own scopes: its workspace (threads working in the same folder or below it), and its page or folder (threads on that page, or in that folder and its pages and subfolders). A global chat can ask for all threads. thread_list and thread_read ask by themselves when nothing is allowed yet; use this to say why, to narrow the ask, or to ask for scopes not allowed yet. The answer lasts for the rest of this chat. Returns allowed, a message and the scopes now readable.",
+    {
+      scopes: z.array(z.enum(["workspace", "page", "folder", "all"])).optional().describe("Ask only for these of your scopes. Default all of them."),
+      reason: z.string().optional().describe("One or two lines on why you need it, shown to the user."),
+      importance,
+    },
+    { readOnlyHint: true },
+    async ({ scopes, reason, importance }, extra) => call("request", { scopes, reason, importance }, extra)
+  );
+
+  server.tool(
+    "thread_list",
+    "List the other Scribe chat threads this chat may read, newest activity first, with title, model, scope, folder, branch, status and turn count. q searches titles and transcripts (every word must match) and returns hits and the first match per thread. Asks the user for access first if nothing is allowed yet.",
+    {
+      q: z.string().optional().describe("Words to find in thread titles, messages, commands or their output."),
+      limit: z.number().optional().describe("At most this many threads (default 20, max 100)."),
+      archived: z.boolean().optional().describe("Include archived threads."),
+      importance,
+    },
+    { readOnlyHint: true },
+    async ({ q, limit, archived, importance }, extra) => call("list", { q, limit, archived, importance }, extra)
+  );
+
+  server.tool(
+    "thread_read",
+    "Read another chat thread's transcript as compact lines: user messages, agent replies, tool calls (commands, edits) with their output, approvals, questions and notices. Each item has a seq. Without from you get the last limit items; earlier / later give the from for the next page. q keeps items that mention every word; kinds keeps only some item kinds. Long tool output is clipped unless full. Asks the user for access first if nothing is allowed yet.",
+    {
+      thread: z.string().describe("Thread id from thread_list."),
+      from: z.number().optional().describe("Start at this seq (inclusive)."),
+      limit: z.number().optional().describe("At most this many items (default 40, max 200)."),
+      q: z.string().optional().describe("Only items that mention every one of these words."),
+      kinds: z
+        .array(z.enum(["user", "text", "tool", "approval", "question", "plan", "todos", "notice"]))
+        .optional()
+        .describe("Only these item kinds: user (messages), text (agent replies), tool (commands, edits, reads), …"),
+      full: z.boolean().optional().describe("Show long tool output in full (up to 20000 chars per item)."),
+      importance,
+    },
+    { readOnlyHint: true },
+    async ({ thread, from, limit, q, kinds, full, importance }, extra) => call("read", { thread, from, limit, q, kinds, full, importance }, extra)
   );
 }
 

@@ -41,6 +41,7 @@ import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
 import { agentRouter } from "./agent/routes.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
+import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
@@ -719,6 +720,57 @@ export async function startHttp(): Promise<http.Server> {
     res.on("close", onClientGone);
     agentHost
       .preRequestWeb(thread, call, { importance, ...(typeof body.reason === "string" ? { reason: body.reason.slice(0, 1000) } : {}), signal: abort.signal })
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
+  /**
+   * thread_access, thread_list and thread_read from a Scribe chat's MCP: read other threads in the
+   * chat's scopes. Any of them can ask the user first, so the request stays open until answered.
+   */
+  app.post("/api/thread-access/:op", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "Reading other threads only works in Scribe chat threads." });
+      return;
+    }
+    const host = agentHost;
+    const body = isPlainObject(req.body) ? req.body : {};
+    const importance = parseWebImportance(body.importance);
+    if (body.importance !== undefined && !importance) {
+      res.status(400).json({ error: "importance must be necessary, important, useful or trivial" });
+      return;
+    }
+    const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    const op = req.params.op;
+    const run = (): Promise<unknown> => {
+      if (op === "request") {
+        const only = strings(body.scopes)?.filter((s): s is AccessScope["kind"] => ["workspace", "page", "folder", "all"].includes(s));
+        return host.requestThreadAccess(thread, { only, importance, reason: str(body.reason, 1000), signal: abort.signal });
+      }
+      if (op === "list") return host.listReadableThreads(thread, { q: str(body.q, 300), limit: num(body.limit), archived: body.archived === true, importance, signal: abort.signal });
+      if (op === "read") {
+        const target = str(body.thread, 60);
+        if (!target) return Promise.reject(new Error("thread is required"));
+        return host.readOtherThread(thread, { thread: target, from: num(body.from), limit: num(body.limit), q: str(body.q, 300), kinds: strings(body.kinds), full: body.full === true, importance, signal: abort.signal });
+      }
+      return Promise.reject(new Error(`unknown op: ${op}`));
+    };
+    run()
       .then((result) => {
         if (!res.writableEnded) res.json(result);
       })

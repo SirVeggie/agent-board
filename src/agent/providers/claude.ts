@@ -335,7 +335,7 @@ export function describeTool(name: string, input: unknown, cwd: string | null): 
   if (name.startsWith("mcp__")) {
     const [, server, ...rest] = name.split("__");
     const tool = rest.join("__");
-    const key = str(inp.key) ?? str(inp.title) ?? str(inp.query);
+    const key = str(inp.key) ?? str(inp.title) ?? str(inp.query) ?? str(inp.q) ?? str(inp.thread);
     return { title: `${server === BOARD_SERVER ? "Scribe" : server}: ${tool}${key ? ` · ${key}` : ""}` };
   }
   switch (name) {

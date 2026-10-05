@@ -56,6 +56,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       "To say why and how much you need it, call web_request first with importance: necessary (waits until answered), important (about 2 hours), useful (15 minutes) or trivial (2 minutes). In a chat run by a board worker an unanswered request is refused after that wait; then carry on without the web, doing what you can."
     );
   }
+  lines.push(
+    "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. The user is asked to allow it first; thread_access says why."
+  );
   if (thread.scope.kind === "page" && scope.page) {
     lines.push(
       "",
