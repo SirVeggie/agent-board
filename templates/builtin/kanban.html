@@ -798,17 +798,6 @@
     color: var(--who, var(--muted));
   }
   .who-name.person { color: var(--muted); font-weight: 600; }
-  .card.by-worker::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 3px;
-    border-radius: 0 11px 11px 0;
-    background: var(--who);
-    pointer-events: none;
-  }
   .waiting { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
   .waiting .who-name { display: inline; font-size: inherit; letter-spacing: 0; text-transform: none; font-weight: 600; }
   .w-badge {
@@ -1843,7 +1832,7 @@
       bar.title = l.name;
       chips.appendChild(bar);
     });
-    // The assignee: name in the top-right corner; a worker's color on the right edge as well.
+    // The assignee: name in the top-right corner; a worker's name in its color.
     var who = str(c.assignee).trim();
     if (who) {
       var wid = workerIdFor(who);
@@ -1851,11 +1840,7 @@
       head.appendChild(chips);
       var nameEl = el("span", "who-name" + (wid ? "" : " person"), isAgent(who) ? "🤖 agent" : who);
       nameEl.title = (wid ? "Worker: " : "Assigned to ") + who;
-      if (wid) {
-        nameEl.style.setProperty("--who", workerColor(wid));
-        li.classList.add("by-worker");
-        li.style.setProperty("--who", workerColor(wid));
-      }
+      if (wid) nameEl.style.setProperty("--who", workerColor(wid));
       head.appendChild(nameEl);
       li.appendChild(head);
     } else if (chosen.length) {
