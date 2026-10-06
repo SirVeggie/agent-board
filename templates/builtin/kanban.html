@@ -211,7 +211,7 @@
     background: rgba(255, 255, 255, .06);
     color: var(--muted);
   }
-  button.role { font: inherit; border-radius: 6px; }
+  button.role { border-radius: 6px; }
   button.role.agent:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .role.agent, .role.working { color: var(--agent); background: rgba(224, 179, 74, .12); }
   .role.agent:hover { background: rgba(224, 179, 74, .22); }
@@ -225,6 +225,23 @@
     height: 9px;
     fill: currentColor;
     display: block;
+  }
+  /* The inbox tag shows its pause icon only on hover (or while paused). */
+  .role.agent .pause-ic {
+    width: 0;
+    margin-left: -4px;
+    opacity: 0;
+    transition: width 150ms ease, margin-left 150ms ease, opacity 150ms ease;
+  }
+  .role.agent:hover .pause-ic,
+  .role.agent:focus-visible .pause-ic,
+  .role.agent.paused .pause-ic {
+    width: 9px;
+    margin-left: 0;
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .role.agent .pause-ic { transition: none; }
   }
   .role.review { color: var(--accent); background: rgba(110, 168, 255, .12); }
   .role.done { color: var(--ok); background: rgba(61, 214, 140, .12); }
@@ -2168,7 +2185,7 @@
       ? "Paused — workers skip this column. Click to resume."
       : "Workers pick cards here. Click to pause.";
     tag.appendChild(document.createTextNode(ROLE_TAG.agent));
-    if (paused) tag.insertAdjacentHTML("beforeend", PAUSE_ICON);
+    tag.insertAdjacentHTML("beforeend", PAUSE_ICON);
     tag.addEventListener("click", function (e) {
       e.stopPropagation();
       toggleColPaused(col.id);
