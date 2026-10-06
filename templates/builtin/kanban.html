@@ -3225,7 +3225,8 @@
       var assigned = workerIdFor(c.assignee);
       var runners = assigned ? [assigned] : workerIds();
       runners.filter(function (wid) { return canRunSolo(c, wid); }).forEach(function (wid) {
-        var b = menuButton(menuEl, "Run " + workerName(worker(wid)) + " on this card", function () { runSolo(id, wid); });
+        var label = assigned ? "Run worker" : "Run " + workerName(worker(wid));
+        var b = menuButton(menuEl, label, function () { runSolo(id, wid); });
         b.title = "A chat of its own for this card, beside the worker's run";
       });
     }
