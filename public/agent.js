@@ -2653,7 +2653,9 @@
         body.append(actions);
       }
       if (it.status === "error" && it.output) body.append(el("pre", "ag-pre ag-out", it.output.slice(0, 2000)));
-      if (page.name === "page_patch") {
+      if (page.name === "page_show") {
+        if (typeof input.htmlPath === "string") body.append(el("div", "ag-tool-desc", `Loaded HTML from ${input.htmlPath}`));
+      } else if (page.name === "page_patch") {
         const edits = Array.isArray(input.edits) ? input.edits.filter(isRecord) : [];
         edits.forEach((edit, i) => {
           const file = snippetDiff(String(edit.oldString ?? ""), String(edit.newString ?? ""));
@@ -4078,8 +4080,10 @@
     const title = resolved?.title || result?.title || (typeof input.title === "string" && input.title) || ref.replace(/^scribe:/, "") || "page";
     const done = it.status === "done";
     const page = { name, ref, title, verb: "", summary: "" };
-    if (name === "page_show") page.verb = done ? (result?.created ? "Created" : "Showed") : it.status === "error" ? "Show" : "Showing";
-    else if (name === "page_patch") {
+    if (name === "page_show") {
+      page.verb = done ? (result?.created ? "Created" : "Showed") : it.status === "error" ? "Show" : "Showing";
+      if (typeof input.htmlPath === "string") page.summary = "from file";
+    } else if (name === "page_patch") {
       page.verb = done ? "Edited" : it.status === "error" ? "Edit" : "Editing";
       const n = Array.isArray(input.edits) ? input.edits.length : 0;
       page.summary = n ? `${n} ${n === 1 ? "edit" : "edits"}` : typeof input.htmlPath === "string" ? "whole page" : typeof input.title === "string" ? "title" : "";

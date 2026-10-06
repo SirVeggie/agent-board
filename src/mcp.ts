@@ -98,7 +98,7 @@ const INSTRUCTIONS = [
   "Scribe is a tabbed HTML viewer the user keeps open. Use it for standalone visual output (investigation results, analyses, comparisons, design options) and interactive pages whose state you read back (todo lists, checklists, reviews, forms, kanban boards). Prefer it over writing .html files into the workspace or the host's own canvas or artifact features, unless the user asked for those.",
   "Also use it whenever the user refers to something in Scribe: a page title, a pasted page key (keys look like scribe:some-page; pass it as key to page_read / page_patch / page_state as is), or their todo list or kanban.",
   "If the scribe skill is available, load it before building or changing pages; it has the full rules. Without the skill, call scribe_docs: it serves the same rules and the page API (window.scribe in a page: state, signals, assets, links, scribe.preview, scribe.agent) for this Scribe version, a section at a time.",
-  "Show a page once with page_show and a stable key; for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key. Pass background: true when creating a page the user will open from a link (a form, investigation, or evidence) rather than look at now — a new background page stays in the Library, not the tab strip.",
+  "Show a page once with page_show and a stable key (html, or htmlPath to a local file when the page is large); for small edits to an existing page use page_patch, not a full re-show. Do not replace a page's content with a continuation: close it and show a new key. Pass background: true when creating a page the user will open from a link (a form, investigation, or evidence) rather than look at now — a new background page stays in the Library, not the tab strip.",
   "Find pages by title with page_list (open tabs), then library_search (every page). Never guess a key.",
   "Pages keep user data in page state (scribe.state / scribe.update / scribe.bind in the page). Read it with page_state (pass path to read one part), change it with page_update ops, or with page_action when the page's template has actions (its guide lists them). Never use localStorage in a page.",
   "Pages can link to each other by key: <a data-scribe-open=\"scribe:key\" data-scribe-mode=\"peek\">. Use peek for a quick look at evidence or references, split for side-by-side reading, and no mode when the user should go to that page. Plain hrefs to websites open the browser. Link only to keys you created or found with page_list / library_search.",
@@ -127,14 +127,24 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_show",
-    "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to skip focus and the strip for a new page (created in the Library with a Library blip); an already-open tab stays in the background with an unread blip; an already-closed page stays closed with a Library blip. Use background when creating a page the user will open from a link rather than look at now. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
+    "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to skip focus and the strip for a new page (created in the Library with a Library blip); an already-open tab stays in the background with an unread blip; an already-closed page stays closed with a Library blip. Use background when creating a page the user will open from a link rather than look at now. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files into the workspace. Pass html (a full document or fragment), or htmlPath to a local HTML file — in Code mode, write a large page to a temp file and pass htmlPath so it is not pasted as a tool argument. Mutually exclusive. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
     {
       key: z
         .string()
         .optional()
         .describe("Stable identity for this page, e.g. sprint-notes; Scribe stores it as scribe:sprint-notes. Reusing the same key updates that page instead of opening another."),
       title: z.string().describe("Tab title shown in Scribe."),
-      html: z.string().describe("HTML document or fragment to render in the tab."),
+      html: z
+        .string()
+        .optional()
+        .describe("HTML document or fragment to render in the tab. Omit when passing htmlPath."),
+      htmlPath: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Local HTML file that is the page body. Use instead of html when the document is large (write it with file tools to a temp file, then pass the path). Same create-or-replace behaviour as html, including title, state, assets, folder, and background. Mutually exclusive with html."
+        ),
       assets: z
         .array(
           z.union([
@@ -178,7 +188,12 @@ export async function startMcp(): Promise<void> {
           "Refuse to replace an existing page whose revision is no longer this one. Without it, re-showing a page you read or wrote earlier in this session is refused if someone changed it since."
         ),
     },
-    async ({ key, title, html, assets, pin, state, background, folder, expectedRevision }) => {
+    async ({ key, title, html: htmlArg, htmlPath, assets, pin, state, background, folder, expectedRevision }) => {
+      const resolved = resolveShowHtml(htmlArg, htmlPath);
+      if ("error" in resolved) {
+        return errorResult(resolved.error);
+      }
+      const html = resolved.html;
       const activate = background !== true;
       const guard = expectedRevision ?? (key ? revisions.forKey(key) : undefined);
       let resolvedAssets: { path: string; name?: string }[] = [];
@@ -284,9 +299,10 @@ export async function startMcp(): Promise<void> {
         ),
       htmlPath: z
         .string()
+        .min(1)
         .optional()
         .describe(
-          "Local HTML file that replaces the whole page, usually the path returned by page_read toFile: true after you edited it. Keeps title, page state, and events. Mutually exclusive with edits."
+          "Local HTML file that replaces the whole page, usually the path returned by page_read toFile: true after you edited it. Keeps title, page state, and events. Mutually exclusive with edits. Does not create a page — for a new page from a file, use page_show htmlPath."
         ),
       expectedRevision: z
         .number()
@@ -321,11 +337,11 @@ export async function startMcp(): Promise<void> {
       }
       let html: string | undefined;
       if (htmlPath) {
-        try {
-          html = stripBom(fs.readFileSync(path.resolve(htmlPath), "utf8"));
-        } catch (err) {
-          return errorResult(`Could not read htmlPath: ${(err as Error).message}`);
+        const file = readHtmlPath(htmlPath);
+        if ("error" in file) {
+          return errorResult(file.error);
         }
+        html = file.html;
       }
       const activate = background !== true;
       const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/patch`, {
@@ -1783,6 +1799,31 @@ function writeCheckout(tab: Tab): string {
 
 function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+export type HtmlPathResult = { html: string } | { error: string };
+
+/** UTF-8 HTML from a local path for page_show / page_patch htmlPath. */
+export function readHtmlPath(htmlPath: string): HtmlPathResult {
+  try {
+    return { html: stripBom(fs.readFileSync(path.resolve(htmlPath), "utf8")) };
+  } catch (err) {
+    return { error: `Could not read htmlPath: ${(err as Error).message}` };
+  }
+}
+
+/** page_show takes inline html or htmlPath, not both. */
+export function resolveShowHtml(html: string | undefined, htmlPath: string | undefined): HtmlPathResult {
+  if (html !== undefined && htmlPath) {
+    return { error: "Pass either html or htmlPath, not both" };
+  }
+  if (htmlPath) {
+    return readHtmlPath(htmlPath);
+  }
+  if (html !== undefined) {
+    return { html };
+  }
+  return { error: "Provide html or htmlPath" };
 }
 
 function jsonResult(value: unknown) {

@@ -57,6 +57,7 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 - `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`). Scribe stores it as `scribe:clims-12345-analysis`; either form finds the page later.
 - `title`: short tab label
 - `html`: a complete HTML document with inline CSS, or a fragment (Scribe wraps fragments)
+- `htmlPath`: instead of `html`, a local HTML file. In Code mode, write a large page to a temp file (not the workspace) and pass the path so it is not pasted as a tool argument. Same title, state, assets, folder, and background rules as `html`. Mutually exclusive with `html`.
 - `assets`: omit unless the page needs images
 - `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing Scribe). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, during a **project design** screenshot loop they should not see yet, or when creating a page you will **link to** (a form, investigation, or evidence) rather than put in front of them. A new page with `background: true` is created in the Library without opening a tab.
 - `pin`: omit or false unless they hinted the tab should persist, or it is a keep-using app (todo list, reusable tool). Do not pin one-off investigations, designs, dumps, questionnaires, demos, or forms.
@@ -132,9 +133,16 @@ page_patch({ key: "todo-page", edits: [{ oldString: "...", newString: "..." }], 
 
 ### Building a large page in parts
 
-A new page too big for one `page_show` call: show the first part, then add the rest with `append` edits. Each `{ append: true, newString }` lands just before the page's closing `</body>` (at the end of a page without one), so parts stay in order inside the body.
+A new page too big to pass as inline `html`:
+
+- **Code mode:** write the HTML to a temp file (not the workspace) and `page_show` with `htmlPath` instead of `html`. One call; title, state, assets, and background work as usual. Do not create a placeholder page and then `page_patch` it.
+- **Pages mode** (no file tools): show the first part, then add the rest with `append` edits.
+
+Each `{ append: true, newString }` lands just before the page's closing `</body>` (at the end of a page without one), so parts stay in order inside the body.
 
 ```
+page_show({ key: "audit", title: "Audit", htmlPath: "<temp file>", background: true })
+
 page_show({ key: "audit", title: "Audit", html: "<h1>Audit</h1><section id=\"part-1\">...</section>", background: true })
 page_patch({ key: "audit", edits: [{ append: true, newString: "<section id=\"part-2\">...</section>" }], background: true })
 page_patch({ key: "audit", edits: [{ append: true, newString: "<script>/* wire it up */</script>" }] })
@@ -156,7 +164,7 @@ page_patch({ key: "todo-page", htmlPath: "<that path>", expectedRevision: 23, ba
 ```
 
 - The checkout is a scratch copy in the system temp folder, not a workspace file. The tab stays the source of truth; the file is only for editing.
-- Check-in replaces the whole HTML but keeps title, page state, and events (unlike `page_show`). `htmlPath` and `edits` are mutually exclusive.
+- Check-in replaces the whole HTML but keeps title, page state, and events (unlike `page_show`). `htmlPath` and `edits` are mutually exclusive. For a **new** large page, use `page_show` with `htmlPath`; `page_patch` does not create.
 - Always pass the checkout's `revision` as `expectedRevision`. If it is refused, the page moved: check out again and redo your edits on the fresh copy.
 - Template-bound pages cannot be checked out.
 
