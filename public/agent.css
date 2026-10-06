@@ -382,7 +382,11 @@ button.ag-scope-chip.warn {
 }
 
 .ag-scroll.queued > .ag-transcript {
-  padding-bottom: 8px;
+  padding-bottom: 14px;
+}
+
+.ag-view-full .ag-scroll.queued > .ag-transcript {
+  padding-bottom: 18px;
 }
 
 /* New rows fade in while the transcript glides up to them (ENTER_MS in agent.js). */
@@ -3536,7 +3540,8 @@ button.dock-scope.warn {
 }
 
 /* A faint divider that fades out at both ends separates turns. */
-.ag-transcript .ag-turn + .ag-turn::before {
+.ag-transcript .ag-turn + .ag-turn::before,
+.ag-transcript.ag-queue > .ag-turn:first-child::before {
   content: "";
   display: block;
   width: 50%;
