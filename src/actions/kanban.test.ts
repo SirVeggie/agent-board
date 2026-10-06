@@ -148,6 +148,18 @@ test("list gives compact rows and column counts", () => {
   assert.equal((result.columns as Array<{ stopRequested?: boolean }>)[1].stopRequested, undefined);
 });
 
+test("list marks a paused agent column without hiding its cards", () => {
+  const paused = {
+    ...board(),
+    columns: board().columns.map((c) => (c.id === "ready" ? { ...c, paused: true } : c)),
+  };
+  const { result } = run(paused, "list", { column: "agent" });
+  const ready = (result.columns as Array<{ id: string; paused?: boolean }>).find((c) => c.id === "ready");
+  assert.equal(ready?.paused, true);
+  assert.equal((result.columns as Array<{ id: string; paused?: boolean }>).find((c) => c.id === "in")?.paused, undefined);
+  assert.deepEqual((result.cards as Array<{ num: number }>).map((c) => c.num), [1, 2]);
+});
+
 const nums = (result: Record<string, unknown>) => (result.cards as Array<{ num: number }>).map((c) => c.num);
 
 test("list with no column omits done-role cards and follows board order", () => {

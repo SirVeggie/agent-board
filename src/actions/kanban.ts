@@ -13,7 +13,7 @@ import {
 
 /** Rules the Kanban page follows too: done time, column order, card numbers, claims. Keep them in step. */
 
-type Column = { id: string; title: string; role?: string; wip?: number };
+type Column = { id: string; title: string; role?: string; wip?: number; paused?: boolean };
 type Label = { id: string; name: string; color?: string };
 type Comment = { id: string; by: "user" | "agent"; at: number; text: string };
 type Status = { kind: string; text: string };
@@ -342,6 +342,7 @@ export const kanbanActions: ActionSet = {
               id: c.id,
               title: c.title,
               ...(c.role ? { role: c.role } : {}),
+              ...(c.paused ? { paused: true } : {}),
               cards: cards(state).filter((x) => x.col === c.id && !x.archived).length,
             })),
             ...(workerList(state).length
