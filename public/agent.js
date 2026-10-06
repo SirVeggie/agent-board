@@ -107,6 +107,8 @@
   /** How long the transcript's spring takes to settle at the bottom, and how long a new row fades in (match .ag-enter). */
   const STICK_SPRING_MS = 600;
   const ENTER_MS = 240;
+  /** How close to the bottom counts as pinned. Opening the queue dock shrinks the scroll by the dock's height, so this must be the hide/show hysteresis too. */
+  const STICK_PX = 80;
   const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
   /** Cursor and Pi have no Limited search: the allowlist covers a fetch tool only. */
   const CURSOR_LIMITED = "Fetch from the web allowlist's domains; the agent asks for others; no web search";
@@ -569,7 +571,7 @@
    * outside any turn (a worktree merge) is its own group where it happened, so it does not stay
    * pinned under every later turn.
    */
-  function groupKey(item) {
+  function itemGroupKey(item) {
     if (item.turnId) return item.turnId;
     if (item.dropped) return `dropped:${item.id}`;
     return item.kind === "user" ? "pending" : `note:${item.id}`;
@@ -1560,16 +1562,18 @@
       this.queueShown = true;
       this.entering = new Map();
       this.scroll.addEventListener("scroll", () => {
+        if (!(this.stickLock || this.stickAnim)) {
+          const dist = this.bottomDist();
+          // Pin from distance alone. Coupling this to the dock hiding left the view unpinned
+          // one dock-height from the bottom, which is where opening the dock always lands.
+          if (dist < STICK_PX) this.stick = true;
+          else if (this.queueShown) this.stick = false;
+        }
         this.updateQueueDock();
-        // Programmatic easing fires scroll asynchronously; treat those as still stuck.
-        if (this.stickLock || this.stickAnim) return;
-        // A queue dock slid away means you are reading further up, even close to the bottom.
-        this.stick = this.queueShown && this.scroll.scrollHeight - this.scroll.scrollTop - this.scroll.clientHeight < 80;
       });
       const releaseStick = () => {
         this.stopStickAnim();
-        const el = this.scroll;
-        if (el.scrollHeight - el.scrollTop - el.clientHeight >= 80) this.stick = false;
+        if (this.bottomDist() >= STICK_PX) this.stick = false;
       };
       this.scroll.addEventListener("wheel", releaseStick, { passive: true });
       this.scroll.addEventListener("touchstart", releaseStick, { passive: true });
@@ -2126,7 +2130,7 @@
       const groups = [];
       const byTurn = new Map();
       for (const item of detail.items) {
-        const key = groupKey(item);
+        const key = itemGroupKey(item);
         let g = byTurn.get(key);
         if (!g) {
           g = { key, turn: item.turnId ? detail.turns.get(item.turnId) || null : null, items: [] };
@@ -3037,7 +3041,7 @@
 
     onItem(item, isNew) {
       if (isNew && item.kind === "user" && item.turnId === null) this.stick = true;
-      this.dirtyTurns.add(groupKey(item));
+      this.dirtyTurns.add(itemGroupKey(item));
       // A queued message that starts a turn or is steered into one leaves the queued group.
       if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
       this.schedule();
@@ -3060,7 +3064,7 @@
     onDelta(item) {
       const node = this.transcript.querySelector(`[data-item-id="${item.id}"]`);
       if (!node) {
-        this.dirtyTurns.add(groupKey(item));
+        this.dirtyTurns.add(itemGroupKey(item));
         this.schedule();
         return;
       }
@@ -3148,6 +3152,11 @@
       }
     }
 
+    bottomDist() {
+      const el = this.scroll;
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    }
+
     /** The queue dock slides away while you read further up, and comes back at the bottom. */
     updateQueueDock() {
       const dock = this.queueDock;
@@ -3156,14 +3165,14 @@
       this.scroll.classList.toggle("queued", has);
       // Line up with the transcript, which the scrollbar narrows.
       if (has) dock.style.paddingRight = `${this.scroll.offsetWidth - this.scroll.clientWidth}px`;
-      if (!has) this.queueShown = true;
-      else if (this.stickAnim) this.queueShown = true;
+      // Stay visible while pinned: opening the dock leaves you about its own height from the
+      // bottom, which used to look like "scrolled up" and hide it for good.
+      if (!has || this.stick || this.stickAnim) this.queueShown = true;
       else {
-        const el = this.scroll;
-        const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-        // Hiding grows the scroll by the dock's height, so it must be further away than that or it would bounce back.
-        if (this.queueShown && dist > this.queueList.offsetHeight + 24) this.queueShown = false;
-        else if (!this.queueShown && dist < 8) this.queueShown = true;
+        const dist = this.bottomDist();
+        const qh = Math.max(this.queueList.scrollHeight, this.queueList.offsetHeight);
+        if (this.queueShown && dist > qh + STICK_PX) this.queueShown = false;
+        else if (!this.queueShown && dist < STICK_PX) this.queueShown = true;
       }
       dock.classList.toggle("away", !this.queueShown);
     }
