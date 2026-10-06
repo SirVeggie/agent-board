@@ -3733,8 +3733,8 @@ button.dock-handle.busy .dock-handle-sep {
 
 /* One line at a time; lines stack in one cell so a new step can slide the old one out.
    Tight travel so the swap doesn't look like a jump. Incoming stays opaque (rich smear
-   under spam); leftover blur is faded on the way out in 90ms instead of sending the
-   glyphs further off-screen. */
+   under spam). Outgoing opacity eases out over the whole slide so the blur fades
+   instead of sitting at full strength and popping off. */
 .dock-handle-text {
   display: grid;
   overflow: hidden;
@@ -3753,27 +3753,25 @@ button.dock-handle.busy .dock-handle-sep {
   transition:
     transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
     filter 520ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 90ms linear;
+    opacity 520ms cubic-bezier(0.65, 0, 1, 1);
 }
 
 .dock-handle-line.in {
   transform: translateY(12px);
-  filter: blur(16px);
+  filter: blur(10px);
 }
 
-/* Opacity waits until the smear has played, then drops in 90ms so the blur bloom
-   isn't cut off when the node is removed. Mid-swap (and spam) stays fully opaque. */
+/* Ease-in opacity: stays rich through the smear, then falls off so the bloom
+   is gone before the node is removed. */
 .dock-handle-line.out {
   transform: translateY(-12px);
-  filter: blur(16px);
+  filter: blur(10px);
   opacity: 0;
-  transition-delay: 0s, 0s, 430ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .dock-handle-line {
     transition: none;
-    transition-delay: 0s;
   }
 }
 
