@@ -272,7 +272,7 @@ When you are done iterating and the user should see the result, `page_show` or `
 
 ## Testing interactions
 
-Scribe shows each page in an iframe that browser tools cannot reach. To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `page_show`, `page_patch`, and `page_read`) directly in a browser. There, the page runs on its own with a live `window.scribe`.
+To click, drag, type, or run a script in a page, open its `viewUrl` (returned by `page_show`, `page_patch`, and `page_read`) directly in a browser. There, the page runs on its own with a live `window.scribe`.
 
 In a Scribe chat thread you have your own browser: the `browser_*` tools (other MCP clients don't get them; use your host's browser tool there). It runs headless, so it never takes the user's focus; the user can watch it live and click or type into it from your chat. It has your thread's own cookies and storage, kept between turns and closed when the thread is archived. It opens loopback addresses (`localhost`, `127.x.x.x`, `*.localhost`) and Scribe pages only, so start dev servers with Keeper first.
 
@@ -296,7 +296,7 @@ browser_tabs({ closeAll: true })                 // when you are done testing
 
 - Writes and signals from that page go to the **real page**. Do not test destructive interactions on a page the user relies on (their todo list). Show a copy under a temp key with `background: true`, test its `viewUrl`, then delete it with `page_close({ key, permanent: true })`.
 - Looking without changing anything (snapshot, reading the DOM, a script that only reads) is fine on the real page.
-- Loaded directly, the page does not receive live updates from `page_update` or other viewers, and links to other pages show no titles. Reload it to see updates. To check live behaviour (state arriving from elsewhere, link titles, flicker or scroll jumps as it re-renders), open the Scribe shell itself with the page in front (`browser_open({ url: "<Scribe address>/#<page id>" })`) and pass `frame: "<page key or id>"` to `browser_eval`: the page's iframe is on another origin, so a script without `frame` only reaches the shell. `frame` also takes a CSS selector of any iframe.
+- Loaded directly, the page does not receive live updates from `page_update` or other viewers, and links to other pages show no titles, and `scribe.agent` has no options. Reload it to see updates. To check live behaviour (state arriving from elsewhere, link titles, flicker or scroll jumps as it re-renders, agent buttons), open the Scribe shell itself with the page in front (`browser_open({ url: "<Scribe address>/#<page id>" })`) and pass `frame: "<page key or id>"` to `browser_snapshot`, `browser_act`, `browser_screenshot`, and `browser_eval`: the page's iframe is on another origin, so without `frame` a `selector`, `text`, or script only reaches the shell. With `frame`, the snapshot is the page's alone and the screenshot is its iframe; refs from any snapshot (`f1e2` for an element in a frame) work with or without it. `frame` also takes a CSS selector of any iframe.
 - This is for testing behavior. For a picture of the layout, `page_screenshot` is still the tool.
 
 ## Interactive pages

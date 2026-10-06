@@ -144,7 +144,9 @@ const server = http.createServer((req, res) => {
   }
   if (req.url?.startsWith("/view/")) {
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(`<!DOCTYPE html><title>View</title><script>window.inside = "page " + location.host;</script>`);
+    res.end(
+      `<!DOCTYPE html><title>View</title><button onclick="this.textContent = 'Pressed'">Press me</button><script>window.inside = "page " + location.host;</script>`
+    );
     return;
   }
   if (req.url === "/drag") {
@@ -227,6 +229,33 @@ test("browser_eval reaches a cross-origin page frame by page key or iframe selec
   assert.equal((await browserEval("thr_frame", { script: "window.inside", frame: "#page" })).result, expected);
   await assert.rejects(browserEval("thr_frame", { script: "1", frame: "#nope" }), /frame not found/);
   await closeThreadBrowser("thr_frame");
+});
+
+test("browser_act, snapshot, and screenshot reach a page frame", async (t) => {
+  if (!launched) {
+    t.skip("no Chromium browser installed");
+    return;
+  }
+  await browserOpen("thr_frame_act", { url: `${base}/shell`, snapshot: false });
+  // Without frame, text only looks in the shell.
+  await assert.rejects(browserAct("thr_frame_act", { action: "click", text: "Press me", snapshot: false }), /Timeout/);
+  const clicked = await browserAct("thr_frame_act", { action: "click", text: "Press me", frame: "scribe:framed" });
+  assert.match(clicked.snapshot as string, /button "Pressed"/);
+  assert.doesNotMatch(clicked.snapshot as string, /iframe/);
+
+  const inner = await browserSnapshot("thr_frame_act", { frame: "#page" });
+  assert.match(inner.frame ?? "", /\/view\//);
+  const ref = /button "Pressed".*\[ref=(f\d+e\d+)\]/.exec(inner.snapshot as string)?.[1];
+  assert.ok(ref, inner.snapshot as string);
+  // A frame ref works from the top page too.
+  await browserEval("thr_frame_act", { script: "document.querySelector('button').textContent = 'Press me'", frame: "#page" });
+  const again = await browserAct("thr_frame_act", { action: "click", ref, snapshot: false });
+  assert.equal(again.action, "click");
+  assert.equal((await browserEval("thr_frame_act", { script: "document.querySelector('button').textContent", frame: "#page" })).result, '"Pressed"');
+
+  const shot = await browserScreenshot("thr_frame_act", { frame: "scribe:framed" });
+  assert.ok(shot.bytes > 0);
+  await closeThreadBrowser("thr_frame_act");
 });
 
 test("links off loopback are blocked, and threads get their own browser", async (t) => {

@@ -1539,6 +1539,14 @@ const targetShape = {
   selector: z.string().optional().describe("CSS or Playwright selector, when there is no ref. The first match is used."),
   text: z.string().optional().describe("Visible text of the element, when there is no ref. The first match is used."),
 };
+const frameShape = {
+  frame: z
+    .string()
+    .optional()
+    .describe(
+      "Look inside a frame instead of the top page: a Scribe page key or id (the frame showing it in the Scribe shell, e.g. scribe:sprint-notes) or a CSS selector of an iframe. Scopes selector, text, and the snapshot to that frame."
+    ),
+};
 const tabShape = {
   tab: z.string().optional().describe("Browser tab id from browser_open or browser_tabs, e.g. b1. Defaults to the current tab."),
 };
@@ -1576,11 +1584,12 @@ function registerBrowserTools(server: McpServer): void {
 
   server.tool(
     "browser_snapshot",
-    "Read the current tab of your browser as an accessibility tree (roles, names, values) with [ref=eN] handles for browser_act. Refs go stale when the page changes: act on the latest snapshot (browser_act returns a fresh one). Pass selector to read one region of a large page.",
+    "Read the current tab of your browser as an accessibility tree (roles, names, values) with [ref=eN] handles for browser_act. Refs go stale when the page changes: act on the latest snapshot (browser_act returns a fresh one). Pass selector to read one region of a large page, or frame for a Scribe page shown in the Scribe shell (refs in frames look like f1e2).",
     {
       ...tabShape,
       selector: z.string().optional().describe("CSS selector of a region to snapshot instead of the whole page."),
       maxChars: z.number().optional().describe("Cut the snapshot at this many characters. Default 20000, max 100000."),
+      ...frameShape,
     },
     { readOnlyHint: true },
     async (args) => browserCall("snapshot", args)
@@ -1605,6 +1614,7 @@ function registerBrowserTools(server: McpServer): void {
       dx: z.number().optional().describe("Horizontal scroll in pixels."),
       dy: z.number().optional().describe("Vertical scroll in pixels (default 600 when scrolling without a target)."),
       snapshot: z.boolean().optional().describe("Include the snapshot after the action. Default true."),
+      ...frameShape,
       ...tabShape,
     },
     async (args) => browserCall("act", args)
@@ -1612,11 +1622,12 @@ function registerBrowserTools(server: McpServer): void {
 
   server.tool(
     "browser_screenshot",
-    "Screenshot the current tab of your browser (the viewport, the full page, or one element by ref, selector, or text) to check how it looks.",
+    "Screenshot the current tab of your browser (the viewport, the full page, or one element by ref, selector, or text, or a frame's iframe) to check how it looks.",
     {
       ...tabShape,
       ...targetShape,
       fullPage: z.boolean().optional().describe("Capture the whole scrolling page instead of the viewport."),
+      ...frameShape,
     },
     { readOnlyHint: true },
     async (args) => {

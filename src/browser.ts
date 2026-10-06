@@ -202,14 +202,19 @@ export async function browserOpen(
   };
 }
 
-export async function browserSnapshot(threadId: string, input: { tab?: string; selector?: string; maxChars?: number }) {
+export async function browserSnapshot(
+  threadId: string,
+  input: { tab?: string; selector?: string; maxChars?: number; frame?: string }
+) {
   const tab = pickTab(await requireSession(threadId), input.tab);
   const maxChars = clamp(input.maxChars ?? DEFAULT_SNAPSHOT_CHARS, 1_000, MAX_SNAPSHOT_CHARS);
+  const frame = await frameOf(tab.page, input.frame);
   return {
     tab: tab.id,
     url: tab.page.url(),
     title: await tab.page.title().catch(() => ""),
-    ...(await snapshotOf(tab.page, input.selector, maxChars)),
+    ...(frame ? { frame: frame.url() } : {}),
+    ...(await snapshotOf(frame ?? tab.page, input.selector, maxChars)),
   };
 }
 
@@ -225,29 +230,32 @@ export async function browserAct(
     dy?: number;
     steps?: number;
     snapshot?: boolean;
+    frame?: string;
   }
 ) {
   const tab = pickTab(await requireSession(threadId), input.tab);
   const { page } = tab;
+  const frame = await frameOf(page, input.frame);
+  const locate = (target: Target) => locateIn(page, frame, target);
   const mark = tab.console.at(-1)?.seq ?? 0;
   const value = input.value;
   const text = Array.isArray(value) ? value.join("") : value ?? "";
   switch (input.action) {
     case "click":
-      await locate(page, input).click({ timeout: ACTION_TIMEOUT_MS });
+      await locate(input).click({ timeout: ACTION_TIMEOUT_MS });
       break;
     case "dblclick":
-      await locate(page, input).dblclick({ timeout: ACTION_TIMEOUT_MS });
+      await locate(input).dblclick({ timeout: ACTION_TIMEOUT_MS });
       break;
     case "hover":
-      await locate(page, input).hover({ timeout: ACTION_TIMEOUT_MS });
+      await locate(input).hover({ timeout: ACTION_TIMEOUT_MS });
       break;
     case "fill":
-      await locate(page, input).fill(text, { timeout: ACTION_TIMEOUT_MS });
+      await locate(input).fill(text, { timeout: ACTION_TIMEOUT_MS });
       break;
     case "type":
       if (hasTarget(input)) {
-        await locate(page, input).pressSequentially(text, { timeout: ACTION_TIMEOUT_MS });
+        await locate(input).pressSequentially(text, { timeout: ACTION_TIMEOUT_MS });
       } else {
         await page.keyboard.type(text);
       }
@@ -258,27 +266,27 @@ export async function browserAct(
         throw new Error("press needs keys, e.g. Enter or Control+A");
       }
       if (hasTarget(input)) {
-        await locate(page, input).press(keys, { timeout: ACTION_TIMEOUT_MS });
+        await locate(input).press(keys, { timeout: ACTION_TIMEOUT_MS });
       } else {
         await page.keyboard.press(keys);
       }
       break;
     }
     case "select":
-      await locate(page, input).selectOption(Array.isArray(value) ? value : text, { timeout: ACTION_TIMEOUT_MS });
+      await locate(input).selectOption(Array.isArray(value) ? value : text, { timeout: ACTION_TIMEOUT_MS });
       break;
     case "check":
-      await locate(page, input).check({ timeout: ACTION_TIMEOUT_MS });
+      await locate(input).check({ timeout: ACTION_TIMEOUT_MS });
       break;
     case "uncheck":
-      await locate(page, input).uncheck({ timeout: ACTION_TIMEOUT_MS });
+      await locate(input).uncheck({ timeout: ACTION_TIMEOUT_MS });
       break;
     case "scroll":
       if (hasTarget(input) && input.dx === undefined && input.dy === undefined) {
-        await locate(page, input).scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS });
+        await locate(input).scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS });
       } else {
         if (hasTarget(input)) {
-          await locate(page, input).hover({ timeout: ACTION_TIMEOUT_MS });
+          await locate(input).hover({ timeout: ACTION_TIMEOUT_MS });
         }
         await page.mouse.wheel(input.dx ?? 0, input.dy ?? 600);
       }
@@ -287,7 +295,7 @@ export async function browserAct(
       if (!input.to || !hasTarget(input.to)) {
         throw new Error("drag needs to: { ref | selector | text }");
       }
-      await locate(page, input).dragTo(locate(page, input.to), {
+      await locate(input).dragTo(locate(input.to), {
         timeout: ACTION_TIMEOUT_MS,
         steps: clamp(input.steps ?? DEFAULT_DRAG_STEPS, 1, MAX_DRAG_STEPS),
       });
@@ -311,14 +319,19 @@ export async function browserAct(
     url: page.url(),
     title: await page.title().catch(() => ""),
     ...errorsSince(tab, mark),
-    ...(input.snapshot === false ? {} : await snapshotOf(page, undefined, DEFAULT_SNAPSHOT_CHARS)),
+    ...(input.snapshot === false ? {} : await snapshotOf(frame ?? page, undefined, DEFAULT_SNAPSHOT_CHARS)),
   };
 }
 
-export async function browserScreenshot(threadId: string, input: Target & { tab?: string; fullPage?: boolean }) {
+export async function browserScreenshot(
+  threadId: string,
+  input: Target & { tab?: string; fullPage?: boolean; frame?: string }
+) {
   const tab = pickTab(await requireSession(threadId), input.tab);
   const { page } = tab;
-  const target = hasTarget(input) ? locate(page, input) : null;
+  const frame = await frameOf(page, input.frame);
+  // With a frame and no target, the iframe's own box.
+  const target = hasTarget(input) ? locateIn(page, frame, input) : await frame?.frameElement();
   const { buffer, mimeType } = await pngOrJpeg((type) =>
     target
       ? target.screenshot({ ...shotOptions(type), timeout: ACTION_TIMEOUT_MS })
@@ -338,7 +351,7 @@ export async function browserEval(threadId: string, input: { tab?: string; scrip
   if (!input.script?.trim()) {
     throw new Error("Provide script");
   }
-  const frame = input.frame?.trim() ? await findFrame(tab.page, input.frame.trim()) : tab.page.mainFrame();
+  const frame = (await frameOf(tab.page, input.frame)) ?? tab.page.mainFrame();
   // An expression, or a function body when it uses return.
   const body = /\breturn\b/.test(input.script) ? input.script : `return (${input.script});`;
   const value = await frame.evaluate(
@@ -730,17 +743,27 @@ function hasTarget(target: Target): boolean {
   return Boolean(target.ref || target.selector || target.text);
 }
 
-function locate(page: Page, target: Target): Locator {
+/**
+ * An element by ref, selector, or text. Refs come from the whole tab's snapshot (frames included,
+ * e.g. f1e2), so they resolve on the page; selector and text look inside frame when one is given.
+ */
+function locateIn(page: Page, frame: Frame | null, target: Target): Locator {
   if (target.ref) {
     return page.locator(`aria-ref=${target.ref.replace(/^ref=/, "")}`);
   }
+  const root = frame ?? page;
   if (target.selector) {
-    return page.locator(target.selector).first();
+    return root.locator(target.selector).first();
   }
   if (target.text) {
-    return page.getByText(target.text).first();
+    return root.getByText(target.text).first();
   }
   throw new Error("Provide ref (from browser_snapshot), selector, or text");
+}
+
+/** The frame a browser tool's frame option names, or null for the top page. */
+async function frameOf(page: Page, which: string | undefined): Promise<Frame | null> {
+  return which?.trim() ? findFrame(page, which.trim()) : null;
 }
 
 /**
@@ -783,9 +806,9 @@ async function findFrame(page: Page, which: string): Promise<Frame> {
   return frame;
 }
 
-async function snapshotOf(page: Page, selector: string | undefined, maxChars: number) {
+async function snapshotOf(page: Page | Frame, selector: string | undefined, maxChars: number) {
   try {
-    const root = selector ? page.locator(selector).first() : page;
+    const root = selector ? page.locator(selector).first() : "ariaSnapshot" in page ? page : page.locator(":root");
     const text = await root.ariaSnapshot({ mode: "ai", timeout: ACTION_TIMEOUT_MS });
     return text.length > maxChars
       ? { snapshot: text.slice(0, maxChars), truncated: `snapshot cut at ${maxChars} of ${text.length} chars; pass selector or maxChars` }
