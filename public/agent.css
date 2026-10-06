@@ -1040,6 +1040,7 @@ button.ag-tool-head:hover {
 
 .ag-reason.open .ag-reason-body {
   display: block;
+  margin-bottom: 8px;
 }
 
 .ag-reason-body.ag-md,
@@ -1058,6 +1059,7 @@ button.ag-tool-head:hover {
 
 .ag-group.open .ag-group-body {
   display: block;
+  margin-bottom: 8px;
 }
 
 .ag-tool {
@@ -1210,6 +1212,7 @@ button.ag-tool-head:hover {
 
 .ag-tool.open > .ag-tool-body {
   display: flex;
+  margin-bottom: 8px;
 }
 
 .ag-tool-desc {
@@ -3971,6 +3974,11 @@ button.ag-help:focus-visible {
   bottom: -7px;
   width: 1px;
   background: rgba(var(--lift-rgb), 0.1);
+}
+
+/* Open thought / tool / explore: keep the block's accent line, pause the rail until the next dot. */
+.ag-rail > .open:not(:last-child)::after {
+  display: none;
 }
 
 .ag-rail > .s-error::before {
