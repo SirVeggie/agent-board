@@ -2377,6 +2377,55 @@ button.ag-icon-btn.ag-list-group-new.on {
   gap: 4px;
 }
 
+/* A list toggle: label and a small on/off pill; the button itself stays plain. */
+button.ag-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 21px;
+  padding: 0 4px 0 6px;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+button.ag-switch-btn:hover {
+  color: var(--text);
+}
+
+.ag-switch {
+  position: relative;
+  width: 22px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: rgba(var(--lift-rgb), 0.16);
+  transition: background 0.15s;
+}
+
+.ag-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.15s, background 0.15s;
+}
+
+button.ag-switch-btn[aria-checked="true"] .ag-switch {
+  background: var(--accent);
+}
+
+button.ag-switch-btn[aria-checked="true"] .ag-switch::after {
+  transform: translateX(10px);
+  background: #fff;
+}
+
 button.ag-list-more {
   width: 100%;
   height: 28px;
@@ -2511,6 +2560,11 @@ button.ag-row.unread .ag-row-title {
   gap: 7px;
 }
 
+/* Room for the archive and delete buttons (2 x 22px) so the title ends before them. */
+.ag-list.compact .ag-row-wrap > button.ag-row {
+  padding-right: 50px;
+}
+
 .ag-list.compact .ag-row-title {
   font-size: 12px;
   line-height: 1.3;
@@ -2541,6 +2595,23 @@ button.ag-row.unread .ag-row-title {
 
 .ag-row.unread .ag-dot {
   background: var(--accent);
+}
+
+/* In the status dot's place: the thread has an unsent message. */
+.ag-row-pen {
+  width: 8px;
+  flex-shrink: 0;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.ag-list.compact .ag-row-pen {
+  width: 6px;
+}
+
+button.ag-row.on .ag-row-pen {
+  color: var(--text);
 }
 
 .ag-dot.s-running {
@@ -2574,7 +2645,7 @@ button.ag-row.unread .ag-row-title {
   bottom: 0;
   z-index: 40;
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr);
+  grid-template-columns: var(--ag-full-side, 392px) minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
   background: var(--bg);
@@ -2583,6 +2654,22 @@ button.ag-row.unread .ag-row-title {
 }
 
 .agent-full[hidden] {
+  display: none;
+}
+
+/* The full window covers the page, so no tab shows as selected; clicking one goes back to it. */
+html body.agent-full-open .tabs .tab.active {
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+html body.agent-full-open .tabs .tab.active:hover {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.05);
+}
+
+body.agent-full-open .tabs .tab.active::after {
   display: none;
 }
 
@@ -2603,6 +2690,21 @@ html.tight-small .agent-full {
 
 .ag-full-main {
   background: var(--panel);
+}
+
+.ag-full-side {
+  position: relative;
+}
+
+.ag-full-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
 }
 
 .ag-full-list {
@@ -2918,12 +3020,7 @@ button.dock-orb,
   color: var(--text);
 }
 
-.dock-status.s-idle .dock-dot {
-  background: var(--ag-ok);
-  opacity: 0.75;
-}
-
-.agent-dock .dock-status.s-idle {
+.dock-status.s-idle {
   display: none;
 }
 

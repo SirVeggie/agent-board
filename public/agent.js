@@ -17,6 +17,7 @@
     tips: "scribe.agent.showTips",
     hidePage: "scribe.agent.hidePageThreads",
     compact: "scribe.agent.compactThreads",
+    fullSide: "scribe.agent.fullSideWidth",
   };
   const DOCK_STYLES = [
     { id: "bar", label: "Bar" },
@@ -115,6 +116,11 @@
     dockExpanded: false,
     /** Thread the dock uses per page id, when the user picked one. */
     dockPicks: new Map(),
+    /**
+     * Unsent composers of threads no view is showing: { text, mentions, attachments }. The text and
+     * chips are saved on the thread too (thread.draft); attached files only live here.
+     */
+    composers: new Map(),
     filter: ["here", "workspaces", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
     search: "",
     hidePageThreads: localStorage.getItem(LS.hidePage) !== "0",
@@ -373,6 +379,7 @@
       case "agent_thread_deleted": {
         S.threads.delete(msg.id);
         S.details.delete(msg.id);
+        S.composers.delete(msg.id);
         for (const view of views()) {
           if (view.threadId === msg.id) view.setThread(null);
         }
@@ -536,6 +543,53 @@
   async function deleteThread(t) {
     if (!(await app().confirm(deletePrompt(t)))) return;
     await api("DELETE", `/threads/${t.id}`).catch((e) => notice(e.message));
+  }
+
+  /** A thread whose composer has something unsent in it, here or saved on the thread. */
+  function hasDraft(t) {
+    return Boolean(t.draft || S.composers.has(t.id));
+  }
+
+  /**
+   * Save an unsent composer's text and chips on its thread, so the list can mark it and a reload
+   * keeps it. A draft thread that was emptied again goes away.
+   */
+  function syncThreadDraft(t, content) {
+    const draft = content ? { text: content.text, context: content.mentions } : null;
+    const was = t.draft ? JSON.stringify({ text: t.draft.text, context: t.draft.context || [] }) : null;
+    if (was === (draft && JSON.stringify(draft))) return;
+    const unsentOnly = Boolean(t.draft) && !draft && t.stats.turns === 0 && !t.queued && t.status === "idle";
+    t.draft = draft;
+    if (unsentOnly) api("DELETE", `/threads/${encodeURIComponent(t.id)}`).catch(() => undefined);
+    else api("PATCH", `/threads/${encodeURIComponent(t.id)}`, { draft }).catch(() => undefined);
+    renderLists();
+  }
+
+  /** Keep a new thread the user wrote in and left unsent as a draft thread. Its files stay in this window. */
+  async function saveDraftThread(s, content, tab) {
+    try {
+      const { thread } = await api("POST", "/threads", {
+        provider: s.provider,
+        model: s.model,
+        effort: s.effort,
+        modelParams: s.modelParams,
+        mode: s.mode,
+        approval: s.approval,
+        web: s.web,
+        cwd: s.cwd,
+        useWorktree: Boolean(s.useWorktree),
+        scope: s.scope,
+        draft: { text: content.text, context: content.mentions },
+        remember: false,
+      });
+      S.threads.set(thread.id, thread);
+      S.composers.set(thread.id, content);
+      // The floating chat comes back to it on that page, unless it has moved on to another thread there.
+      if (tab && !S.dockPicks.has(tab) && !(dock.view.draft && dock.view.draftTab === tab)) S.dockPicks.set(tab, thread.id);
+      renderLists();
+    } catch (err) {
+      notice(`Could not keep the unsent thread: ${err.message}`);
+    }
   }
 
   /** Last used folders, with `prefer` first when it is not already among them. */
@@ -1359,7 +1413,10 @@
       this.mdTimers = new Map();
       /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
       this.attachments = [];
-      this.drafts = new Map();
+      /** The page tab the floating chat's draft belongs to (it follows the active page). */
+      this.draftTab = null;
+      /** The composer moved to another layout; what is left here is not the user's to save. */
+      this.handedOff = false;
       this.mentions = [];
       this.mentionGen = 0;
       this.mentionTimer = 0;
@@ -1478,11 +1535,11 @@
 
     setThread(id) {
       if (this.threadId === id && id) return;
-      this.saveDraftText();
+      this.parkComposer();
       this.threadId = id;
       if (id) this.draft = null;
       this.expanded.clear();
-      this.restoreDraftText();
+      this.loadComposer();
       if (this.variant === "dock") dock.invalidateFeed();
       this.renderAll();
       if (id) {
@@ -1505,31 +1562,99 @@
       this.setThread(id);
     }
 
+    /** An empty composer for a new thread. Whatever was being written here is kept (see parkComposer). */
     startDraft(scope, settings = {}) {
-      this.saveDraftText();
+      this.parkComposer();
       this.threadId = null;
-      this.draft = { scope, settings };
-      this.restoreDraftText();
+      this.draft = { scope, settings: { ...settings } };
+      this.draftTab = this.variant === "dock" ? activeTab()?.id || null : null;
+      this.loadComposer();
       this.renderAll();
-      if (this.variant === "dock") dock.bindFeed();
+      if (this.variant === "dock") {
+        dock.bindFeed();
+        dock.renderTitle();
+      }
       setTimeout(() => this.focus(), 0);
     }
 
-    draftKey() {
-      return this.threadId || `draft:${this.draft?.scope?.kind}:${this.draft?.scope?.ref}`;
+    /** Hand this chat to another layout as it is: its thread or unsent draft, and the composer with its files. */
+    takeChat() {
+      const snap = {
+        threadId: this.threadId,
+        draft: this.threadId || !this.draft ? null : { scope: { ...this.draft.scope }, settings: { ...this.draft.settings } },
+        composer: this.composerContent(),
+      };
+      this.emptyComposer();
+      this.handedOff = true;
+      this.renderContext();
+      return snap;
     }
 
-    saveDraftText() {
-      if (!this.input) return;
-      this.drafts.set(this.draftKey(), { text: this.input.value, mentions: this.mentions.map((c) => ({ ...c })) });
+    giveChat(snap) {
+      if (snap.threadId) this.setThread(snap.threadId);
+      else this.startDraft(snap.draft?.scope || defaultScope(), snap.draft?.settings || {});
+      this.handedOff = false;
+      // What setThread loaded is an older copy of the same composer.
+      if (snap.composer) this.fillComposer(snap.composer);
+      if (this.variant === "dock") {
+        if (snap.threadId) dock.remember(snap.threadId);
+        dock.renderTitle();
+      }
     }
 
-    restoreDraftText() {
+    /** What the user has written and not sent, or null when the composer is empty. */
+    composerContent() {
+      if (!this.input) return null;
+      const text = this.input.value;
+      if (!text.trim() && !this.attachments.length && !this.mentions.length) return null;
+      return { text, mentions: this.mentions.map((c) => ({ ...c })), attachments: this.attachments };
+    }
+
+    /** Clear the composer without freeing its files' previews: they went with the content. */
+    emptyComposer() {
       if (!this.input) return;
-      const d = this.drafts.get(this.draftKey());
-      this.mentions = d?.mentions ? d.mentions.map((c) => ({ ...c })) : [];
-      this.input.value = d?.text || "";
+      this.input.value = "";
+      this.mentions = [];
+      this.attachments = [];
       this.autosize();
+    }
+
+    fillComposer(content) {
+      this.input.value = content.text || "";
+      this.mentions = (content.mentions || []).map((c) => ({ ...c }));
+      this.attachments = content.attachments || [];
+      this.autosize();
+      this.renderContext();
+    }
+
+    /**
+     * Keep what is being written before this view shows something else: on its thread, or for an
+     * unsent new thread, as a draft thread the list marks with a pen.
+     */
+    parkComposer() {
+      if (this.handedOff) {
+        this.handedOff = false;
+        return;
+      }
+      const content = this.composerContent();
+      this.emptyComposer();
+      const t = this.thread();
+      if (t) {
+        if (content) S.composers.set(t.id, content);
+        else S.composers.delete(t.id);
+        syncThreadDraft(t, content);
+      } else if (!this.threadId && this.draft && content) {
+        void saveDraftThread(this.settings(), content, this.variant === "dock" ? this.draftTab : null);
+      }
+    }
+
+    /** Show the thread's unsent composer: the one left in this window, else the text saved on the thread. */
+    loadComposer() {
+      if (!this.input) return;
+      const t = this.thread();
+      const kept = t ? S.composers.get(t.id) : null;
+      if (kept) S.composers.delete(t.id);
+      this.fillComposer(kept || (t?.draft ? { text: t.draft.text, mentions: t.draft.context || [] } : {}));
     }
 
     visible() {
@@ -1587,7 +1712,7 @@
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L, or Ctrl+Up from the chat)"));
         acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)"));
       } else if (this.variant === "full") {
-        acts.append(button(icon("collapse"), "ag-icon-btn", () => full.close(), "Back to Scribe (Esc)"));
+        acts.append(button(icon("collapse"), "ag-icon-btn", () => leaveFull(), "Back to Scribe (Esc)"));
       }
       this.header.append(acts);
     }
@@ -1672,6 +1797,7 @@
       if (!t) {
         this.draft = { scope, settings: this.draft?.settings || {} };
         this.renderAll();
+        if (this.variant === "dock") dock.renderTitle();
         return;
       }
       await this.updateSettings({ scope });
@@ -1716,6 +1842,7 @@
       if (!t) {
         this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir, ...(mode ? { mode } : {}) } };
         this.renderAll();
+        if (this.variant === "dock") dock.renderTitle();
         if (dir) await this.rememberDraftPrefs();
         return;
       }
@@ -2909,7 +3036,7 @@
       const t = this.thread();
       if (t && t.status !== "idle") return;
       if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) return;
-      const key = JSON.stringify([this.draftKey(), s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope, s.useWorktree]);
+      const key = JSON.stringify([this.threadId || `draft:${this.variant}`, s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope, s.useWorktree]);
       const now = Date.now();
       if (this.lastWarm && this.lastWarm.key === key && now - this.lastWarm.at < 60_000) return;
       this.lastWarm = { key, at: now };
@@ -3671,7 +3798,12 @@
       this.autosize();
       this.renderContext();
       this.hidePicker();
-      this.drafts.delete(this.draftKey());
+      const sent = this.thread();
+      if (sent) {
+        // Sent, so no longer a draft; the daemon clears its copy when the message arrives.
+        sent.draft = null;
+        S.composers.delete(sent.id);
+      }
       try {
         let id = this.threadId;
         if (!id) {
@@ -3976,14 +4108,14 @@
     items.push({ label: "Global", detail: "Not tied to a page or folder", icon: "globe", run: () => view.startDraft({ kind: "global", ref: null }) });
     items.push({ separator: true });
     for (const dir of recentWorkspaceDirs(null)) {
-      items.push({ label: R.basename(dir), detail: dir, icon: "box", run: () => view.startDraft({ kind: "workspace", ref: dir }, { cwd: dir }) });
+      items.push({ label: R.basename(dir), detail: dir, icon: "box", run: () => view.startDraft({ kind: "global", ref: null }, { cwd: dir, mode: "code" }) });
     }
     items.push({
       label: "Another workspace…",
       icon: "folder",
       run: async () => {
         const dir = await pickWorkspace(null);
-        if (dir) view.startDraft({ kind: "workspace", ref: dir }, { cwd: dir });
+        if (dir) view.startDraft({ kind: "global", ref: null }, { cwd: dir, mode: "code" });
       },
     });
     openMenu(anchor, items, { width: 280 });
@@ -4011,16 +4143,18 @@
   }
 
   /**
-   * Draft for a new thread in a list group: the group's scope, with the settings of the group's
-   * latest thread (threads a person started win over page-launched ones).
+   * Draft for a new thread in a list group: the group's Scribe scope, with the settings of the
+   * group's latest thread (threads a person started win over page-launched ones). Workspace groups
+   * start Global (page tools, all-thread access) in Code mode with that folder as cwd; app scope
+   * None is opt-in.
    */
   function groupDraft(key) {
     const members = [...S.threads.values()].filter((t) => !t.archived && groupKey(t) === key);
     const last = (members.some((t) => !t.fromPage) ? members.filter((t) => !t.fromPage) : members).sort((a, b) => b.activityAt - a.activityAt)[0];
     if (!last) return null;
     const dir = S.filter === "workspaces" ? workspaceDir(last) : null;
-    const scope = dir ? { kind: "workspace", ref: dir } : { ...last.scope };
-    const settings = { mode: last.mode, web: last.web, cwd: dir || homeDir(last), useWorktree: Boolean(last.useWorktree) };
+    const scope = dir ? { kind: "global", ref: null } : { ...last.scope };
+    const settings = { mode: dir ? "code" : last.mode, web: last.web, cwd: dir || homeDir(last), useWorktree: Boolean(last.useWorktree) };
     if (providerAvailable(last.provider)) {
       Object.assign(settings, { provider: last.provider, model: last.model, effort: last.effort, modelParams: { ...(last.modelParams || {}) }, approval: last.approval });
     }
@@ -4095,16 +4229,16 @@
     newBtn.append(icon("plus"), el("span", null, "New"));
     // Toolbox row above the threads: list toggles that change which rows show.
     const tools = el("div", "ag-list-tools");
-    const hide = button("", `ag-chip small toggle${S.hidePageThreads ? " on" : ""}`, () => {
+    const workers = button("", "ag-switch-btn", () => {
       S.hidePageThreads = !S.hidePageThreads;
       localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
-      hide.classList.toggle("on", S.hidePageThreads);
-      hide.setAttribute("aria-pressed", String(S.hidePageThreads));
+      workers.setAttribute("aria-checked", String(!S.hidePageThreads));
       fill();
-    }, "Threads started by a page stay hidden until you type in them");
-    hide.setAttribute("aria-pressed", String(S.hidePageThreads));
-    hide.append(icon("page"), el("span", null, "Hide page-launched"));
-    tools.append(hide);
+    }, "Threads started by a page (board workers) stay hidden until you type in them, unless this is on");
+    workers.setAttribute("role", "switch");
+    workers.setAttribute("aria-checked", String(!S.hidePageThreads));
+    workers.append(el("span", null, "Show workers"), el("span", "ag-switch"));
+    tools.append(workers);
     top.append(search, seg, newBtn, tools);
     const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
     container.append(top, list);
@@ -4189,7 +4323,7 @@
             "div",
             "ag-list-empty",
             S.hidePageThreads
-              ? "No recent threads. Page-launched and older threads are hidden."
+              ? "No recent threads. Worker and older threads are hidden."
               : "No recent threads. Older threads are hidden."
           )
         );
@@ -4227,15 +4361,19 @@
   function threadRow(t, current, onPick) {
     const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}`, () => onPick(t.id));
     row.dataset.id = t.id;
-    const dot = el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
+    const quiet = t.status === "idle" && !t.background && !(t.unread && !t.fromPage);
+    const dot = quiet && hasDraft(t) ? icon("pen", "ag-row-pen") : el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
+    if (quiet && hasDraft(t)) dot.title = "Unsent message";
     if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
-    const title = el("span", "ag-row-title", t.title);
+    // Draft threads are all "New thread" until sent: tell them apart by what was written.
+    const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : t.title;
+    const title = el("span", "ag-row-title", name);
     if (compactThreads()) main.append(title);
     else main.append(title, threadRowMeta(t));
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
-    row.title = t.title;
+    row.title = name;
     const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
     wrap.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -4371,27 +4509,59 @@
       const root = el("div", "agent-full");
       root.hidden = true;
       const side = el("aside", "ag-full-side");
-      side.append(this.list);
+      const resizer = el("div", "ag-full-resizer");
+      side.append(this.list, resizer);
       const main = el("div", "ag-full-main");
       main.append(this.view.root);
       root.append(side, main);
       document.body.append(root);
       this.root = root;
+      const setWidth = (w) => root.style.setProperty("--ag-full-side", `${Math.round(Math.max(220, Math.min(w, window.innerWidth * 0.6)))}px`);
+      const saved = Number(localStorage.getItem(LS.fullSide));
+      if (saved) setWidth(saved);
+      resizer.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        resizer.setPointerCapture(event.pointerId);
+        document.body.classList.add("resizing-side");
+        const startX = event.clientX;
+        const startW = side.getBoundingClientRect().width;
+        const move = (e) => setWidth(startW + (e.clientX - startX));
+        const up = () => {
+          document.body.classList.remove("resizing-side");
+          resizer.removeEventListener("pointermove", move);
+          resizer.removeEventListener("pointerup", up);
+          localStorage.setItem(LS.fullSide, String(Math.round(side.getBoundingClientRect().width)));
+        };
+        resizer.addEventListener("pointermove", move);
+        resizer.addEventListener("pointerup", up);
+      });
+      resizer.addEventListener("dblclick", () => {
+        root.style.removeProperty("--ag-full-side");
+        localStorage.removeItem(LS.fullSide);
+      });
+      resizer.title = "Drag to resize, double-click to reset";
+      document.addEventListener(
+        "click",
+        (event) => {
+          if (S.fullOpen && event.target.closest?.(".tabs .tab") && !event.target.closest(".tab-close")) leaveFull();
+        },
+        true
+      );
     },
-    open(threadId, draft) {
+    /** snap: what ChatView.takeChat handed over. */
+    open(snap) {
       S.fullOpen = true;
       this.root.hidden = false;
       document.body.classList.add("agent-full-open");
-      if (threadId) this.view.setThread(threadId);
-      else this.view.startDraft(draft?.scope || defaultScope(), draft?.settings || {});
+      this.view.giveChat(snap);
       this.renderList();
       setTimeout(() => this.view.focus(), 50);
     },
+    /** Use leaveFull, which moves the chat back to the layout it came from. */
     close() {
       S.fullOpen = false;
       this.root.hidden = true;
       document.body.classList.remove("agent-full-open");
-      if (this.view.threadId && S.sideOpen) sidebar.view.setThread(this.view.threadId);
     },
     renderList() {
       if (!S.fullOpen) return;
@@ -4550,7 +4720,8 @@
         if (this.view.threadId !== id) this.view.setThread(id);
       } else {
         const scope = tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null };
-        if (this.view.threadId || !sameScope(this.view.draft?.scope, scope)) this.view.startDraft(scope);
+        // Already on this page's new thread: keep it as the user set it up (mode, scope, text).
+        if (this.view.threadId || !this.view.draft || this.view.draftTab !== (tab?.id || null)) this.view.startDraft(scope);
       }
       this.renderTitle();
     },
@@ -5376,7 +5547,7 @@
       .map((key) => ({ provider: key.slice(0, key.indexOf(":")), id: key.slice(key.indexOf(":") + 1) }))
       .filter(usable);
     const current = modelKey(s.provider, s.model);
-    const chatKey = view.draftKey();
+    const chatKey = view.threadId || `draft:${view.variant}`;
     if (!list.some((f) => modelKey(f.provider, f.id) === current)) cycleExtras.set(chatKey, { provider: s.provider, id: s.model });
     const extra = cycleExtras.get(chatKey);
     if (extra && usable(extra) && !list.some((f) => modelKey(f.provider, f.id) === modelKey(extra.provider, extra.id))) list.unshift(extra);
@@ -6741,8 +6912,8 @@
 
   function shortcut(action) {
     if (action === "side") {
-      if (S.fullOpen) full.close();
-      sidebar.setOpen(!S.sideOpen);
+      if (S.fullOpen) leaveFull("side");
+      else sidebar.setOpen(!S.sideOpen);
     } else if (action === "dock") {
       if (S.dockShown && document.activeElement !== dock.view.input) {
         dock.view.focus();
@@ -6791,25 +6962,25 @@
   function enterFull(from) {
     fullFrom = from;
     const view = from === "dock" ? dock.view : sidebar.view;
-    // From the floating chat, keep its thread or its empty draft — don't open the sidebar's thread.
-    const threadId = view.threadId || (from !== "dock" && S.current && S.threads.has(S.current) ? S.current : null);
-    const draft = threadId ? view.draft : { scope: view.draft?.scope || defaultScope(), settings: inheritSettings(view) };
-    full.open(threadId, draft);
+    // The chat moves over as it is (its thread or its unsent new thread, and the composer);
+    // only a chat that has shown nothing yet opens the current thread.
+    const snap = view.threadId || view.draft ? view.takeChat() : { threadId: S.current && S.threads.has(S.current) ? S.current : null, draft: null, composer: null };
+    full.open(snap);
   }
 
-  /** Close the full window into the chat it was opened from: the floating chat, else the sidebar. */
-  function leaveFull() {
-    const id = full.view.threadId;
-    const from = fullFrom;
+  /** Close the full window into the chat it was opened from (the floating chat, else the sidebar), taking the chat along. */
+  function leaveFull(to = fullFrom) {
+    const snap = full.view.takeChat();
     fullFrom = null;
     full.close();
-    if (from === "dock" && S.dockShown) {
-      if (id && id !== dock.view.threadId) dock.pick(id);
+    if (to === "dock" && S.dockShown) {
+      dock.view.giveChat(snap);
       dock.view.focus();
       return;
     }
     if (!S.sideOpen) sidebar.setOpen(true);
-    if (id) sidebar.view.setThread(id);
+    sidebar.view.giveChat(snap);
+    if (snap.threadId) setCurrent(snap.threadId);
     setTimeout(() => sidebar.view.focus(), 60);
   }
 
@@ -6919,7 +7090,7 @@
       return true;
     }
     if (S.fullOpen) {
-      full.close();
+      leaveFull();
       return true;
     }
     if (S.dockShown && (dock.root?.contains(document.activeElement) || S.dockExpanded)) {

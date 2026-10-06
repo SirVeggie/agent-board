@@ -690,10 +690,12 @@ export class AgentHost {
   createThread(input: Partial<Thread> & { scope?: ThreadScope }, { remember = true }: { remember?: boolean } = {}): ThreadView {
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
-    const spareId = this.agent(thread.provider).spareThreadId?.(thread, this.ctx);
+    // A draft thread (saved unsent) leaves the spare for the thread the user goes on to start.
+    const spareId = input.draft ? null : this.agent(thread.provider).spareThreadId?.(thread, this.ctx);
     // The spare is taken on the first message; a second thread made before that gets its own id.
     // createSession also refuses that spare: its MCP still reports this id.
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
+    if (input.draft) thread.draft = input.draft;
     this.threads.set(thread.id, thread);
     this.items.set(thread.id, []);
     this.turns.set(thread.id, []);
@@ -797,6 +799,7 @@ export class AgentHost {
     if (patch.scope) next.scope = patch.scope;
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
     if (typeof patch.archived === "boolean") next.archived = patch.archived;
+    if (patch.draft !== undefined) next.draft = patch.draft;
     // An archived thread is done with its agent browser.
     if (next.archived && !thread.archived) void closeThreadBrowser(id);
     next.updatedAt = Date.now();
@@ -1240,6 +1243,11 @@ export class AgentHost {
       ...(input.from ? { from: input.from } : {}),
       ...(input.card ? { card: input.card } : {}),
     };
+    if (!input.from && thread.draft) {
+      // The user sent what they had left in the composer.
+      thread.draft = null;
+      this.db.saveThread(thread);
+    }
     if (this.runs.has(threadId)) {
       const queue = this.queues.get(threadId) ?? [];
       queue.push(msg);
@@ -2706,6 +2714,7 @@ export class AgentHost {
       const asked = ofTurn.filter((it) => it.kind === "user").map((it) => (it.kind === "user" ? it.text : "")).join("\n\n");
       const texts = ofTurn.filter((it) => it.kind === "text");
       const reply = texts.at(-1)?.kind === "text" ? (texts.at(-1) as { text: string }).text : "";
+      const stopped = turn.status === "cancelled" ? " (stopped before it finished)" : turn.status === "error" ? " (failed before it finished)" : "";
       if (asked) parts.push(`User: ${asked}`);
       if (reply || stopped) parts.push(`You${stopped}: ${reply || "(no reply)"}`);
     }
@@ -2714,7 +2723,6 @@ export class AgentHost {
     return text.length > MAX_RECAP ? `…${text.slice(-MAX_RECAP)}` : text;
   }
 
-      const stopped = turn.status === "cancelled" ? " (stopped before it finished)" : turn.status === "error" ? " (failed before it finished)" : "";
   // ---------- forks ----------
 
   /**

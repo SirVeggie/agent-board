@@ -50,6 +50,7 @@
     image:
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="6" cy="6.6" r="1.2" fill="currentColor"/><path d="M2.5 12l3.8-3.6 2.6 2.4 2-1.8 2.6 2.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>',
     copy: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3.8C3 3.3 3.3 3 3.8 3h6.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+    pen: '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M10.7 2.4l2.9 2.9-7.9 7.9-3.5.6.6-3.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.1 4l2.9 2.9" stroke="currentColor" stroke-width="1.4"/></svg>',
     archive:
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="2.6" width="12" height="3.2" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M3.3 5.8h9.4v6.4a1.3 1.3 0 0 1-1.3 1.3H4.6a1.3 1.3 0 0 1-1.3-1.3z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.2 9.2h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
     trash:

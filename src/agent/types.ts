@@ -79,7 +79,14 @@ export type Thread = {
   updatedAt: number;
   /** Last user message or finished turn; drives list order. */
   activityAt: number;
+  /**
+   * What the user typed in the composer and left unsent. A thread with a draft and no turns is a
+   * draft thread (the list marks it with a pen). Attached files stay in the window that has them.
+   */
+  draft?: ComposerDraft | null;
 };
+
+export type ComposerDraft = { text: string; context?: ContextChip[] };
 
 export type ThreadFork = {
   /** The thread it was forked from, as it was then. */

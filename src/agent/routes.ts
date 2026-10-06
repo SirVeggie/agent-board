@@ -525,5 +525,13 @@ function threadPatch(body: Record<string, unknown>): Partial<Thread> {
   if (body.scope !== undefined) patch.scope = parseScope(body.scope);
   if (typeof body.pinned === "boolean") patch.pinned = body.pinned;
   if (typeof body.archived === "boolean") patch.archived = body.archived;
+  if (body.draft === null) patch.draft = null;
+  else if (isPlainRecord(body.draft) && typeof body.draft.text === "string") {
+    const context = Array.isArray(body.draft.context) ? (body.draft.context.filter(isPlainRecord) as ContextChip[]) : [];
+    patch.draft = { text: body.draft.text.slice(0, MAX_DRAFT_TEXT), ...(context.length ? { context } : {}) };
+  }
   return patch;
 }
+
+/** Most unsent composer text a thread keeps. */
+const MAX_DRAFT_TEXT = 200_000;

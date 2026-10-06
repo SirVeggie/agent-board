@@ -116,6 +116,19 @@ test("a session that cannot be resumed starts over with a recap that keeps a sto
   assert.match(input.text, /Also 9\) one more/);
 });
 
+test("a draft thread keeps its unsent text across a restart until the user sends", () => {
+  const first = startHost().host;
+  const id = first.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null }, draft: { text: "half a thought" } }, { remember: false }).id;
+  first.updateThread(id, { draft: { text: "half a thought, and more" } });
+  first.dispose();
+  hosts.splice(hosts.indexOf(first), 1);
+
+  const { host } = startHost();
+  assert.deepEqual(host.threadDetail(id)?.thread.draft, { text: "half a thought, and more" });
+  host.send(id, { text: "half a thought, and more" });
+  assert.equal(host.threadDetail(id)?.thread.draft, null);
+});
+
 test("the resumed turn reaches the agent worded as Scribe's", async () => {
   const first = startHost().host;
   const id = cutOff(first);
