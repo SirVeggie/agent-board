@@ -586,13 +586,17 @@ export const kanbanActions: ActionSet = {
     },
     claim: {
       description:
-        "Start work on a card: moves it to the working column, sets assignee (your name, or assignee if you pass one) and a working status, and records you as its holder. Refused while another live agent holds it. If your thread or session stops, Scribe releases the card for you.",
+        "Start work on a card: moves it to the working column, sets assignee (your name, or assignee if you pass one) and a working status, and records you as its holder. Refused while another live agent holds it, and for an agent worker's chat once the user asked that worker to stop. If your thread or session stops, Scribe releases the card for you.",
       args: "{ card, text?, assignee? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);
         if (card.claim && !card.claim.stale && !sameHolder(card.claim, ctx)) {
           throw new ActionError(`#${card.num} is held by ${card.claim.holder} since ${new Date(card.claim.at).toISOString()}`);
         }
+        // A worker the user asked to stop takes no further card, so its agent needs no list to check.
+        const thread = str(ctx.caller.thread);
+        const stopping = thread && !(card.claim && card.claim.thread === thread) && workerList(state).find(([, w]) => w.stop === true && str(w.threadId) === thread);
+        if (stopping) throw new ActionError(`The user asked the worker "${str(stopping[1].name)}" to stop after its card. Take no more cards; end your turn.`);
         const working = roleColumn(state, "working");
         const from = claimFrom(state, card);
         const ops: unknown[] = [

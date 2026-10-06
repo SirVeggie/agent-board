@@ -3872,6 +3872,11 @@
   var FOLDER_MODES = { code: true, plan: true };
   /** Cards one agent chat may take before the board starts a fresh one. */
   var MAX_CARDS_PER_AGENT = 3;
+  /** How much of the card goes in a worker's prompt (the page's prompts are capped at 20000 characters). */
+  var CARD_PROMPT_TEXT_MAX = 6000;
+  var CARD_PROMPT_COMMENTS = 4;
+  var CARD_PROMPT_COMMENT_MAX = 1200;
+  var OTHER_CARDS_IN_PROMPT = 10;
   /** Matches the worker_step action's lease. */
   var STEP_LEASE_MS = 15 * 60 * 1000;
   /** How long after a plan limit resets the worker sends its agent on, so the new usage is in. */
@@ -4203,6 +4208,35 @@
     var h = document.querySelector("h1");
     return h ? h.textContent.trim() : "Board";
   }
+  function clip(text, max) {
+    text = str(text).trim();
+    return text.length > max ? text.slice(0, max) + "… (cut; get the card for the rest)" : text;
+  }
+  /** The card as the agent would get it, so its first call needn't be get: fields, checklist, the last few comments. */
+  function cardBrief(c) {
+    var lines = ["Your card: #" + c.num + " " + c.title];
+    var names = (c.labels || []).map(function (id) { var l = labels().filter(function (x) { return x.id === id; })[0]; return l && l.name; }).filter(Boolean);
+    var meta = [];
+    if (names.length) meta.push("labels: " + names.join(", "));
+    if (Number(c.priority) > 0) meta.push("priority: " + (["", "low", "medium", "high", "urgent"][Number(c.priority)] || c.priority));
+    if (c.due) meta.push("due: " + c.due);
+    if (meta.length) lines.push(meta.join(" · "));
+    lines.push("", "Description:", clip(c.description, CARD_PROMPT_TEXT_MAX) || "(none)");
+    var checklist = c.checklist || [];
+    if (checklist.length) {
+      lines.push("", "Checklist:");
+      checklist.forEach(function (it) { lines.push("- [" + (it.done ? "x" : " ") + "] " + str(it.text)); });
+    }
+    var comments = c.comments || [];
+    if (comments.length) {
+      var shown = comments.slice(-CARD_PROMPT_COMMENTS);
+      lines.push("", "Comments" + (comments.length > shown.length ? " (last " + shown.length + " of " + comments.length + ")" : "") + ":");
+      shown.forEach(function (cm) { lines.push("- " + (cm.by || "user") + ": " + clip(cm.text, CARD_PROMPT_COMMENT_MAX).replace(/\n/g, "\n  ")); });
+    }
+    var images = (c.images || []).length;
+    if (images) lines.push("", "The card has " + images + " image" + (images === 1 ? "" : "s") + "; get the card to see " + (images === 1 ? "it" : "them") + ".");
+    return lines.join("\n");
+  }
   function workerPrompt(w, c, fallbackInstructions, solo) {
     var name = workerName(w) || "Agent";
     var lines = [
@@ -4211,24 +4245,34 @@
       "The user's instructions:",
       str(w.instructions).trim() || fallbackInstructions || "",
       "",
-      "Your card: #" + c.num + " " + c.title,
+      cardBrief(c),
       "",
       "How to work:",
       "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with this message (or with your first page_action result); follow it.",
-      "- The board has claimed your card for you under \"" + name + "\" and moved it to the working column, so don't claim it. get the card, do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
+      "- The board has claimed your card for you under \"" + name + "\" and moved it to the working column, so don't claim it. The card is above as it was when this chat started; get it only to see its images or older comments. Do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
     ];
     if (FOLDER_MODES[workerMode(w)] && w.worktree) {
-      lines.push("- You work in a git worktree, on a branch of your own. Commit your work. Before you end your turn, rebase onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list) and resolve any conflicts, so it merges cleanly. When your turn ends, the board merges your branch, and the next agent starts from there.");
+      lines.push("- You work in a git worktree, on a branch of your own. Commit your work before you end your turn. When your turn ends, the board rebases your branch onto the one it came from and merges it, and the next agent starts from there; if that hits conflicts, it asks you to sort them out.");
     }
     if (solo) {
       lines.push("- This is a one-off run for this card only. Don't take other cards; when it is finished, end your turn.");
     } else if (w.context === "fresh") {
       lines.push("- Work on this card only, then end your turn. The board starts a fresh agent for the next card.");
     } else {
-      lines.push("- When it is finished, list your cards (list { column: \"agent\", assignee: " + JSON.stringify(name) + " }). If the list's workers show stopRequested: true on \"" + name + "\", end your turn. If one of those cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way (claim that one yourself with assignee " + JSON.stringify(name) + "), up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
+      var id = workerIdFor(name);
+      var others = id ? workerCards(id).filter(function (o) { return o.id !== c.id && cardTakeable(o); }) : [];
+      if (!others.length) {
+        lines.push("- No other cards wait for you right now, so when it is finished, end your turn. The board starts a fresh agent for any card that comes in.");
+      } else {
+        lines.push("- Your other ready cards when this chat started: " + others.slice(0, OTHER_CARDS_IN_PROMPT).map(function (o) { return "#" + o.num + " " + str(o.title).slice(0, 80); }).join("; ") + (others.length > OTHER_CARDS_IN_PROMPT ? "; and " + (others.length - OTHER_CARDS_IN_PROMPT) + " more" : "") + ".");
+        lines.push("- When it is finished, if one of those is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn: claim it yourself with assignee " + JSON.stringify(name) + " (no need to list first; claim refuses a card someone else took, and refuses any card once the user has asked you to stop: then end your turn), then get it. Up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
+      }
     }
     lines.push("- Don't wait for new cards; the board does that. End your turn with a short summary.");
-    return lines.join("\n");
+    var prompt = lines.join("\n");
+    // Long instructions plus a long card would pass the cap: name the card only, and the agent gets it.
+    if (prompt.length > 19000) prompt = prompt.replace(cardBrief(c), function () { return "Your card: #" + c.num + " " + c.title + " (too long to include here: get it first)"; });
+    return prompt;
   }
   function launchError(r) {
     var error = r && r.error;

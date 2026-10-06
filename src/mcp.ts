@@ -64,7 +64,8 @@ type ToolResult = { content: Array<{ type: "text"; text: string } | { type: "ima
  */
 const deliveredGuides = new Map<string, string>();
 
-async function withGuide(result: ToolResult, which: string, force = false): Promise<ToolResult> {
+/** quiet leaves out the one-line pointer once the guide was sent (a page_action that went through needs no reminder). */
+async function withGuide(result: ToolResult, which: string, force = false, quiet = false): Promise<ToolResult> {
   let guide: TemplateGuide | null = null;
   let sent: boolean | undefined;
   try {
@@ -79,6 +80,7 @@ async function withGuide(result: ToolResult, which: string, force = false): Prom
     return result;
   }
   if (!force && (sent ?? deliveredGuides.get(guide.id) === guide.text)) {
+    if (quiet) return result;
     result.content.push({
       type: "text",
       text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; page_state with guide: true shows it again.`,
@@ -1075,7 +1077,7 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return withGuide(errorResult((data as ApiError).error || `HTTP ${status}`), which);
       }
-      return withGuide(await withImages(jsonResult(data), data, which), which);
+      return withGuide(await withImages(jsonResult(data), data, which), which, false, true);
     }
   );
 

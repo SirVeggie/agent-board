@@ -368,6 +368,14 @@ test("list shows the agent workers, marking one that was asked to stop", () => {
   assert.equal(run(board(), "list", {}).result.workers, undefined);
 });
 
+test("claim refuses a further card for a worker asked to stop, but not its own card or other chats", () => {
+  const state = { ...board(), settings: { workers: { w_1: { name: "Opus", stop: true, threadId: "th_1", run: { since: 1 } } } } };
+  const own = run(state, "worker_claim", { card: 1, thread: "th_1", assignee: "Opus" }, { caller: { by: "user", label: "user" }, now: 1000, values: {} }).state;
+  assert.throws(() => run(own, "claim", { card: 2 }, agent({ thread: "th_1" })), /asked the worker "Opus" to stop/);
+  run(own, "claim", { card: 1 }, agent({ thread: "th_1" }));
+  run(own, "claim", { card: 2 }, agent({ thread: "th_other" }));
+});
+
 test("list filters by assignee regardless of case", () => {
   const state = run(board(), "update", { card: 2, assignee: "Opus" }).state;
   assert.deepEqual((run(state, "list", { assignee: "opus" }).result.cards as Array<{ num: number }>).map((c) => c.num), [2]);
