@@ -5755,7 +5755,8 @@
     hoverTipEl = null;
   }
 
-  function placeHoverTip(anchor, tip, width = 280) {
+  /** `start`: the tip's left edge at the anchor's, for a small anchor at the start of a line; otherwise its right edges. */
+  function placeHoverTip(anchor, tip, width = 280, start = false) {
     hideHoverTip();
     document.body.append(tip);
     const rect = anchor.getBoundingClientRect();
@@ -5763,20 +5764,20 @@
     tip.style.width = `${tw}px`;
     let top = rect.top - tip.offsetHeight - 8;
     if (top < 8) top = rect.bottom + 8;
-    const left = Math.min(Math.max(8, rect.right - tw), window.innerWidth - tw - 8);
+    const left = Math.min(Math.max(8, start ? rect.left : rect.right - tw), window.innerWidth - tw - 8);
     tip.style.top = `${Math.max(8, top)}px`;
     tip.style.left = `${left}px`;
     hoverTipEl = tip;
   }
 
-  function bindHoverTip(anchor, build) {
+  function bindHoverTip(anchor, build, { delay = 160, start = false } = {}) {
     anchor.addEventListener("pointerenter", (event) => {
       if (event.pointerType !== "mouse") return;
       clearTimeout(hoverTipTimer);
       hoverTipTimer = setTimeout(() => {
         const node = build();
-        if (node) placeHoverTip(anchor, node);
-      }, 160);
+        if (node) placeHoverTip(anchor, node, 280, start);
+      }, delay);
     });
     anchor.addEventListener("pointerleave", () => {
       clearTimeout(hoverTipTimer);
@@ -6013,11 +6014,40 @@
     ["Esc Esc", "Stop the agent"],
   ];
 
-  /** A labelled setting row with its control on the right. */
-  function settingRow(text, control, { id, title } = {}) {
+  /** A short explanation in the shared hover tip. */
+  function noteTip(text) {
+    return el("div", "ag-usage-tip ag-note-tip", text);
+  }
+
+  /**
+   * A section heading with a ? that shows its explanation at once, for help that isn't one setting's.
+   * Help for one setting goes on its label instead (settingRow's `hint`), so neither takes room in the dialog.
+   */
+  function helpHeading(text, help) {
+    const head = el("h3", "ag-help-head", text);
+    const b = el("button", "ag-help");
+    b.type = "button";
+    b.append(icon("question"));
+    b.setAttribute("aria-label", `About ${text}`);
+    b.setAttribute("aria-description", help);
+    bindHoverTip(b, () => noteTip(help), { delay: 0, start: true });
+    const show = () => placeHoverTip(b, noteTip(help), 280, true);
+    b.addEventListener("click", show);
+    b.addEventListener("focus", () => b.matches(":focus-visible") && show());
+    b.addEventListener("blur", hideHoverTip);
+    head.append(b);
+    return head;
+  }
+
+  /** A labelled setting row with its control on the right. `hint` explains it in a hover tip on the label. */
+  function settingRow(text, control, { id, hint } = {}) {
     const row = el("div", "setting-row");
     const label = el("span", null, text);
-    if (title) label.title = title;
+    if (hint) {
+      label.classList.add("ag-hinted");
+      label.setAttribute("aria-description", hint);
+      bindHoverTip(label, () => noteTip(hint), { delay: 350, start: true });
+    }
     if (id) {
       label.id = id;
       control.setAttribute("aria-labelledby", id);
@@ -6088,11 +6118,6 @@
       this.web = el("section", "settings-section ag-web-allow");
       this.hooks = el("section", "settings-section");
       const commands = el("section", "settings-section");
-      const intro = el(
-        "p",
-        "settings-hint",
-        "The rules Claude Code and Cursor apply before they ask you. They live in the providers' own config files; Scribe only edits their permission lists. \"Always allow\" on an approval adds a rule here too."
-      );
       const pick = el("div", "setting-row");
       const label = el("span", null, "Workspace");
       label.id = "ag-perm-ws-label";
@@ -6103,7 +6128,13 @@
         void this.load();
       });
       pick.append(label, this.picker);
-      commands.append(el("h3", null, "Commands"), intro, pick);
+      commands.append(
+        helpHeading(
+          "Commands",
+          "The rules Claude Code and Cursor apply before they ask you. They live in the providers' own config files; Scribe only edits their permission lists. \"Always allow\" on an approval adds a rule here too."
+        ),
+        pick
+      );
       this.body = el("div", "ag-perm-body");
       panel.append(title, this.web, this.hooks, commands, this.body);
       root.append(backdrop, panel);
@@ -6148,10 +6179,8 @@
       const actions = el("div", "settings-actions");
       actions.append(button("Reset to defaults", null, () => this.saveWeb(null)));
       this.web.replaceChildren(
-        el("h3", null, "Web"),
-        el(
-          "p",
-          "settings-hint",
+        helpHeading(
+          "Web",
           "With web set to Limited, Claude threads may search and fetch only these domains and their subdomains, without asking. Fetches anywhere else are refused."
         ),
         rows,
@@ -6174,10 +6203,8 @@
       });
       label.append(box, el("span", null, "Run Claude Code hooks in Claude threads"));
       this.hooks.replaceChildren(
-        el("h3", null, "Hooks"),
-        el(
-          "p",
-          "settings-hint",
+        helpHeading(
+          "Hooks",
           "Hooks from your Claude Code settings files and plugins are written for your own terminal sessions. One that fails closed, such as a plugin that checks each tool call with a local service, can deny every tool in Scribe without saying why. Off by default; Scribe's own checks run either way. Applies from a thread's next message."
         ),
         label
@@ -6195,6 +6222,7 @@
     close() {
       if (!this.isOpen()) return false;
       this.root.hidden = true;
+      hideHoverTip();
       return true;
     },
     async load() {
@@ -6301,7 +6329,14 @@
           allowlists.open();
         })
       );
-      providers.append(el("h3", null, "Providers"), this.status, actions);
+      providers.append(
+        helpHeading(
+          "Providers",
+          "Cursor runs through the Cursor SDK (log in below, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login. Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
+        ),
+        this.status,
+        actions
+      );
 
       const cursor = el("section", "settings-section");
       const hostShell = switchControl(
@@ -6323,12 +6358,10 @@
       );
       cursor.append(
         el("h3", null, "Cursor"),
-        settingRow("Ask before shell commands (experimental)", hostShell, { id: "ag-cursor-shell-label" }),
-        el(
-          "p",
-          "settings-hint",
-          "The Cursor SDK can't ask you before a tool runs. With this on, Code and Plan threads set to Ask or Edits get Scribe's own shell tool instead of Cursor's: you approve each command, and Scribe runs it outside Cursor's sandbox. File edits still go through Auto-review. Board workers keep Cursor's shell. Applies from a thread's next message."
-        )
+        settingRow("Ask before shell commands (experimental)", hostShell, {
+          id: "ag-cursor-shell-label",
+          hint: "The Cursor SDK can't ask you before a tool runs. With this on, Code and Plan threads set to Ask or Edits get Scribe's own shell tool instead of Cursor's: you approve each command, and Scribe runs it outside Cursor's sandbox. File edits still go through Auto-review. Board workers keep Cursor's shell. Applies from a thread's next message.",
+        })
       );
 
       const sources = el("section", "settings-section");
@@ -6336,8 +6369,10 @@
       const sourceActions = el("div", "settings-actions");
       sourceActions.append(button("Add source…", null, () => editSource(null)));
       sources.append(
-        el("h3", null, "Model sources"),
-        el("p", "settings-hint", "OpenAI-compatible endpoints (OpenRouter, LM Studio, Ollama, vLLM, llama.cpp…) for the native harness. Native also offers the models of providers whose API key is set in the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, …)."),
+        helpHeading(
+          "Model sources",
+          "OpenAI-compatible endpoints (OpenRouter, LM Studio, Ollama, vLLM, llama.cpp…) for the native harness. Native also offers the models of providers whose API key is set in the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, …)."
+        ),
         this.sources,
         sourceActions
       );
@@ -6388,7 +6423,7 @@
               renderLists();
             }
           ),
-          { id: "ag-compact-label", title: "Each thread shows only its title and status dot, in a smaller font with less spacing." }
+          { id: "ag-compact-label", hint: "Each thread shows only its title and status dot, in a smaller font with less spacing." }
         ),
         settingRow(
           "Show reasoning expanded",
@@ -6403,7 +6438,7 @@
         ),
         settingRow("Summaries for forks", this.summarizerButton(), {
           id: "ag-summarizer-label",
-          title: "A fork that starts a new session (another provider) gets the earlier thread's first and last messages, and a summary of the rest written by this model. A small, fast model is enough.",
+          hint: "A fork that starts a new session (another provider) gets the earlier thread's first and last messages, and a summary of the rest written by this model. A small, fast model is enough.",
         }),
         settingRow(
           "Send messages with",
@@ -6413,7 +6448,7 @@
           }),
           {
             id: "ag-send-key-label",
-            title: "Shift+Enter always inserts a line break. Ctrl+Enter always sends.",
+            hint: "Shift+Enter always inserts a line break. Ctrl+Enter always sends.",
           }
         ),
         settingRow(
@@ -6424,7 +6459,7 @@
           }),
           {
             id: "ag-empty-enter-label",
-            title: "While the agent works. Steer hands it to the running turn, which reads it at the next safe stop; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.",
+            hint: "While the agent works. Steer hands it to the running turn, which reads it at the next safe stop; pressing Enter again stops the turn and sends it. Send now always stops the turn and sends it.",
           }
         )
       );
@@ -6434,12 +6469,7 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      const about = el(
-        "p",
-        "settings-hint",
-        "Cursor runs through the Cursor SDK (log in above, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login. Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
-      );
-      panel.append(title, providers, cursor, sources, usage, chat, keys, about);
+      panel.append(title, providers, cursor, sources, usage, chat, keys);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -6574,6 +6604,7 @@
     close() {
       if (!this.isOpen()) return false;
       this.root.hidden = true;
+      hideHoverTip();
       return true;
     },
   };
