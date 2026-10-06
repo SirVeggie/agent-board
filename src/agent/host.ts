@@ -764,6 +764,20 @@ export class AgentHost {
     return view;
   }
 
+  /**
+   * Bind this chat to a page it just opened for the user, so the floating dock stays with the
+   * conversation. Board-owned threads (a page started them) stay on that page.
+   */
+  followToPage(threadId: string, pageId: string): boolean {
+    const thread = this.threads.get(threadId);
+    if (!thread || thread.archived) return false;
+    if (!store.get(pageId)) return false;
+    if (pageOwned(this.loadItems(threadId))) return false;
+    if (thread.scope.kind === "page" && thread.scope.ref === pageId) return false;
+    this.updateThread(threadId, { scope: { kind: "page", ref: pageId } });
+    return true;
+  }
+
   /** Model, effort, mode, and workspace picks become the defaults for new threads. */
   private rememberChoices(thread: Thread, patch: Partial<Thread>): void {
     const next = prefsPatchFromChoices(this.prefs(), thread, patch);

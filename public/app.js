@@ -510,6 +510,9 @@
       return;
     }
     if (msg.type === "tab_focus_request") {
+      if (msg.thread) {
+        window.scribeChat?.followThread?.(msg.thread, msg.id);
+      }
       if (state.tabs.some((tab) => tab.id === msg.id)) {
         selectTab(msg.id, { fromUser: false });
       }

@@ -938,6 +938,24 @@ test("user writes leave provenance alone; external agents have no thread", () =>
   store.closeDb();
 });
 
+test("an activating agent write names its thread on the upsert notice", () => {
+  const store = loaded();
+  /** @type {Array<[string, { activate: boolean, structural: boolean, thread?: string }]>} */
+  const notices = [];
+  store.on("tab_upserted", (tab, _index, notice) => notices.push([tab.id, notice]));
+  const actor = { thread: "th_abc", title: "Show", at: 1 };
+  const { tab } = store.upsert({ key: "shown", title: "Shown", html: "<p>a</p>", viewer: "agent", actor });
+  const created = notices.find(([id]) => id === tab.id);
+  assert.equal(created?.[1].activate, true);
+  assert.equal(created?.[1].thread, "th_abc");
+
+  notices.length = 0;
+  store.upsert({ key: "bg", title: "Bg", html: "<p>b</p>", viewer: "agent", actor, activate: false });
+  assert.equal(notices[0][1].activate, false);
+  assert.equal(notices[0][1].thread, "th_abc");
+  store.closeDb();
+});
+
 test("page provenance persists, exports, and migrates a missing column", () => {
   const store = loaded();
   const actor = { thread: "th_abc", title: "Maker", at: 1_700_000_000_000 };

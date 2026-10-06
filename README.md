@@ -212,7 +212,7 @@ Scribe has its own chat with coding agents, so Claude, Cursor, and Native run fr
 Three ways to open it:
 
 - **Sidebar** — the ✦ button or **Ctrl+L**. The ☰ button lists threads.
-- **Floating** — **Ctrl+K**. A composer over the bottom of the page for quick asks and edits. While the conversation is collapsed, progress shows as lines that fade out; the final answer stays for a while. **Ctrl+↑** or the list button shows the conversation; **Esc** hides it to a small handle. It follows the active page: its newest thread for that page, or a new one.
+- **Floating** — **Ctrl+K**. A composer over the bottom of the page for quick asks and edits. While the conversation is collapsed, progress shows as lines that fade out; the final answer stays for a while. **Ctrl+↑** or the list button shows the conversation; **Esc** hides it to a small handle. It follows the active page: its newest thread for that page, or a new one. When that thread opens a page for you, the conversation moves with it.
 - **Full window** — **Ctrl+Shift+L** or ⤢ in the sidebar. Threads on the left, the conversation in the middle.
 
 **Threads** belong to a page, a Library folder, a workspace folder, or nothing (global). The list's **Here** filter shows threads for the current page, its folders, workspaces, and global ones; **Workspaces** lists every thread attached to a disk folder, grouped by that folder; **All** and **Archived** show the rest. New page and folder threads start in Pages mode. A thread keeps its provider; picking a model from the other provider starts a new thread in the same place.

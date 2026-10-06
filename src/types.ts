@@ -306,6 +306,8 @@ export type UpsertNotice = {
   activate: boolean;
   /** HTML, title, or an in-archive write; pin-only updates on open tabs are not structural. */
   structural: boolean;
+  /** In-app chat that made this write, so a focused page can take that thread with it. */
+  thread?: string;
 };
 
 export type BoardEvent =
@@ -327,7 +329,7 @@ export type BoardEvent =
   | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean }
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }
-  | { type: "tab_focus_request"; id: string }
+  | { type: "tab_focus_request"; id: string; thread?: string }
   /** A state change as the ops that made it. A viewer at fromRevision applies them; one behind refetches. */
   | { type: "tab_state"; id: string; fromRevision: number; stateRevision: number; ops: StateOp[]; client?: string; writeId?: string }
   | { type: "tab_event"; id: string; event: PageEvent }

@@ -364,7 +364,7 @@
         for (const view of views()) {
           if (view.threadId === msg.thread.id) view.onThread(msg.thread, prev);
         }
-        if (!prev && dock.draftMatches(msg.thread)) dock.syncThread();
+        if (dockFollowsThread(msg.thread, prev)) dock.syncThread();
         renderLists();
         renderBadge();
         pageThreadChanged(msg.thread, prev);
@@ -574,6 +574,17 @@
 
   function sameScope(a, b) {
     return a && b && a.kind === b.kind && (a.ref || null) === (b.ref || null);
+  }
+
+  /** The dock should stay on this chat after it moved onto the page now in front. */
+  function dockFollowsThread(thread, prev) {
+    if (!prev && dock.draftMatches(thread)) return true;
+    const tab = activeTab();
+    if (!tab || thread.archived) return false;
+    if (thread.scope.kind !== "page" || thread.scope.ref !== tab.id) return false;
+    const wasHere = prev && prev.scope.kind === "page" && prev.scope.ref === tab.id;
+    if (wasHere) return false;
+    return dock.view.threadId === thread.id || dock.draftMatches(thread) || !dock.view.threadId;
   }
 
   /** Threads relevant to what the user is looking at: this page, its folders, and global. */
@@ -4453,6 +4464,15 @@
       if (tab) S.dockPicks.set(tab.id, id);
       this.renderTitle();
     },
+    /** Keep this conversation on a page it just opened, so syncThread does not start a draft. */
+    followThread(threadId, tabId) {
+      const t = S.threads.get(threadId);
+      if (!t || t.archived) return;
+      if (this.view.threadId === threadId || this.draftMatches(t) || !this.view.threadId) {
+        S.dockPicks.set(tabId, threadId);
+        if (activeTab()?.id === tabId) this.syncThread();
+      }
+    },
     /** The dock follows the active page: its picked thread, else its newest page thread, else a draft. */
     syncThread() {
       if (!this.root) return;
@@ -7017,7 +7037,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction };
+  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

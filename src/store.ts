@@ -79,6 +79,7 @@ import {
   type TemplateValues,
   type TrashBatch,
   type UpsertInput,
+  type UpsertNotice,
   type Viewer,
 } from "./types.js";
 import {
@@ -999,10 +1000,7 @@ export class BoardStore extends EventEmitter {
       noteAgentWrite(tab, input.actor);
       this.markDirty(tab.id);
       this.persistSoon();
-      this.emit("tab_upserted", toMeta(tab), pinIndex, {
-        activate: input.activate !== false,
-        structural: true,
-      });
+      this.emit("tab_upserted", toMeta(tab), pinIndex, actorNotice(input.activate !== false, true, input.actor));
       if (input.activate !== false) {
         this.emit("tab_focused", tab.id);
       }
@@ -1055,10 +1053,7 @@ export class BoardStore extends EventEmitter {
     if (this.folders.size !== foldersBefore) {
       this.emitFolders();
     }
-    this.emit("tab_upserted", toMeta(tab), activate ? this.order.indexOf(id) : undefined, {
-      activate,
-      structural: true,
-    });
+    this.emit("tab_upserted", toMeta(tab), activate ? this.order.indexOf(id) : undefined, actorNotice(activate, true, input.actor));
     if (activate) {
       this.emit("tab_focused", id);
     }
@@ -1138,10 +1133,7 @@ export class BoardStore extends EventEmitter {
     }
     this.markDirty(tab.id);
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab), undefined, {
-      activate: input.activate !== false,
-      structural: true,
-    });
+    this.emit("tab_upserted", toMeta(tab), undefined, actorNotice(input.activate !== false, true, input.actor));
     if (input.activate !== false) {
       this.emit("tab_focused", tab.id);
     }
@@ -1224,10 +1216,7 @@ export class BoardStore extends EventEmitter {
     }
     this.markDirty(tab.id);
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab), pinIndex, {
-      activate: patch.activate !== false,
-      structural,
-    });
+    this.emit("tab_upserted", toMeta(tab), pinIndex, actorNotice(patch.activate !== false, structural, patch.actor));
     if (patch.activate !== false && structural) {
       this.emit("tab_focused", tab.id);
     }
@@ -3684,6 +3673,10 @@ function shouldClose(destination: ImportDestination, closedAt?: number): boolean
       return _never;
     }
   }
+}
+
+function actorNotice(activate: boolean, structural: boolean, actor?: PageActor): UpsertNotice {
+  return { activate, structural, ...(actor?.thread ? { thread: actor.thread } : {}) };
 }
 
 /** The date a page is judged by; undefined when it has none (an open page has no close date). */

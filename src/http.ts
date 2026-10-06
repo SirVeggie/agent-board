@@ -831,7 +831,13 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const rawBefore = req.body?.before;
       const before = rawBefore === null ? null : typeof rawBefore === "string" && rawBefore.trim() ? rawBefore.trim() : undefined;
-      const tab = store.openPage(req.params.id, { activate: req.body?.activate !== false, before });
+      const activate = req.body?.activate !== false;
+      const tab = store.openPage(req.params.id, { activate, before });
+      const threadId = actorOf(req)?.thread;
+      if (activate && threadId) {
+        agentHost?.followToPage(threadId, tab.id);
+        requestAgentFocus(tab.id, threadId);
+      }
       res.json({ tab: libraryMeta(tab), closedCount: store.closedCount(viewerOf(req)) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
@@ -1326,9 +1332,14 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   store.on("tab_upserted", (tab: TabMeta, index?: number, notice?: UpsertNotice) => {
+    const threadId = notice?.thread;
+    if (notice?.activate && notice.structural && threadId) {
+      // Re-scope before the client sees the new tab, so the dock can keep this chat.
+      agentHost?.followToPage(threadId, tab.id);
+    }
     broadcast({ type: "tab_upserted", tab, index, structural: notice?.structural !== false });
     if (notice?.activate && notice.structural) {
-      requestAgentFocus(tab.id);
+      requestAgentFocus(tab.id, threadId);
     }
   });
   store.on("tab_deleted", (id: string) => broadcast({ type: "tab_deleted", id }));
@@ -1864,12 +1875,12 @@ function importFilename(req: express.Request): string {
   return path.basename(raw).slice(0, 180) || "import";
 }
 
-function requestAgentFocus(tabId: string): void {
+function requestAgentFocus(tabId: string, threadId?: string): void {
   const target = viewers.focusTarget(tabId);
   if (!target || target === "already-visible") {
     return;
   }
-  send(target.socket, { type: "tab_focus_request", id: tabId });
+  send(target.socket, { type: "tab_focus_request", id: tabId, ...(threadId ? { thread: threadId } : {}) });
 }
 
 function send(socket: WebSocket, event: BoardEvent): void {
