@@ -3570,7 +3570,10 @@ button.ag-usage:hover {
   box-shadow: 0 0 8px color-mix(in srgb, var(--ag-ok) 70%, transparent);
 }
 
-.ag-transcript .ag-turn.latest.running .ag-step-last::before {
+.ag-transcript .ag-turn.latest.running .ag-step-last::before,
+.ag-transcript .ag-turn.latest .ag-step-last.live::before,
+.ag-transcript .ag-turn.latest .ag-step-last.s-running::before,
+.ag-transcript .ag-turn.latest .ag-step-last.s-pending::before {
   background: var(--ag-live);
   box-shadow: 0 0 9px var(--ag-live);
   animation: dock-glow 1.2s ease-in-out infinite;

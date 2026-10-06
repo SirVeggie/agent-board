@@ -1913,7 +1913,7 @@
       if (railed) {
         const rails = body.querySelectorAll(":scope > .ag-rail");
         rails[rails.length - 1]?.lastElementChild?.classList.add("ag-step-last");
-        if (group.turn?.status === "running") wrap.classList.add("running");
+        if (this.turnIsLive(group.key)) wrap.classList.add("running");
         // Earlier turns fold their steps into one summary line, which expands them again.
         if (rails.length && group.turn) {
           const key = `s:${group.key}`;
@@ -1971,7 +1971,21 @@
     markLatest() {
       const turns = [...this.transcript.querySelectorAll(".ag-turn")].filter((n) => !n.dataset.turn.startsWith("pending") && !n.dataset.turn.startsWith("dropped"));
       const last = turns[turns.length - 1];
-      for (const n of turns) n.classList.toggle("latest", n === last);
+      for (const n of turns) {
+        n.classList.toggle("latest", n === last);
+        if (n !== last) n.classList.remove("running");
+      }
+      // The current-step dot is orange while this turn is live, green once it is not.
+      if (last) last.classList.toggle("running", this.turnIsLive(last.dataset.turn));
+    }
+
+    /** Orange last-step glow: this turn is still running, or the thread is busy and the turn object has not arrived yet. */
+    turnIsLive(turnId) {
+      if (!turnId || turnId.startsWith("pending") || turnId.startsWith("dropped")) return false;
+      const turn = S.details.get(this.threadId)?.turns.get(turnId);
+      if (turn) return turn.status === "running";
+      const t = this.thread();
+      return Boolean(t && (t.status === "running" || t.status === "waiting"));
     }
 
     renderUser(item, queued) {
@@ -2148,7 +2162,7 @@
     renderExplore(items, byParent) {
       const key = `g:${items[0].id}`;
       const running = items.some((it) => it.status === "running" || it.status === "pending");
-      const node = el("div", `ag-group${this.expanded.has(key) ? " open" : ""}`);
+      const node = el("div", `ag-group${this.expanded.has(key) ? " open" : ""}${running ? " live" : ""}`);
       const reads = items.filter((it) => it.tool === "read").length;
       const searches = items.filter((it) => it.tool === "search").length;
       const other = items.length - reads - searches;
@@ -2636,6 +2650,8 @@
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
+      // Status can change without a turn event; keep the current-step dot orange or green to match.
+      if (prev && prev.status !== thread.status) this.markLatest();
       if (thread.unread && this.visible()) api("POST", `/threads/${encodeURIComponent(thread.id)}/read`).catch(() => undefined);
     }
 
@@ -2668,6 +2684,9 @@
         this.schedule();
         return;
       }
+      // Thinking/text streams skip a full re-render; restore the orange last-step if it went green too soon.
+      const wrap = node.closest(".ag-turn");
+      if (wrap?.classList.contains("latest") && this.turnIsLive(item.turnId || wrap.dataset.turn)) wrap.classList.add("running");
       if (item.kind === "reasoning") {
         const prev = node.querySelector(".ag-reason-preview");
         if (prev) prev.textContent = lastLine(item.text);
