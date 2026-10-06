@@ -14,8 +14,11 @@ import type {
 } from "@cursor/sdk";
 import { log } from "../../log.js";
 
-/** The SDK's list paging, passed in so this module does not load the SDK itself. */
+/** The SDK's list paging, passed in (loaded on first list) so this module does not load the SDK itself. */
 export type Paging = Pick<typeof import("@cursor/sdk"), "paginateAgentDocuments" | "paginateRunDocuments" | "paginateCheckpointBlobIds">;
+
+/** What a prune removed. */
+export type PruneResult = { agents: number; expired: number };
 
 const CREATE_SQL = `
 CREATE TABLE IF NOT EXISTS agents (agent_id TEXT PRIMARY KEY, cwd TEXT NOT NULL, data TEXT NOT NULL);
@@ -66,12 +69,21 @@ export class SqliteCursorStore implements LocalAgentStore {
   readonly checkpoints: LocalAgentStoreCheckpoints;
   private db: DatabaseSync;
 
-  constructor(file: string, paging: Paging) {
+  constructor(file: string, paging: () => Promise<Paging>) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const db = new DatabaseSync(file);
     this.db = db;
-    db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+    // Without a size limit a WAL file never shrinks after a big write (the JSONL import left one of 159 MB).
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA journal_size_limit = 67108864;");
     db.exec(CREATE_SQL);
+    const agentCols = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+    if (!agentCols.some((c) => c.name === "touched_at")) {
+      // When the agent last ran or saved a checkpoint; agents from before the column count from now.
+      db.exec("ALTER TABLE agents ADD COLUMN touched_at INTEGER");
+      db.prepare("UPDATE agents SET touched_at = ?").run(Date.now());
+    }
+    const touchStmt = db.prepare("UPDATE agents SET touched_at = ? WHERE agent_id = ?");
+    const touch = (agentId: string) => touchStmt.run(Date.now(), agentId);
 
     const agentRows = (agentIds: readonly string[] | undefined, cwd: string | undefined): Array<{ agent_id: string; data: string }> => {
       const where: string[] = [];
@@ -92,12 +104,12 @@ export class SqliteCursorStore implements LocalAgentStore {
         return row ? (JSON.parse(row.data) as LocalAgentDocument) : null;
       },
       async create({ agent }) {
-        const done = db.prepare("INSERT OR IGNORE INTO agents (agent_id, cwd, data) VALUES (?, ?, ?)").run(agent.agentId, agent.cwd, JSON.stringify(agent));
+        const done = db.prepare("INSERT OR IGNORE INTO agents (agent_id, cwd, data, touched_at) VALUES (?, ?, ?, ?)").run(agent.agentId, agent.cwd, JSON.stringify(agent), Date.now());
         if (!done.changes) throw new Error(`Agent ${agent.agentId} already exists`);
         return JSON.parse(JSON.stringify(agent)) as LocalAgentDocument;
       },
       async update({ agent }) {
-        const done = db.prepare("UPDATE agents SET cwd = ?, data = ? WHERE agent_id = ?").run(agent.cwd, JSON.stringify(agent), agent.agentId);
+        const done = db.prepare("UPDATE agents SET cwd = ?, data = ?, touched_at = ? WHERE agent_id = ?").run(agent.cwd, JSON.stringify(agent), Date.now(), agent.agentId);
         if (!done.changes) throw new Error(`Agent ${agent.agentId} not found`);
         return JSON.parse(JSON.stringify(agent)) as LocalAgentDocument;
       },
@@ -109,7 +121,7 @@ export class SqliteCursorStore implements LocalAgentStore {
       async list(input) {
         const filter = input?.filter;
         const items = agentRows(undefined, filter?.cwd).map((r) => JSON.parse(r.data) as LocalAgentDocument);
-        return paging.paginateAgentDocuments(items, filter);
+        return (await paging()).paginateAgentDocuments(items, filter);
       },
     };
 
@@ -139,11 +151,13 @@ export class SqliteCursorStore implements LocalAgentStore {
       async create({ run }) {
         const done = db.prepare("INSERT OR IGNORE INTO runs (agent_id, run_id, data) VALUES (?, ?, ?)").run(run.agentId, run.runId, JSON.stringify(run));
         if (!done.changes) throw new Error(`Run ${run.runId} already exists for agent ${run.agentId}`);
+        touch(run.agentId);
         return JSON.parse(JSON.stringify(run)) as LocalAgentRunDocument;
       },
       async update({ run }) {
         const done = db.prepare("UPDATE runs SET data = ? WHERE agent_id = ? AND run_id = ?").run(JSON.stringify(run), run.agentId, run.runId);
         if (!done.changes) throw new Error(`Run ${run.runId} not found for agent ${run.agentId}`);
+        touch(run.agentId);
         return JSON.parse(JSON.stringify(run)) as LocalAgentRunDocument;
       },
       async delete({ filter }) {
@@ -155,7 +169,7 @@ export class SqliteCursorStore implements LocalAgentStore {
       },
       async list(input) {
         const filter = input?.filter;
-        return paging.paginateRunDocuments(runRows(filter?.agentIds, filter?.runIds), filter);
+        return (await paging()).paginateRunDocuments(runRows(filter?.agentIds, filter?.runIds), filter);
       },
     };
 
@@ -229,10 +243,12 @@ export class SqliteCursorStore implements LocalAgentStore {
       async create({ agentId, blobId, data }) {
         const done = db.prepare("INSERT OR IGNORE INTO checkpoints (agent_id, blob_id, data) VALUES (?, ?, ?)").run(agentId, blobId, data);
         if (!done.changes) throw new Error(`Checkpoint blob ${blobId} already exists for agent ${agentId}`);
+        touch(agentId);
       },
       async update({ agentId, blobId, data }) {
         const done = db.prepare("UPDATE checkpoints SET data = ? WHERE agent_id = ? AND blob_id = ?").run(data, agentId, blobId);
         if (!done.changes) throw new Error(`Checkpoint blob ${blobId} not found for agent ${agentId}`);
+        touch(agentId);
       },
       async delete({ filter }) {
         const [where, args] = checkpointWhere(filter.agentIds, filter.blobIds);
@@ -242,7 +258,7 @@ export class SqliteCursorStore implements LocalAgentStore {
         const filter = input?.filter;
         const [where, args] = checkpointWhere(filter?.agentIds, filter?.blobIds);
         const ids = (db.prepare(`SELECT blob_id FROM checkpoints${where}`).all(...args) as Array<{ blob_id: string }>).map((r) => r.blob_id);
-        return paging.paginateCheckpointBlobIds(ids, filter);
+        return (await paging()).paginateCheckpointBlobIds(ids, filter);
       },
     };
   }
@@ -254,7 +270,7 @@ export class SqliteCursorStore implements LocalAgentStore {
   async importJsonl(dir: string): Promise<void> {
     const db = this.db;
     const insert = {
-      agents: db.prepare("INSERT OR IGNORE INTO agents (agent_id, cwd, data) VALUES (?, ?, ?)"),
+      agents: db.prepare("INSERT OR IGNORE INTO agents (agent_id, cwd, data, touched_at) VALUES (?, ?, ?, ?)"),
       runs: db.prepare("INSERT OR IGNORE INTO runs (agent_id, run_id, data) VALUES (?, ?, ?)"),
       runEvents: db.prepare(
         "INSERT OR IGNORE INTO run_events (run_id, seq, event_type, payload, payload_ref, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -262,7 +278,7 @@ export class SqliteCursorStore implements LocalAgentStore {
       checkpoints: db.prepare("INSERT OR IGNORE INTO checkpoints (agent_id, blob_id, data) VALUES (?, ?, ?)"),
     };
     const add: Record<keyof typeof JSONL, (r: Row) => void> = {
-      agents: (r) => insert.agents.run(String(r.agentId), String(r.cwd ?? ""), JSON.stringify(r)),
+      agents: (r) => insert.agents.run(String(r.agentId), String(r.cwd ?? ""), JSON.stringify(r), Date.now()),
       runs: (r) => insert.runs.run(String(r.agentId), String(r.runId), JSON.stringify(r)),
       runEvents: (r) =>
         insert.runEvents.run(
@@ -303,6 +319,95 @@ export class SqliteCursorStore implements LocalAgentStore {
       fs.renameSync(file, `${file}.imported`);
       log(`Cursor store: imported ${count} ${kind} from ${JSONL[kind]} in ${Date.now() - started} ms`);
     }
+  }
+
+  /**
+   * Whether the agent can pick its conversation up again: it is on record and the checkpoint its
+   * history lives in is still there (prune drops the checkpoints of agents left idle).
+   */
+  resumable(agentId: string): boolean {
+    const row = this.db.prepare("SELECT data FROM agents WHERE agent_id = ?").get(agentId) as { data: string } | undefined;
+    if (!row) return false;
+    const root = (JSON.parse(row.data) as { latestCheckpoint?: { rootBlobId?: string } }).latestCheckpoint?.rootBlobId;
+    if (!root) return true;
+    return Boolean(this.db.prepare("SELECT 1 FROM checkpoints WHERE agent_id = ? AND blob_id = ?").get(agentId, root));
+  }
+
+  /** Remove agents with everything they own: runs, their events, and checkpoints. */
+  forget(agentIds: readonly string[]): void {
+    this.inTransaction(() => {
+      for (const id of agentIds) {
+        this.dropRunEvents(id);
+        this.db.prepare("DELETE FROM runs WHERE agent_id = ?").run(id);
+        this.db.prepare("DELETE FROM checkpoints WHERE agent_id = ?").run(id);
+        this.db.prepare("DELETE FROM agents WHERE agent_id = ?").run(id);
+      }
+    });
+  }
+
+  /**
+   * Drop what no thread can use any more (#214). An agent that keep() refuses, and that has not run
+   * within graceMs, belongs to a deleted or rewound thread or a one-off answer: it goes whole. An
+   * agent kept but idle past idleMs loses its checkpoints and run events, most of the space (each
+   * checkpoint holds the conversation so far); its thread goes on in a new agent with a recap.
+   * Checkpoint blobs are shared within an agent, so they only ever go a whole agent at a time.
+   */
+  prune(keep: (agentId: string) => boolean, opts: { graceMs: number; idleMs: number; open?: (agentId: string) => boolean; now?: number }): PruneResult {
+    const db = this.db;
+    const now = opts.now ?? Date.now();
+    const rows = db.prepare("SELECT agent_id, touched_at FROM agents").all() as Array<{ agent_id: string; touched_at: number | null }>;
+    // An agent open in this process keeps its blobs in memory and only writes new ones: it is never pruned.
+    const open = opts.open ?? (() => false);
+    const orphans = rows.filter((r) => !keep(r.agent_id) && !open(r.agent_id) && (r.touched_at ?? 0) < now - opts.graceMs).map((r) => r.agent_id);
+    // Rows left without their agent (a crash between deletes): nothing can reach them.
+    const known = new Set(rows.map((r) => r.agent_id));
+    const owners = db.prepare("SELECT DISTINCT agent_id FROM checkpoints UNION SELECT DISTINCT agent_id FROM runs").all() as Array<{ agent_id: string }>;
+    for (const { agent_id } of owners) if (!known.has(agent_id)) orphans.push(agent_id);
+    if (orphans.length) this.forget(orphans);
+    const gone = new Set(orphans);
+    const hasCheckpoints = db.prepare("SELECT 1 FROM checkpoints WHERE agent_id = ? LIMIT 1");
+    const idle = rows.filter((r) => !gone.has(r.agent_id) && !open(r.agent_id) && (r.touched_at ?? 0) < now - opts.idleMs && hasCheckpoints.get(r.agent_id)).map((r) => r.agent_id);
+    if (idle.length) {
+      this.inTransaction(() => {
+        for (const id of idle) {
+          this.dropRunEvents(id);
+          db.prepare("DELETE FROM checkpoints WHERE agent_id = ?").run(id);
+        }
+      });
+    }
+    if (orphans.length || idle.length) this.compact();
+    return { agents: orphans.length, expired: idle.length };
+  }
+
+  private dropRunEvents(agentId: string): void {
+    this.db.prepare("DELETE FROM run_events WHERE run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)").run(agentId);
+  }
+
+  private inTransaction(fn: () => void): void {
+    this.db.exec("BEGIN");
+    try {
+      fn();
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /**
+   * Give freed pages back to the disk. The first time, this switches the file to incremental
+   * auto-vacuum, which takes one full VACUUM; after that each call frees pages without a rewrite.
+   */
+  private compact(): void {
+    const db = this.db;
+    const mode = (db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum;
+    if (mode !== 2) {
+      db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+      db.exec("VACUUM");
+    } else {
+      db.exec("PRAGMA incremental_vacuum");
+    }
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   }
 
   close(): void {

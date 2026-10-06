@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
   AgentOptions,
   InteractionUpdate,
-  LocalAgentStore,
   ModelListItem,
   ModelSelection,
   Run,
@@ -66,16 +66,21 @@ function sdk(): Promise<Sdk> {
   return sdkLoad;
 }
 
-let agentStore: Promise<LocalAgentStore> | null = null;
+/** An agent nothing refers to may still be starting (a spare, a one-off answer) this long after it last ran. */
+const PRUNE_GRACE_MS = 60 * 60 * 1000;
+/** A thread idle this long loses its agent's checkpoints; its next turn starts a new agent with a recap. */
+export const CHECKPOINT_IDLE_MS = 3 * 24 * 60 * 60 * 1000;
+
+const storeDir = () => path.join(dataDir(), "cursor-agents");
+let agentStore: Promise<SqliteCursorStore> | null = null;
 /**
  * Scribe's own store, so threads don't mix with the Cursor IDE's or another SDK host's agents.
  * SQLite, not the SDK's JSONL store: that one rewrites whole files on every write (#212).
  */
-function store(): Promise<LocalAgentStore> {
+function store(): Promise<SqliteCursorStore> {
   agentStore ??= (async () => {
-    const paging = await sdk();
-    const dir = path.join(dataDir(), "cursor-agents");
-    const opened = new SqliteCursorStore(path.join(dir, "store.sqlite"), paging);
+    const dir = storeDir();
+    const opened = new SqliteCursorStore(path.join(dir, "store.sqlite"), sdk);
     await opened.importJsonl(dir).catch((err) => log(`Cursor store: JSONL import failed: ${(err as Error).message}`));
     return opened;
   })().catch((err) => {
@@ -332,6 +337,24 @@ export class CursorProvider implements AgentProvider {
     void spare.warm(instructions);
   }
 
+  /** False when the thread's agent is gone or prune dropped its checkpoints: the next turn needs a recap. */
+  async resumable(nativeId: string): Promise<boolean> {
+    if (!isSdkAgentId(nativeId)) return false;
+    return (await store()).resumable(nativeId);
+  }
+
+  /** Drop the agents of deleted and rewound threads, and the checkpoints of idle ones (#214). */
+  async prune(keep: ReadonlySet<string>): Promise<void> {
+    // Nothing to do (and no need to open the store) before Cursor was ever used.
+    if (!agentStore && !fs.existsSync(path.join(storeDir(), "store.sqlite"))) return;
+    const open = new Set([...this.sessions].map((s) => s.openAgentId()).filter((id): id is string => Boolean(id)));
+    const started = Date.now();
+    const result = (await store()).prune((id) => keep.has(id), { graceMs: PRUNE_GRACE_MS, idleMs: CHECKPOINT_IDLE_MS, open: (id) => open.has(id) });
+    if (result.agents || result.expired) {
+      log(`Cursor store: removed ${result.agents} agents, dropped the checkpoints of ${result.expired} idle ones in ${Date.now() - started} ms`);
+    }
+  }
+
   dispose(): void {
     this.spares.dispose();
     for (const session of this.sessions) {
@@ -498,6 +521,11 @@ class CursorSession implements ProviderSession {
 
   scribeThreadId(): string {
     return this.thread.id;
+  }
+
+  /** The agent this session has open (or is opening); prune leaves it alone. */
+  openAgentId(): string | null {
+    return this.agent || this.opening ? this.agentId : null;
   }
 
   update(thread: Thread): void {

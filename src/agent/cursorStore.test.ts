@@ -10,7 +10,7 @@ const paging = { paginateAgentDocuments, paginateRunDocuments, paginateCheckpoin
 
 function tempStore(): { dir: string; store: SqliteCursorStore } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-store-"));
-  return { dir, store: new SqliteCursorStore(path.join(dir, "store.sqlite"), paging) };
+  return { dir, store: new SqliteCursorStore(path.join(dir, "store.sqlite"), async () => paging) };
 }
 
 const agent = (agentId: string, cwd = "C:/work") => ({ agentId, cwd, status: "idle" as const, createdAt: 1, updatedAt: 1 });
@@ -86,4 +86,50 @@ test("importJsonl brings in an old JSONL store once and renames its files", asyn
   assert.ok(!fs.existsSync(path.join(dir, "agents.ndjson")));
   await store.importJsonl(dir);
   store.close();
+});
+
+test("prune drops agents no thread keeps, and the checkpoints of idle ones", async () => {
+  const { dir, store } = tempStore();
+  for (const id of ["agent-kept", "agent-idle", "agent-gone", "agent-new", "agent-open"]) {
+    await store.agents.create({ agent: agent(id) });
+    await store.runs.create({ run: run(id, `run-${id}`, 1) });
+    await store.runEvents.append({ runId: `run-${id}`, eventType: "a" });
+    await store.checkpoints.create({ agentId: id, blobId: "root", data: new Uint8Array(4096) });
+    await store.agents.update({ agent: { ...agent(id), latestCheckpoint: { rootBlobId: "root" } } as never });
+  }
+  // Rows a crash left without their agent.
+  await store.checkpoints.create({ agentId: "agent-lost", blobId: "b", data: new Uint8Array([1]) });
+  assert.ok(store.resumable("agent-idle"));
+  assert.ok(!store.resumable("agent-missing"));
+
+  const hour = 60 * 60 * 1000;
+  const now = Date.now() + 4 * 24 * hour;
+  // agent-new ran ten minutes ago: too fresh to drop though nothing keeps it (a spare, a one-off answer).
+  const db = (store as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+  db.prepare("UPDATE agents SET touched_at = ? WHERE agent_id = ?").run(now - 10 * 60 * 1000, "agent-new");
+  db.prepare("UPDATE agents SET touched_at = ? WHERE agent_id = ?").run(now - hour, "agent-kept");
+  const result = store.prune((id) => id === "agent-kept" || id === "agent-idle", { graceMs: hour, idleMs: 3 * 24 * hour, open: (id) => id === "agent-open", now });
+  assert.deepEqual(result, { agents: 2, expired: 1 });
+
+  assert.equal(await store.agents.get({ agentId: "agent-gone" }), null);
+  assert.deepEqual((await store.runs.list({ filter: { agentIds: ["agent-gone"] } })).items, []);
+  assert.deepEqual((await store.runEvents.list({ runId: "run-agent-gone" })).items, []);
+  assert.deepEqual((await store.checkpoints.list({ filter: { agentIds: ["agent-gone"] } })).items, []);
+  assert.deepEqual((await store.checkpoints.list({ filter: { agentIds: ["agent-lost"] } })).items, []);
+
+  // Idle but kept: the agent and its runs stay, its checkpoints and events go, and it cannot resume.
+  assert.ok(await store.agents.get({ agentId: "agent-idle" }));
+  assert.equal((await store.runs.list({ filter: { agentIds: ["agent-idle"] } })).items.length, 1);
+  assert.deepEqual((await store.checkpoints.list({ filter: { agentIds: ["agent-idle"] } })).items, []);
+  assert.deepEqual((await store.runEvents.list({ runId: "run-agent-idle" })).items, []);
+  assert.ok(!store.resumable("agent-idle"));
+
+  for (const id of ["agent-kept", "agent-new", "agent-open"]) assert.ok(store.resumable(id), id);
+  assert.equal((db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum, 2);
+  assert.deepEqual(store.prune(() => true, { graceMs: hour, idleMs: 3 * 24 * hour, open: (id) => id === "agent-open", now }), { agents: 0, expired: 0 });
+  store.close();
+  // The column added to an older file survives reopening.
+  const again = new SqliteCursorStore(path.join(dir, "store.sqlite"), async () => paging);
+  assert.ok(again.resumable("agent-kept"));
+  again.close();
 });

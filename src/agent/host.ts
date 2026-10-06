@@ -80,6 +80,9 @@ const FLUSH_MS = 700;
 const CURSOR_USAGE_TTL_MS = 30 * 60 * 1000;
 /** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
 const MAX_RECAP = 24_000;
+/** Providers drop the saved sessions no thread uses a few minutes after start, then every few hours. */
+const PRUNE_FIRST_MS = 5 * 60 * 1000;
+const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 const DELTA_MS = 50;
 /** At most this often, a running thread is sent again because its live step changed. */
 const ACTIVITY_MS = 1000;
@@ -325,6 +328,28 @@ export class AgentHost {
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
     this.scheduleClaudeUsageRefresh();
+    this.pruneTimer = setTimeout(() => this.pruneSessions(), PRUNE_FIRST_MS);
+    this.pruneTimer.unref?.();
+  }
+
+  private pruneTimer: NodeJS.Timeout | null = null;
+
+  /** Let providers drop saved sessions of deleted and rewound threads (#214), then again every few hours. */
+  private pruneSessions(): void {
+    const keep = new Set<string>();
+    for (const t of this.threads.values()) {
+      if (t.nativeId) keep.add(t.nativeId);
+      if (t.fork?.nativeId) keep.add(t.fork.nativeId);
+    }
+    void (async () => {
+      for (const provider of Object.values(this.providers)) {
+        await provider.prune?.(keep).catch((err) => log(`Pruning ${provider.label} sessions failed: ${(err as Error).message}`));
+      }
+    })().finally(() => {
+      if (this.closed) return;
+      this.pruneTimer = setTimeout(() => this.pruneSessions(), PRUNE_EVERY_MS);
+      this.pruneTimer.unref?.();
+    });
   }
 
   private planLimits: Partial<Record<ProviderId, PlanLimits>> = {};
@@ -450,6 +475,7 @@ export class AgentHost {
 
   dispose(): void {
     this.closed = true;
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
     if (this.usageTimer) {
       clearTimeout(this.usageTimer);
       this.usageTimer = null;
@@ -1808,8 +1834,8 @@ export class AgentHost {
       }
     }
 
-    if (msg && thread.provider === "cursor" && thread.nativeId && !isSdkAgentId(thread.nativeId) && !thread.rewind && !setupError) {
-      thread = this.leaveAcpSession(thread, turn.id);
+    if (msg && thread.nativeId && !thread.rewind && !setupError && !(await this.canResume(thread))) {
+      thread = this.startOverWithRecap(thread, turn.id);
     }
 
     const sink = this.makeSink(threadId, run);
@@ -2605,16 +2631,32 @@ export class AgentHost {
     return message;
   }
 
+  /** Whether the provider can still resume the thread's session; on doubt, let it try. */
+  private async canResume(thread: Thread): Promise<boolean> {
+    if (!thread.nativeId) return true;
+    try {
+      return (await this.providers[thread.provider].resumable?.(thread.nativeId)) ?? true;
+    } catch (err) {
+      log(`Checking the session of ${thread.id} failed: ${(err as Error).message}`);
+      return true;
+    }
+  }
+
   /**
-   * A Cursor thread whose nativeId is an old ACP session id: the SDK cannot resume it, so the turn
-   * starts a new agent with a recap of the conversation, like a rewind to the end. Once per thread.
+   * A session the provider cannot resume (a Cursor thread's old ACP session id, or an agent whose
+   * checkpoints were pruned after days idle): the turn starts a new one with a recap of the
+   * conversation, like a rewind to the end.
    */
-  private leaveAcpSession(thread: Thread, turnId: string): Thread {
+  private startOverWithRecap(thread: Thread, turnId: string): Thread {
     const kept = this.loadTurns(thread.id).filter((t) => t.id !== turnId && t.status === "done");
     const recap = kept.length ? this.recap(this.loadItems(thread.id), kept) : "";
     const next: Thread = { ...thread, nativeId: null, ...(recap ? { rewind: { at: null, recap, migrated: true } } : {}) };
     this.threads.set(thread.id, next);
     this.db.saveThread(next);
+    if (thread.provider === "cursor" && isSdkAgentId(thread.nativeId)) {
+      const text = "Cursor's saved context for this thread was cleared after 3 days without use, so this turn starts a new agent with a recap of the conversation.";
+      this.addItem(thread.id, turnId, { kind: "notice", level: "info", text });
+    }
     return next;
   }
 

@@ -186,6 +186,10 @@ export interface AgentProvider {
   prewarm(draft: Thread, instructions: string, ctx: SessionContext): void;
   /** Thread id a matching spare's MCP was started with, so createThread can keep claims pointing at a real thread. */
   spareThreadId?(thread: Thread, ctx: SessionContext): string | null;
+  /** False when a saved session (nativeId) can no longer be resumed, so the next turn starts over with a recap. */
+  resumable?(nativeId: string): Promise<boolean>;
+  /** Delete saved sessions no thread refers to any more (keep: every nativeId threads still hold). */
+  prune?(keep: ReadonlySet<string>): Promise<void>;
   dispose(): void;
 }
 
