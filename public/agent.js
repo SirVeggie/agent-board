@@ -9,6 +9,7 @@
     width: "scribe.agent.width",
     current: "scribe.agent.current",
     dock: "scribe.agent.dockShown",
+    dockPicks: "scribe.agent.dockPicks",
     filter: "scribe.agent.filter",
     reasoning: "scribe.agent.reasoningOpen",
     button: "scribe.agent.showButton",
@@ -148,8 +149,8 @@
     fullOpen: false,
     dockShown: localStorage.getItem(LS.dock) === "1",
     dockExpanded: false,
-    /** Thread the dock uses per page id, when the user picked one. */
-    dockPicks: new Map(),
+    /** Thread the dock uses per page id, when the user picked one. Survives refresh. */
+    dockPicks: loadDockPicks(),
     /**
      * Unsent composers of threads no view is showing: { text, mentions, attachments }. The text and
      * chips are saved on the thread too (thread.draft); attached files only live here.
@@ -343,6 +344,7 @@
       return;
     }
     S.ready = true;
+    pruneDockPicks();
     for (const id of [...S.details.keys()]) {
       if (!S.threads.has(id)) S.details.delete(id);
     }
@@ -418,6 +420,7 @@
           if (view.threadId === msg.id) view.setThread(null);
         }
         if (S.current === msg.id) setCurrent(null);
+        forgetDockThread(msg.id);
         renderLists();
         renderBadge();
         return;
@@ -628,7 +631,7 @@
       S.threads.set(thread.id, thread);
       S.composers.set(thread.id, content);
       // The floating chat comes back to it on that page, unless it has moved on to another thread there.
-      if (tab && !S.dockPicks.has(tab) && !(dock.view.draft && dock.view.draftTab === tab)) S.dockPicks.set(tab, thread.id);
+      if (tab && !S.dockPicks.has(tab) && !(dock.view.draft && dock.view.draftTab === tab)) setDockPick(tab, thread.id);
       renderLists();
     } catch (err) {
       notice(`Could not keep the unsent thread: ${err.message}`);
@@ -755,6 +758,54 @@
     S.current = id;
     if (id) localStorage.setItem(LS.current, id);
     else localStorage.removeItem(LS.current);
+  }
+
+  function loadDockPicks() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(LS.dockPicks) || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+      return new Map(Object.entries(parsed).filter(([, id]) => typeof id === "string" && id));
+    } catch {
+      return new Map();
+    }
+  }
+
+  function saveDockPicks() {
+    localStorage.setItem(LS.dockPicks, JSON.stringify(Object.fromEntries(S.dockPicks)));
+  }
+
+  function setDockPick(tabId, threadId) {
+    if (!tabId || !threadId) return;
+    if (S.dockPicks.get(tabId) === threadId) return;
+    S.dockPicks.set(tabId, threadId);
+    saveDockPicks();
+  }
+
+  function clearDockPick(tabId) {
+    if (!tabId || !S.dockPicks.delete(tabId)) return;
+    saveDockPicks();
+  }
+
+  function forgetDockThread(threadId) {
+    let changed = false;
+    for (const [tabId, id] of [...S.dockPicks]) {
+      if (id === threadId) {
+        S.dockPicks.delete(tabId);
+        changed = true;
+      }
+    }
+    if (changed) saveDockPicks();
+  }
+
+  function pruneDockPicks() {
+    let changed = false;
+    for (const [tabId, id] of [...S.dockPicks]) {
+      if (!S.threads.has(id)) {
+        S.dockPicks.delete(tabId);
+        changed = true;
+      }
+    }
+    if (changed) saveDockPicks();
   }
 
   /* ---------- generic popover menu ---------- */
@@ -4779,7 +4830,7 @@
     },
     remember(id) {
       const tab = activeTab();
-      if (tab) S.dockPicks.set(tab.id, id);
+      if (tab) setDockPick(tab.id, id);
       this.renderTitle();
     },
     /** Keep this conversation on a page it just opened, so syncThread does not start a draft. */
@@ -4787,7 +4838,7 @@
       const t = S.threads.get(threadId);
       if (!t || t.archived) return;
       if (this.view.threadId === threadId || this.draftMatches(t) || !this.view.threadId) {
-        S.dockPicks.set(tabId, threadId);
+        setDockPick(tabId, threadId);
         if (activeTab()?.id === tabId) this.syncThread();
       }
     },
@@ -4913,7 +4964,7 @@
       const pageThreads = tab ? threads.filter((t) => t.scope.kind === "page" && t.scope.ref === tab.id) : [];
       const others = threads.filter((t) => !pageThreads.includes(t)).slice(0, 12);
       const items = [];
-      items.push({ label: "New thread", icon: "plus", run: () => { if (tab) S.dockPicks.delete(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
+      items.push({ label: "New thread", icon: "plus", run: () => { if (tab) clearDockPick(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
       for (const t of pageThreads) items.push({ label: t.title, detail: threadWhenText(t), checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
       if (others.length) items.push({ header: "Recent" });
@@ -7177,7 +7228,7 @@
     const scope = { kind: cur.scope.kind, ref: cur.scope.ref };
     const settings = inheritSettings(view);
     if (where === "dock") {
-      if (scope.kind === "page") S.dockPicks.delete(scope.ref);
+      if (scope.kind === "page") clearDockPick(scope.ref);
       view.startDraft(scope, settings);
       dock.renderTitle();
     } else if (where === "full") {
