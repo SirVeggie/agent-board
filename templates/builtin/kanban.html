@@ -1745,6 +1745,7 @@
   function render() {
     if (drag) return;
     refreshWorkerThreads();
+    sweepUnmerged();
     scheduleWorkers();
     renderToolbar();
     renderWorkersButton();
@@ -2923,11 +2924,12 @@
     go.addEventListener("click", function (e) {
       e.stopPropagation();
       go.disabled = skip.disabled = true;
+      var sentAt = Date.now();
       scribe.agent.card(c.thread, { card: c.num, title: plainLinks(c.title), resume: true }).then(function (r) {
         if (r && r.ok && r.delivered) {
           setComment(c.id, cm.id, { followUp: "continued" });
           claimForAgent(c, c.thread, null);
-          mergeWhenDone(c, c.thread);
+          mergeWhenDone(c, c.thread, sentAt);
           setHint((r.delivered === "queued" ? "Queued #" : "Sent #") + c.num + " back to its agent.");
         } else {
           go.disabled = skip.disabled = false;
@@ -3892,6 +3894,8 @@
   var threadStatus = {};
   var launching = {};
   var advancing = {};
+  /** How long a Continue's solo run waits for the turn it sent to end before it merges anyway. */
+  var CONTINUE_START_MS = 10 * 60 * 1000;
   var soloStarting = {};
   var soloMerging = {};
   var workerErrors = {};
@@ -4190,6 +4194,7 @@
   if (scribe.agent && scribe.agent.onChange) {
     scribe.agent.onChange(function (t) {
       threadStatus[t.id] = { status: t.status, queued: t.queued || 0 };
+      if (t.status === "idle") adoptUnmerged(t);
       render();
     });
   }
@@ -4596,17 +4601,63 @@
    * Continue sent a card's earlier chat back to work: its branch was merged when it ended, and Scribe
    * gives it a worktree again (#184). Keep it with the one-card runs of the card's worker (else the
    * first worker with a folder), so any window merges it once it ends. A worker's own running chat
-   * it wraps up itself.
+   * it wraps up itself. after is when Continue sent it on: until a turn has ended since then, an idle
+   * status is the old turn's, and merging then would close the worktree before the new turn opens
+   * one, leaving its commits behind (#253).
    */
-  function mergeWhenDone(c, threadId) {
+  function mergeWhenDone(c, threadId, after) {
+    var id = mergeWorkerFor(c);
+    var w = id && worker(id);
+    if (!w || soloRuns(w)[threadId] || (workerOn(w) && w.threadId === threadId)) return;
+    if (!threadStatus[threadId] || threadStatus[threadId].status === "idle") threadStatus[threadId] = { status: "running", queued: 0 };
+    addSolo(id, threadId, { card: c.num, at: Date.now(), after: after || Date.now() });
+  }
+  /** The worker that merges a card's chat: the card's own worker when it works in a folder, else the first that does. */
+  function mergeWorkerFor(c) {
     var id = workerIdFor(c.assignee);
     if (!id || !FOLDER_MODES[workerMode(worker(id))]) {
       id = workerIds().filter(function (x) { return FOLDER_MODES[workerMode(worker(x))]; })[0] || null;
     }
-    var w = id && worker(id);
-    if (!w || !FOLDER_MODES[workerMode(w)] || soloRuns(w)[threadId] || (workerOn(w) && w.threadId === threadId)) return;
-    if (!threadStatus[threadId] || threadStatus[threadId].status === "idle") threadStatus[threadId] = { status: "running", queued: 0 };
-    addSolo(id, threadId, { card: c.num, at: Date.now() });
+    return id;
+  }
+  /** Whether a worker's run or one-card runs already own the chat's wrap-up (a paused worker's last chat too). */
+  function chatOwned(threadId) {
+    return workerIds().some(function (id) {
+      var w = worker(id);
+      return w.threadId === threadId || w.merge === threadId || Boolean(soloRuns(w)[threadId]);
+    });
+  }
+  /**
+   * A chat on a finished card (review or done) went idle with commits on its worktree branch, and
+   * no worker step owns its wrap-up: a turn the user started in the chat itself, a run whose
+   * bookkeeping was lost (a board update mid-run), or a Continue whose merge went early (#233,
+   * #234, #253). Keep it with the one-card runs so it merges like one, instead of leaving the
+   * commits on the branch where nobody sees them. t is the thread as scribe.agent reports it.
+   */
+  var adopting = {};
+  function adoptUnmerged(t) {
+    if (!AGENT_MODE || !hasWorkerApi() || !t || !t.id || adopting[t.id]) return;
+    var wt = t.worktree;
+    if (!wt || !(Number(wt.ahead) > 0) || wt.dirty || t.status !== "idle" || t.queued > 0 || chatOwned(t.id)) return;
+    var c = liveCards().filter(function (x) { return x.thread === t.id; })[0];
+    var col = c && colOf(c);
+    if (!col || (col.role !== "review" && col.role !== "done") || (c.claim && !c.claim.stale)) return;
+    var id = mergeWorkerFor(c);
+    if (!id) return;
+    adopting[t.id] = true;
+    threadStatus[t.id] = { status: "idle", queued: 0 };
+    addSolo(id, t.id, { card: c.num, at: Date.now() });
+    appendLog(id, "solo", "#" + c.num + "'s chat ended with " + wt.ahead + " unmerged commit" + (wt.ahead === 1 ? "" : "s") + " on " + str(wt.branch) + "; merging it", { card: c.num, thread: t.id });
+    scheduleWorkers();
+  }
+  /** Once per page load: chats left unmerged while no board window was open, or before this check existed. */
+  var adoptSwept = false;
+  function sweepUnmerged() {
+    if (adoptSwept || !AGENT_MODE || !hasWorkerApi() || typeof scribe.agent.threads !== "function") return;
+    adoptSwept = true;
+    scribe.agent.threads().then(function (r) {
+      if (r && r.ok && Array.isArray(r.threads)) r.threads.forEach(adoptUnmerged);
+    });
   }
   /** Wrap up each idle one-card run: wait out a plan limit, send it on, or merge its branch. */
   function wrapUpSolos(id) {
@@ -4626,6 +4677,12 @@
         function (r) {
           if (resume) return resumeSolo(id, tid);
           var turn = r && r.lastTurn;
+          var after = Number(run.after) || 0;
+          if (after && turn && !(Number(turn.endedAt) >= after) && Date.now() - after < CONTINUE_START_MS) {
+            // The idle status is from before Continue sent it on: wait for that turn to end.
+            patchSolo(id, tid, { step: null });
+            return;
+          }
           if (turn && turn.status === "error" && turn.limitResetsAt) {
             var waits = (Number(run.wait && run.wait.count) || 0) + 1;
             if (waits > MAX_LIMIT_WAITS) {
@@ -4651,6 +4708,7 @@
   }
   function forgetSolo(id, threadId, error) {
     var run = soloRuns(worker(id))[threadId] || {};
+    delete adopting[threadId];
     if (error) appendLog(id, "pause", error, { card: run.card, thread: threadId });
     var left = Object.keys(soloRuns(worker(id))).filter(function (k) { return k !== threadId; });
     if (!left.length) patchWorker(id, error ? { solo: null, error: error } : { solo: null });
@@ -4693,9 +4751,11 @@
     return scribe.agent.merge(threadId).then(function (m) {
       if (m && (m.ok || m.error === "not_found")) {
         var cardNum = runs[threadId] && runs[threadId].card;
-        appendLog(id, "merge", m.ok
-          ? ("Merged one-card run" + (cardNum ? " #" + cardNum : ""))
-          : "No worktree to merge for the one-card run (chat gone)", { card: cardNum, thread: threadId });
+        appendLog(id, "merge", !m.ok
+          ? "No worktree to merge for the one-card run (chat gone)"
+          : m.merged === false
+            ? "One-card run" + (cardNum ? " #" + cardNum : "") + " had no worktree open to merge"
+            : "Merged one-card run" + (cardNum ? " #" + cardNum : ""), { card: cardNum, thread: threadId });
         forgetSolo(id, threadId, null);
         return;
       }

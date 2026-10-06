@@ -1121,7 +1121,7 @@ export const BOARD_BRIDGE_JS = `
     merge: function (threadId) {
       return agentCall({ op: "merge", threadId: agentText(threadId) }, AGENT_ASK_MS);
     },
-    /** This page's threads, newest first: { ok, threads: [{ id, title, status, queued, activityAt, finishedAt, mode, model, cwd }] }. */
+    /** This page's threads, newest first: { ok, threads: [{ id, title, status, queued, activityAt, finishedAt, mode, model, cwd, worktree? }] }. worktree ({ branch, ahead, dirty }, as of the last turn) is there while the thread has one open. */
     threads: function () {
       return agentCall({ op: "threads" });
     },

@@ -404,7 +404,7 @@ test("worker_step lets one window at a time move a worker on, once its thread is
   assert.throws(() => run(withWorker({ ...running, threadId: "fresh" }), "worker_step", { worker: "w_op", from: "fresh", token: "a" }, page()), /still working/);
   assert.throws(() => run(withWorker({ ...running, threadId: "failed" }), "worker_step", { worker: "w_op", from: "other", token: "a" }, page()), /moved on/);
   const failed = run(withWorker({ ...running, threadId: "failed" }), "worker_step", { worker: "w_op", from: "failed", token: "a" }, page());
-  assert.deepEqual(failed.result, { ok: true, lastTurn: { status: "error", error: "rate limited" } });
+  assert.deepEqual(failed.result, { ok: true, lastTurn: { status: "error", endedAt: 900, error: "rate limited" } });
   const gone = run(withWorker({ ...running, threadId: "deleted" }), "worker_step", { worker: "w_op", from: "deleted", token: "a" }, page());
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });
@@ -607,7 +607,7 @@ test("worker_step passes on when a plan limit resets", () => {
   const page: ActionContext = { caller: { by: "user", label: "user" }, now: 1000, values: {}, thread: (id) => threads[id] ?? { exists: false } };
   const state = { ...board(), settings: { workers: { w_1: { threadId: "limited", run: { since: 1 } } } } };
   const r = run(state, "worker_step", { worker: "w_1", from: "limited", token: "a" }, page);
-  assert.deepEqual(r.result, { ok: true, lastTurn: { status: "error", error: "limit", limitResetsAt: 5000 } });
+  assert.deepEqual(r.result, { ok: true, lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } });
 });
 
 test("worker_solo_step lets one window wrap up a one-card run and passes on a plan limit", () => {
@@ -633,13 +633,14 @@ test("worker_solo_step lets one window wrap up a one-card run and passes on a pl
   assert.throws(() => run(withSolo({ busy: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "busy", token: "a" }, page()), /still working/);
 
   const limited = run(withSolo({ limited: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "limited", token: "a" }, page());
-  assert.deepEqual(limited.result, { ok: true, lastTurn: { status: "error", error: "limit", limitResetsAt: 5000 } });
+  assert.deepEqual(limited.result, { ok: true, lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } });
   assert.deepEqual(soloOf(limited.state, "limited").step, { token: "a", at: 1000 });
   assert.throws(() => run(limited.state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "b" }, page()), /another window/);
   run(limited.state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "b" }, page(1000 + 16 * 60 * 1000));
 
   const done = run(withSolo({ done: { card: 2, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "done", token: "c" }, page());
-  assert.deepEqual(done.result, { ok: true, lastTurn: { status: "done" } });
+  // endedAt lets the page tell a Continue's turn from the one before it (#253).
+  assert.deepEqual(done.result, { ok: true, lastTurn: { status: "done", endedAt: 900 } });
   const gone = run(withSolo({ missing: { card: 3, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "missing", token: "d" }, page());
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });

@@ -6856,6 +6856,8 @@
       model: t.model,
       effort: t.effort,
       ...(FOLDER_MODES.has(t.mode) ? { cwd: pageFolder(t), approval: t.approval } : {}),
+      // As of its last turn, so a board can tell a finished chat whose branch is still unmerged.
+      ...(openWorktree(t) ? { worktree: { branch: t.worktree.branch, ahead: t.worktree.ahead || 0, dirty: Boolean(t.worktree.dirty) } } : {}),
     };
   }
 

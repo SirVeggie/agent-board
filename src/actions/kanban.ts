@@ -228,11 +228,11 @@ function soloRunOf(w: Worker, threadId: string): SoloRun | undefined {
 }
 
 /** Last turn of an idle thread, or null if it is gone. Throws while the agent is still working. */
-function workerLastTurn(info: ThreadRunInfo | undefined): { status: string; error?: string; limitResetsAt?: number } | null {
+function workerLastTurn(info: ThreadRunInfo | undefined): { status: string; endedAt?: number; error?: string; limitResetsAt?: number } | null {
   if (!info?.exists) return null;
   if (info.running || !info.lastTurn || info.lastTurn.status === "running") throw new ActionError("the agent is still working");
-  const { status, error, limitResetsAt } = info.lastTurn;
-  return { status, ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}) };
+  const { status, endedAt, error, limitResetsAt } = info.lastTurn;
+  return { status, ...(endedAt ? { endedAt } : {}), ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}) };
 }
 
 /**
