@@ -4,6 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { BOARD_BRIDGE_JS } from "./bridge.js";
 import { SKILL_DIR, skillDocs, splitSections } from "./skillDocs.js";
+import { PAGE_THEME, wrapHtml } from "./wrapHtml.js";
 
 /** Top-level keys of the object literal that starts at `start` in the bridge source. */
 function objectKeys(start: string): string[] {
@@ -25,6 +26,21 @@ function objectKeys(start: string): string[] {
   }
   return keys;
 }
+
+test("the scribe skill documents the page wrapper theme", () => {
+  const skill = fs.readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8");
+  const wrapped = wrapHtml("Theme", "<p>Hi</p>");
+  assert.match(wrapped, /color-scheme:\s*dark/);
+  assert.match(skill, /dark theme/);
+  for (const name of Object.keys(PAGE_THEME)) {
+    assert.ok(wrapped.includes(`${name}:`), `wrapper defines ${name}`);
+    assert.ok(skill.includes(name), `document ${name} in .cursor/skills/scribe/SKILL.md`);
+  }
+  const docs = skillDocs("theme");
+  assert.equal(docs.error, undefined);
+  assert.match(docs.text, /^### Theme/);
+  assert.match(docs.text, /--text/);
+});
 
 test("the scribe skill documents every member of window.scribe", () => {
   const docs = ["SKILL.md", "TEMPLATES.md"].map((name) => fs.readFileSync(path.join(SKILL_DIR, name), "utf8")).join("\n");

@@ -56,7 +56,7 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 
 - `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`). Scribe stores it as `scribe:clims-12345-analysis`; either form finds the page later.
 - `title`: short tab label
-- `html`: a complete HTML document with inline CSS, or a fragment (Scribe wraps fragments)
+- `html`: a complete HTML document with inline CSS, or a fragment (Scribe wraps fragments in a dark theme; see Theme)
 - `htmlPath`: instead of `html`, a local HTML file. In Code mode, write a large page to a temp file (not the workspace) and pass the path so it is not pasted as a tool argument. Same title, state, assets, folder, and background rules as `html`. Mutually exclusive with `html`.
 - `assets`: omit unless the page needs images
 - `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing Scribe). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, during a **project design** screenshot loop they should not see yet, or when creating a page you will **link to** (a form, investigation, or evidence) rather than put in front of them. A new page with `background: true` is created in the Library without opening a tab.
@@ -187,6 +187,19 @@ If the content page would change a lot, it is better to make a new page, otherwi
 - Full documents start with `<!DOCTYPE html>` or `<html`.
 - Keep pages focused. Typical size is well under 200 KB (hard limit 2 MB). Images passed via `assets` do not count toward that cap.
 - Do not rely on the parent page's styles; tab content renders in an iframe.
+
+### Theme
+
+Fragment pages (no `<!DOCTYPE html>` / `<html`) are wrapped in a **dark** theme. The wrapper sets `color-scheme: dark` and these variables on `:root` — use them; body is already `background: var(--bg); color: var(--text)`:
+
+- `--bg` — page background
+- `--text` — body text
+- `--muted` — secondary text (or the `.muted` class)
+- `--border` — rules and table borders
+- `--accent` — links
+- `--code-bg` — `code` and `pre`
+
+Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall back to them (`color: var(--fg, #222)`): `--fg` is not defined, so the fallback is dark text on `--bg`. A full document skips this wrapper — copy the same `:root` block, or set both background and color yourself so they contrast.
 
 ## Linking pages
 

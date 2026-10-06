@@ -16,15 +16,24 @@ export const BOARD_SCROLLBAR_CSS = `
 ::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 127, 0.65); }
 `.trim();
 
+/** Custom properties the fragment wrapper sets. Documented in the scribe skill (Theme). */
+export const PAGE_THEME = {
+  "--bg": "#1a1a1d",
+  "--text": "#e8e8ea",
+  "--muted": "#8e8e96",
+  "--border": "rgba(255, 255, 255, 0.08)",
+  "--accent": "#c9c9d0",
+  "--code-bg": "#131315",
+} as const;
+
+const PAGE_THEME_CSS = Object.entries(PAGE_THEME)
+  .map(([name, value]) => `  ${name}: ${value};`)
+  .join("\n");
+
 const DEFAULT_CSS = `
 :root {
   color-scheme: dark;
-  --bg: #1a1a1d;
-  --text: #e8e8ea;
-  --muted: #8e8e96;
-  --border: rgba(255, 255, 255, 0.08);
-  --accent: #c9c9d0;
-  --code-bg: #131315;
+${PAGE_THEME_CSS}
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
