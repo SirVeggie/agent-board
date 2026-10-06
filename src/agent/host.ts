@@ -44,6 +44,7 @@ import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, s
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
+import { grantRows, revokeGrant } from "./grants.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -804,6 +805,20 @@ export class AgentHost {
     return true;
   }
 
+  /** Take back a permission the user granted the thread (a web domain, any website, or a readable thread scope). key comes from the view's grants. */
+  revokeGrant(id: string, key: string): ThreadView {
+    const thread = this.requireThread(id);
+    const next = revokeGrant(thread, key);
+    if (!next) throw new Error("This thread has no such permission.");
+    thread.webGrants = next.webGrants;
+    thread.threadGrants = next.threadGrants;
+    this.db.saveThread(thread);
+    this.sessions.get(id)?.update(thread);
+    const view = this.view(thread);
+    this.emit({ type: "agent_thread", thread: view });
+    return view;
+  }
+
   /** Model, effort, mode, and workspace picks become the defaults for new threads. */
   private rememberChoices(thread: Thread, patch: Partial<Thread>): void {
     const next = prefsPatchFromChoices(this.prefs(), thread, patch);
@@ -912,6 +927,7 @@ export class AgentHost {
     const activity = threadActivity(items, status, unread);
     if (activity) this.activitySent.set(thread.id, activityKey(activity));
     else this.activitySent.delete(thread.id);
+    const grants = grantRows(thread, this.scopeLookup());
     return {
       ...thread,
       status,
@@ -924,6 +940,7 @@ export class AgentHost {
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
       ...(asking ? { asking } : {}),
       ...(activity ? { activity } : {}),
+      ...(grants.length ? { grants } : {}),
     };
   }
 

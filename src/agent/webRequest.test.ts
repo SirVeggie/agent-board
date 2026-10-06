@@ -83,6 +83,13 @@ test("allowing for the thread covers every call, searches too", async () => {
   assert.equal((await first).allowed, true);
   assert.equal((await host.requestWeb(threadId, { kind: "fetch", url: "https://anything.dev/" })).allowed, true);
   assert.equal(host.getThread(threadId)?.webGrants?.all, true);
+
+  // The chat lists the grant and can take it back; the next call asks again.
+  assert.throws(() => host.revokeGrant(threadId, "web:example.com"), /no such permission/);
+  assert.equal(host.revokeGrant(threadId, "web:*").grants, undefined);
+  const again = host.requestWeb(threadId, { kind: "fetch", url: "https://anything.dev/" });
+  await answer(threadId, "deny");
+  assert.equal((await again).allowed, false);
 });
 
 test("web_request's allow once lets the next matching call through, once", async () => {

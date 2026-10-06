@@ -148,7 +148,16 @@ export function agentRouter(host: AgentHost): express.Router {
 
   router.patch(
     "/threads/:id",
-    wrap((req) => ({ thread: host.updateThread(req.params.id, threadPatch(isPlainRecord(req.body) ? req.body : {})) }))
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      // revokeGrant: a key from the thread's grants, taken back before the other fields apply.
+      const patch = threadPatch(body);
+      if (typeof body.revokeGrant === "string") {
+        const thread = host.revokeGrant(req.params.id, body.revokeGrant);
+        if (!Object.keys(patch).length) return { thread };
+      }
+      return { thread: host.updateThread(req.params.id, patch) };
+    })
   );
 
   router.delete(

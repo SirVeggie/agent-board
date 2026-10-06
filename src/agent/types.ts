@@ -1,5 +1,6 @@
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
+import type { GrantRow } from "./grants.js";
 import type { WebAccess, WebGrants } from "./webAccess.js";
 import type { ThreadGrants } from "./threadAccess.js";
 import type { BrowserView } from "../browser.js";
@@ -145,6 +146,8 @@ export type ThreadView = Thread & {
   };
   /** Running, waiting or unread threads: the live step and the latest agent message, for the activity flyout and toasts. */
   activity?: { line: string; lastText?: string };
+  /** Permissions the user granted while it ran (web domains, readable threads), each revocable by key. Missing when none. */
+  grants?: GrantRow[];
 };
 
 export type FileChange = {

@@ -1729,6 +1729,31 @@
       );
     }
 
+    /** What the user granted the thread while it ran (web requests, thread access); picking one takes it back. */
+    permissionsMenu(anchor) {
+      const t = this.thread();
+      if (!t?.grants?.length) return;
+      const row = (g) => ({
+        label: g.label,
+        detail: "Remove",
+        icon: g.kind === "web" ? "globe" : "shield",
+        run: () =>
+          api("PATCH", `/threads/${encodeURIComponent(t.id)}`, { revokeGrant: g.key })
+            .then(() => notice(`Removed: ${g.label}`))
+            .catch((e) => notice(e.message)),
+      });
+      const web = t.grants.filter((g) => g.kind === "web");
+      const threads = t.grants.filter((g) => g.kind === "threads");
+      openMenu(
+        anchor,
+        [
+          ...(web.length ? [{ header: "Web access" }, ...web.map(row)] : []),
+          ...(threads.length ? [{ header: "Can read other threads" }, ...threads.map(row)] : []),
+        ],
+        { width: 320 }
+      );
+    }
+
     async finishWorktree(how) {
       const t = this.thread();
       const wt = openWorktree(t);
@@ -1779,6 +1804,7 @@
         ...(t.stats.turns ? [{ label: "Fork thread", detail: "Continue in a new thread", run: () => forkThread(t, (id) => this.openThread(id)) }] : []),
         { label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) },
         ...(openWorktree(t) ? [{ label: "Worktree…", detail: openWorktree(t).branch, icon: "git", run: () => this.worktreeMenu(anchor) }] : []),
+        ...(t.grants?.length ? [{ label: "Permissions…", detail: `${t.grants.length} granted`, icon: "shield", run: () => this.permissionsMenu(anchor) }] : []),
         ...(t.nativeId ? [{ label: "Copy session id", detail: t.nativeId, run: () => navigator.clipboard?.writeText(t.nativeId) }] : []),
         { separator: true },
         {
