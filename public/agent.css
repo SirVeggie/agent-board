@@ -316,6 +316,8 @@ button.ag-scope-chip.warn {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* JS keeps the pin; browser anchoring jumps when a turn node is replaced. */
+  overflow-anchor: none;
 }
 
 .ag-transcript {
