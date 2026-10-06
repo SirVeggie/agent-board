@@ -4516,8 +4516,9 @@
       void next.offsetWidth;
       next.classList.remove("in");
       cur.classList.add("out");
+      // Cover slide (520ms) plus the outgoing opacity fade that starts at 430ms (90ms long).
       // A timer rather than transitionend: transitions stall in a hidden window, and the old line must still go.
-      setTimeout(() => cur.remove(), 400);
+      setTimeout(() => cur.remove(), 650);
       const outs = box.querySelectorAll(".dock-handle-line.out");
       for (let i = 0; i < outs.length - 2; i++) outs[i].remove();
     },

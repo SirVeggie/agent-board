@@ -3729,7 +3729,9 @@ button.dock-handle.busy .dock-handle-sep {
 }
 
 /* One line at a time; lines stack in one cell so a new step can slide the old one out.
-   A little taller than the glyphs so the motion blur can bloom without clipping into fog. */
+   Tight travel so the swap doesn't look like a jump. Incoming stays opaque (rich smear
+   under spam); leftover blur is faded on the way out in 90ms instead of sending the
+   glyphs further off-screen. */
 .dock-handle-text {
   display: grid;
   overflow: hidden;
@@ -3746,27 +3748,29 @@ button.dock-handle.busy .dock-handle-sep {
   line-height: 16px;
   filter: blur(0px);
   transition:
-    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    filter 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 280ms linear;
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 90ms linear;
 }
 
-/* Far enough past the clip edge that the blur's bloom is gone too, not just the glyphs. */
 .dock-handle-line.in {
-  transform: translateY(30px);
-  filter: blur(6px);
-  opacity: 0;
+  transform: translateY(12px);
+  filter: blur(16px);
 }
 
+/* Opacity waits until the smear has played, then drops in 90ms so the blur bloom
+   isn't cut off when the node is removed. Mid-swap (and spam) stays fully opaque. */
 .dock-handle-line.out {
-  transform: translateY(-30px);
-  filter: blur(6px);
+  transform: translateY(-12px);
+  filter: blur(16px);
   opacity: 0;
+  transition-delay: 0s, 0s, 430ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .dock-handle-line {
     transition: none;
+    transition-delay: 0s;
   }
 }
 
