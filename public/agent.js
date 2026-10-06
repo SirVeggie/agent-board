@@ -4493,43 +4493,62 @@
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
       else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
-    /** The hidden handle shows one line at a time; a new step slides the previous one up with a short motion blur. */
+    /** The hidden handle shows one line at a time. A new step slides the old line up and out while it blurs, and
+        the new one up and in while it sharpens. CSS transitions rather than keyframes: a step that lands mid-swap
+        retargets each line from where it is, so fast steps keep the text moving and blurred instead of snapping sharp. */
     setHandleText(text, key) {
       const box = this.handleText;
-      const cur = box.lastElementChild;
+      const cur = box.querySelector(".dock-handle-line:not(.out)");
       if (cur && box.dataset.key === key) {
-        cur.textContent = text;
+        if (cur.textContent !== text) cur.textContent = text;
         return;
       }
       box.dataset.key = key;
-      // Only the line on its way out may stay; anything older is gone already.
-      for (const old of [...box.children]) if (old !== cur) old.remove();
       const next = el("span", "dock-handle-line", text);
-      box.append(next);
-      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const animate = !reduce && cur && !S.dockShown && this.handle.classList.contains("busy") && Date.now() - (this.handleAt || 0) > 600;
-      this.handleAt = Date.now();
+      const animate = cur && !this.feedQuiet && !S.dockShown && this.handle.classList.contains("busy");
       if (!animate) {
-        for (const old of [...box.children]) if (old !== next) old.remove();
+        box.replaceChildren(next);
         return;
       }
-      const ease = { duration: 460, easing: "cubic-bezier(.42,0,.58,1)" };
-      next.animate(
-        [
-          { transform: "translateY(100%)", filter: "blur(5px)", opacity: 0.75 },
-          { transform: "none", filter: "blur(0px)", opacity: 1 },
-        ],
-        ease,
-      );
-      cur.animate(
-        [
-          { transform: "none", filter: "blur(0px)", opacity: 1 },
-          { transform: "translateY(-100%)", filter: "blur(5px)", opacity: 0.5 },
-        ],
-        { ...ease, fill: "forwards" },
-      );
-      // A timer rather than onfinish: animations stall in a hidden window, and the old line must still go.
-      setTimeout(() => cur.remove(), ease.duration + 20);
+      // Start below and blurred, then let the transition carry it in.
+      next.classList.add("in");
+      box.append(next);
+      void next.offsetWidth;
+      next.classList.remove("in");
+      cur.classList.add("out");
+      // A timer rather than transitionend: transitions stall in a hidden window, and the old line must still go.
+      setTimeout(() => cur.remove(), 400);
+      const outs = box.querySelectorAll(".dock-handle-line.out");
+      for (let i = 0; i < outs.length - 2; i++) outs[i].remove();
+    },
+    /** About 1.75 pills' worth of characters: enough streamed text to fill the pill and cut it at the ellipsis. */
+    pillChars() {
+      return Math.round(((this.handleText?.clientWidth || 220) / 6.5) * 1.75);
+    },
+    /** Streamed text waits until it fills the pill, then shows that prefix and stays put, so the pill never
+        types along with the model and a swap is never disturbed by deltas. A short reply shows after a pause. */
+    queueLive(key, text) {
+      if (this.live?.key === key) return;
+      const need = this.pillChars();
+      if (text.length >= need) {
+        this.setLive(key, text.slice(0, need));
+        return;
+      }
+      this.pendingLive = { key, text };
+      if (this._liveWaitKey === key) return;
+      clearTimeout(this._liveWait);
+      this._liveWaitKey = key;
+      this._liveWait = setTimeout(() => {
+        const p = this.pendingLive;
+        if (p?.key === key) this.setLive(key, p.text.slice(0, need) || "Thinking…");
+      }, 900);
+    },
+    setLive(key, text) {
+      clearTimeout(this._liveWait);
+      this._liveWaitKey = null;
+      this.pendingLive = null;
+      this.live = { key, text };
+      if (this.view.thread()?.status === "running") this.renderHandle();
     },
     threadMenu(anchor) {
       const tab = activeTab();
@@ -4565,6 +4584,9 @@
     resetFeed() {
       this.clearFeedLines();
       this.live = null;
+      this.pendingLive = null;
+      clearTimeout(this._liveWait);
+      this._liveWaitKey = null;
     },
     /** Clear now and drop any in-flight paint, so a switch never keeps the previous thread's reply. */
     invalidateFeed() {
@@ -4627,17 +4649,17 @@
       } else if (item.kind === "notice") {
         this.line(item.id, "other", item.text, { cls: item.level });
       } else if (item.kind === "reasoning") {
-        this.line(item.id, "think", lastLine(item.text) || "Thinking…", { cls: "reason" });
+        this.line(item.id, "think", lastLine(item.text) || "Thinking…", { cls: "reason", pill: plain(item.text) });
       } else if (item.kind === "text") {
-        this.line(item.id, "sparkle", lastLine(item.text), { cls: "text" });
+        this.line(item.id, "sparkle", lastLine(item.text), { cls: "text", pill: plain(item.text) });
       }
     },
-    line(key, _icon, text, { cls = "", keep = false } = {}) {
+    line(key, _icon, text, { cls = "", keep = false, pill } = {}) {
       if (!this.root) return;
       const hold = keep || /\btext\b/.test(cls);
       if (!/\b(done|files|error)\b/.test(cls)) {
-        this.live = { key, text };
-        if (this.view.thread()?.status === "running") this.renderHandle();
+        if (pill !== undefined) this.queueLive(key, pill);
+        else this.setLive(key, text);
       }
       if (S.dockExpanded || !S.dockShown) return;
       let line = this.feedLines.get(key);

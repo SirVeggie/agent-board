@@ -3745,6 +3745,29 @@ button.dock-handle.busy .dock-handle-sep {
   white-space: nowrap;
   line-height: 16px;
   filter: blur(0px);
+  transition:
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 280ms linear;
+}
+
+/* Far enough past the clip edge that the blur's bloom is gone too, not just the glyphs. */
+.dock-handle-line.in {
+  transform: translateY(30px);
+  filter: blur(6px);
+  opacity: 0;
+}
+
+.dock-handle-line.out {
+  transform: translateY(-30px);
+  filter: blur(6px);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-handle-line {
+    transition: none;
+  }
 }
 
 button.dock-handle.busy .dock-handle-text {
