@@ -470,6 +470,38 @@ test("the sweep keeps a running worker's card claimed while its chat waits out a
   assert.deepEqual(stopped.events?.map((e) => e.name), ["claim_lost"]);
 });
 
+test("the sweep keeps a one-card run's card claimed while that chat waits out a plan limit", () => {
+  const resetsAt = 50_000;
+  const limited: ThreadRunInfo = {
+    exists: true,
+    running: false,
+    title: "S",
+    lastTurn: { status: "error", endedAt: 2000, error: "You've hit your limit", limitResetsAt: resetsAt },
+  };
+  const claimed = run(board(), "claim", { card: 1 }, agent({ session: undefined, thread: "th_solo" })).state;
+  const withSolo = (over: Record<string, unknown> = {}) => ({
+    ...claimed,
+    settings: { workers: { w_1: { name: "Opus", solo: { th_solo: { card: 1, at: 1 } }, ...over } } },
+  });
+  const ctx = (now: number): SweepContext => ({ now, thread: () => limited, sessionSeenAt: () => undefined });
+
+  const waiting = kanbanActions.sweep!(withSolo(), ctx(3000))!;
+  const state = applyStateOps(withSolo(), waiting.ops);
+  assert.equal(card(state, 1).col, "work");
+  assert.ok(card(state, 1).claim);
+  assert.equal((card(state, 1).status as { kind: string }).kind, "info");
+  assert.match((card(state, 1).status as { text: string }).text, /Out of plan usage/);
+  assert.equal(waiting.events?.length, 0);
+
+  // Beside the worker's own run on a different chat, the one-card run still waits.
+  const beside = kanbanActions.sweep!(withSolo({ threadId: "th_other", run: { since: 1 } }), ctx(3000))!;
+  assert.equal(card(applyStateOps(withSolo({ threadId: "th_other", run: { since: 1 } }), beside.ops), 1).col, "work");
+
+  // Dropping the solo entry releases the card as a failed turn.
+  const gone = kanbanActions.sweep!(withSolo({ solo: {} }), ctx(3000))!;
+  assert.deepEqual(gone.events?.map((e) => e.name), ["claim_lost"]);
+});
+
 test("worker_step passes on when a plan limit resets", () => {
   const threads: Record<string, ThreadRunInfo> = {
     limited: { exists: true, running: false, title: "L", lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } },
@@ -478,6 +510,40 @@ test("worker_step passes on when a plan limit resets", () => {
   const state = { ...board(), settings: { workers: { w_1: { threadId: "limited", run: { since: 1 } } } } };
   const r = run(state, "worker_step", { worker: "w_1", from: "limited", token: "a" }, page);
   assert.deepEqual(r.result, { ok: true, lastTurn: { status: "error", error: "limit", limitResetsAt: 5000 } });
+});
+
+test("worker_solo_step lets one window wrap up a one-card run and passes on a plan limit", () => {
+  const threads: Record<string, ThreadRunInfo> = {
+    busy: { exists: true, running: true, title: "Busy" },
+    limited: { exists: true, running: false, title: "L", lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } },
+    done: { exists: true, running: false, title: "D", lastTurn: { status: "done", endedAt: 900 } },
+  };
+  const page = (now = 1000): ActionContext => ({ caller: { by: "user", label: "user" }, now, values: {}, thread: (id) => threads[id] ?? { exists: false } });
+  const withSolo = (solo: Record<string, unknown>) => ({
+    ...board(),
+    settings: { workers: { w_1: { name: "Opus", solo } } },
+  });
+  const soloOf = (state: Record<string, unknown>, tid: string) => {
+    const settings = state.settings as { workers: { w_1: { solo: Record<string, { step?: { token: string; at: number } }> } } };
+    return settings.workers.w_1.solo[tid];
+  };
+
+  assert.throws(() => run(withSolo({ th: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "th", token: "a" }), /board page itself/);
+  assert.throws(() => run(withSolo({}), "worker_solo_step", { worker: "w_1", thread: "th", token: "a" }, page()), /not a one-card run/);
+  assert.throws(() => run(withSolo({ th: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "  ", token: "a" }, page()), /thread is required/);
+  assert.throws(() => run(withSolo({ th: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "th", token: "  " }, page()), /token is required/);
+  assert.throws(() => run(withSolo({ busy: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "busy", token: "a" }, page()), /still working/);
+
+  const limited = run(withSolo({ limited: { card: 1, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "limited", token: "a" }, page());
+  assert.deepEqual(limited.result, { ok: true, lastTurn: { status: "error", error: "limit", limitResetsAt: 5000 } });
+  assert.deepEqual(soloOf(limited.state, "limited").step, { token: "a", at: 1000 });
+  assert.throws(() => run(limited.state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "b" }, page()), /another window/);
+  run(limited.state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "b" }, page(1000 + 16 * 60 * 1000));
+
+  const done = run(withSolo({ done: { card: 2, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "done", token: "c" }, page());
+  assert.deepEqual(done.result, { ok: true, lastTurn: { status: "done" } });
+  const gone = run(withSolo({ missing: { card: 3, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "missing", token: "d" }, page());
+  assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });
 
 test("the sweep marks a card blocked while its thread waits on the user, and puts its status back after", () => {

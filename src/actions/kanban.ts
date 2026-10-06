@@ -63,8 +63,23 @@ function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }
   return `Waiting for your answer: ${what}`.slice(0, 300);
 }
 
+/** A one-card run from the card menu (`settings.workers[id].solo[threadId]`). */
+type SoloRun = {
+  card?: number;
+  at?: number;
+  wait?: { until?: number; count?: number; tries?: number };
+  step?: { token: string; at: number };
+};
+
 /** An agent worker, set up on the page in settings.workers by its id. It takes the ready cards assigned to its name. */
-type Worker = { name?: string; threadId?: string; stop?: boolean; run?: unknown; step?: { token: string; at: number } };
+type Worker = {
+  name?: string;
+  threadId?: string;
+  stop?: boolean;
+  run?: unknown;
+  step?: { token: string; at: number };
+  solo?: Record<string, SoloRun | null | undefined>;
+};
 
 /** How long a page holds a worker's step before another window may take over: covers a permission prompt. */
 const STEP_LEASE_MS = 15 * 60 * 1000;
@@ -173,9 +188,25 @@ function claimFrom(state: BoardState, card: Card): string | undefined {
   return columnById(state, card.from)?.id ?? columnById(state, card.claim?.from)?.id;
 }
 
-/** The thread is a running worker's chat, which the board resumes after a plan limit resets. */
+function soloRunOf(w: Worker, threadId: string): SoloRun | undefined {
+  const run = w.solo?.[threadId];
+  return run && typeof run === "object" ? run : undefined;
+}
+
+/** Last turn of an idle thread, or null if it is gone. Throws while the agent is still working. */
+function workerLastTurn(info: ThreadRunInfo | undefined): { status: string; error?: string; limitResetsAt?: number } | null {
+  if (!info?.exists) return null;
+  if (info.running || !info.lastTurn || info.lastTurn.status === "running") throw new ActionError("the agent is still working");
+  const { status, error, limitResetsAt } = info.lastTurn;
+  return { status, ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}) };
+}
+
+/**
+ * The thread is a worker chat the board will send on after a plan limit resets: its own run, or a
+ * one-card run from the card menu (`solo`).
+ */
 function workerWaits(state: BoardState, threadId: string): boolean {
-  return workerList(state).some(([, w]) => w.threadId === threadId && Boolean(w.run));
+  return workerList(state).some(([, w]) => (w.threadId === threadId && Boolean(w.run)) || Boolean(soloRunOf(w, threadId)));
 }
 
 function resetTime(at: number): string {
@@ -541,18 +572,31 @@ export const kanbanActions: ActionSet = {
           if (!w.run) throw new ActionError("the worker is not running");
           if (w.step && w.step.token !== token && w.step.at > ctx.now - STEP_LEASE_MS) throw new ActionError("another window is on it");
         }
-        let lastTurn: { status: string; error?: string; limitResetsAt?: number } | null = null;
-        if (w.threadId && ctx.thread) {
-          const info = ctx.thread(w.threadId);
-          if (info.exists) {
-            if (info.running || !info.lastTurn || info.lastTurn.status === "running") throw new ActionError("the agent is still working");
-            const { status, error, limitResetsAt } = info.lastTurn;
-            lastTurn = { status, ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}) };
-          }
-        }
+        const lastTurn = w.threadId && ctx.thread ? workerLastTurn(ctx.thread(w.threadId)) : null;
         const value: Record<string, unknown> = { step: { token, at: ctx.now } };
         if (args.start) Object.assign(value, { run: { since: ctx.now }, stop: null, error: null });
         return { ops: [{ op: "merge", path: `settings/workers/${workerId}`, value }], result: { ok: true, lastTurn } };
+      },
+    },
+    worker_solo_step: {
+      description:
+        "The board's own bookkeeping for a one-card worker run (right-click Run, or Continue); only the page calls it. Takes that chat for one step (wrap up, or send it on after a plan limit), so two windows don't both send it on.",
+      args: "{ worker, thread, token }",
+      run(state, args, ctx) {
+        if (ctx.caller.by !== "user") throw new ActionError("worker_solo_step is for the board page itself");
+        const [workerId, w] = findWorker(state, args.worker);
+        const threadId = str(args.thread).trim();
+        const token = str(args.token).trim();
+        if (!threadId) throw new ActionError("thread is required");
+        if (!token) throw new ActionError("token is required");
+        const run = soloRunOf(w, threadId);
+        if (!run) throw new ActionError("that chat is not a one-card run of this worker");
+        if (run.step && run.step.token !== token && run.step.at > ctx.now - STEP_LEASE_MS) throw new ActionError("another window is on it");
+        const lastTurn = ctx.thread ? workerLastTurn(ctx.thread(threadId)) : null;
+        return {
+          ops: [{ op: "merge", path: `settings/workers/${workerId}/solo/${threadId}`, value: { step: { token, at: ctx.now } } }],
+          result: { ok: true, lastTurn },
+        };
       },
     },
   },
