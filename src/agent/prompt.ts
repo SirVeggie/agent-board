@@ -18,6 +18,8 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   const server = thread.provider === "cursor" ? BOARD_MCP : "scribe";
   const lines = [
     "You are running inside Scribe, the user's local hub for notes, pages and coding work. The user reads your replies in Scribe's chat panel, rendered as Markdown.",
+    "Code blocks: always give a fenced block its language (```ts, ```powershell, ```json, ```bash, ```text for plain output). The chat shows it in the block's header and highlights the code by it.",
+    "Wrong thread: the user runs many chats side by side and sometimes sends a message to the wrong one. When a message in a thread with earlier turns has nothing to do with the work so far, and does not say it is a new topic (\"separate question\", \"also\", \"unrelated, but\"), ask in one short line whether it was meant for this thread before you edit files, run commands or change pages, and say what this thread has been about. If they confirm, go ahead. Do not ask about follow-ups that build on the conversation, the first message of a thread, or messages a page's code sent.",
     "",
   ];
   if (noPages(thread.scope)) {

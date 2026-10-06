@@ -43,6 +43,14 @@ test("threads with a workspace are told their shell already starts there", () =>
   assert.doesNotMatch(threadInstructions(thread({ mode: "board" }), {}), /Shell commands/);
 });
 
+test("every thread is told to check a message that looks meant for another thread", () => {
+  const thread = (over: Partial<Thread>): Thread =>
+    ({ provider: "cursor", mode: "board", cwd: null, scope: { kind: "global", ref: null }, ...over }) as Thread;
+  for (const t of [thread({}), thread({ mode: "code", cwd: "/work" }), thread({ provider: "claude", mode: "ask" })]) {
+    assert.match(threadInstructions(t, {}), /Wrong thread: .*ask in one short line whether it was meant for this thread/);
+  }
+});
+
 test("worktree threads with a linked node_modules are told how to change dependencies", () => {
   const wt = (links: string[]) =>
     ({ provider: "claude", mode: "code", cwd: "/wt", scope: { kind: "global", ref: null }, worktree: { home: "/repo", repo: "/repo", path: "/wt", branch: "agent/x", base: "master", baseCommit: "abc", links, createdAt: 0 } }) as Thread;
