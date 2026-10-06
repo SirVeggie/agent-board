@@ -269,8 +269,13 @@ button.ag-stat-chip {
   color: var(--muted);
   background: rgba(var(--lift-rgb), 0.05);
   box-shadow: none;
-  max-width: 220px;
+  max-width: 280px;
   border-radius: 6px;
+}
+
+.ag-scope-sep {
+  flex-shrink: 0;
+  opacity: 0.55;
 }
 
 button.ag-scope-chip span:last-child {
@@ -2383,7 +2388,7 @@ button.ag-switch-btn {
   align-items: center;
   gap: 6px;
   height: 21px;
-  padding: 0 4px 0 6px;
+  padding: 0 6px 0 4px;
   border-radius: 6px;
   background: transparent;
   box-shadow: none;
@@ -3054,7 +3059,7 @@ button.dock-title {
 }
 
 button.dock-title span,
-button.dock-scope span {
+button.dock-scope span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4271,6 +4276,10 @@ button.ag-ws-dir:hover {
 .ag-diff-actions {
   display: flex;
   gap: 6px;
+}
+
+.ag-diff-actions:empty {
+  display: none;
 }
 
 .ag-diff-body {

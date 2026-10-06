@@ -504,6 +504,15 @@
     return { icon: "box", text: R.basename(scope.ref) || scope.ref };
   }
 
+  /** Scribe access, then the workspace folder when that is a separate pick (not already the scope). */
+  function fillScopeDisplay(node, scope, cwd) {
+    const sc = scopeLabel(scope);
+    node.replaceChildren(icon(sc.icon), el("span", null, sc.text));
+    const dir = cwd || (scope?.kind === "workspace" ? scope.ref : null);
+    if (!dir || scope?.kind === "workspace") return;
+    node.append(el("span", "ag-scope-sep", "·"), icon("box"), el("span", null, R.basename(dir) || dir));
+  }
+
   function dirKey(dir) {
     return String(dir || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
@@ -1274,7 +1283,7 @@
     const title = el("h2", "ag-modal-title", "Changes");
     const tabs = el("div", "ag-seg");
     const actions = el("div", "ag-diff-actions");
-    head.append(title, el("span", "ag-grow"), tabs, actions, button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)"));
+    head.append(title, el("span", "ag-grow"), actions, tabs, button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)"));
     const body = el("div", "ag-diff-body");
     const side = el("div", "ag-diff-files");
     const main = el("div", "ag-diff-main");
@@ -1688,10 +1697,9 @@
       const title = el("div", "ag-title", t ? t.title : "New thread");
       title.title = t ? "Double-click to rename" : "";
       if (t) title.addEventListener("dblclick", () => this.rename(title));
-      const sc = scopeLabel(s.scope);
       const needsFolder = s.mode !== "board" && s.mode !== "ask" && !s.cwd;
       const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
-      scope.append(icon(sc.icon), el("span", null, sc.text));
+      fillScopeDisplay(scope, s.scope, t ? workspaceDir(t) : s.cwd);
       titleWrap.append(title, scope);
       if (t && t.stats.files) {
         const ch = button("", "ag-stat-chip", () => openDiff({ kind: "thread", threadId: t.id }), "Files changed in this thread");
@@ -2019,9 +2027,13 @@
       if (this.variant === "dock") {
         const sc = scopeLabel(t.scope);
         const mark = el("div", "ag-scope-mark");
-        mark.append(icon(sc.icon), el("span", null, `${SCOPE_KIND[t.scope.kind] || "Global"} thread · `), el("b", null, sc.text));
-        if (t.scope.kind === "global") mark.replaceChildren(icon(sc.icon), el("span", null, "Global thread"));
-        else if (t.scope.kind === "workspace" && !t.scope.ref) mark.replaceChildren(icon(sc.icon), el("span", null, "Thread with no scope"));
+        if (t.scope.kind === "global") mark.append(icon(sc.icon), el("span", null, "Global thread"));
+        else if (t.scope.kind === "workspace" && !t.scope.ref) mark.append(icon(sc.icon), el("span", null, "Thread with no scope"));
+        else mark.append(icon(sc.icon), el("span", null, `${SCOPE_KIND[t.scope.kind] || "Global"} thread · `), el("b", null, sc.text));
+        const dir = workspaceDir(t);
+        if (dir && t.scope.kind !== "workspace") {
+          mark.append(el("span", "ag-scope-sep", "·"), icon("box"), el("b", null, R.basename(dir) || dir));
+        }
         this.transcript.append(mark);
       }
       for (const group of this.groups(detail)) {
@@ -2035,10 +2047,9 @@
       const s = this.settings();
       const box = el("div", "ag-empty");
       box.append(icon("sparkle", "ag-empty-ico"));
-      const sc = scopeLabel(s.scope);
       box.append(el("div", "ag-empty-title", this.variant === "dock" ? "Ask about this page" : "New thread"));
       const meta = el("div", "ag-empty-meta");
-      meta.append(icon(sc.icon), el("span", null, sc.text));
+      fillScopeDisplay(meta, s.scope, this.thread() ? workspaceDir(this.thread()) : s.cwd);
       box.append(meta);
       if (localStorage.getItem(LS.tips) === "0") return box;
       const tips =
@@ -4237,7 +4248,7 @@
     }, "Threads started by a page (board workers) stay hidden until you type in them, unless this is on");
     workers.setAttribute("role", "switch");
     workers.setAttribute("aria-checked", String(!S.hidePageThreads));
-    workers.append(el("span", null, "Show workers"), el("span", "ag-switch"));
+    workers.append(el("span", "ag-switch"), el("span", null, "Show workers"));
     tools.append(workers);
     top.append(search, seg, newBtn, tools);
     const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
@@ -4733,8 +4744,7 @@
       const t = this.view.thread();
       const s = this.view.settings();
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread"), icon("chevron", "ag-ico ag-chev-down"));
-      const sc = scopeLabel(s.scope);
-      this.scopeBtn.replaceChildren(icon(sc.icon), el("span", null, sc.text));
+      fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
       this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
       this.scopeBtn.title = "Page, folder, or workspace this thread belongs to";
       this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
