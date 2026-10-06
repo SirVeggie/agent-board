@@ -2475,7 +2475,7 @@ export class AgentHost {
     this.addItem(threadId, turnId, {
       kind: "notice",
       level: "info",
-      text: `${merged ? "Working in a worktree again, on branch" : "Working in a worktree on branch"} ${made.worktree.branch}, from ${from}${merged ? " as it is now" : ""}.${made.worktree.links.length ? ` Linked from the main checkout: ${made.worktree.links.join(", ")}.` : ""}`,
+      text: `${merged ? "New worktree" : "Worktree"} on ${made.worktree.branch}, from ${from}${merged ? " as it is now" : ""}.`,
     });
     for (const note of made.notes) this.addItem(threadId, turnId, { kind: "notice", level: "warn", text: note });
     this.emitThread(threadId);
@@ -2545,10 +2545,9 @@ export class AgentHost {
       this.threads.set(id, next);
       this.db.saveThread(next);
       const by = id === threadId ? "" : ` (from “${thread.title}”, which shared it)`;
-      const after = reopen
-        ? `new messages open a worktree again from ${wt.base} as it is then, and go on in the same agent session.`
-        : `new messages start a fresh agent session in ${wt.home}.`;
-      this.addItem(id, null, { kind: "notice", level: "info", text: `${message}${by} The worktree folder is removed; ${after}` });
+      // A merged thread goes on as before (the next message opens a new worktree); say only what changes.
+      const after = reopen ? "" : " The next message starts a new agent session in the folder.";
+      this.addItem(id, null, { kind: "notice", level: "info", text: `${message}${by} Worktree removed.${after}` });
       this.emitThread(id);
     }
     this.flushNow();

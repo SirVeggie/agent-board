@@ -561,6 +561,17 @@
     return String(dir || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
+  /**
+   * The transcript group an item renders in: its turn, or the queued group pinned to the end. A note
+   * outside any turn (a worktree merge) is its own group where it happened, so it does not stay
+   * pinned under every later turn.
+   */
+  function groupKey(item) {
+    if (item.turnId) return item.turnId;
+    if (item.dropped) return `dropped:${item.id}`;
+    return item.kind === "user" ? "pending" : `note:${item.id}`;
+  }
+
   /** The thread's worktree while it is open. */
   function openWorktree(t) {
     return t?.worktree && !t.worktree.closed ? t.worktree : null;
@@ -2098,7 +2109,7 @@
       const groups = [];
       const byTurn = new Map();
       for (const item of detail.items) {
-        const key = item.turnId || (item.dropped ? `dropped:${item.id}` : "pending");
+        const key = groupKey(item);
         let g = byTurn.get(key);
         if (!g) {
           g = { key, turn: item.turnId ? detail.turns.get(item.turnId) || null : null, items: [] };
@@ -2289,7 +2300,7 @@
 
     /** Every turn but the latest folds its steps; this marks that one after each render. */
     markLatest() {
-      const turns = [...this.transcript.querySelectorAll(".ag-turn")].filter((n) => !n.dataset.turn.startsWith("pending") && !n.dataset.turn.startsWith("dropped"));
+      const turns = [...this.transcript.querySelectorAll(".ag-turn")].filter((n) => !/^(pending|dropped|note)/.test(n.dataset.turn));
       const last = turns[turns.length - 1];
       for (const n of turns) {
         n.classList.toggle("latest", n === last);
@@ -2301,7 +2312,7 @@
 
     /** Orange last-step glow: this turn is still running, or the thread is busy and the turn object has not arrived yet. */
     turnIsLive(turnId) {
-      if (!turnId || turnId.startsWith("pending") || turnId.startsWith("dropped")) return false;
+      if (!turnId || /^(pending|dropped|note)/.test(turnId)) return false;
       const turn = S.details.get(this.threadId)?.turns.get(turnId);
       if (turn) return turn.status === "running";
       const t = this.thread();
@@ -3001,7 +3012,7 @@
 
     onItem(item, isNew) {
       if (isNew && item.kind === "user" && item.turnId === null) this.stick = true;
-      this.dirtyTurns.add(item.turnId || "pending");
+      this.dirtyTurns.add(groupKey(item));
       // A queued message that starts a turn or is steered into one leaves the queued group.
       if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
       this.schedule();
@@ -3024,7 +3035,7 @@
     onDelta(item) {
       const node = this.transcript.querySelector(`[data-item-id="${item.id}"]`);
       if (!node) {
-        this.dirtyTurns.add(item.turnId || "pending");
+        this.dirtyTurns.add(groupKey(item));
         this.schedule();
         return;
       }
@@ -6034,6 +6045,7 @@
     if (wt.dirty) state.push("uncommitted changes");
     add("State", state.join(" · "));
     add("Path", wt.path, "ag-wt-tip-path");
+    if (wt.links?.length) add("Linked", wt.links.join(", "));
     tip.append(rows);
     return tip;
   }
