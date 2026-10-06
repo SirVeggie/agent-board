@@ -122,6 +122,33 @@ test("merge refuses when the main checkout is on another branch", async () => {
   assert.equal(sh(repo, "branch", "--list", wt.branch).replace("*", "").trim(), wt.branch);
 });
 
+test("merge rebases a branch the base has moved past, and leaves a conflicting one as it was", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "rebase me");
+  fs.writeFileSync(path.join(wt.path, "mine.txt"), "mine\n");
+  await commitAll(wt, "add mine");
+  fs.writeFileSync(path.join(repo, "theirs.txt"), "theirs\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-q", "-m", "theirs");
+  assert.deepEqual(await mergeWorktree(wt), { commits: 1 });
+  assert.equal(sh(repo, "rev-list", "--merges", "--count", "HEAD~1..HEAD"), "0", "a fast-forward, no merge commit");
+  assert.equal(sh(repo, "log", "-1", "--format=%s"), "add mine");
+  await removeWorktree(wt);
+  await dropBranchIfEmpty(wt);
+
+  const { worktree: clash } = await createWorktree(repo, repo, "clash");
+  fs.writeFileSync(path.join(clash.path, "theirs.txt"), "mine instead\n");
+  await commitAll(clash, "change theirs");
+  const before = sh(clash.path, "rev-parse", "HEAD");
+  fs.writeFileSync(path.join(repo, "theirs.txt"), "theirs again\n");
+  sh(repo, "commit", "-q", "-am", "theirs again");
+  await assert.rejects(mergeWorktree(clash), /did not go through/);
+  assert.equal(sh(clash.path, "rev-parse", "HEAD"), before, "the aborted rebase leaves the branch alone");
+  assert.equal(sh(clash.path, "status", "--porcelain"), "");
+  assert.equal(sh(repo, "status", "--porcelain"), "");
+  await removeWorktree(clash);
+  sh(repo, "branch", "-D", clash.branch);
+});
+
 test("reverting a worktree turn undoes its commits too", async () => {
   const { worktree: wt } = await createWorktree(repo, repo, "revert me");
   const beforeTree = (await snapshotTree(wt.path))!;

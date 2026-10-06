@@ -282,10 +282,27 @@ export async function dropBranchIfEmpty(wt: ThreadWorktree): Promise<boolean> {
   return res.code === 0;
 }
 
-/** Merge the worktree's branch into its base in the main checkout. Leaves everything as it was if the merge fails. */
+/**
+ * Rebase the worktree's branch onto its base when the base has moved on, so the merge is a fast-forward.
+ * A rebase that stops on a conflict is aborted and the branch stays as it was; the merge then tries it.
+ */
+async function rebaseOntoBase(wt: ThreadWorktree, base: string): Promise<boolean> {
+  if (!fs.existsSync(wt.path) || (await currentBranch(wt.path)) !== wt.branch) return false;
+  const behind = await git(["rev-list", "--count", `HEAD..${base}`], wt.path, { timeoutMs: 10_000 });
+  if (behind.code !== 0 || !(Number(behind.stdout.trim()) > 0)) return false;
+  const res = await git([...LONG, "rebase", "--no-verify", base], wt.path, { timeoutMs: 120_000 });
+  if (res.code === 0) return true;
+  await git(["rebase", "--abort"], wt.path, { timeoutMs: 30_000 });
+  return false;
+}
+
+/**
+ * Merge the worktree's branch into its base in the main checkout, rebasing it onto the base first
+ * when it can. Leaves everything as it was if the merge fails.
+ */
 export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: number }> {
   if (!wt.base) throw new Error("The worktree was made from a detached HEAD, so there is no branch to merge into. Use Leave branch instead.");
-  const status = await worktreeStatus(wt);
+  let status = await worktreeStatus(wt);
   if (status.dirty.length) {
     throw new Error(`The worktree has ${status.dirty.length} uncommitted file${status.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch, which commits them for you.`);
   }
@@ -293,6 +310,10 @@ export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: numb
     throw new Error(`The main checkout is on ${status.mainBranch ?? "a detached HEAD"}, not ${wt.base}. Switch it to ${wt.base} to merge.`);
   }
   if (!status.ahead) return { commits: 0 };
+  if (await rebaseOntoBase(wt, wt.base)) {
+    status = await worktreeStatus(wt);
+    if (!status.ahead) return { commits: 0 };
+  }
   const res = await git(["merge", "--no-edit", wt.branch], wt.repo, { timeoutMs: 120_000 });
   if (res.code !== 0) {
     const mergeHead = await git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], wt.repo, { timeoutMs: 5000 });
