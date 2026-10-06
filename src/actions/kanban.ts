@@ -614,6 +614,40 @@ export const kanbanActions: ActionSet = {
         return { ops, result: { num: card.num, column: working?.title ?? null } };
       },
     },
+    worker_claim: {
+      description:
+        "The board's own bookkeeping when it starts an agent chat on a card (a worker's run, a one-card run, or Continue); only the page calls it. Claims the card for that chat under the worker's name and moves it to the working column, so the agent doesn't spend a call on it.",
+      args: "{ card, thread, assignee, text? }",
+      run(state, args, ctx) {
+        if (ctx.caller.by !== "user") throw new ActionError("worker_claim is for the board page itself");
+        const card = findCard(state, args.card);
+        const thread = str(args.thread).trim();
+        if (!thread) throw new ActionError("thread is required");
+        const name = str(args.assignee).trim().slice(0, 60);
+        if (!name) throw new ActionError("assignee is required");
+        if (card.claim && !card.claim.stale && card.claim.thread !== thread) {
+          throw new ActionError(`#${card.num} is held by ${card.claim.holder} since ${new Date(card.claim.at).toISOString()}`);
+        }
+        const working = roleColumn(state, "working");
+        const from = claimFrom(state, card);
+        const ops: unknown[] = [
+          { op: "test", path: `${cardPath(card)}/claim`, value: card.claim ?? null },
+          {
+            op: "merge",
+            path: cardPath(card),
+            value: {
+              assignee: name,
+              status: { kind: "working", text: str(args.text) || "Agent starting" },
+              claim: { holder: name, thread, at: ctx.now, seenAt: ctx.now, ...(from ? { from } : {}) },
+              thread,
+              ...(from ? { from } : {}),
+            },
+          },
+        ];
+        if (working) ops.push(...moveOps(state, card, working, ctx.now));
+        return { ops, result: { num: card.num, column: working?.title ?? null } };
+      },
+    },
     release: {
       description:
         "Give a card back without finishing it: clears your claim and status and moves it (default: the column it was claimed from). note adds a comment; status (e.g. { kind: \"blocked\", text }) stays on the card.",

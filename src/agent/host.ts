@@ -1304,7 +1304,7 @@ export class AgentHost {
       if (!text.trim()) throw new Error("Empty comment");
     }
     const body = card.resume
-      ? `Continue the work on card #${card.num}. Its description, checklist, or comments may have changed since you last worked on it: get the card again and read it in full before you go on. Claim it again while you work on it, and finish it when you are done.`
+      ? `Continue the work on card #${card.num}. Its description, checklist, or comments may have changed since you last worked on it: get the card again and read it in full before you go on. The board has claimed it for you again and moved it to the working column, so don't claim it; finish it when you are done.`
       : text;
     const { queued } = this.send(threadId, { text: body, from: "page", card });
     if (!queued) return { delivered: "started" };

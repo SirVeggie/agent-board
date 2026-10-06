@@ -409,6 +409,29 @@ test("worker_step lets one window at a time move a worker on, once its thread is
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });
 
+test("worker_claim claims a card for the chat the board started, so its agent needn't", () => {
+  const page: ActionContext = { caller: { by: "user", label: "user" }, now: 1000, values: {} };
+  assert.throws(() => run(board(), "worker_claim", { card: 1, thread: "th_a", assignee: "Opus" }), /board page itself/);
+  assert.throws(() => run(board(), "worker_claim", { card: 1, assignee: "Opus" }, page), /thread is required/);
+  const { state } = run(board(), "worker_claim", { card: 1, thread: "th_a", assignee: "Opus" }, page);
+  const c = card(state, 1);
+  assert.equal(c.col, "work");
+  assert.equal(c.assignee, "Opus");
+  assert.equal(c.thread, "th_a");
+  assert.equal(c.from, "ready");
+  assert.deepEqual(c.status, { kind: "working", text: "Agent starting" });
+  assert.deepEqual(c.claim, { holder: "Opus", thread: "th_a", at: 1000, seenAt: 1000, from: "ready" });
+  // The chat's own claim still goes through; another chat's is refused, and so is claiming it for another chat.
+  run(state, "claim", { card: 1, assignee: "Opus" }, agent({ session: undefined, thread: "th_a" }));
+  assert.throws(() => run(state, "claim", { card: 1 }, agent({ session: undefined, thread: "th_b" })), /held by Opus/);
+  assert.throws(() => run(state, "worker_claim", { card: 1, thread: "th_b", assignee: "Opus" }, page), /held by Opus/);
+  // Continue: a finished card goes back to working for the same chat.
+  const finished = run(state, "finish", { card: 1, summary: "done" }, agent({ session: undefined, thread: "th_a" })).state;
+  const again = run(finished, "worker_claim", { card: 1, thread: "th_a", assignee: "Opus" }, page).state;
+  assert.equal(card(again, 1).col, "work");
+  assert.equal((card(again, 1).claim as { from?: string }).from, "ready");
+});
+
 test("the sweep releases a card whose thread failed and flags one whose thread went quiet", () => {
   let state: Record<string, unknown> = board();
   state = run(state, "claim", { card: 1 }, agent({ session: undefined, thread: "th_fail" })).state;

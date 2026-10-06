@@ -2909,6 +2909,7 @@
       scribe.agent.card(c.thread, { card: c.num, title: plainLinks(c.title), resume: true }).then(function (r) {
         if (r && r.ok && r.delivered) {
           setComment(c.id, cm.id, { followUp: "continued" });
+          claimForAgent(c, c.thread, null);
           mergeWhenDone(c, c.thread);
           setHint((r.delivered === "queued" ? "Queued #" : "Sent #") + c.num + " back to its agent.");
         } else {
@@ -4192,7 +4193,7 @@
       "",
       "How to work:",
       "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with this message (or with your first page_action result); follow it.",
-      "- get the card, claim it with assignee \"" + name + "\", do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
+      "- The board has claimed your card for you under \"" + name + "\" and moved it to the working column, so don't claim it. get the card, do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
     ];
     if (FOLDER_MODES[workerMode(w)] && w.worktree) {
       lines.push("- You work in a git worktree, on a branch of your own. Commit your work. Before you end your turn, rebase onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list) and resolve any conflicts, so it merges cleanly. When your turn ends, the board merges your branch, and the next agent starts from there.");
@@ -4202,7 +4203,7 @@
     } else if (w.context === "fresh") {
       lines.push("- Work on this card only, then end your turn. The board starts a fresh agent for the next card.");
     } else {
-      lines.push("- When it is finished, list your cards (list { column: \"agent\", assignee: " + JSON.stringify(name) + " }). If the list's workers show stopRequested: true on \"" + name + "\", end your turn. If one of those cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way, up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
+      lines.push("- When it is finished, list your cards (list { column: \"agent\", assignee: " + JSON.stringify(name) + " }). If the list's workers show stopRequested: true on \"" + name + "\", end your turn. If one of those cards that isn't claimed or blocked is closely related to the work you just did, so that what you know now saves real effort, take it next in this turn the same way (claim that one yourself with assignee " + JSON.stringify(name) + "), up to " + MAX_CARDS_PER_AGENT + " cards in all. Otherwise end your turn: the board starts a fresh agent with a clean context for the next card, which costs less than carrying this conversation along.");
     }
     lines.push("- Don't wait for new cards; the board does that. End your turn with a short summary.");
     return lines.join("\n");
@@ -4512,6 +4513,7 @@
       threadStatus[r.threadId] = { status: "running", queued: 0 };
       patchWorker(id, { threadId: r.threadId, step: null, merge: null, wait: null, fix: null, run: { since: since, card: c.num, startedAt: startedAt } });
       appendLog(id, "launch", "Started #" + c.num + " " + str(c.title).slice(0, 80), { card: c.num, thread: r.threadId });
+      return claimForAgent(c, r.threadId, workerName(w));
     });
   }
 
@@ -4529,7 +4531,7 @@
   function runSolo(cardId, id) {
     var c = card(cardId);
     if (!c || !canRunSolo(c, id)) return;
-    var col = colOf(c), w = worker(id);
+    var w = worker(id);
     var name = workerName(w);
     soloStarting[cardId] = true;
     setHint("Starting " + name + " on #" + c.num + "…");
@@ -4543,21 +4545,23 @@
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
       var now = Date.now();
-      var latest = card(cardId);
-      // Hold the card for the new chat at once, so a running worker doesn't take it before the agent claims it.
-      if (latest && !(latest.claim && !latest.claim.stale)) {
-        scribe.update([{ op: "merge", path: "cards/id=" + cardId, value: {
-          assignee: name,
-          claim: { holder: name, thread: r.threadId, at: now, seenAt: now, from: col.id },
-          status: { kind: "working", text: "Agent starting" }
-        } }]);
-      }
+      // Claim the card for the new chat at once, so a running worker doesn't take it and the agent needn't claim it.
+      claimForAgent(c, r.threadId, name);
       addSolo(id, r.threadId, { card: c.num, at: now });
       appendLog(id, "solo", "One-card run started on #" + c.num + " " + str(c.title).slice(0, 80), { card: c.num, thread: r.threadId });
       setHint(name + " started on #" + c.num + ".");
       render();
     });
     render();
+  }
+  /**
+   * The board claims the card for the chat it just started (or sent on with Continue) and moves it
+   * to the working column, so the agent doesn't spend a call on it. Refused while another chat holds it.
+   */
+  function claimForAgent(c, threadId, name) {
+    return scribe.action("worker_claim", { card: c.num, thread: threadId, assignee: name || str(c.assignee).trim() || "agent" }).catch(function (err) {
+      setHint("Could not claim #" + c.num + " for its agent: " + str(err && err.message), true);
+    });
   }
   function addSolo(id, threadId, entry) {
     var cur = worker(id);
