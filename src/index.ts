@@ -4,6 +4,7 @@ import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
 import { migrateLegacyData } from "./config.js";
 import { watchMemory } from "./memoryWatch.js";
+import { hideChildWindows } from "./hideWindows.js";
 
 const args = new Set(process.argv.slice(2));
 
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
   }
 
   if (args.has("--daemon")) {
+    hideChildWindows();
     migrateLegacyData(log);
     watchMemory();
     await startHttp();
