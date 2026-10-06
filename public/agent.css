@@ -4846,6 +4846,14 @@ button.ag-ctx-meter.fixed:hover {
   background: color-mix(in srgb, var(--ag-warn) 12%, transparent);
 }
 
+.ag-fly-row.s-checked {
+  opacity: 0.42;
+}
+
+.ag-fly-row.s-checked .ag-fly-title {
+  color: var(--muted);
+}
+
 .ag-fly-meta {
   display: flex;
   flex-direction: column;
