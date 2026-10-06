@@ -4477,7 +4477,7 @@
       if (!this.titleBtn) return;
       const t = this.view.thread();
       const s = this.view.settings();
-      this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread for this page"), icon("chevron", "ag-ico ag-chev-down"));
+      this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread"), icon("chevron", "ag-ico ag-chev-down"));
       const sc = scopeLabel(s.scope);
       this.scopeBtn.replaceChildren(icon(sc.icon), el("span", null, sc.text));
       this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
@@ -4575,7 +4575,7 @@
       const pageThreads = tab ? threads.filter((t) => t.scope.kind === "page" && t.scope.ref === tab.id) : [];
       const others = threads.filter((t) => !pageThreads.includes(t)).slice(0, 12);
       const items = [];
-      items.push({ label: "New thread for this page", icon: "plus", run: () => { if (tab) S.dockPicks.delete(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
+      items.push({ label: "New thread", icon: "plus", run: () => { if (tab) S.dockPicks.delete(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
       for (const t of pageThreads) items.push({ label: t.title, detail: threadWhenText(t), checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
       if (others.length) items.push({ header: "Recent" });
