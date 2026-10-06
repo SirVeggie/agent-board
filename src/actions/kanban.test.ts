@@ -283,6 +283,61 @@ test("create and move refuse a shared role and still accept a unique role, id, o
   assert.equal(card(run(twoAgents(), "move", { card: 2, to: "claude" }).state, 2).col, "claude");
 });
 
+test("logs returns recent worker log lines, filtered and capped", () => {
+  const entries = Array.from({ length: 5 }, (_, i) => ({
+    id: "lg_" + i,
+    at: 1000 + i,
+    kind: i === 3 ? "pause" : "launch",
+    text: i === 3 ? "Could not merge #12" : "Started #" + (10 + i) + " Task",
+    worker: i === 2 ? "Opus" : "Grok",
+    workerId: i === 2 ? "w_opus" : "w_grok",
+    card: 10 + i,
+  }));
+  const state = {
+    ...board(),
+    settings: {
+      workers: { w_grok: { name: "Grok" }, w_opus: { name: "Opus" } },
+      workerLog: [{ id: "lg_bad" }, ...entries],
+    },
+  };
+  const all = run(state, "logs", {}).result;
+  assert.equal(all.total, 6);
+  assert.equal((all.logs as unknown[]).length, 6);
+  assert.equal((all.logs as Array<{ kind: string }>)[1].kind, "launch");
+  assert.equal((all.logs as Array<{ worker: string }>)[0].worker, undefined);
+
+  const grok = run(state, "logs", { worker: "Grok" }).result;
+  assert.equal(grok.total, 4);
+  assert.deepEqual(
+    (grok.logs as Array<{ card?: number }>).map((e) => e.card),
+    [10, 11, 13, 14]
+  );
+
+  const paused = run(state, "logs", { kind: "PAUSE", q: "merge" }).result;
+  assert.equal(paused.total, 1);
+  assert.equal((paused.logs as Array<{ text: string }>)[0].text, "Could not merge #12");
+
+  const numbered = run(state, "logs", { q: "#13" }).result;
+  assert.equal(numbered.total, 1);
+  assert.equal((numbered.logs as Array<{ card: number }>)[0].card, 13);
+
+  const many = {
+    ...state,
+    settings: {
+      ...state.settings,
+      workerLog: Array.from({ length: 100 }, (_, i) => ({ id: "lg_n" + i, at: i, kind: "wait", text: "Waiting " + i, workerId: "w_grok" })),
+    },
+  };
+  const tail = run(many, "logs", {}).result;
+  assert.equal(tail.total, 100);
+  assert.equal(tail.more, 20);
+  assert.equal((tail.logs as Array<{ text: string }>)[0].text, "Waiting 20");
+  assert.equal((tail.logs as Array<{ text: string }>).at(-1)?.text, "Waiting 99");
+  assert.equal((run(many, "logs", { limit: 3 }).result.logs as unknown[]).length, 3);
+  assert.equal(run(board(), "logs", {}).result.total, 0);
+  assert.throws(() => run(state, "logs", { worker: "nobody" }), /no agent worker/);
+});
+
 test("list shows the agent workers, marking one that was asked to stop", () => {
   const state = { ...board(), settings: { workers: { w_1: { name: "Opus", stop: true, run: { since: 1 } }, w_2: { name: "Other" } } } };
   const workers = run(state, "list", {}).result.workers;

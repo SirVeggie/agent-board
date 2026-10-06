@@ -83,6 +83,39 @@ type Worker = {
 
 /** How long a page holds a worker's step before another window may take over: covers a permission prompt. */
 const STEP_LEASE_MS = 15 * 60 * 1000;
+/** Newest lines kept in `settings.workerLog` (the page trims; this caps a read). */
+const MAX_WORKER_LOG = 200;
+const DEFAULT_LOG_LIMIT = 80;
+
+/** One line in the board's worker log: starts, pauses, merges, usage-limit waits. */
+type WorkerLogEntry = {
+  id?: string;
+  at?: number;
+  kind?: string;
+  text?: string;
+  worker?: string;
+  workerId?: string;
+  card?: number;
+  thread?: string;
+};
+
+function workerLogEntries(state: BoardState): WorkerLogEntry[] {
+  const settings = state.settings as { workerLog?: unknown } | undefined;
+  return arr<WorkerLogEntry>(settings?.workerLog).filter((e) => Boolean(e) && typeof e === "object");
+}
+
+function compactLog(e: WorkerLogEntry): Record<string, unknown> {
+  const card = Number(e.card);
+  return {
+    at: Number(e.at) || 0,
+    kind: str(e.kind) || "info",
+    text: str(e.text),
+    ...(str(e.worker) ? { worker: str(e.worker) } : {}),
+    ...(str(e.workerId) ? { workerId: str(e.workerId) } : {}),
+    ...(Number.isFinite(card) && card > 0 ? { card } : {}),
+    ...(str(e.thread) ? { thread: str(e.thread) } : {}),
+  };
+}
 
 function workerMap(state: BoardState): Record<string, Worker> {
   const settings = state.settings as { workers?: Record<string, Worker> } | undefined;
@@ -401,6 +434,46 @@ export const kanbanActions: ActionSet = {
         // The summary's comment count and last-comment stamp are for list rows; get keeps the comments themselves.
         const { comments: _count, lastComment: _last, ...brief } = summary(state, card);
         return { ops: [], result: { ...card, ...brief, comments: arr<Comment>(card.comments), labelIds: arr(card.labels) } };
+      },
+    },
+    logs: {
+      description:
+        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, limit, resume, wait, or solo; q matches text, worker, kind, or #card.",
+      args: "{ worker?, kind?, q?, limit? }",
+      run(state, args) {
+        let list = workerLogEntries(state);
+        if (args.worker !== undefined && str(args.worker).trim()) {
+          const [workerId] = findWorker(state, args.worker);
+          list = list.filter((e) => str(e.workerId) === workerId || str(e.worker).trim().toLowerCase() === str(args.worker).trim().toLowerCase());
+        }
+        if (args.kind !== undefined && str(args.kind).trim()) {
+          const kind = str(args.kind).trim().toLowerCase();
+          list = list.filter((e) => str(e.kind).toLowerCase() === kind);
+        }
+        if (args.q !== undefined && str(args.q).trim()) {
+          const words = str(args.q)
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean);
+          list = list.filter((e) => {
+            const hay = `${str(e.text)} ${str(e.worker)} ${str(e.kind)} ${e.card ? "#" + e.card : ""}`.toLowerCase();
+            return words.every((w) => hay.includes(w));
+          });
+        }
+        list = [...list].sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0) || str(a.id).localeCompare(str(b.id)));
+        const limit =
+          typeof args.limit === "number" && args.limit > 0
+            ? Math.min(Math.floor(args.limit), MAX_WORKER_LOG)
+            : DEFAULT_LOG_LIMIT;
+        const slice = list.slice(-limit);
+        return {
+          ops: [],
+          result: {
+            logs: slice.map(compactLog),
+            total: list.length,
+            ...(list.length > slice.length ? { more: list.length - slice.length } : {}),
+          },
+        };
       },
     },
     create: {

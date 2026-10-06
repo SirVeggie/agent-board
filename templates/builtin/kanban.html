@@ -856,11 +856,32 @@
   .swatch.sel { box-shadow: 0 0 0 2px rgba(18, 22, 30, 1), 0 0 0 4px var(--who); }
   .swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .wp-foot { display: flex; justify-content: space-between; align-items: center; padding: 8px 6px 2px; border-top: 1px solid var(--line); margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .wp-foot-left { display: inline-flex; align-items: center; gap: 12px; }
   .wp-foot .add { color: var(--accent); padding: 4px 2px; }
   .wp-foot .add:hover { text-decoration: underline; }
+  .wp-foot .log-tog.on { color: var(--text); }
   .wp-max { display: inline-flex; align-items: center; gap: 6px; }
   .worker-error { margin: -2px 10px 6px; font-size: 12px; color: var(--danger); }
   .worker-error button { color: var(--text); text-decoration: underline; padding: 0; margin-left: 4px; }
+  .wp-log { margin: 4px 4px 0; padding: 8px 6px 4px; border-top: 1px solid var(--line); }
+  .wp-log-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .wp-log-head b { font-size: 12px; }
+  .wp-log-head .muted { color: var(--muted); font-size: 11.5px; margin-right: auto; }
+  .wp-log-head button { color: var(--muted); font-size: 12px; padding: 2px 4px; }
+  .wp-log-head button:hover { color: var(--text); text-decoration: underline; }
+  .wp-log-list { max-height: 200px; overflow-y: auto; font-size: 11.5px; line-height: 1.4; }
+  .wp-log-line {
+    display: grid;
+    grid-template-columns: auto minmax(52px, 88px) minmax(0, 1fr);
+    gap: 8px;
+    padding: 3px 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, .04);
+  }
+  .wp-log-line .at { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .wp-log-line .who-name { max-width: none; font-size: 11px; letter-spacing: 0; text-transform: none; }
+  .wp-log-line .msg { min-width: 0; overflow-wrap: anywhere; }
+  .wp-log-line.pause .msg, .wp-log-line.merge_fail .msg { color: var(--danger); }
+  .wp-log-empty { color: var(--muted); font-size: 12px; padding: 8px 2px; }
   .worker-box { width: min(560px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
   .worker-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; overflow-y: auto; padding: 10px 2px 2px; }
   .worker-form > label { color: var(--muted); font-size: 12.5px; }
@@ -3765,10 +3786,12 @@
   // starts the worker's next card or waits for one. settings.maxWorkers caps how many work at once.
   // Every open window runs this code: the worker_step action lets one of them take each step.
   // Anything unexpected (a failed turn, an unfinished card, a merge that doesn't go through) pauses
-  // the worker with its reason. A branch that won't merge first goes back to its agent to rebase
-  // and commit (MAX_MERGE_FIXES times); if it still won't, the cards that chat finished come back
-  // to their ready column, blocked. "Stop when its card is done" sets stop on the worker (list
-  // shows it as stopRequested) and logs worker_stop. When a plan usage limit stops the agent's
+  // the worker with its reason. Starts, pauses, merges, and usage-limit waits are appended to
+  // settings.workerLog (newest 200) and shown on the Workers panel, so they can be read even when
+  // Keeper process logs are not available. A branch that won't merge first goes back to its agent
+  // to rebase and commit (MAX_MERGE_FIXES times); if it still won't, the cards that chat finished
+  // come back to their ready column, blocked. "Stop when its card is done" sets stop on the worker
+  // (list shows it as stopRequested) and logs worker_stop. When a plan usage limit stops the agent's
   // turn, the worker keeps its chat and card (wait.until) and sends it on once the limit has reset.
   // A one-card run (right-click Run, or Continue) waits the same way on that chat's own wait.until.
   var FOLDER_MODES = { code: true, plan: true };
@@ -3785,6 +3808,8 @@
   var RESUME_RETRY_MS = 60 * 1000;
   /** Times the worker asks one agent to fix a branch that won't merge before it pauses. */
   var MAX_MERGE_FIXES = 2;
+  /** Newest lines kept in settings.workerLog (the logs action reads the same cap). */
+  var MAX_WORKER_LOG = 200;
   var MERGE_FIX_PROMPT = "Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes, run the checks, and commit, so the worktree is clean. Don't take another card. Then end your turn with a short summary; the board tries the merge again.";
   var RESUME_PROMPT ="Your plan's usage limit has reset. Go on with your card where you left off: check the card and the work you have done so far, then finish it as before.";
   var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
@@ -3803,6 +3828,7 @@
   var workerEdit = null;
   var workerHintOpen = false;
   var stopWorkerId = null;
+  var workersLogOpen = false;
 
   function hasWorkerApi() {
     return Boolean(scribe.agent && typeof scribe.agent.options === "function");
@@ -3895,6 +3921,89 @@
   }
   function limitTime(at) {
     return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  }
+  function workerLog() {
+    return arr(settings().workerLog).filter(function (e) { return e && typeof e === "object"; });
+  }
+  function logTime(at) {
+    var t = new Date(at);
+    var sameDay = t.toDateString() === new Date().toDateString();
+    return t.toLocaleString(undefined, sameDay
+      ? { hour: "2-digit", minute: "2-digit", second: "2-digit" }
+      : { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  function formatLogLine(e) {
+    return logTime(e.at) + "  " + (str(e.worker) || "board") + "  " + str(e.text);
+  }
+  /**
+   * Append a line to the board's worker log (settings.workerLog). Kept even if Keeper logs are
+   * not available. Newest MAX_WORKER_LOG lines; agents read them with the logs action.
+   */
+  function appendLog(id, kind, text, extra) {
+    if (!scribe.state.settings || typeof scribe.state.settings !== "object") return;
+    var w = id ? worker(id) : null;
+    var entry = { id: newId("lg"), at: Date.now(), kind: kind, text: str(text).slice(0, 500) };
+    if (id) entry.workerId = id;
+    if (w) entry.worker = workerName(w);
+    if (extra) {
+      if (extra.card != null && extra.card !== "") entry.card = extra.card;
+      if (extra.thread) entry.thread = extra.thread;
+    }
+    var ops = [{ op: "insert", path: "settings/workerLog", value: entry }];
+    var list = workerLog();
+    if (list.length >= MAX_WORKER_LOG) {
+      var drop = list.length - MAX_WORKER_LOG + 1;
+      for (var i = 0; i < drop; i++) {
+        if (list[i] && list[i].id) ops.push({ op: "remove", path: "settings/workerLog/" + list[i].id });
+      }
+    }
+    scribe.update(ops);
+    try { console.warn("[scribe worker] " + formatLogLine(entry)); } catch (err) { /* ignore */ }
+  }
+  function buildWorkerLog() {
+    var list = workerLog();
+    var box = el("div", "wp-log");
+    var head = el("div", "wp-log-head");
+    head.appendChild(el("b", null, "Log"));
+    head.appendChild(el("span", "muted", list.length ? list.length + (list.length === 1 ? " line" : " lines") : "empty"));
+    if (list.length) {
+      var copy = el("button", null, "Copy");
+      copy.type = "button";
+      copy.addEventListener("click", function () {
+        var text = list.map(formatLogLine).join("\n");
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { setHint("Copied the worker log."); }, function () { setHint("Could not copy the log.", true); });
+        } else setHint("Could not copy the log.", true);
+      });
+      head.appendChild(copy);
+      var clear = el("button", null, "Clear");
+      clear.type = "button";
+      clear.addEventListener("click", function () {
+        askConfirm({ title: "Clear the worker log?", text: "Starts, pauses, and merges already recorded are dropped. New lines still appear.", ok: "Clear" }).then(function (ok) {
+          if (!ok) return;
+          scribe.update([{ op: "set", path: "settings/workerLog", value: [] }]);
+          render();
+        });
+      });
+      head.appendChild(clear);
+    }
+    box.appendChild(head);
+    if (!list.length) {
+      box.appendChild(el("p", "wp-log-empty", "Starts, pauses, merges, and usage-limit waits show up here, so they can be read even when Keeper logs are not available."));
+      return box;
+    }
+    var lines = el("div", "wp-log-list");
+    list.forEach(function (e) {
+      var row = el("div", "wp-log-line " + str(e.kind));
+      row.appendChild(el("span", "at", logTime(e.at)));
+      var who = el("span", "who-name", str(e.worker) || "board");
+      if (e.workerId) who.style.setProperty("--who", workerColor(e.workerId));
+      row.appendChild(who);
+      row.appendChild(el("span", "msg", str(e.text)));
+      lines.appendChild(row);
+    });
+    box.appendChild(lines);
+    return box;
   }
   function saveWorker(id, patch) {
     var all = Object.assign({}, workers());
@@ -4133,7 +4242,10 @@
       },
       function (err) {
         // Another window took the step, or the agent isn't done after all. A click says why.
-        if (start) workerErrors[id] = "Could not start: " + str(err && err.message);
+        if (start) {
+          workerErrors[id] = "Could not start: " + str(err && err.message);
+          appendLog(id, "pause", workerErrors[id]);
+        }
       }
     ).then(function () {
       delete advancing[id];
@@ -4156,6 +4268,7 @@
           endRun(id, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true);
         } else {
           patchWorker(id, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
+          appendLog(id, "limit", "Out of plan usage until " + limitTime(Number(turn.limitResetsAt)) + " (wait " + waits + " of " + MAX_LIMIT_WAITS + ")", { card: run.card, thread: threadId });
         }
         return Promise.resolve(false);
       }
@@ -4184,6 +4297,9 @@
     return scribe.agent.merge(threadId).then(function (m) {
       if (m && (m.ok || m.error === "not_found")) {
         restoreMergeCards(id);
+        appendLog(id, "merge", m.ok
+          ? (run.card ? "Merged #" + run.card : "Merged the agent's branch")
+          : "No worktree to merge (chat gone)", { card: run.card, thread: threadId });
         return true;
       }
       var why = m && m.error === "merge_failed" ? m.message : launchError(m);
@@ -4211,6 +4327,7 @@
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
       patchWorker(id, { step: null, fix: { thread: threadId, count: count } });
+      appendLog(id, "merge_fix", "Asked the agent to fix the merge (" + count + " of " + MAX_MERGE_FIXES + "): " + why, { thread: threadId });
     });
   }
   /**
@@ -4286,10 +4403,12 @@
         // until + RESUME_DELAY_MS is when advanceWorkers tries again.
         var backoff = Math.min(RESUME_RETRY_MS * Math.pow(2, tries - 1), 8 * 60 * 1000);
         patchWorker(id, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
+        appendLog(id, "resume", "Could not resume yet (" + why + "); try " + tries + " of " + MAX_RESUME_TRIES, { card: cur.run && cur.run.card, thread: threadId });
         return;
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
       patchWorker(id, { step: null, wait: { count: Number(w && w.wait && w.wait.count) || 1 } });
+      appendLog(id, "resume", "Sent the agent on after its usage limit reset", { card: w && w.run && w.run.card, thread: threadId });
     });
   }
 
@@ -4321,6 +4440,7 @@
     var c = nextCard(id);
     if (!c || atLimit(id)) {
       patchWorker(id, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since: since } });
+      appendLog(id, "wait", !c ? "Waiting for cards" : "Waiting for a free slot");
       return;
     }
     return startCard(id, c, since);
@@ -4336,6 +4456,7 @@
       }
       threadStatus[r.threadId] = { status: "running", queued: 0 };
       patchWorker(id, { threadId: r.threadId, step: null, merge: null, wait: null, fix: null, run: { since: since, card: c.num, startedAt: startedAt } });
+      appendLog(id, "launch", "Started #" + c.num + " " + str(c.title).slice(0, 80), { card: c.num, thread: r.threadId });
     });
   }
 
@@ -4361,6 +4482,7 @@
       delete soloStarting[cardId];
       if (!r || !r.ok) {
         setHint(launchError(r));
+        appendLog(id, "pause", launchError(r) + " (one-card run #" + c.num + ")", { card: c.num });
         render();
         return;
       }
@@ -4376,6 +4498,7 @@
         } }]);
       }
       addSolo(id, r.threadId, { card: c.num, at: now });
+      appendLog(id, "solo", "One-card run started on #" + c.num + " " + str(c.title).slice(0, 80), { card: c.num, thread: r.threadId });
       setHint(name + " started on #" + c.num + ".");
       render();
     });
@@ -4434,6 +4557,7 @@
               return;
             }
             patchSolo(id, tid, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
+            appendLog(id, "limit", "One-card run #" + run.card + " out of plan usage until " + limitTime(Number(turn.limitResetsAt)) + " (wait " + waits + " of " + MAX_LIMIT_WAITS + ")", { card: run.card, thread: tid });
             return;
           }
           return mergeSolo(id, tid);
@@ -4450,6 +4574,8 @@
     scribe.update([{ op: "merge", path: "settings/workers/" + id + "/solo/" + threadId, value: patch }]);
   }
   function forgetSolo(id, threadId, error) {
+    var run = soloRuns(worker(id))[threadId] || {};
+    if (error) appendLog(id, "pause", error, { card: run.card, thread: threadId });
     var left = Object.keys(soloRuns(worker(id))).filter(function (k) { return k !== threadId; });
     if (!left.length) patchWorker(id, error ? { solo: null, error: error } : { solo: null });
     else {
@@ -4474,10 +4600,12 @@
         }
         var backoff = Math.min(RESUME_RETRY_MS * Math.pow(2, tries - 1), 8 * 60 * 1000);
         patchSolo(id, threadId, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
+        appendLog(id, "resume", "Could not resume one-card run yet (" + why + "); try " + tries + " of " + MAX_RESUME_TRIES, { card: cur.card, thread: threadId });
         return;
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
       patchSolo(id, threadId, { step: null, wait: { count: Number(run.wait && run.wait.count) || 1 } });
+      appendLog(id, "resume", "Sent the one-card run on after its usage limit reset", { card: run.card, thread: threadId });
     });
   }
   function mergeSolo(id, threadId) {
@@ -4488,6 +4616,10 @@
     }
     return scribe.agent.merge(threadId).then(function (m) {
       if (m && (m.ok || m.error === "not_found")) {
+        var cardNum = runs[threadId] && runs[threadId].card;
+        appendLog(id, "merge", m.ok
+          ? ("Merged one-card run" + (cardNum ? " #" + cardNum : ""))
+          : "No worktree to merge for the one-card run (chat gone)", { card: cardNum, thread: threadId });
         forgetSolo(id, threadId, null);
         return;
       }
@@ -4504,10 +4636,13 @@
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
   function endRun(id, error, clearThread) {
     var w = worker(id);
+    var extra = { card: w && w.run && w.run.card, thread: w && w.threadId };
     var patch = { run: null, step: null, stop: null, error: error || null, merge: null, wait: null, fix: null };
     if (clearThread) patch.threadId = null;
     else if (w && w.threadId) patch.merge = w.threadId;
     patchWorker(id, patch);
+    if (error) appendLog(id, "pause", error, extra);
+    else appendLog(id, "stop", "Stopped", extra);
   }
 
   function launchWorker(id) {
@@ -4515,6 +4650,7 @@
     if (!workerReady(w) || !hasWorkerApi()) { openWorkersPanel(id); return; }
     launching[id] = true;
     delete workerErrors[id];
+    appendLog(id, "start", "Started");
     render();
     stepWorker(id, true);
   }
@@ -4553,6 +4689,7 @@
     if (w) {
       patchWorker(stopWorkerId, { stop: true });
       scribe.signal("worker_stop", { worker: workerName(w), workerId: stopWorkerId });
+      appendLog(stopWorkerId, "stop", "Stop requested after this card", { card: w.run && w.run.card, thread: w.threadId });
     }
     closeStop();
     render();
@@ -4567,7 +4704,10 @@
     render();
     if (!threadId) return;
     scribe.agent.stop(threadId).then(function (r) {
-      if (!r || !r.ok) workerErrors[id] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
+      if (!r || !r.ok) {
+        workerErrors[id] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
+        appendLog(id, "pause", workerErrors[id], { thread: threadId });
+      }
       render();
     });
   });
@@ -4722,6 +4862,9 @@
   function renderWorkersPanel() {
     if (workersPop.classList.contains("hidden")) return;
     var scroll = workersPop.scrollTop;
+    var logListEl = workersPop.querySelector(".wp-log-list");
+    var logScroll = logListEl ? logListEl.scrollTop : 0;
+    var logStick = !logListEl || (logListEl.scrollHeight - logListEl.scrollTop - logListEl.clientHeight < 48);
     var keep = panelEditor && panelEditor.contains(document.activeElement) ? document.activeElement : null;
     workersPop.replaceChildren();
     var head = el("div", "wp-head");
@@ -4791,6 +4934,7 @@
         workersPop.appendChild(panelEditor);
       }
     });
+    if (workersLogOpen) workersPop.appendChild(buildWorkerLog());
     var foot = el("div", "wp-foot");
     var add = el("button", "add", "+ Add worker");
     add.type = "button";
@@ -4802,7 +4946,17 @@
       var name = workersPop.querySelector(".wedit input");
       if (name) { name.focus(); name.select(); }
     });
-    foot.appendChild(add);
+    var left = el("span", "wp-foot-left");
+    left.appendChild(add);
+    var logTog = el("button", "log-tog" + (workersLogOpen ? " on" : ""), "Log");
+    logTog.type = "button";
+    logTog.title = "Starts, pauses, merges, and usage-limit waits — kept on the board, not in Keeper";
+    logTog.addEventListener("click", function () {
+      workersLogOpen = !workersLogOpen;
+      renderWorkersPanel();
+    });
+    left.appendChild(logTog);
+    foot.appendChild(left);
     var maxWrap = el("label", "wp-max", "Max parallel ");
     var maxSel = el("select", "field");
     maxSel.setAttribute("aria-label", "Max parallel workers");
@@ -4825,6 +4979,8 @@
     foot.appendChild(maxWrap);
     workersPop.appendChild(foot);
     workersPop.scrollTop = scroll;
+    var newLog = workersPop.querySelector(".wp-log-list");
+    if (newLog) newLog.scrollTop = logStick ? newLog.scrollHeight : logScroll;
     if (keep && document.activeElement !== keep && document.contains(keep)) keep.focus();
   }
   workersBtn.addEventListener("click", function (e) {
