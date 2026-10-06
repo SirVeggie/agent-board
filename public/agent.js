@@ -1474,10 +1474,26 @@
       this.composer = this.buildComposer();
       if (variant !== "dock") this.root.append(this.header);
       this.root.append(this.scroll, this.composer);
+      this.stick = true;
+      this.stickAnim = 0;
+      this.stickLock = false;
       this.scroll.addEventListener("scroll", () => {
+        // Programmatic easing fires scroll asynchronously; treat those as still stuck.
+        if (this.stickLock || this.stickAnim) return;
         this.stick = this.scroll.scrollHeight - this.scroll.scrollTop - this.scroll.clientHeight < 80;
       });
-      this.stick = true;
+      const releaseStick = () => {
+        this.stopStickAnim();
+        const el = this.scroll;
+        if (el.scrollHeight - el.scrollTop - el.clientHeight >= 80) this.stick = false;
+      };
+      this.scroll.addEventListener("wheel", releaseStick, { passive: true });
+      this.scroll.addEventListener("touchstart", releaseStick, { passive: true });
+      this.scroll.addEventListener("pointerdown", releaseStick);
+      this.stickRo = new ResizeObserver(() => {
+        if (this.stick) this.scrollToEnd();
+      });
+      this.stickRo.observe(this.transcript);
       this.root.addEventListener("click", (event) => onLinkClick(event));
     }
 
@@ -2074,7 +2090,7 @@
         this.transcript.append(this.renderGroup(group));
       }
       this.markLatest();
-      this.scrollToEnd();
+      this.scrollToEnd(true);
     }
 
     emptyState() {
@@ -3014,11 +3030,54 @@
       if (stick) this.scrollToEnd();
     }
 
-    scrollToEnd() {
-      requestAnimationFrame(() => {
-        this.scroll.scrollTop = this.scroll.scrollHeight;
-        this.stick = true;
-      });
+    /** Snap when opening a thread or for tiny growth; ease larger blocks so queued rows don't jump. */
+    scrollToEnd(instant) {
+      const el = this.scroll;
+      if (!el) return;
+      this.stick = true;
+      const max = () => Math.max(0, el.scrollHeight - el.clientHeight);
+      const remain = max() - el.scrollTop;
+      const reduce = instant || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+      if (reduce || remain < 16) {
+        this.stopStickAnim();
+        this.jumpScroll(max());
+        return;
+      }
+      if (this.stickAnim) return;
+      const tick = () => {
+        if (!this.stick) {
+          this.stickAnim = 0;
+          return;
+        }
+        const target = max();
+        const cur = el.scrollTop;
+        const gap = target - cur;
+        if (gap <= 0.5) {
+          this.jumpScroll(target);
+          this.stickAnim = 0;
+          return;
+        }
+        this.jumpScroll(cur + Math.max(1, gap * 0.22));
+        if (el.scrollTop === cur) {
+          this.jumpScroll(target);
+          this.stickAnim = 0;
+          return;
+        }
+        this.stickAnim = requestAnimationFrame(tick);
+      };
+      this.stickAnim = requestAnimationFrame(tick);
+    }
+
+    jumpScroll(top) {
+      this.stickLock = true;
+      this.scroll.scrollTop = top;
+      this.stickLock = false;
+    }
+
+    stopStickAnim() {
+      if (!this.stickAnim) return;
+      cancelAnimationFrame(this.stickAnim);
+      this.stickAnim = 0;
     }
 
     /* ----- composer ----- */
