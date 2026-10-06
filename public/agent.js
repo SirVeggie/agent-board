@@ -3323,14 +3323,43 @@
       }
     }
 
+    /**
+     * Size the composer to its text without collapsing it to one line first.
+     * height:auto on the live field shrinks the flex chat, which grows the transcript
+     * pane and clamps scrollTop; stick-to-bottom then springs back from that snap.
+     */
     autosize() {
-      const el = this.input;
+      const node = this.input;
+      if (!node) return;
       const max = this.variant === "full" ? 320 : 220;
-      el.style.overflowY = "hidden";
-      el.style.height = "auto";
-      const needed = el.scrollHeight;
-      el.style.height = `${Math.min(max, needed)}px`;
-      if (needed > max) el.style.overflowY = "auto";
+      const sizer = this.inputSizer?.isConnected ? this.inputSizer : (this.inputSizer = this.makeInputSizer());
+      const width = node.offsetWidth;
+      if (width) sizer.style.width = `${width}px`;
+      sizer.value = node.value;
+      const needed = sizer.scrollHeight;
+      const next = `${Math.min(max, needed)}px`;
+      node.style.overflowY = needed > max ? "auto" : "hidden";
+      if (node.style.height === next) return;
+      const pinned = this.stick;
+      node.style.height = next;
+      if (pinned) this.jumpScroll(Math.max(0, this.scroll.scrollHeight - this.scroll.clientHeight));
+    }
+
+    makeInputSizer() {
+      const sizer = el("textarea", this.input.className);
+      sizer.rows = 1;
+      sizer.tabIndex = -1;
+      sizer.ariaHidden = "true";
+      sizer.style.position = "absolute";
+      sizer.style.left = "0";
+      sizer.style.top = "0";
+      sizer.style.height = "auto";
+      sizer.style.maxHeight = "none";
+      sizer.style.overflow = "hidden";
+      sizer.style.visibility = "hidden";
+      sizer.style.pointerEvents = "none";
+      this.input.parentElement.append(sizer);
+      return sizer;
     }
 
     renderContext() {
