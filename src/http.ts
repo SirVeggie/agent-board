@@ -838,21 +838,22 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  // Close/delete results list ids this call affected. Do not include closedCount
+  // (Library-wide closed pages): agents read it as "this call closed N tabs".
   app.delete("/api/tabs/:id", (req, res) => {
-    const viewer = viewerOf(req);
     try {
       const permanent = req.query.permanent === "true" || req.query.permanent === "1";
       if (permanent) {
         const tab = store.deletePermanent(req.params.id);
-        res.json({ deleted: [tab.id], closedCount: store.closedCount(viewer) });
+        res.json({ deleted: [tab.id] });
         return;
       }
       const tab = store.closeTab(req.params.id);
       if (store.isClosed(tab.id)) {
-        res.json({ closed: [tab.id], closedCount: store.closedCount(viewer) });
+        res.json({ closed: [tab.id] });
         return;
       }
-      res.json({ deleted: [tab.id], closedCount: store.closedCount(viewer) });
+      res.json({ deleted: [tab.id] });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
@@ -865,11 +866,11 @@ export async function startHttp(): Promise<http.Server> {
     if (permanent) {
       const ids = store.list(viewer).filter((tab) => filter === "all" || !tab.pinned).map((tab) => tab.id);
       const deleted = store.deleteMany(ids).map((tab) => tab.id);
-      res.json({ deleted, closedCount: store.closedCount(viewer) });
+      res.json({ deleted });
       return;
     }
     const closed = store.closeMany(filter, viewer);
-    res.json({ closed, closedCount: store.closedCount(viewer) });
+    res.json({ closed });
   });
 
   app.get("/api/folders", (_req, res) => {

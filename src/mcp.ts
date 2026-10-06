@@ -1079,7 +1079,7 @@ export async function startMcp(): Promise<void> {
 
   server.tool(
     "page_close",
-    "Close Scribe tabs (same as the UI close button). The pages stay in the Library and can be reopened with page_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one).",
+    "Close Scribe tabs (same as the UI close button). The pages stay in the Library and can be reopened with page_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one). Returns { closed: [ids] } or { deleted: [ids] } for the tabs this call closed or deleted — not the Library-wide closed-page count (that is page_list's closedCount).",
     {
       id: z.string().optional().describe("Tab id to close or delete."),
       key: z.string().optional().describe("Tab key to close or delete."),
@@ -1100,7 +1100,7 @@ export async function startMcp(): Promise<void> {
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }
-        return jsonResult(data);
+        return jsonResult(pageClosePayload(data));
       }
       const which = id || key;
       if (!which) {
@@ -1111,7 +1111,7 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      return jsonResult(data);
+      return jsonResult(pageClosePayload(data));
     }
   );
 
@@ -1772,6 +1772,19 @@ function jsonResult(value: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
   };
+}
+
+/** Ids this call closed or deleted — never the Library-wide closed-page count. */
+export function pageClosePayload(data: unknown): { closed?: string[]; deleted?: string[] } {
+  const payload = data as { closed?: unknown; deleted?: unknown };
+  const out: { closed?: string[]; deleted?: string[] } = {};
+  if (Array.isArray(payload.closed)) {
+    out.closed = payload.closed.filter((id): id is string => typeof id === "string");
+  }
+  if (Array.isArray(payload.deleted)) {
+    out.deleted = payload.deleted.filter((id): id is string => typeof id === "string");
+  }
+  return out;
 }
 
 /**
