@@ -5435,6 +5435,7 @@
   /**
    * Hover the island orb or the top-bar agent button: waiting, running and unread threads,
    * plus recently checked ones (dim, no status dot) for five minutes.
+   * Right-click opens the same list at once, without the hover delay.
    * The anchor, the panel and its peek are one hover group, so the pointer can move onto the list.
    */
   const flyout = {
@@ -5447,6 +5448,12 @@
     peekTimer: 0,
     peekId: null,
     bind(anchor, from) {
+      const showNow = () => {
+        clearTimeout(this.hideTimer);
+        clearTimeout(this.showTimer);
+        if (this.node && this.anchor === anchor) return;
+        this.open(anchor, from);
+      };
       anchor.addEventListener("pointerenter", (event) => {
         if (event.pointerType !== "mouse" || event.buttons) return;
         clearTimeout(this.hideTimer);
@@ -5458,10 +5465,20 @@
         clearTimeout(this.showTimer);
         this.hideSoon();
       });
-      // A click keeps its own job (model menu, sidebar).
-      anchor.addEventListener("pointerdown", () => {
+      // A left click keeps its own job (model menu, sidebar). Right-click opens the list at once.
+      anchor.addEventListener("pointerdown", (event) => {
+        if (event.button === 2) {
+          showNow();
+          return;
+        }
+        if (event.button !== 0) return;
         clearTimeout(this.showTimer);
         this.close();
+      });
+      anchor.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showNow();
       });
     },
     hold(node) {
