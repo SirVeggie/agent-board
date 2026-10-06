@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +46,18 @@ import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
+
+/** Languages chat code blocks use that highlight.js's common bundle leaves out. */
+const EXTRA_HIGHLIGHT_LANGUAGES = ["powershell", "dos", "dockerfile"];
+let highlightBundle: string | null = null;
+
+/** highlight.js's common bundle plus the extra grammars, which register themselves on the global hljs. */
+function highlightScript(): string {
+  const root = path.join(publicDir, "..", "node_modules", "@highlightjs", "cdn-assets");
+  const parts = [fs.readFileSync(path.join(root, "highlight.min.js"), "utf8")];
+  for (const lang of EXTRA_HIGHLIGHT_LANGUAGES) parts.push(fs.readFileSync(path.join(root, "languages", `${lang}.min.js`), "utf8"));
+  return parts.join("\n;\n");
+}
 const startedAt = Date.now();
 const sockets = new Set<WebSocket>();
 const viewers = new ViewerHub();
@@ -102,6 +115,10 @@ export async function startHttp(): Promise<http.Server> {
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js")));
   app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js")));
+  app.get("/vendor/highlight.js", (_req, res) => {
+    highlightBundle ??= highlightScript();
+    res.type("application/javascript").send(highlightBundle);
+  });
   app.use(express.json({ limit: "6mb" }));
   app.use(noteAgentSession);
   app.use(express.static(publicDir));

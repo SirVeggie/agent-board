@@ -223,20 +223,63 @@
         /* resolve is best effort */
       }
     }
-    for (const pre of root.querySelectorAll("pre")) {
-      const copy = button(icon("copy"), "ag-copy", () => {
-        navigator.clipboard?.writeText(pre.innerText).then(() => {
-          copy.classList.add("done");
-          setTimeout(() => copy.classList.remove("done"), 1200);
-        });
-      }, "Copy");
-      pre.append(copy);
-    }
+    for (const pre of root.querySelectorAll("pre")) codeBlock(pre);
     for (const table of root.querySelectorAll("table")) {
       const wrap = el("div", "ag-table-wrap");
       table.replaceWith(wrap);
       wrap.append(table);
     }
+  }
+
+  /**
+   * A fence's info string: a language (```ts), or Cursor's code reference (```12:40:src/app.ts), whose
+   * language comes from the file's extension.
+   */
+  function fenceInfo(code) {
+    const cls = [...(code?.classList || [])].find((c) => c.startsWith("language-"));
+    const info = cls ? cls.slice(9) : "";
+    const ref = /^\d+:\d+:(.+)$/.exec(info);
+    if (ref) {
+      const file = ref[1];
+      const ext = /\.([\w+-]+)$/.exec(file)?.[1] || "";
+      return { lang: ext.toLowerCase(), label: basename(file), title: file };
+    }
+    return { lang: info.toLowerCase(), label: "", title: "" };
+  }
+
+  function codeBlock(pre) {
+    const code = pre.querySelector("code");
+    const { lang, label, title } = fenceInfo(code);
+    const hljs = window.hljs;
+    const grammar = lang && hljs?.getLanguage(lang);
+    const text = (code || pre).textContent.replace(/\n$/, "");
+    if (grammar && code) {
+      try {
+        code.innerHTML = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+        code.classList.add("hljs");
+      } catch {
+        /* unhighlighted is fine */
+      }
+    }
+    const block = el("div", "ag-code");
+    const head = el("div", "ag-code-head");
+    const name = el("span", "ag-code-lang", label || grammar?.name || lang || "Text");
+    if (title) name.title = title;
+    const copyLabel = el("span", "ag-copy-label", "Copy");
+    const copy = button(icon("copy"), "ag-copy", () => {
+      navigator.clipboard?.writeText(text).then(() => {
+        copy.classList.add("done");
+        copyLabel.textContent = "Copied";
+        setTimeout(() => {
+          copy.classList.remove("done");
+          copyLabel.textContent = "Copy";
+        }, 1200);
+      });
+    }, "Copy to clipboard");
+    copy.append(copyLabel);
+    head.append(name, copy);
+    pre.replaceWith(block);
+    block.append(head, pre);
   }
 
   /* ---------- diffs ---------- */
