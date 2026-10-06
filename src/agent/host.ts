@@ -1270,15 +1270,23 @@ export class AgentHost {
    * Hand the first queued message to the running turn, which takes it in at its next step. When a
    * steered message is already waiting, or the provider cannot steer, send it now instead.
    */
-  async steer(threadId: string): Promise<{ steered: boolean }> {
+  async steer(threadId: string, itemId?: string): Promise<{ steered: boolean }> {
     const run = this.runs.get(threadId);
-    const queue = this.queues.get(threadId);
     const session = this.sessions.get(threadId);
     if (!run) throw new Error("No turn is running");
+    if (itemId) {
+      const waiting = this.loadItems(threadId).find((it) => it.id === itemId && it.kind === "user" && it.steer === "waiting");
+      if (waiting) {
+        await this.sendNow(threadId);
+        return { steered: false };
+      }
+      if (!this.preferQueued(threadId, itemId)) throw new Error("That message is not queued");
+    }
     if (run.steer || !session?.steer) {
       await this.sendNow(threadId);
       return { steered: false };
     }
+    const queue = this.queues.get(threadId);
     if (!queue?.length) throw new Error("Nothing is queued");
     this.steerFirst(threadId);
     return { steered: true };
@@ -1303,6 +1311,19 @@ export class AgentHost {
     // Steer only when it is the one queued message: steering takes the queue's first.
     if (!card.resume && this.queues.get(threadId)?.length === 1 && this.steerFirst(threadId)) return { delivered: "steered" };
     return { delivered: "queued" };
+  }
+
+  /** Put this queued item first so steer / send-now acts on it. */
+  private preferQueued(threadId: string, itemId: string): boolean {
+    const items = this.queuedItems(threadId);
+    const i = items.findIndex((it) => it.id === itemId);
+    const queue = this.queues.get(threadId);
+    if (i < 0 || !queue || i >= queue.length) return false;
+    if (i > 0) {
+      const [msg] = queue.splice(i, 1);
+      queue.unshift(msg);
+    }
+    return true;
   }
 
   /** Hand the first queued message to the running turn. False when there is nothing to hand, or the provider cannot take it now. */
@@ -1377,8 +1398,14 @@ export class AgentHost {
    * Stop the running turn and run the waiting steered message, or else the first queued one, as the
    * next turn. Unlike cancel, the rest of the queue stays.
    */
-  async sendNow(threadId: string): Promise<void> {
+  async sendNow(threadId: string, itemId?: string): Promise<void> {
     const run = this.runs.get(threadId);
+    if (itemId) {
+      const waiting = this.loadItems(threadId).find((it) => it.kind === "user" && it.steer === "waiting");
+      if (waiting) {
+        if (waiting.id !== itemId) return;
+      } else if (!this.preferQueued(threadId, itemId)) return;
+    }
     if (!run || (!run.steer && !this.queues.get(threadId)?.length)) return;
     await this.cancel(threadId, { keepQueue: true });
   }

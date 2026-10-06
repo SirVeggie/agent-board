@@ -443,9 +443,51 @@ button.ag-tip {
 .ag-queued {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   font-size: 11px;
   color: var(--muted);
+}
+
+button.ag-queued-act {
+  height: auto;
+  padding: 0;
+  border-radius: 0;
+  gap: 4px;
+  flex-shrink: 0;
+  align-self: start;
+  white-space: nowrap;
+  font-size: inherit;
+  font-weight: 500;
+  color: var(--muted);
+  background: none;
+  box-shadow: none;
+}
+
+button.ag-queued-act .ag-ico,
+button.ag-queued-act .ag-ico svg {
+  width: 12px;
+  height: 12px;
+}
+
+@media (hover: hover) {
+  button.ag-queued-act {
+    opacity: 0;
+    pointer-events: none;
+    transition: color 0.12s ease, opacity 0.12s ease;
+  }
+
+  .ag-user:hover > .ag-queued button.ag-queued-act,
+  .ag-user:focus-within > .ag-queued button.ag-queued-act {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+button.ag-queued-act:hover,
+button.ag-queued-act:focus-visible {
+  color: var(--accent);
+  background: transparent;
+  box-shadow: none;
 }
 
 .ag-chips {
@@ -2602,17 +2644,21 @@ button.ag-row.unread .ag-row-title {
   background: var(--accent);
 }
 
-/* In the status dot's place: the thread has an unsent message. */
+/* Draft marker in the status-dot column: sized for the title, not the 8px / 6px dots. */
 .ag-row-pen {
-  width: 8px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   display: inline-flex;
+  align-items: center;
   justify-content: center;
   color: var(--muted);
 }
 
-.ag-list.compact .ag-row-pen {
-  width: 6px;
+.ag-row-pen svg {
+  width: 14px;
+  height: 14px;
+  display: block;
 }
 
 button.ag-row.on .ag-row-pen {

@@ -277,7 +277,14 @@ export function agentRouter(host: AgentHost): express.Router {
   router.post("/threads/:id/tasks/:itemId/background", wrap((req) => host.backgroundTask(req.params.id, req.params.itemId)));
 
   // Enter on an empty composer while a turn runs: steer the first queued message in (again: send it now).
-  router.post("/threads/:id/steer", wrap((req) => host.steer(req.params.id)));
+  router.post(
+    "/threads/:id/steer",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const itemId = typeof body.itemId === "string" && body.itemId ? body.itemId : undefined;
+      return host.steer(req.params.id, itemId);
+    })
+  );
 
   // Up on an empty composer: take the latest queued (or waiting steered) message back for editing.
   router.post("/threads/:id/withdraw", wrap((req) => host.withdraw(req.params.id)));
@@ -285,7 +292,9 @@ export function agentRouter(host: AgentHost): express.Router {
   router.post(
     "/threads/:id/send-now",
     wrap(async (req) => {
-      await host.sendNow(req.params.id);
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const itemId = typeof body.itemId === "string" && body.itemId ? body.itemId : undefined;
+      await host.sendNow(req.params.id, itemId);
       return { ok: true };
     })
   );

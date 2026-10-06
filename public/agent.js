@@ -14,6 +14,7 @@
     button: "scribe.agent.showButton",
     dockStyle: "scribe.agent.dockStyle",
     emptyEnter: "scribe.agent.emptyEnter",
+    sendKey: "scribe.agent.sendKey",
     tips: "scribe.agent.showTips",
     hidePage: "scribe.agent.hidePageThreads",
     compact: "scribe.agent.compactThreads",
@@ -35,6 +36,12 @@
     { id: "send", label: "Send now" },
   ];
 
+  /** Plain Enter sends, or only Ctrl+Enter. Shift+Enter is always a new line; Ctrl+Enter always sends. */
+  const SEND_KEY = [
+    { id: "enter", label: "Enter" },
+    { id: "mod", label: "Ctrl+Enter" },
+  ];
+
   /** The thread list shows only each thread's title and status dot (Agent settings). */
   function compactThreads() {
     return localStorage.getItem(LS.compact) === "1";
@@ -42,6 +49,33 @@
 
   function emptyEnter() {
     return localStorage.getItem(LS.emptyEnter) === "send" ? "send" : "steer";
+  }
+
+  /** Empty Enter acts on the waiting steered message, else the first queued one. */
+  function emptyEnterTarget(threadId) {
+    const items = S.details.get(threadId)?.items || [];
+    const waiting = items.find((it) => it.kind === "user" && it.steer === "waiting");
+    if (waiting) return { id: waiting.id, action: "send-now" };
+    const queued = items.find((it) => it.kind === "user" && it.turnId == null && !it.dropped && !it.steer);
+    if (queued) return { id: queued.id, action: emptyEnter() === "send" ? "send-now" : "steer" };
+    return null;
+  }
+
+  /** What the hover button on this queued or waiting message does. None while another is already steering. */
+  function queuedItemAction(threadId, item) {
+    if (item.steer === "waiting") return "send-now";
+    if (item.steer || item.dropped || item.turnId) return null;
+    const items = S.details.get(threadId)?.items || [];
+    if (items.some((it) => it.kind === "user" && it.steer === "waiting")) return null;
+    return emptyEnter() === "send" ? "send-now" : "steer";
+  }
+
+  function sendKey() {
+    return localStorage.getItem(LS.sendKey) === "mod" ? "mod" : "enter";
+  }
+
+  function composerSendHint() {
+    return sendKey() === "mod" ? "Ctrl+Enter to send · Shift+Enter for a new line" : "Enter to send · Shift+Enter for a new line";
   }
 
   function approvalFor(provider, p = prefs()) {
@@ -1715,7 +1749,7 @@
       if (t && S.browsers.has(t.id)) acts.append(button(icon("browser"), "ag-icon-btn", () => openBrowser(t.id), "Agent browser: watch it, click and type into it"));
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
       acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings"));
-      acts.append(button(icon("plus"), "ag-icon-btn", (event) => newThreadMenu(event.currentTarget, this), "New thread"));
+      acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread with this chat's settings (Ctrl+Shift+K)"));
       if (this.variant === "side") {
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L, or Ctrl+Up from the chat)"));
         acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)"));
@@ -2253,12 +2287,17 @@
       if (actions.childElementCount) row.append(actions);
       if (item.steer === "waiting") {
         row.classList.add("steering");
-        row.append(el("div", "ag-queued", "Steering — waiting for a safe stop · Enter again to send it now"));
+        const target = emptyEnterTarget(this.threadId);
+        const text = target?.id === item.id ? "Steering — waiting for a safe stop · Enter again to send it now" : "Steering — waiting for a safe stop";
+        row.append(this.queuedHint(item, text, queuedItemAction(this.threadId, item)));
       } else if (item.steer === "folded") {
         row.classList.add("steered");
         row.append(el("div", "ag-queued", "Steered in"));
       } else if (queued) {
-        row.append(el("div", "ag-queued", `Queued · Enter again ${emptyEnter() === "send" ? "sends it now" : "steers it in"}`));
+        const target = emptyEnterTarget(this.threadId);
+        const send = emptyEnter() === "send";
+        const text = target?.id === item.id ? `Queued · Enter again ${send ? "sends it now" : "steers it in"}` : "Queued";
+        row.append(this.queuedHint(item, text, queuedItemAction(this.threadId, item)));
       }
       if (item.dropped) {
         row.classList.add("dropped");
@@ -2271,6 +2310,23 @@
         row.append(again);
       }
       return row;
+    }
+
+    queuedHint(item, text, action) {
+      const hint = el("div", "ag-queued");
+      hint.append(el("span", null, text));
+      if (action) {
+        const send = action === "send-now";
+        const btn = button(
+          "",
+          "ag-queued-act",
+          () => this.queueAction(action, item.id),
+          send ? "Stop the turn and send this message now" : "Hand this message to the running turn"
+        );
+        btn.append(icon(send ? "send" : "steer"), el("span", null, send ? "Send now" : "Steer"));
+        hint.append(btn);
+      }
+      return hint;
     }
 
     renderItem(it, byParent, turn) {
@@ -2973,7 +3029,7 @@
       this.input = el("textarea", "ag-textarea");
       this.input.rows = 1;
       this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
-      this.input.title = "Enter to send · @ mentions a page, folder or file · / for commands";
+      this.input.title = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
       this.input.addEventListener("input", () => {
         this.autosize();
         this.updatePicker();
@@ -3298,7 +3354,8 @@
       if (running) {
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
       }
-      tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : "Send (Enter)"));
+      this.input.title = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
+      tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)"));
     }
 
     /**
@@ -3447,7 +3504,7 @@
           items[next]?.scrollIntoView({ block: "nearest" });
           return;
         }
-        if (event.key === "Enter" || event.key === "Tab") {
+        if ((event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) || event.key === "Tab") {
           if (items.length) {
             event.preventDefault();
             (items[at >= 0 ? at : 0]).click();
@@ -3465,10 +3522,14 @@
           return;
         }
       }
+      // Shift+Enter always inserts a line. Ctrl+Enter always sends. Plain Enter follows Chat settings.
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        if (!this.input.value.trim() && !this.attachments.length && !this.mentions.length && this.pushQueued()) return;
-        this.send();
+        const mod = event.ctrlKey || event.metaKey;
+        if (mod || sendKey() === "enter") {
+          event.preventDefault();
+          if (!this.input.value.trim() && !this.attachments.length && !this.mentions.length && this.pushQueued()) return;
+          this.send();
+        }
         return;
       }
       if (event.key === "ArrowUp" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !this.input.value && !this.attachments.length && !this.mentions.length && this.withdrawQueued()) {
@@ -3723,11 +3784,16 @@
     pushQueued() {
       const t = this.thread();
       if (!t || t.status === "idle") return false;
-      const steering = (S.details.get(t.id)?.items || []).some((it) => it.kind === "user" && it.steer === "waiting");
-      if (!t.queued && !steering) return false;
-      const action = steering || emptyEnter() === "send" ? "send-now" : "steer";
-      api("POST", `/threads/${encodeURIComponent(t.id)}/${action}`).catch((err) => notice(err.message));
+      const target = emptyEnterTarget(t.id);
+      if (!target) return false;
+      this.queueAction(target.action, target.id);
       return true;
+    }
+
+    queueAction(action, itemId) {
+      const t = this.thread();
+      if (!t) return;
+      api("POST", `/threads/${encodeURIComponent(t.id)}/${action}`, { itemId }).catch((err) => notice(err.message));
     }
 
     /** Up on an empty composer: take the latest queued or waiting steered message back into the input. */
@@ -4238,7 +4304,7 @@
     }
     const newBtn = button("", "ag-btn small primary ag-new", (event) => onNew(event.currentTarget));
     newBtn.append(icon("plus"), el("span", null, "New"));
-    // Toolbox row above the threads: list toggles that change which rows show.
+    // Toolbox row above the threads: list toggles that change which rows show, or how.
     const tools = el("div", "ag-list-tools");
     const workers = button("", "ag-switch-btn", () => {
       S.hidePageThreads = !S.hidePageThreads;
@@ -4249,7 +4315,14 @@
     workers.setAttribute("role", "switch");
     workers.setAttribute("aria-checked", String(!S.hidePageThreads));
     workers.append(el("span", "ag-switch"), el("span", null, "Show workers"));
-    tools.append(workers);
+    const compact = button("", "ag-switch-btn", () => {
+      localStorage.setItem(LS.compact, compactThreads() ? "0" : "1");
+      renderLists();
+    }, "Each thread shows only its title and status, in a smaller font with less spacing");
+    compact.setAttribute("role", "switch");
+    compact.setAttribute("aria-checked", String(compactThreads()));
+    compact.append(el("span", "ag-switch"), el("span", null, "Compact"));
+    tools.append(workers, compact);
     top.append(search, seg, newBtn, tools);
     const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
     container.append(top, list);
@@ -5932,6 +6005,9 @@
     ["Ctrl+'", "Next starred model"],
     ["Ctrl+Alt+'", "Next reasoning level"],
     ["Ctrl+Shift+'", "Next mode"],
+    ["Enter", "Send (or a new line, from Chat settings)"],
+    ["Ctrl+Enter", "Always send"],
+    ["Shift+Enter", "Always a new line"],
     ["Enter on an empty box", "Steer in, or send, the first queued message"],
     ["↑ on an empty box", "Edit the last queued message"],
     ["Esc Esc", "Stop the agent"],
@@ -6329,6 +6405,17 @@
           id: "ag-summarizer-label",
           title: "A fork that starts a new session (another provider) gets the earlier thread's first and last messages, and a summary of the rest written by this model. A small, fast model is enough.",
         }),
+        settingRow(
+          "Send messages with",
+          choiceTrack(SEND_KEY, sendKey, (id) => {
+            localStorage.setItem(LS.sendKey, id);
+            for (const view of views()) view.renderComposerBar();
+          }),
+          {
+            id: "ag-send-key-label",
+            title: "Shift+Enter always inserts a line break. Ctrl+Enter always sends.",
+          }
+        ),
         settingRow(
           "Enter on an empty box sends a queued message",
           choiceTrack(EMPTY_ENTER, emptyEnter, (id) => {
@@ -7052,10 +7139,11 @@
     };
   }
 
-  function newThread() {
-    const where = shortcutChat();
-    const view = where === "dock" ? dock.view : where === "full" ? full.view : sidebar.view;
-    const scope = defaultScope();
+  function newThread(fromView) {
+    const where = fromView ? (fromView.variant === "full" ? "full" : fromView.variant === "dock" ? "dock" : "side") : shortcutChat();
+    const view = fromView || (where === "dock" ? dock.view : where === "full" ? full.view : sidebar.view);
+    const cur = view.settings();
+    const scope = { kind: cur.scope.kind, ref: cur.scope.ref };
     const settings = inheritSettings(view);
     if (where === "dock") {
       if (scope.kind === "page") S.dockPicks.delete(scope.ref);

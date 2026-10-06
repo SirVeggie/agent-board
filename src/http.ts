@@ -47,15 +47,26 @@ import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
-/** Languages chat code blocks use that highlight.js's common bundle leaves out. */
-const EXTRA_HIGHLIGHT_LANGUAGES = ["powershell", "dos", "dockerfile"];
+/**
+ * Grammars chat fences often use that highlight.js's common bundle leaves out (js, ts, python,
+ * rust, go, json, bash, html, … are already in highlight.min.js).
+ */
+const EXTRA_HIGHLIGHT_LANGUAGES = [
+  "apache", "armasm", "awk", "clojure", "cmake", "coffeescript", "crystal", "d", "dart", "delphi",
+  "dockerfile", "dos", "elixir", "elm", "erlang", "fortran", "fsharp", "gherkin", "glsl", "gradle",
+  "groovy", "handlebars", "haskell", "haxe", "http", "julia", "latex", "lisp", "matlab", "nginx",
+  "nim", "nix", "ocaml", "pgsql", "powershell", "properties", "protobuf", "qml", "reasonml", "scala",
+  "scheme", "thrift", "twig", "vim", "x86asm",
+];
 let highlightBundle: string | null = null;
 
 /** highlight.js's common bundle plus the extra grammars, which register themselves on the global hljs. */
 function highlightScript(): string {
   const root = path.join(publicDir, "..", "node_modules", "@highlightjs", "cdn-assets");
   const parts = [fs.readFileSync(path.join(root, "highlight.min.js"), "utf8")];
-  for (const lang of EXTRA_HIGHLIGHT_LANGUAGES) parts.push(fs.readFileSync(path.join(root, "languages", `${lang}.min.js`), "utf8"));
+  for (const lang of EXTRA_HIGHLIGHT_LANGUAGES) {
+    parts.push(fs.readFileSync(path.join(root, "languages", `${lang}.min.js`), "utf8"));
+  }
   return parts.join("\n;\n");
 }
 const startedAt = Date.now();
@@ -1651,7 +1662,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   next();
 }
 
-const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/agent.js", "/agent.css", "/agent-render.js"]);
+const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/agent.js", "/agent.css", "/agent-render.js", "/vendor/highlight.js"]);
 
 function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (SHELL_PATHS.has(req.path)) {
