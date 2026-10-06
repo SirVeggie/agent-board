@@ -495,8 +495,10 @@ function parseScope(value: unknown): ThreadScope {
   const kind = value.kind;
   if (kind === "workspace" || kind === "folder" || kind === "page") {
     const ref = typeof value.ref === "string" && value.ref ? value.ref : null;
+    // A workspace scope is a thread with no Scribe scope; with no folder it has no workspace either.
+    if (kind === "workspace") return { kind, ref: ref ? path.normalize(ref) : null };
     if (!ref) throw new Error(`${kind} scope needs a ref`);
-    return { kind, ref: kind === "workspace" ? path.normalize(ref) : ref };
+    return { kind, ref };
   }
   return { kind: "global", ref: null };
 }

@@ -91,3 +91,15 @@ test("guidesBlock sends each guide once, naming every page it covers", () => {
 test("pageKeysIn finds scribe: keys without trailing punctuation or repeats", () => {
   assert.deepEqual(pageKeysIn("See [[scribe:agent-todo]] and scribe:Notes.v2. Also scribe:agent-todo, not xscribe:nope."), ["scribe:agent-todo", "scribe:notes.v2"]);
 });
+
+test("threads with no Scribe scope are told they have no page tools", () => {
+  const thread = (over: Partial<Thread>): Thread =>
+    ({ provider: "claude", mode: "board", web: "on", cwd: null, scope: { kind: "workspace", ref: null }, ...over }) as Thread;
+  const none = threadInstructions(thread({}), {});
+  assert.match(none, /no access to Scribe pages/);
+  assert.match(none, /Mode: Chat\./);
+  assert.doesNotMatch(none, /page_show/);
+  const global = threadInstructions(thread({ scope: { kind: "global", ref: null } }), {});
+  assert.match(global, /page_show/);
+  assert.match(global, /Mode: Pages\./);
+});

@@ -107,9 +107,15 @@ const INSTRUCTIONS = [
   "Do not create, edit, or delete templates unless the user asked. Pages from a template come with an agent guide in tool results; follow it.",
 ].join(" ");
 
+const NO_PAGES_INSTRUCTIONS =
+  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread tools to read other threads in its workspace, and the agent browser.";
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
-  const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: INSTRUCTIONS });
+  // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
+  const pages = !(process.env.SCRIBE_THREAD && process.env.SCRIBE_PAGES === "off");
+  const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
+  const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
   const revisions = new SeenRevisions();
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {
@@ -119,7 +125,7 @@ export async function startMcp(): Promise<void> {
     }
   };
 
-  server.tool(
+  pageTool(
     "page_show",
     "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to skip focus and the strip for a new page (created in the Library with a Library blip); an already-open tab stays in the background with an unread blip; an already-closed page stays closed with a Library blip. Use background when creating a page the user will open from a link rather than look at now. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files. Pass a full HTML document or a fragment. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
     {
@@ -231,7 +237,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_patch",
     "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, find the spot with page_grep or a page_read offset/limit window and patch it the same way, or replace a numbered block with startLine/endLine. To build a large new page in parts, page_show the first part and add the rest with append edits. With file tools (Code mode) you can instead check it out with page_read toFile: true, edit that file, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
     {
@@ -362,7 +368,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_list",
     "List or search open tabs only. Omit query to list every open tab (id, key, title, folder, pinned, dates, size) plus activeId and closedCount — not paged. Pass query to search title, key, visible page text, and JSON state (same rules as library_search). Closed pages are never included; if the page is missing and closedCount > 0, call library_search with the same query (it searches every page). Do not invent a key. If library_search is missing, the MCP is stale — tell the user to reload it.",
     {
@@ -422,7 +428,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "library_search",
     "Page or search the Library: every page in Scribe, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context.",
     {
@@ -483,7 +489,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "library_folders",
     "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with the number of pages directly inside it. Use before page_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for library_search. Never create a new folder unless the user asked for one.",
     {},
@@ -501,7 +507,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "scribe_docs",
     "The scribe skill for this Scribe version: rules for building and changing pages, and the page API pages use (window.scribe: state and ops, signals, actions, assets, links, scribe.preview, scribe.agent, permissions). Use it when the scribe skill is not loaded, or to check an API the skill you have does not mention. No topic: overview and table of contents. topic: a heading or part of one (e.g. \"Interactive pages\", \"Waiting\", \"Previewing files\"), \"templates\" for Scribe templates, or \"all\".",
     {
@@ -514,7 +520,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_open",
     "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from library_search. The page stays where it is in the Library.",
     {
@@ -539,7 +545,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_read",
     `Read a page's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB is not returned whole: you get its size, line count and an outline of headings, sections and script/style blocks with line numbers. Then read a line window with offset/limit (numbered like a file read; leave the line-number prefix out of oldStrings), find text with page_grep, and change it with page_patch edits. Pass full: true only when you really need the whole page. With file tools (Code mode), you can instead pass toFile: true: the HTML is written to a temp file and only its path and revision are returned. Edit that file, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file. In Pages mode there are no file tools, so do not check out.`,
     {
@@ -676,7 +682,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_grep",
     "Find text inside one page's HTML, like grep -n on a file. Returns matching lines with their line numbers (`12:` a match, `11-` context, `--` between hunks), so you can page_read a window around them with offset/limit or copy an exact oldString for page_patch. Leave the number prefix out of oldStrings. pattern is a JavaScript regex unless literal is true. Works on open and closed pages. To find which page has something, use library_search instead.",
     {
@@ -727,7 +733,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_screenshot",
     "Capture a screenshot of a page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Pass local to seed scribe.local for this capture only (view switchers, open panels), fromViewer to start from the user's last local, or click a selector after load. Embed-template pages are captured at the embedded URL. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
     {
@@ -821,7 +827,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_state",
     "Read the live state of an interactive page: what the user has actually added, edited, or checked off. Returns the state (or, with path, just that part), stateRevision, and eventCursor (pass it to page_wait to wait for events after this read). Works whether or not the tab is focused, closed, or the browser is open. On a page with large arrays, read one part: path \"cards/num=12\", or path \"cards\" with where. Images on a single card or todo are attached so you can see them; a whole-board read does not inline every cover. Pages with template actions often have a cheaper list action. Do not poll this tool while waiting for the user — use page_wait.",
     {
@@ -870,7 +876,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_wait",
     "Block until the page logs an event (scribe.signal(name, data) or data-scribe-signal in the page; Scribe itself logs some too, like claim_lost), then return the matching events, oldest first, and a cursor. Events carry a small data payload (e.g. { card: \"c_12\" }), not the page's state: read what you need with page_state path or a page action. Pass the returned cursor as after on the next wait so no event is missed or seen twice; without after, only events from now on count. Optional where matches fields on event data (e.g. { column: \"grok issues\" }). Use this instead of polling page_state. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same after. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. missed: true means older events dropped out of the log (it keeps the last 500): scan the page's state instead.",
     {
@@ -947,7 +953,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_update",
     "Change an interactive page's state with ops, without focusing or reopening it. An open page applies them live; an unfocused tab or a closed page shows an unread blip. Ops address items by path, so you send only what changes: merge one card, insert one comment, move one item, set one key. They apply in order, all or nothing (if one fails, nothing changes and the error names it), to the latest state, so you don't need expectedRevision unless your edit depends on a value you read. Replace a whole top-level key with { op: \"set\", path: \"todos\", value: [...] }. When the page's template has actions (its guide lists them), prefer page_action: it applies the page's rules for you. Never write a key the page uses for in-progress typing (by convention, draft). To put a local file into the page's data (an image on a todo item or a card), pass it in assets and write \"asset:<name>\" as the value where its URL belongs.",
     {
@@ -1035,7 +1041,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_action",
     "Run one of the page template's actions, e.g. on a Kanban board: list, get, create, comment, move, claim, finish. Actions apply the page's own rules (timestamps, ordering, numbering, who holds a card) in one atomic step, and read the latest state, so there's nothing to merge or retry. The page's agent guide lists its actions and their arguments; an unknown action name returns the list. Pages without a template (or with a template that has no actions) use page_update. get attaches images on the card or item so you can see them.",
     {
@@ -1057,7 +1063,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "page_pin",
     "Pin an Scribe tab so Clear and close-unpinned keep it. Identify the tab by id or key.",
     {
@@ -1067,7 +1073,7 @@ export async function startMcp(): Promise<void> {
     async ({ id, key }) => pinResult(id || key, true)
   );
 
-  server.tool(
+  pageTool(
     "page_unpin",
     "Unpin an Scribe tab so Clear and close-unpinned can close it. Identify the tab by id or key.",
     {
@@ -1077,7 +1083,7 @@ export async function startMcp(): Promise<void> {
     async ({ id, key }) => pinResult(id || key, false)
   );
 
-  server.tool(
+  pageTool(
     "page_close",
     "Close Scribe tabs (same as the UI close button). The pages stay in the Library and can be reopened with page_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one). Returns { closed: [ids] } or { deleted: [ids] } for the tabs this call closed or deleted — not the Library-wide closed-page count (that is page_list's closedCount).",
     {
@@ -1115,7 +1121,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "template_upsert",
     "Create or update a reusable Scribe template. Only use when the user explicitly asked to create or edit a Scribe template. Built-in templates are read-only: to change one, use a new key (template_get the built-in for its HTML), or update its local copy (localId from template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
     {
@@ -1242,7 +1248,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "template_list",
     "List Scribe templates (no HTML): the user's own under templates, and read-only built-ins that ship with the app under builtins (id builtin:<key>; localId is the user's copy, if any). builtinUpdate on a copy means its built-in changed and the copy was not updated automatically; see the scribe skill's TEMPLATES.md before updating it. Only use when the user asked to work with Scribe templates.",
     {},
@@ -1256,7 +1262,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "template_get",
     "Read a template's HTML, fields, and metadata, including a built-in's. Only use when the user asked to work with Scribe templates.",
     {
@@ -1277,7 +1283,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "template_delete",
     "Delete a template. Pages created from it stay, keep their last HTML, and become ordinary editable pages. Only use when the user asked to delete a Scribe template.",
     {
@@ -1298,7 +1304,7 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  server.tool(
+  pageTool(
     "template_open",
     "Create a pinned page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance. Opening a built-in opens its local copy, creating that copy first if needed.",
     {
@@ -1345,7 +1351,7 @@ export async function startMcp(): Promise<void> {
   // The agent browser and page_ask are for Scribe chat threads only; other MCP clients have their own.
   if (process.env.SCRIBE_THREAD) {
     registerBrowserTools(server);
-    registerAsk(server);
+    if (pages) registerAsk(server);
     registerWebRequest(server);
     registerThreadTools(server);
   }

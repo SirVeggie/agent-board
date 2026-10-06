@@ -20,7 +20,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
-import { isPlainRecord } from "../types.js";
+import { isPlainRecord, noPages } from "../types.js";
 import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
 import { SqliteCursorStore } from "./cursorStore.js";
@@ -366,7 +366,7 @@ export class CursorProvider implements AgentProvider {
 /** A spare is bound to what its agent was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web, thread.approval]);
+  return JSON.stringify([where, thread.mode, thread.web, thread.approval, noPages(thread.scope)]);
 }
 
 /**
@@ -379,7 +379,9 @@ class BoardTools {
 
   constructor(
     private spec: SessionContext["boardMcp"],
-    readonly threadId: string
+    readonly threadId: string,
+    /** Page tools; off for a thread with no Scribe scope. */
+    readonly pages = true
   ) {}
 
   tools(): Promise<Record<string, SDKCustomTool>> {
@@ -392,7 +394,7 @@ class BoardTools {
 
   private async open(): Promise<Record<string, SDKCustomTool>> {
     const client = new Client({ name: "scribe-cursor", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, ...(this.pages ? {} : { SCRIBE_PAGES: "off" }) };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();
@@ -552,7 +554,7 @@ class CursorSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell()]);
+    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope)]);
   }
 
   /** Board workers (threads only a page has written to) keep Cursor's own shell; the host says which these are. */
@@ -572,7 +574,7 @@ class CursorSession implements ProviderSession {
   private async options(): Promise<AgentOptions> {
     const t = this.thread;
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
-    this.board ??= new BoardTools(this.ctx.boardMcp, t.id);
+    this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope));
     const customTools: Record<string, SDKCustomTool> = { ...(await this.board.tools()) };
     if (t.web !== "on") customTools.web_fetch = gatedFetch((url) => this.gateFetch(url));
     const hostShell = this.hostShell();
@@ -606,7 +608,7 @@ class CursorSession implements ProviderSession {
 
   private async open(key: string): Promise<SDKAgent> {
     this.closeAgent();
-    if (this.board && this.board.threadId !== this.thread.id) {
+    if (this.board && (this.board.threadId !== this.thread.id || this.board.pages === noPages(this.thread.scope))) {
       this.board.close();
       this.board = null;
     }

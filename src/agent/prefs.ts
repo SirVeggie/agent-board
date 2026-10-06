@@ -150,7 +150,7 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
   if (patch.cwd && thread.cwd) {
     const cwd = path.normalize(thread.cwd);
     next.recentWorkspaces = [thread.cwd, ...prefs.recentWorkspaces.filter((dir) => path.normalize(dir) !== cwd)].slice(0, 12);
-    if (thread.scope.kind !== "global") {
+    if (thread.scope.kind === "page" || thread.scope.kind === "folder") {
       next.scopeWorkspaces = { ...prefs.scopeWorkspaces, [`${thread.scope.kind}:${thread.scope.ref}`]: thread.cwd };
     }
   }

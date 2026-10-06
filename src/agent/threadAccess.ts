@@ -117,7 +117,9 @@ export function scopeLabel(scope: AccessScope, lookup?: ScopeLookup): string {
 /** The scope a thread belongs to, for list rows. */
 export function threadScopeLabel(thread: Pick<Thread, "scope">, lookup?: ScopeLookup): string {
   const { kind, ref } = thread.scope;
-  if (kind === "global" || !ref) return "global";
+  if (kind === "global") return "global";
+  if (kind === "workspace") return ref ? `workspace ${ref}` : "none";
+  if (!ref) return "global";
   if (kind === "page") return `page "${lookup?.pageTitle?.(ref) ?? ref}"`;
   if (kind === "folder") return `folder "${lookup?.folderPath?.(ref) ?? ref}"`;
   return `workspace ${ref}`;

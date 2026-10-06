@@ -17,11 +17,21 @@ export type ApprovalPolicy = "ask" | "edits" | "auto" | "full";
 
 export type ScopeKind = "global" | "workspace" | "folder" | "page";
 
+/**
+ * What a thread belongs to in Scribe. "workspace" is a thread with no Scribe scope (app scope None):
+ * it is only tied to its workspace folder (ref, in step with cwd) or, with a null ref, to nothing,
+ * and gets no page tools.
+ */
 export type ThreadScope = {
   kind: ScopeKind;
-  /** Page id, folder id, or absolute workspace path. Null for global. */
+  /** Page id, folder id, or absolute workspace path. Null for global, and for a workspace scope with no workspace. */
   ref: string | null;
 };
+
+/** App scope None: the thread gets no Scribe page tools. */
+export function noPages(scope: ThreadScope): boolean {
+  return scope.kind === "workspace";
+}
 
 export type Thread = {
   id: string;

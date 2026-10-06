@@ -492,6 +492,8 @@
       return { icon: "page", text: tab ? tab.title : "Missing page" };
     }
     if (scope.kind === "folder") return { icon: "folder", text: folderPath(scope.ref) || "Missing folder" };
+    // No Scribe scope: the thread is only tied to its workspace, if any.
+    if (!scope.ref) return { icon: "close", text: "No scope" };
     return { icon: "box", text: R.basename(scope.ref) || scope.ref };
   }
 
@@ -592,7 +594,8 @@
     const tab = activeTab();
     const scope = thread.scope;
     if (scope.kind === "global") return true;
-    if (!tab) return scope.kind === "workspace";
+    // Threads with no Scribe scope (workspace only, or nothing) show in the Workspaces list, not here.
+    if (!tab || scope.kind === "workspace") return false;
     if (scope.kind === "page") return scope.ref === tab.id;
     if (scope.kind === "folder") {
       const folders = app()?.folders?.() || [];
@@ -675,6 +678,7 @@
     if (!openMenuEl || openMenuEl.contains(event.target)) return;
     // A left press on the menu's own button is left to its click, which toggles the menu shut.
     if (event.button === 0 && openMenuAnchor?.contains(event.target)) return;
+    if (event.button === 0 && !openMenuAnchor?.isConnected && openMenuAnchor?.className && event.target.closest?.("button")?.className === openMenuAnchor.className) return;
     closeMenu();
   }
   // Clicks inside a page iframe never reach this document; they do take focus, so blur closes the menu.
@@ -691,7 +695,8 @@
    * Opening again from the anchor whose menu is already open closes it instead.
    */
   function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search" } = {}) {
-    if (openMenuEl && openMenuAnchor === anchor) {
+    // A re-render can swap the menu's button for a new one of the same kind while the menu stays open.
+    if (openMenuEl && (openMenuAnchor === anchor || (!openMenuAnchor?.isConnected && openMenuAnchor?.className === anchor.className))) {
       closeMenu();
       return null;
     }
@@ -760,9 +765,17 @@
           row.append(star);
         }
         row.addEventListener("click", () => {
-          closeMenu();
+          if (!item.keep) {
+            closeMenu();
+            item.run?.();
+            return;
+          }
+          // A pick in a group (one of several in the menu) keeps the menu open for the others.
+          for (const other of items) if (other.group && other.group === item.group) other.checked = other === item;
           item.run?.();
+          renderItems();
         });
+        if (item.keep) row.addEventListener("dblclick", () => closeMenu());
         if (search) {
           // The pointer moves the one highlight; a list scrolling under a still pointer doesn't.
           row.addEventListener("pointermove", (event) => {
@@ -1606,17 +1619,30 @@
       input.addEventListener("blur", () => finish(true));
     }
 
+    /**
+     * Two picks in one menu: the app scope (page, folder, global, or none) and the workspace (a folder,
+     * or none). A click picks one and keeps the menu open for the other; a double click also closes it.
+     */
     scopeMenu(anchor) {
       const s = this.settings();
       const tab = activeTab();
-      const items = [{ header: "Belongs to" }];
-      if (tab) items.push({ label: tab.title, detail: "This page", icon: "page", checked: s.scope.kind === "page" && s.scope.ref === tab.id, run: () => this.setScope({ kind: "page", ref: tab.id }) });
-      if (tab?.folderId) items.push({ label: folderPath(tab.folderId), detail: "This page's folder", icon: "folder", checked: s.scope.kind === "folder" && s.scope.ref === tab.folderId, run: () => this.setScope({ kind: "folder", ref: tab.folderId }) });
-      items.push({ label: "Global", detail: "Not tied to a page or folder", icon: "globe", checked: s.scope.kind === "global", run: () => this.setScope({ kind: "global", ref: null }) });
-      items.push({ separator: true });
-      const currentWs = s.scope.kind === "workspace" ? s.scope.ref : null;
+      const app_ = (scope, rest) => ({ group: "app", keep: true, checked: sameScope(s.scope, scope), run: () => this.setScope(scope), ...rest });
+      const items = [{ header: "Scribe access" }];
+      if (tab) items.push(app_({ kind: "page", ref: tab.id }, { label: tab.title, detail: "This page", icon: "page" }));
+      if (tab?.folderId) items.push(app_({ kind: "folder", ref: tab.folderId }, { label: folderPath(tab.folderId), detail: "This page's folder", icon: "folder" }));
+      // A page or folder thread opened elsewhere keeps its own scope in the list.
+      if ((s.scope.kind === "page" && s.scope.ref !== tab?.id) || (s.scope.kind === "folder" && s.scope.ref !== tab?.folderId)) {
+        const sc = scopeLabel(s.scope);
+        items.push(app_({ ...s.scope }, { label: sc.text, detail: s.scope.kind === "page" ? "Its page" : "Its folder", icon: sc.icon }));
+      }
+      items.push(app_({ kind: "global", ref: null }, { label: "Global", detail: "All pages, not tied to one", icon: "globe" }));
+      items.push(app_({ kind: "workspace", ref: s.cwd || null }, { label: "None", detail: "No Scribe pages", icon: "close", checked: s.scope.kind === "workspace" }));
+      items.push({ header: "Workspace" });
+      const currentWs = s.cwd || null;
       for (const dir of recentWorkspaceDirs(currentWs)) {
         items.push({
+          group: "ws",
+          keep: true,
           label: R.basename(dir),
           detail: dir,
           icon: "box",
@@ -1630,13 +1656,18 @@
         icon: "folder",
         run: () => this.pickOtherWorkspace(),
       });
+      items.push({ group: "ws", keep: true, label: "None", detail: "No files or shell", icon: "close", checked: !currentWs, run: () => this.setWorkspace(null) });
       if (s.scope.kind === "page" && s.scope.ref !== tab?.id && s.scope.ref) {
         items.push({ separator: true }, { label: "Open its page", icon: "page", run: () => app()?.openLink(s.scope.ref) });
       }
       openMenu(anchor, items, { width: 280 });
     }
 
+    /** App scope. None is stored as a workspace scope (a thread only tied to its workspace, or to nothing). */
     async setScope(scope) {
+      const cur = this.settings();
+      if (scope.kind === "workspace") scope = { kind: "workspace", ref: cur.cwd || null };
+      if (sameScope(cur.scope, scope)) return;
       const t = this.thread();
       if (!t) {
         this.draft = { scope, settings: this.draft?.settings || {} };
@@ -1673,17 +1704,22 @@
       }
     }
 
+    /** The thread's workspace folder, or null for none. A thread with no app scope keeps its scope's ref in step. */
     async setWorkspace(dir) {
-      if (!dir) return;
-      const scope = { kind: "workspace", ref: dir };
+      dir = dir || null;
+      const cur = this.settings();
+      if (dirKey(cur.cwd) === dirKey(dir)) return;
+      const scope = cur.scope.kind === "workspace" ? { kind: "workspace", ref: dir } : cur.scope;
+      // Code and Plan work on files: with no workspace, fall back to Pages (or plain chat with no app scope).
+      const mode = !dir && (cur.mode === "code" || cur.mode === "plan") ? "board" : undefined;
       const t = this.thread();
       if (!t) {
-        this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir } };
+        this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir, ...(mode ? { mode } : {}) } };
         this.renderAll();
-        await this.rememberDraftPrefs();
+        if (dir) await this.rememberDraftPrefs();
         return;
       }
-      await this.updateSettings({ scope, cwd: dir });
+      await this.updateSettings({ scope, cwd: dir, ...(mode ? { mode } : {}) });
     }
 
     async pickOtherWorkspace() {
@@ -1858,6 +1894,7 @@
         const mark = el("div", "ag-scope-mark");
         mark.append(icon(sc.icon), el("span", null, `${SCOPE_KIND[t.scope.kind] || "Global"} thread · `), el("b", null, sc.text));
         if (t.scope.kind === "global") mark.replaceChildren(icon(sc.icon), el("span", null, "Global thread"));
+        else if (t.scope.kind === "workspace" && !t.scope.ref) mark.replaceChildren(icon(sc.icon), el("span", null, "Thread with no scope"));
         this.transcript.append(mark);
       }
       for (const group of this.groups(detail)) {
@@ -3619,7 +3656,7 @@
         const dir = await pickWorkspace(null);
         if (!dir) return;
         const patch = { cwd: dir };
-        if (s.scope.kind === "global" || s.scope.kind === "workspace") patch.scope = { kind: "workspace", ref: dir };
+        if (s.scope.kind === "workspace") patch.scope = { kind: "workspace", ref: dir };
         await this.updateSettings(patch);
       }
       const context = this.composerContext();
@@ -3965,7 +4002,7 @@
   function groupTitle(thread) {
     if (S.filter === "workspaces") {
       const dir = workspaceDir(thread);
-      return { icon: "box", text: dir ? R.basename(dir) || dir : "", kind: "Workspace" };
+      return { icon: dir ? "box" : "close", text: dir ? R.basename(dir) || dir : "No workspace", kind: "Workspace" };
     }
     const s = thread.scope;
     const label = scopeLabel(s);
@@ -4076,7 +4113,8 @@
       const q = S.search.trim().toLowerCase();
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
-      if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t));
+      // Threads with no scope at all group here too, under No workspace.
+      if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t) || t.scope.kind === "workspace");
       if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
       threads.sort((a, b) => threadRank(b) - threadRank(a));
       if (!threads.length) {

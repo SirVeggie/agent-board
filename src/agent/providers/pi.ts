@@ -8,7 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
-import { isPlainRecord, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
+import { isPlainRecord, noPages, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
 import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
@@ -374,7 +374,7 @@ export class PiProvider implements AgentProvider {
 /** A spare is bound to what its session was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web]);
+  return JSON.stringify([where, thread.mode, thread.web, noPages(thread.scope)]);
 }
 
 /** The board MCP server's tools as Pi custom tools: one MCP client per session, started with the thread's id so card claims point at it. */
@@ -384,7 +384,9 @@ class BoardTools {
 
   constructor(
     private spec: SessionContext["boardMcp"],
-    readonly threadId: string
+    readonly threadId: string,
+    /** Page tools; off for a thread with no Scribe scope. */
+    readonly pages = true
   ) {}
 
   tools(): Promise<ToolDefinition[]> {
@@ -397,7 +399,7 @@ class BoardTools {
 
   private async open(): Promise<ToolDefinition[]> {
     const client = new Client({ name: "scribe-pi", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, ...(this.pages ? {} : { SCRIBE_PAGES: "off" }) };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();
@@ -503,7 +505,7 @@ class PiSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), this.instructions]);
+    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), noPages(t.scope), this.instructions]);
   }
 
   private async gateFetch(url: string): Promise<{ allowed: boolean; message?: string }> {
@@ -516,7 +518,7 @@ class PiSession implements ProviderSession {
 
   /** The tools Scribe adds to Pi: the board's, the web fetch, questions, todos, and Plan mode's exit_plan. */
   private async customTools(): Promise<ToolDefinition[]> {
-    this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id);
+    this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope));
     const tools = [...(await this.board.tools())];
     tools.push({
       name: "web_fetch",
@@ -710,7 +712,7 @@ class PiSession implements ProviderSession {
 
   private async open(key: string): Promise<AgentSession> {
     this.closeSession();
-    if (this.board && this.board.threadId !== this.thread.id) {
+    if (this.board && (this.board.threadId !== this.thread.id || this.board.pages === noPages(this.thread.scope))) {
       this.board.close();
       this.board = null;
     }

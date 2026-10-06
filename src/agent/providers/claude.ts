@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
-import { isPlainRecord } from "../types.js";
+import { isPlainRecord, noPages } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
@@ -448,7 +448,7 @@ class ClaudeSession implements ProviderSession {
 
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, this.instructions, this.ctx.claudeHooks?.() ?? false]);
+    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false]);
   }
 
   update(thread: Thread): void {
@@ -499,7 +499,7 @@ class ClaudeSession implements ProviderSession {
     const webTools = ["WebSearch", "WebFetch"];
     const { command, args } = this.ctx.boardMcp;
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
-    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id };
+    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}) };
     const permissionMode = permissionModeFor(thread);
     const options: Options = {
       cwd: this.cwd(),
