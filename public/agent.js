@@ -7280,20 +7280,24 @@
     full.open(snap);
   }
 
-  /** Close the full window into the chat it was opened from (the floating chat, else the sidebar), taking the chat along. */
-  function leaveFull(to = fullFrom) {
+  /**
+   * Close the full window into the chat it was opened from (the floating chat, else the sidebar), taking the chat along.
+   * Pass "side" to land in the sidebar even if it was closed (Ctrl+L). Leaving fullscreen itself does not open it.
+   */
+  function leaveFull(to) {
+    const dest = to ?? fullFrom;
     const snap = full.view.takeChat();
     fullFrom = null;
     full.close();
-    if (to === "dock" && S.dockShown) {
+    if (dest === "dock" && S.dockShown) {
       dock.view.giveChat(snap);
       dock.view.focus();
       return;
     }
-    if (!S.sideOpen) sidebar.setOpen(true);
     sidebar.view.giveChat(snap);
     if (snap.threadId) setCurrent(snap.threadId);
-    setTimeout(() => sidebar.view.focus(), 60);
+    if (to === "side" && !S.sideOpen) sidebar.setOpen(true);
+    if (S.sideOpen) setTimeout(() => sidebar.view.focus(), 60);
   }
 
   /** Ctrl+Up: a collapsed floating chat expands; an expanded one, or the sidebar, goes full window. */
