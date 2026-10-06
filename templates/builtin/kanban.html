@@ -635,6 +635,11 @@
   .md-preview pre { background: #0f1115; padding: 10px 12px; border-radius: 8px; overflow: auto; }
   .md-preview pre code { padding: 0; background: none; }
   .md-preview img { max-width: 100%; border-radius: 8px; display: block; margin: 8px 0; cursor: zoom-in; }
+  .md-preview .table-wrap { margin: .5em 0; overflow-x: auto; }
+  .md-preview table { border-collapse: collapse; font-size: .95em; }
+  .md-preview th, .md-preview td { padding: 4px 10px; border: 1px solid rgba(255, 255, 255, .1); text-align: left; vertical-align: top; }
+  .md-preview th { background: rgba(255, 255, 255, .04); font-weight: 600; }
+  .md-preview td img { margin: 0; }
   .md-editor {
     width: 100%;
     min-height: 150px;
@@ -3565,11 +3570,48 @@
     });
     return s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return held[Number(i)]; });
   }
+  // GFM tables: a header row, a |---|:--:| delimiter row, then body rows until a line without a pipe.
+  // \| keeps a pipe inside a cell.
+  var TABLE_DELIM = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  function tableCells(line) {
+    var s = line.trim().replace(/^\|/, "").replace(/(^|[^\\])\|$/, "$1");
+    return s.split(/(?<!\\)\|/).map(function (c) { return c.trim().replace(/\\\|/g, "|"); });
+  }
+  function tableStart(lines, i) {
+    return i + 1 < lines.length && lines[i].indexOf("|") >= 0 && lines[i + 1].indexOf("-") >= 0 &&
+      TABLE_DELIM.test(lines[i + 1]) && (lines[i + 1].indexOf("|") >= 0 || /^\s*\|/.test(lines[i]));
+  }
+  function renderTable(lines, i, images) {
+    var head = tableCells(lines[i]);
+    var align = tableCells(lines[i + 1]).map(function (d) {
+      var l = d.charAt(0) === ":", r = d.charAt(d.length - 1) === ":";
+      return l && r ? "center" : r ? "right" : l ? "left" : "";
+    });
+    function row(cells, tag) {
+      var out = "";
+      for (var k = 0; k < head.length; k++) {
+        var a = align[k] ? ' style="text-align:' + align[k] + '"' : "";
+        out += "<" + tag + a + ">" + inline(cells[k] || "", images) + "</" + tag + ">";
+      }
+      return "<tr>" + out + "</tr>";
+    }
+    var body = [];
+    for (i += 2; i < lines.length && lines[i].trim() && lines[i].indexOf("|") >= 0; i++) body.push(row(tableCells(lines[i]), "td"));
+    var html = '<div class="table-wrap"><table><thead>' + row(head, "th") + "</thead>" +
+      (body.length ? "<tbody>" + body.join("") + "</tbody>" : "") + "</table></div>";
+    return { html: html, next: i };
+  }
   function renderMarkdown(src, images) {
     var lines = str(src).replace(/\r\n?/g, "\n").split("\n");
     var html = [];
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
+      if (tableStart(lines, i)) {
+        var t = renderTable(lines, i, images);
+        html.push(t.html);
+        i = t.next - 1;
+        continue;
+      }
       if (/^```/.test(line)) {
         var code = [];
         for (i++; i < lines.length && !/^```/.test(lines[i]); i++) code.push(lines[i]);
@@ -3597,7 +3639,7 @@
       }
       if (!line.trim()) continue;
       var para = [];
-      for (; i < lines.length && lines[i].trim() && !/^(```|#{1,3}\s|>|\s*[-*]\s|\s*\d+\.\s)/.test(lines[i]); i++) para.push(inline(lines[i], images));
+      for (; i < lines.length && lines[i].trim() && !/^(```|#{1,3}\s|>|\s*[-*]\s|\s*\d+\.\s)/.test(lines[i]) && !tableStart(lines, i); i++) para.push(inline(lines[i], images));
       i--;
       html.push("<p>" + para.join("<br>") + "</p>");
     }

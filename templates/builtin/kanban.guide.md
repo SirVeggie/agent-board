@@ -59,7 +59,7 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?,    // the user's page se
                                       threadId?, run?, step?, stop?, merge?, error?, solo? } } }  // run..solo: the page's
 ```
 
-- `description` and comments are markdown. `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.
+- `description` and comments are markdown: headings, lists, quotes, code, links and GFM tables (`| a | b |` over a `|---|---|` row). `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.
 - comments `by` is `"user"` for the person, or the assignee/worker name that posted it. Older comments may still say `"agent"`.
 - Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. Use keys you created or found with `page_list` / `library_search`.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
