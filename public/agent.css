@@ -349,6 +349,65 @@ button.ag-scope-chip.warn {
   gap: 18px;
 }
 
+/* Queued messages: a dock below the scroll that looks like the end of the transcript. It slides away while you read further up. */
+.ag-queue-dock {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s ease;
+}
+
+.ag-queue-dock.has {
+  grid-template-rows: 1fr;
+}
+
+.ag-queue-dock.has.away {
+  grid-template-rows: 0fr;
+}
+
+.ag-queue-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ag-queue-dock > .ag-queue-clip > .ag-transcript.ag-queue {
+  padding-top: 0;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.ag-queue-dock.away .ag-queue {
+  opacity: 0;
+  transform: translateY(50%);
+  pointer-events: none;
+}
+
+.ag-scroll.queued > .ag-transcript {
+  padding-bottom: 8px;
+}
+
+/* New rows fade in while the transcript glides up to them (ENTER_MS in agent.js). */
+.ag-enter {
+  animation: ag-enter 0.24s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+}
+
+@keyframes ag-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-enter {
+    animation: none;
+  }
+
+  .ag-queue-dock,
+  .ag-queue-dock > .ag-queue-clip > .ag-transcript.ag-queue {
+    transition: none;
+  }
+}
+
 .ag-loading,
 .ag-list-empty {
   color: var(--muted);

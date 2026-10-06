@@ -14,7 +14,8 @@ import type { AgentProvider, ProviderSession, RunSink, TurnInput, TurnResult } f
  * Directives in the message (a card title works, since the worker prompt quotes it) change a turn:
  * [fake:delay=5000] waits that long, [fake:error] ends the turn with an error, [fake:hang] runs
  * until cancelled, [fake:nofinish] leaves the card claimed, [fake:commit] commits a file in the
- * thread's worktree (never outside one), so the board has a branch to merge.
+ * thread's worktree (never outside one), so the board has a branch to merge. [fake:stream] (or
+ * stream=N steps, default 12) streams thinking, tool calls and text first, to try the transcript's motion.
  */
 
 export const FAKE_AGENTS = process.env.SCRIBE_FAKE_AGENTS === "1";
@@ -27,6 +28,8 @@ export type FakePlan = {
   hang: boolean;
   finish: boolean;
   commit: boolean;
+  /** Steps of streamed thinking, tools and text before the wait; 0 for none. */
+  stream: number;
   /** The board page and card, when the message is a board worker's prompt. */
   board: { page: string; card: number } | null;
 };
@@ -35,10 +38,12 @@ export type FakePlan = {
 export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakePlan {
   const flags = new Set<string>();
   let delayMs = defaultDelayMs;
+  let stream = 0;
   for (const match of text.matchAll(/\[fake:([^\]]*)\]/gi)) {
     for (const part of match[1].split(/[\s,]+/)) {
       const [name, value] = part.toLowerCase().split("=");
       if (name === "delay" && value && Number.isFinite(Number(value))) delayMs = Math.max(0, Number(value));
+      else if (name === "stream") stream = value && Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 12;
       else if (name) flags.add(name);
     }
   }
@@ -50,6 +55,7 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
     hang: flags.has("hang"),
     finish: !flags.has("nofinish"),
     commit: flags.has("commit"),
+    stream,
     board: page && card ? { page, card: Number(card) } : null,
   };
 }
@@ -114,6 +120,7 @@ class FakeSession implements ProviderSession {
     try {
       sink.text(`Fake agent, turn ${this.turns}.`);
       if (plan.board) this.act(sink, "claim", { card: plan.board.card, text: "Fake agent working" }, plan.board.page);
+      if (plan.stream) await this.stream(sink, plan.stream, abort.signal);
       if (plan.hang) await wait(abort.signal);
       else await wait(abort.signal, plan.delayMs);
       if (plan.error) return { status: "error", error: "Fake agent error ([fake:error])" };
@@ -140,6 +147,43 @@ class FakeSession implements ProviderSession {
       sink.toolUpdate(toolId, { status: "done", output: JSON.stringify(result ?? null) });
     } catch (err) {
       sink.toolUpdate(toolId, { status: "error", output: (err as Error).message });
+    }
+  }
+
+  /** Thinking, a few tool calls and a streamed paragraph, step by step, like a real run's transcript. */
+  private async stream(sink: RunSink, steps: number, signal: AbortSignal): Promise<void> {
+    const words = async (text: string, put: (delta: string) => void) => {
+      for (const word of text.split(" ")) {
+        put(`${word} `);
+        await wait(signal, 45);
+      }
+      sink.breakBlock();
+    };
+    for (let i = 0; i < steps; i++) {
+      const kind = i % 5;
+      if (kind === 0) {
+        sink.breakBlock();
+        await words("Looking at what this step needs and which files it touches before going on.", (d) => sink.reasoning(d));
+      } else if (kind === 4) {
+        await words(
+          `Step ${i + 1}: the change reads the new rows, keeps the queued messages where they are, and glides the view down to the latest line without a jump.`,
+          (d) => sink.text(d)
+        );
+      } else {
+        const toolId = `fake-tool-${i}-${Date.now().toString(36)}`;
+        const run = kind === 3;
+        sink.toolStart({
+          toolId,
+          name: run ? "Bash" : "Read",
+          tool: run ? "execute" : "read",
+          title: run ? `npm test (step ${i + 1})` : `Read src/fake/step${i + 1}.ts`,
+          input: run ? { command: "npm test" } : { path: `src/fake/step${i + 1}.ts` },
+          status: "running",
+        });
+        await wait(signal, 300);
+        sink.toolUpdate(toolId, { status: "done", output: run ? "ok" : `// step ${i + 1}` });
+      }
+      await wait(signal, 350);
     }
   }
 

@@ -104,6 +104,9 @@
   function webEnforced(provider) {
     return provider === "claude" || provider === "cursor" || provider === "pi";
   }
+  /** How long the transcript's spring takes to settle at the bottom, and how long a new row fades in (match .ag-enter). */
+  const STICK_SPRING_MS = 600;
+  const ENTER_MS = 240;
   const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
   /** Cursor and Pi have no Limited search: the allowlist covers a fetch tool only. */
   const CURSOR_LIMITED = "Fetch from the web allowlist's domains; the agent asks for others; no web search";
@@ -1540,16 +1543,28 @@
       this.scroll = el("div", "ag-scroll");
       this.transcript = el("div", "ag-transcript");
       this.scroll.append(this.transcript);
+      // Queued messages sit below the scroll, so rows arriving above never push them around.
+      this.queueDock = el("div", "ag-queue-dock");
+      this.queueList = el("div", "ag-transcript ag-queue");
+      const queueClip = el("div", "ag-queue-clip");
+      queueClip.append(this.queueList);
+      this.queueDock.append(queueClip);
       this.composer = this.buildComposer();
       if (variant !== "dock") this.root.append(this.header);
-      this.root.append(this.scroll, this.composer);
+      this.root.append(this.scroll, this.queueDock, this.composer);
       this.stick = true;
       this.stickAnim = 0;
       this.stickLock = false;
+      this.stickY = 0;
+      this.stickV = 0;
+      this.queueShown = true;
+      this.entering = new Map();
       this.scroll.addEventListener("scroll", () => {
+        this.updateQueueDock();
         // Programmatic easing fires scroll asynchronously; treat those as still stuck.
         if (this.stickLock || this.stickAnim) return;
-        this.stick = this.scroll.scrollHeight - this.scroll.scrollTop - this.scroll.clientHeight < 80;
+        // A queue dock slid away means you are reading further up, even close to the bottom.
+        this.stick = this.queueShown && this.scroll.scrollHeight - this.scroll.scrollTop - this.scroll.clientHeight < 80;
       });
       const releaseStick = () => {
         this.stopStickAnim();
@@ -1563,6 +1578,8 @@
         if (this.stick) this.scrollToEnd();
       });
       this.stickRo.observe(this.transcript);
+      // The scroll shrinks while the queue dock opens; stay at the bottom through it.
+      this.stickRo.observe(this.scroll);
       this.root.addEventListener("click", (event) => onLinkClick(event));
     }
 
@@ -2129,6 +2146,8 @@
 
     renderTranscript() {
       this.transcript.replaceChildren();
+      this.queueList.replaceChildren();
+      this.queueShown = true;
       const t = this.thread();
       if (!t) {
         this.transcript.append(this.emptyState());
@@ -2156,10 +2175,16 @@
         this.transcript.append(mark);
       }
       for (const group of this.groups(detail)) {
-        this.transcript.append(this.renderGroup(group));
+        this.groupHost(group.key).append(this.renderGroup(group));
       }
       this.markLatest();
+      this.updateQueueDock();
       this.scrollToEnd(true);
+    }
+
+    /** Queued messages render into the dock below the scroll; every other turn into the transcript. */
+    groupHost(key) {
+      return key === "pending" ? this.queueList : this.transcript;
     }
 
     emptyState() {
@@ -3083,55 +3108,99 @@
       const groups = this.groups(detail);
       for (const key of keys) {
         const group = groups.find((g) => g.key === key);
-        const existing = this.transcript.querySelector(`.ag-turn[data-turn="${key}"]`);
+        const host = this.groupHost(key);
+        const existing = host.querySelector(`.ag-turn[data-turn="${key}"]`);
         if (!group) {
           existing?.remove();
           continue;
         }
         const fresh = this.renderGroup(group);
+        const known = existing && new Set([...existing.querySelectorAll("[data-item-id]")].map((n) => n.dataset.itemId));
         if (existing) existing.replaceWith(fresh);
         else {
           const idx = groups.indexOf(group);
-          const nextGroup = groups.slice(idx + 1).map((g) => this.transcript.querySelector(`.ag-turn[data-turn="${g.key}"]`)).find(Boolean);
+          const nextGroup = groups.slice(idx + 1).map((g) => host.querySelector(`.ag-turn[data-turn="${g.key}"]`)).find(Boolean);
           if (nextGroup) nextGroup.before(fresh);
-          else this.transcript.append(fresh);
+          else host.append(fresh);
         }
+        this.markEntering(fresh, known);
       }
       this.markLatest();
+      this.updateQueueDock();
       if (stick) this.scrollToEnd();
     }
 
-    /** Snap when opening a thread or for tiny growth; ease larger blocks so queued rows don't jump. */
+    /** New rows fade in; a row rebuilt mid-fade carries on from where it was. */
+    markEntering(root, known) {
+      const now = performance.now();
+      for (const [id, at] of this.entering) if (now - at >= ENTER_MS) this.entering.delete(id);
+      for (const node of root.querySelectorAll("[data-item-id]")) {
+        if (node.parentElement?.closest(".ag-enter")) continue;
+        const id = node.dataset.itemId;
+        let at = this.entering.get(id);
+        if (at == null) {
+          if (known?.has(id)) continue;
+          at = now;
+          this.entering.set(id, at);
+        }
+        node.classList.add("ag-enter");
+        if (now > at) node.style.animationDelay = `${at - now}ms`;
+      }
+    }
+
+    /** The queue dock slides away while you read further up, and comes back at the bottom. */
+    updateQueueDock() {
+      const dock = this.queueDock;
+      const has = this.queueList.childElementCount > 0;
+      dock.classList.toggle("has", has);
+      this.scroll.classList.toggle("queued", has);
+      // Line up with the transcript, which the scrollbar narrows.
+      if (has) dock.style.paddingRight = `${this.scroll.offsetWidth - this.scroll.clientWidth}px`;
+      if (!has) this.queueShown = true;
+      else if (this.stickAnim) this.queueShown = true;
+      else {
+        const el = this.scroll;
+        const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+        // Hiding grows the scroll by the dock's height, so it must be further away than that or it would bounce back.
+        if (this.queueShown && dist > this.queueList.offsetHeight + 24) this.queueShown = false;
+        else if (!this.queueShown && dist < 8) this.queueShown = true;
+      }
+      dock.classList.toggle("away", !this.queueShown);
+    }
+
+    /** Snap when opening a thread; otherwise a critically damped spring follows the bottom and keeps its speed as more rows arrive. */
     scrollToEnd(instant) {
       const el = this.scroll;
       if (!el) return;
       this.stick = true;
       const max = () => Math.max(0, el.scrollHeight - el.clientHeight);
-      const remain = max() - el.scrollTop;
       const reduce = instant || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
-      if (reduce || remain < 16) {
+      if (reduce) {
         this.stopStickAnim();
         this.jumpScroll(max());
         return;
       }
-      if (this.stickAnim) return;
-      const tick = () => {
+      if (this.stickAnim || max() - el.scrollTop <= 0.5) return;
+      const omega = 4.6 / (STICK_SPRING_MS / 1000);
+      this.stickY = el.scrollTop;
+      let last = performance.now();
+      const tick = (now) => {
         if (!this.stick) {
-          this.stickAnim = 0;
+          this.stopStickAnim();
           return;
         }
+        const dt = Math.min(0.05, Math.max(0, now - last) / 1000);
+        last = now;
         const target = max();
-        const cur = el.scrollTop;
-        const gap = target - cur;
-        if (gap <= 0.5) {
+        // Something else moved the scroll (a snap, a layout change): carry on from there.
+        if (Math.abs(el.scrollTop - this.stickY) > 2) this.stickY = el.scrollTop;
+        this.stickV += (omega * omega * (target - this.stickY) - 2 * omega * this.stickV) * dt;
+        this.stickY = Math.min(target, this.stickY + this.stickV * dt);
+        if (this.stickY >= target) this.stickV = Math.min(this.stickV, 0);
+        this.jumpScroll(this.stickY);
+        if (target - this.stickY < 0.5 && Math.abs(this.stickV) < 5) {
           this.jumpScroll(target);
-          this.stickAnim = 0;
-          return;
-        }
-        this.jumpScroll(cur + Math.max(1, gap * 0.22));
-        if (el.scrollTop === cur) {
-          this.jumpScroll(target);
-          this.stickAnim = 0;
+          this.stopStickAnim();
           return;
         }
         this.stickAnim = requestAnimationFrame(tick);
@@ -3146,6 +3215,7 @@
     }
 
     stopStickAnim() {
+      this.stickV = 0;
       if (!this.stickAnim) return;
       cancelAnimationFrame(this.stickAnim);
       this.stickAnim = 0;
@@ -4680,6 +4750,7 @@
       this.listOpen = !this.listOpen;
       this.listEl.hidden = !this.listOpen;
       this.view.scroll.hidden = this.listOpen;
+      this.view.queueDock.hidden = this.listOpen;
       this.view.composer.hidden = this.listOpen;
       this.view.root.classList.toggle("listing", this.listOpen);
       this.view.renderHeader();
@@ -4817,7 +4888,7 @@
       // Output: the conversation when expanded, the live step feed when collapsed.
       const out = el("div", "dock-out");
       const history = el("div", "dock-history");
-      history.append(view.scroll);
+      history.append(view.scroll, view.queueDock);
       out.append(history, this.feed, el("span", "dock-sweep"));
       // Input: composer and send. The island style also shows the model orb here.
       const toggle = button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)");
