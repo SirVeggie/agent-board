@@ -4222,7 +4222,7 @@
    */
   function resumeAgent(id, threadId) {
     var w = worker(id);
-    return scribe.agent.send(threadId, RESUME_PROMPT).then(function (r) {
+    return scribe.agent.send(threadId, resumePrompt(w, threadId)).then(function (r) {
       if (!r || !r.ok) {
         var cur = worker(id) || {};
         var wait = cur.wait || {};
@@ -4240,6 +4240,26 @@
       threadStatus[threadId] = { status: "running", queued: 0 };
       patchWorker(id, { step: null, wait: { count: Number(w && w.wait && w.wait.count) || 1 } });
     });
+  }
+
+  /**
+   * What to tell a chat once its limit resets. While it waited, another chat (a Continue, the
+   * user) may have taken or finished its card, so a plain "go on" could redo or overwrite that work.
+   */
+  function resumePrompt(w, threadId) {
+    var held = liveCards().some(function (c) { return c.claim && !c.claim.stale && c.claim.thread === threadId; });
+    var c = w && w.run && w.run.card ? byNum(w.run.card) : null;
+    if (held || !c || c.archived) return RESUME_PROMPT;
+    var col = colOf(c);
+    var where = col ? " It is in " + col.title + " now." : "";
+    var leftovers = " Don't redo or overwrite that work and don't claim the card again. Only check your worktree for changes of yours that are still needed: commit those (or leave the worktree clean), rebase as before, and end your turn.";
+    if (c.claim && !c.claim.stale) {
+      return "Your plan's usage limit has reset, but while you waited another chat took over your card #" + c.num + " and is working on it." + where + leftovers;
+    }
+    if (col && (col.role === "review" || col.role === "done")) {
+      return "Your plan's usage limit has reset, but while you waited another chat finished your card #" + c.num + "." + where + leftovers;
+    }
+    return "Your plan's usage limit has reset. Your card #" + c.num + " was released while you waited." + where + " Get it and read it again before you do anything: claim it again and go on only if it is still in an agent column and the work is still needed; otherwise end your turn.";
   }
 
   /** start: the step began with a click, which already cleared stop in the daemon (this window may not have that yet). */
