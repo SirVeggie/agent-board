@@ -459,6 +459,8 @@ button.ag-queued-act {
   align-self: start;
   white-space: nowrap;
   font-size: inherit;
+  /* The hint's line height, so the button's line lines up with the hint's first line. */
+  line-height: inherit;
   font-weight: 500;
   color: var(--muted);
   background: none;
