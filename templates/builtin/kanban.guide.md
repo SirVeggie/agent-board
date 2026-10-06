@@ -48,7 +48,7 @@ columns: [{ id, title, role?, wip?, askAssignee?, paused? }]  // array order = b
 labels:  [{ id, name, color }]
 cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             due?, assignee?, checklist: [{ id, text, done }],
-            comments: [{ id, by, at, text }], images: [{ id, name, data }],
+            comments: [{ id, by, at, text }], images: [{ id, name, data }],  // by: "user" | assignee name | "agent"
             blockedBy: [cardId], status?, claim?, thread?, from?, archived?,
             cover?, createdAt, movedAt, doneAt? }]
 nextNum: number
@@ -60,6 +60,7 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?,    // the user's page se
 ```
 
 - `description` and comments are markdown. `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.
+- comments `by` is `"user"` for the person, or the assignee/worker name that posted it. Older comments may still say `"agent"`.
 - Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. Use keys you created or found with `page_list` / `library_search`.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
 - `thread` is the in-app agent thread that last claimed the card (set by `claim`, kept after `finish`). The card's right-click menu opens it.

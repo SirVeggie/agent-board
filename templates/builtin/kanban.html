@@ -1204,6 +1204,12 @@
     return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
   }
   function isAgent(name) { return str(name).trim().toLowerCase() === "agent"; }
+  function isUserComment(by) { return !str(by).trim() || str(by).trim().toLowerCase() === "user"; }
+  function commentWho(by) {
+    if (isUserComment(by)) return "You";
+    var n = str(by).trim();
+    return isAgent(n) ? "🤖 Agent" : "🤖 " + n;
+  }
   function setHint(msg, error) {
     hintEl.textContent = msg || "";
     hintEl.className = "hint" + (error ? " error" : "");
@@ -1284,7 +1290,8 @@
       return { id: it.id || newId("ck"), text: str(it.text), done: Boolean(it.done) };
     });
     out.comments = arr(out.comments).filter(Boolean).map(function (cm) {
-      var out = { id: cm.id || newId("cm"), by: cm.by === "agent" ? "agent" : "user", at: Number(cm.at) || Date.now(), text: str(cm.text) };
+      var by = str(cm.by).trim().slice(0, 60);
+      var out = { id: cm.id || newId("cm"), by: isUserComment(by) ? "user" : by, at: Number(cm.at) || Date.now(), text: str(cm.text) };
       // Card comment hand-off (#182): sent to the working agent, or Continue offered to the last one.
       if (cm.sent === "steered" || cm.sent === "queued") out.sent = cm.sent;
       if (cm.followUp === "offer" || cm.followUp === "continued" || cm.followUp === "dismissed") out.followUp = cm.followUp;
@@ -1899,9 +1906,10 @@
     }
     if (c.comments.length) {
       var cm = el("span", "badge", "💬 " + c.comments.length);
-      if (hasUnread(c)) {
+      var unread = latestAgentComment(c);
+      if (unread) {
         cm.appendChild(el("span", "dot"));
-        cm.title = "New comment from the agent";
+        cm.title = "New comment from " + (isAgent(unread.by) ? "the agent" : str(unread.by).trim());
       }
       badges.appendChild(cm);
     }
@@ -1951,10 +1959,15 @@
   function openBlockers(c) {
     return c.blockedBy.map(card).filter(function (b) { return b && !b.archived && !isDone(b); });
   }
-  function hasUnread(c) {
+  function latestAgentComment(c) {
     var seen = Number(c.seenAt) || 0;
-    return c.comments.some(function (cm) { return cm.by === "agent" && cm.at > seen; });
+    var last = null;
+    c.comments.forEach(function (cm) {
+      if (!isUserComment(cm.by) && cm.at > seen) last = cm;
+    });
+    return last;
   }
+  function hasUnread(c) { return Boolean(latestAgentComment(c)); }
 
   // ---------- adding cards ----------
   function renderComposer(col) {
@@ -2618,15 +2631,15 @@
     var oldImages = loadedImages(commentsEl);
     commentsEl.replaceChildren();
     c.comments.forEach(function (cm, i) {
-      var box = el("div", "comment" + (cm.by === "agent" ? " agent" : ""));
-      box.appendChild(el("div", "who", (cm.by === "agent" ? "🤖 Agent" : "You") + " · " + ago(cm.at) + commentFate(cm)));
+      var box = el("div", "comment" + (isUserComment(cm.by) ? "" : " agent"));
+      box.appendChild(el("div", "who", commentWho(cm.by) + " · " + ago(cm.at) + commentFate(cm)));
       // Markdown, like the description: #12 card links, [[page]] links and the card's images work too.
       var body = el("div", "body md-preview");
       body.innerHTML = renderMarkdown(cm.text, c.images);
       keepImages(body, oldImages);
       box.appendChild(body);
       commentsEl.appendChild(box);
-      if (i === c.comments.length - 1 && cm.by === "user" && cm.followUp === "offer" && c.thread) box.appendChild(followUpButtons(c, cm));
+      if (i === c.comments.length - 1 && isUserComment(cm.by) && cm.followUp === "offer" && c.thread) box.appendChild(followUpButtons(c, cm));
       // Long comments other than the latest fold to a faded preview; a click opens one until the card closes.
       if (i < c.comments.length - 1 && !expandedComments[cm.id]) {
         box.setAttribute("data-comment", cm.id);
@@ -4347,7 +4360,7 @@
       nums.push("#" + c.num);
       backTo = backTo || target;
       var next = Object.assign({}, c);
-      next.comments = next.comments.concat([{ id: newId("cm"), by: "agent", at: now, text: "The board could not merge this card's branch, so its work isn't in yet: " + why }]);
+      next.comments = next.comments.concat([{ id: newId("cm"), by: workerName(worker(id)) || str(c.assignee).trim() || "agent", at: now, text: "The board could not merge this card's branch, so its work isn't in yet: " + why }]);
       next.status = { kind: "blocked", text: "Branch didn't merge" };
       return enterColumn(next, target.id, now);
     });

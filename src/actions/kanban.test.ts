@@ -68,7 +68,7 @@ test("finish comments, clears the claim, and hands the card to review", () => {
   assert.equal(c.claim, undefined);
   assert.equal(c.status, undefined);
   assert.equal((c.comments as Array<{ by: string; text: string }>).at(-1)?.text, "Done, see commit abc.");
-  assert.equal((c.comments as Array<{ by: string }>).at(-1)?.by, "agent");
+  assert.equal((c.comments as Array<{ by: string }>).at(-1)?.by, "Claude Code");
 });
 
 test("a thread's claim records it on the card, and finish keeps it", () => {
@@ -101,6 +101,26 @@ test("finish without a summary hands in the comment posted since the claim, and 
   assert.equal((card(other.state, 1).comments as unknown[]).length, 2);
 });
 
+test("agent comments store the assignee or worker name, not a generic agent", () => {
+  const named = run(board(), "claim", { card: 1, assignee: "Grok" });
+  assert.equal((card(run(named.state, "comment", { card: 1, text: "On it" }).state, 1).comments as Array<{ by: string }>)[0].by, "Grok");
+  assert.equal((card(run(named.state, "finish", { card: 1, summary: "Done." }).state, 1).comments as Array<{ by: string }>).at(-1)?.by, "Grok");
+  assert.equal((card(run(named.state, "release", { card: 1, note: "Need a spec" }).state, 1).comments as Array<{ by: string }>)[0].by, "Grok");
+
+  const unlabeled = run(board(), "comment", { card: 1, text: "Hi" });
+  assert.equal((card(unlabeled.state, 1).comments as Array<{ by: string }>)[0].by, "Claude Code");
+
+  const grokWorker = {
+    ...board(),
+    settings: { workers: { w_g: { name: "Grok", threadId: "th_g" }, w_s: { name: "Opus", solo: { th_solo: { card: 2, at: 1 } } } } },
+  };
+  assert.equal((card(run(grokWorker, "comment", { card: 1, text: "From worker" }, agent({ thread: "th_g" })).state, 1).comments as Array<{ by: string }>)[0].by, "Grok");
+  assert.equal((card(run(grokWorker, "comment", { card: 1, text: "From solo" }, agent({ thread: "th_solo" })).state, 1).comments as Array<{ by: string }>)[0].by, "Opus");
+
+  const fromUser = run(named.state, "comment", { card: 1, text: "Looks good" }, { caller: { by: "user", label: "user" }, now: 1000, values: {} });
+  assert.equal((card(fromUser.state, 1).comments as Array<{ by: string }>)[0].by, "user");
+});
+
 test("get returns the comments themselves, not just their count", () => {
   const commented = run(board(), "comment", { card: 1, text: "First **note**" }).state;
   const withImage = {
@@ -115,7 +135,7 @@ test("get returns the comments themselves, not just their count", () => {
   const comments = result.comments as Array<{ by: string; text: string }>;
   assert.equal(comments.length, 1);
   assert.equal(comments[0].text, "First **note**");
-  assert.equal(comments[0].by, "agent");
+  assert.equal(comments[0].by, "Claude Code");
   assert.equal(result.lastComment, undefined);
   assert.equal(result.column, "Ready for agent");
   assert.deepEqual(result.images, [{ id: "im_1", name: "shot.png", data: "/blob/pa_aaaaaaaaaaaaaaaaaaaaaaaa" }]);

@@ -15,7 +15,8 @@ import {
 
 type Column = { id: string; title: string; role?: string; wip?: number; paused?: boolean };
 type Label = { id: string; name: string; color?: string };
-type Comment = { id: string; by: "user" | "agent"; at: number; text: string };
+/** `by` is `"user"` for the person, the assignee/worker name for an agent, or `"agent"` on older comments. */
+type Comment = { id: string; by: string; at: number; text: string };
 type Status = { kind: string; text: string };
 /** waiting: set while the holder's turn waits on the user; keeps the status to put back after. */
 type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string; waiting?: { status: Status | null } };
@@ -322,7 +323,11 @@ function sameText(a: string, b: string): boolean {
   return norm(a) === norm(b);
 }
 
-function commentOp(card: Card, by: "user" | "agent", text: string, now: number): unknown {
+function isUserComment(by: string): boolean {
+  return !str(by).trim() || str(by).trim().toLowerCase() === "user";
+}
+
+function commentOp(card: Card, by: string, text: string, now: number): unknown {
   return { op: "insert", path: `${cardPath(card)}/comments`, value: { id: newId("cm"), by, at: now, text } };
 }
 
@@ -366,6 +371,22 @@ function claimAssignee(args: Record<string, unknown>, ctx: ActionContext): strin
   const label = ctx.caller.label?.trim() ?? "";
   if (label && label !== "agent" && !label.startsWith("Scribe chat:")) return label.slice(0, 60);
   return PROVIDER_ASSIGNEE[ctx.caller.provider ?? ""] || "agent";
+}
+
+/** Name stored on an agent's comment: the worker on this thread, else the card's assignee. */
+function commentAuthor(state: BoardState, card: Card, ctx: ActionContext): string {
+  if (ctx.caller.by !== "agent") return "user";
+  const thread = str(ctx.caller.thread);
+  if (thread) {
+    for (const [, w] of workerList(state)) {
+      const name = str(w.name).trim().slice(0, 60);
+      if (!name) continue;
+      if (str(w.threadId) === thread || soloRunOf(w, thread)) return name;
+    }
+  }
+  const assignee = str(card.assignee).trim().slice(0, 60);
+  if (assignee && assignee.toLowerCase() !== "agent") return assignee;
+  return claimAssignee({}, ctx);
 }
 
 export const kanbanActions: ActionSet = {
@@ -541,13 +562,13 @@ export const kanbanActions: ActionSet = {
       },
     },
     comment: {
-      description: "Add a comment to a card (markdown). Agents' comments show as the agent's.",
+      description: "Add a comment to a card (markdown). Agent comments show as the assignee that posted them.",
       args: "{ card, text }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);
         const text = str(args.text).trim();
         if (!text) throw new ActionError("text is required");
-        return { ops: [commentOp(card, ctx.caller.by, text, ctx.now)], result: { num: card.num, comments: arr(card.comments).length + 1 } };
+        return { ops: [commentOp(card, commentAuthor(state, card, ctx), text, ctx.now)], result: { num: card.num, comments: arr(card.comments).length + 1 } };
       },
     },
     move: {
@@ -601,7 +622,7 @@ export const kanbanActions: ActionSet = {
         const card = findCard(state, args.card);
         const col = args.to !== undefined ? findColumn(state, args.to) : returnColumn(state, card);
         const ops: unknown[] = [{ op: "merge", path: cardPath(card), value: { claim: null, status: args.status !== undefined ? checkStatus(args.status) : null } }];
-        if (str(args.note).trim()) ops.push(commentOp(card, ctx.caller.by, str(args.note).trim(), ctx.now));
+        if (str(args.note).trim()) ops.push(commentOp(card, commentAuthor(state, card, ctx), str(args.note).trim(), ctx.now));
         if (col) ops.push(...moveOps(state, card, col, ctx.now));
         return { ops, result: { num: card.num, column: col?.title ?? null } };
       },
@@ -615,14 +636,14 @@ export const kanbanActions: ActionSet = {
         const text = str(args.summary).trim();
         // The caller's own comment from this claim, if it wrote its wrap-up as a comment already.
         const since = card.claim && sameHolder(card.claim, ctx) ? card.claim.at : Infinity;
-        const own = arr<Comment>(card.comments).filter((c) => c.by === ctx.caller.by && c.at >= since).at(-1);
+        const own = arr<Comment>(card.comments).filter((c) => !isUserComment(c.by) && c.at >= since).at(-1);
         if (!text && !own) {
           throw new ActionError(
             "summary is required: it is posted as the card's hand-in comment (what changed, what to check). If you already posted that as a comment since claiming the card, call finish without summary and that comment is the hand-in."
           );
         }
         const repeat = Boolean(text && own && sameText(text, own.text));
-        const ops: unknown[] = [...(text && !repeat ? [commentOp(card, ctx.caller.by, text, ctx.now)] : []), { op: "merge", path: cardPath(card), value: { claim: null, status: null } }];
+        const ops: unknown[] = [...(text && !repeat ? [commentOp(card, commentAuthor(state, card, ctx), text, ctx.now)] : []), { op: "merge", path: cardPath(card), value: { claim: null, status: null } }];
         const col = args.to !== undefined ? findColumn(state, args.to) : (roleColumn(state, "review") ?? roleColumn(state, "done"));
         if (col) ops.push(...moveOps(state, card, col, ctx.now));
         return { ops, result: { num: card.num, column: col?.title ?? null, ...(text && !repeat ? {} : { handIn: "your earlier comment" }) } };
