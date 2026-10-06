@@ -541,13 +541,20 @@
     return { icon: "box", text: R.basename(scope.ref) || scope.ref };
   }
 
-  /** Scribe access, then the workspace folder when that is a separate pick (not already the scope). */
+  /**
+   * Scribe access, then the workspace folder when that is a separate pick (not already the scope).
+   * With both, the Scribe part sits in .ag-scope-main so a tight spot (the dock) can drop it and keep the workspace.
+   */
   function fillScopeDisplay(node, scope, cwd) {
     const sc = scopeLabel(scope);
-    node.replaceChildren(icon(sc.icon), el("span", null, sc.text));
     const dir = cwd || (scope?.kind === "workspace" ? scope.ref : null);
-    if (!dir || scope?.kind === "workspace") return;
-    node.append(el("span", "ag-scope-sep", "·"), icon("box"), el("span", null, R.basename(dir) || dir));
+    if (!dir || scope?.kind === "workspace") {
+      node.replaceChildren(icon(sc.icon), el("span", null, sc.text));
+      return;
+    }
+    const main = el("span", "ag-scope-main");
+    main.append(icon(sc.icon), el("span", "ag-scope-text", sc.text), el("span", "ag-scope-sep", "·"));
+    node.replaceChildren(main, icon("box"), el("span", null, R.basename(dir) || dir));
   }
 
   function dirKey(dir) {
@@ -4827,6 +4834,7 @@
       const topRight = el("div", "dock-top-tab dock-top-right");
       const top = el("div", "dock-top");
       top.append(topLeft, topRight);
+      new ResizeObserver(() => this.fitScope()).observe(top);
       this.parts = { left, right, topLeft, topRight, tools, sep: el("span", "dock-top-sep") };
       const head = el("div", "dock-head");
       head.append(out, top);
@@ -4930,10 +4938,20 @@
       fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
       this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
       this.scopeBtn.title = "Page, folder, or workspace this thread belongs to";
+      this.fitScope();
       this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
       // No native title: hovering the orb opens the threads flyout, and a tooltip would sit on top of it.
       this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
+    },
+    /** With both a Scribe scope and a workspace, show only the workspace once either name would be cut off. */
+    fitScope() {
+      const btn = this.scopeBtn;
+      if (!btn) return;
+      btn.classList.remove("tight");
+      if (!btn.querySelector(".ag-scope-main")) return;
+      const cut = (node) => node && node.scrollWidth > node.clientWidth + 1;
+      if (cut(btn) || cut(btn.querySelector(".ag-scope-text")) || cut(btn.lastElementChild)) btn.classList.add("tight");
     },
     /** When the thread's current run started: its running turn, else when the dock first saw it running. */
     runStart(t) {

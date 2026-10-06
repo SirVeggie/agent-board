@@ -278,6 +278,21 @@ button.ag-stat-chip {
   opacity: 0.55;
 }
 
+/* The Scribe part of a scope that also has a workspace: shrinks before the workspace does. */
+.ag-scope-main {
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+  flex: 0 4 auto;
+}
+
+.ag-scope-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 button.ag-scope-chip span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3106,6 +3121,12 @@ button.dock-scope {
 
 button.dock-title {
   min-width: 64px;
+  max-width: 260px;
+}
+
+/* No room for both scope parts: keep the workspace, the more important one (see dock.fitScope). */
+button.dock-scope.tight .ag-scope-main {
+  display: none;
 }
 
 button.dock-title span,
@@ -3231,7 +3252,8 @@ button.dock-scope.warn {
 }
 
 .style-island .dock-top-left {
-  max-width: 70%;
+  max-width: 50%;
+  flex-shrink: 3;
 }
 
 .style-island .dock-top-right {
