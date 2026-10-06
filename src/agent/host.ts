@@ -2430,7 +2430,7 @@ export class AgentHost {
     thread = { ...this.requireThread(threadId), worktree: made.worktree, cwd: made.cwd };
     if (merged && thread.nativeId && !made.sameFolder) {
       // The session belongs to the old folder: start a new one with a recap, as after a rewind.
-      const kept = this.loadTurns(threadId).filter((t) => t.id !== turnId && t.status === "done");
+      const kept = this.loadTurns(threadId).filter((t) => t.id !== turnId && t.status !== "running");
       const recap = kept.length ? this.recap(this.loadItems(threadId), kept) : "";
       thread = { ...thread, nativeId: null, ...(recap ? { rewind: { at: null, recap, migrated: true } } : {}) };
     }
@@ -2683,13 +2683,16 @@ export class AgentHost {
    * conversation, like a rewind to the end.
    */
   private startOverWithRecap(thread: Thread, turnId: string): Thread {
-    const kept = this.loadTurns(thread.id).filter((t) => t.id !== turnId && t.status === "done");
+    // Stopped and failed turns count too: the user's message in them is still part of the conversation.
+    const kept = this.loadTurns(thread.id).filter((t) => t.id !== turnId && t.status !== "running");
     const recap = kept.length ? this.recap(this.loadItems(thread.id), kept) : "";
     const next: Thread = { ...thread, nativeId: null, ...(recap ? { rewind: { at: null, recap, migrated: true } } : {}) };
     this.threads.set(thread.id, next);
     this.db.saveThread(next);
     if (thread.provider === "cursor" && isSdkAgentId(thread.nativeId)) {
-      const text = "Cursor's saved context for this thread was cleared after 3 days without use, so this turn starts a new agent with a recap of the conversation.";
+      const text = recap
+        ? "Cursor could not reopen this thread's agent (its saved context is gone), so this turn starts a new agent with a recap of the conversation."
+        : "Cursor could not reopen this thread's agent (its saved context is gone), so this turn starts a new agent.";
       this.addItem(thread.id, turnId, { kind: "notice", level: "info", text });
     }
     return next;
@@ -2704,13 +2707,14 @@ export class AgentHost {
       const texts = ofTurn.filter((it) => it.kind === "text");
       const reply = texts.at(-1)?.kind === "text" ? (texts.at(-1) as { text: string }).text : "";
       if (asked) parts.push(`User: ${asked}`);
-      if (reply) parts.push(`You: ${reply}`);
+      if (reply || stopped) parts.push(`You${stopped}: ${reply || "(no reply)"}`);
     }
     const text = parts.join("\n\n");
     // The latest part matters most; keep the prompt a sensible size.
     return text.length > MAX_RECAP ? `…${text.slice(-MAX_RECAP)}` : text;
   }
 
+      const stopped = turn.status === "cancelled" ? " (stopped before it finished)" : turn.status === "error" ? " (failed before it finished)" : "";
   // ---------- forks ----------
 
   /**

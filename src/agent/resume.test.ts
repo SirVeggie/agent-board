@@ -90,6 +90,32 @@ test("a turn cut off by a restart is sent on with Scribe's note, and queued mess
   assert.equal(userItems(host, looping).length, 0);
 });
 
+test("a session that cannot be resumed starts over with a recap that keeps a stopped turn's message", async () => {
+  const first = startHost().host;
+  const view = first.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
+  const id = view.id;
+  const thread = (first as unknown as { threads: Map<string, { nativeId: string | null }> }).threads.get(id)!;
+  first.db.saveThread({ ...(thread as never), nativeId: "lost-session" });
+  first.db.saveTurn({ id: `tu_${id}_0`, threadId: id, seq: 1, status: "cancelled", model: "m", effort: null, mode: "board", startedAt: Date.now() });
+  first.db.saveItems([
+    { id: `it_${id}_0`, threadId: id, turnId: `tu_${id}_0`, seq: 1, createdAt: Date.now(), kind: "user", text: "Issues: 1) the first list" } as Item,
+    { id: `it_${id}_1`, threadId: id, turnId: `tu_${id}_0`, seq: 2, createdAt: Date.now(), kind: "text", text: "Looking into these." } as Item,
+  ]);
+  first.dispose();
+  hosts.splice(hosts.indexOf(first), 1);
+
+  const { host, ran } = startHost();
+  (host as unknown as { providers: Record<string, { resumable?: (id: string) => Promise<boolean> }> }).providers.pi.resumable = async () => false;
+  host.send(id, { text: "Also 9) one more" });
+  for (let i = 0; i < 50 && !ran.get(id); i++) await new Promise((r) => setTimeout(r, 10));
+  const [input] = ran.get(id) ?? [];
+  assert.ok(input);
+  assert.match(input.text, /<earlier_conversation>/);
+  assert.match(input.text, /User: Issues: 1\) the first list/);
+  assert.match(input.text, /You \(stopped before it finished\): Looking into these\./);
+  assert.match(input.text, /Also 9\) one more/);
+});
+
 test("the resumed turn reaches the agent worded as Scribe's", async () => {
   const first = startHost().host;
   const id = cutOff(first);
