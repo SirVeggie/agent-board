@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { PORT, dataDir } from "../config.js";
 import { closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
+import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
 import type { PageEvent } from "../types.js";
@@ -19,6 +20,7 @@ import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
+import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
 import { PiProvider } from "./providers/pi.js";
 import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
 import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
@@ -259,6 +261,8 @@ export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]
 export class AgentHost {
   readonly db: AgentDb;
   private providers: Record<ProviderId, AgentProvider>;
+  /** With SCRIBE_FAKE_AGENTS=1: what runs every provider's threads, so tests start no real agent. */
+  private fakes: Record<ProviderId, AgentProvider> | null = null;
   private threads = new Map<string, Thread>();
   private sessions = new Map<string, ProviderSession>();
   private runs = new Map<string, RunState>();
@@ -288,6 +292,15 @@ export class AgentHost {
   constructor(private emit: (event: AgentEvent) => void) {
     this.db = new AgentDb();
     this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), pi: new PiProvider(() => this.modelSources()) };
+    if (FAKE_AGENTS) {
+      const deps = {
+        runAction: (page: string, name: string, args: Record<string, unknown>, caller: ActionCaller) => store.runAction(page, name, args, caller, (id) => this.runInfo(id)).result,
+        runInfo: (id: string) => this.runInfo(id),
+        delayMs: Number(process.env.SCRIBE_FAKE_AGENT_DELAY) || undefined,
+      };
+      this.fakes = { claude: new FakeProvider("claude", "Claude", deps), cursor: new FakeProvider("cursor", "Cursor", deps), pi: new FakeProvider("pi", "Native", deps) };
+      log("SCRIBE_FAKE_AGENTS=1: chats run fake agents (no model, tools or MCP)");
+    }
     const claudeModels = this.db.getSetting<ModelOption[]>("models.claude", []);
     (this.providers.claude as ClaudeProvider).setModelCache(claudeModels);
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
@@ -376,7 +389,7 @@ export class AgentHost {
 
   /** After a Cursor turn, pull its plan usage, at most once per CURSOR_USAGE_TTL_MS. */
   private refreshCursorUsage(): void {
-    if (this.closed || Date.now() - this.cursorUsageFetchAt < CURSOR_USAGE_TTL_MS) return;
+    if (this.closed || this.fakes || Date.now() - this.cursorUsageFetchAt < CURSOR_USAGE_TTL_MS) return;
     this.cursorUsageFetchAt = Date.now();
     void (this.providers.cursor as CursorProvider).fetchPlanUsage().then((resp) => {
       if (this.closed || !resp) return;
@@ -554,11 +567,16 @@ export class AgentHost {
   }
 
   async providerStatus(): Promise<ProviderStatus[]> {
-    return Promise.all(Object.values(this.providers).map((provider) => provider.status()));
+    return Promise.all(Object.values(this.fakes ?? this.providers).map((provider) => provider.status()));
+  }
+
+  /** The provider that runs a thread: the real one, or its fake under SCRIBE_FAKE_AGENTS=1. */
+  private agent(id: ProviderId): AgentProvider {
+    return this.fakes?.[id] ?? this.providers[id];
   }
 
   async models(provider: ProviderId, refresh = false): Promise<ModelOption[]> {
-    const models = await this.providers[provider].models(refresh);
+    const models = await this.agent(provider).models(refresh);
     if (models.length) this.db.setSetting(`models.${provider}`, models);
     return models.length ? models : this.db.getSetting<ModelOption[]>(`models.${provider}`, []);
   }
@@ -665,14 +683,14 @@ export class AgentHost {
     const draft = this.draftThread(input);
     if (draft.mode !== "board" && draft.mode !== "ask" && !draft.cwd) return;
     if (wantsWorktree(draft)) return;
-    this.providers[draft.provider].prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
+    this.agent(draft.provider).prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
   }
 
   /** remember: false for threads a page starts (board workers), so they leave the user's defaults alone. */
   createThread(input: Partial<Thread> & { scope?: ThreadScope }, { remember = true }: { remember?: boolean } = {}): ThreadView {
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
-    const spareId = this.providers[thread.provider].spareThreadId?.(thread, this.ctx);
+    const spareId = this.agent(thread.provider).spareThreadId?.(thread, this.ctx);
     // The spare is taken on the first message; a second thread made before that gets its own id.
     // createSession also refuses that spare: its MCP still reports this id.
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
@@ -1773,7 +1791,7 @@ export class AgentHost {
   private session(thread: Thread): ProviderSession {
     let session = this.sessions.get(thread.id);
     if (!session) {
-      session = this.providers[thread.provider].createSession(thread, this.ctx);
+      session = this.agent(thread.provider).createSession(thread, this.ctx);
       this.sessions.set(thread.id, session);
     }
     return session;
@@ -2620,7 +2638,7 @@ export class AgentHost {
 
     // Where the provider continues from: its transcript at the end of the last kept turn.
     const last = kept.at(-1);
-    const forks = this.providers[thread.provider].forks === true;
+    const forks = this.agent(thread.provider).forks === true;
     const at = forks && last?.nativeEnd ? last.nativeEnd : null;
     const recap = kept.length && !at ? this.recap(items, kept) : "";
     this.sessions.get(threadId)?.dispose();
@@ -2652,7 +2670,7 @@ export class AgentHost {
   private async canResume(thread: Thread): Promise<boolean> {
     if (!thread.nativeId) return true;
     try {
-      return (await this.providers[thread.provider].resumable?.(thread.nativeId)) ?? true;
+      return (await this.agent(thread.provider).resumable?.(thread.nativeId)) ?? true;
     } catch (err) {
       log(`Checking the session of ${thread.id} failed: ${(err as Error).message}`);
       return true;
@@ -2734,7 +2752,7 @@ export class AgentHost {
     }
     if (to.mode) thread.mode = to.mode;
     // A merged thread's session belongs to its removed worktree folder, not the folder a fork starts in.
-    const native = this.providers[source.provider].forks === true && source.nativeId && last.nativeEnd && !source.worktree?.closed;
+    const native = this.agent(source.provider).forks === true && source.nativeId && last.nativeEnd && !source.worktree?.closed;
     thread.fork = {
       from: source.id,
       title: source.title,
@@ -2787,7 +2805,7 @@ export class AgentHost {
 
   /** Whether a fork's first turn can continue the other thread's own provider session. */
   private forksNatively(thread: Thread, fork: NonNullable<Thread["fork"]>): boolean {
-    return Boolean(fork.nativeId && fork.at && thread.provider === fork.provider && this.providers[thread.provider].forks && (thread.cwd ?? null) === (fork.cwd ?? null));
+    return Boolean(fork.nativeId && fork.at && thread.provider === fork.provider && this.agent(thread.provider).forks && (thread.cwd ?? null) === (fork.cwd ?? null));
   }
 
   private forkCarry(thread: Thread, fork: NonNullable<Thread["fork"]>): ThreadView["carry"] {
@@ -2832,7 +2850,7 @@ export class AgentHost {
       run.abort = new AbortController();
       try {
         const middle = material.middle.length > MAX_FORK_MIDDLE ? `…${material.middle.slice(-MAX_FORK_MIDDLE)}` : material.middle;
-        const summary = (await this.providers[provider].complete(summaryPrompt(middle), model, run.abort.signal)).trim();
+        const summary = (await this.agent(provider).complete(summaryPrompt(middle), model, run.abort.signal)).trim();
         if (!summary) throw new Error("the summary came back empty");
         material.summary = summary;
         this.db.setSetting(`fork:${threadId}`, material);
