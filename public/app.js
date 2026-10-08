@@ -57,6 +57,10 @@
   const smoothScrollToggle = document.getElementById("smooth-scroll");
   const showClearToggle = document.getElementById("show-clear");
   const tightSmallToggle = document.getElementById("tight-small");
+  const agentSideTrack = document.getElementById("agent-side");
+  const librarySideTrack = document.getElementById("library-side");
+  const agentSideLabel = document.getElementById("agent-side-label");
+  const librarySideLabel = document.getElementById("library-side-label");
   const importPageBtn = document.getElementById("import-page");
   const exportPageBtn = document.getElementById("export-page");
   const exportAllBtn = document.getElementById("export-all");
@@ -101,6 +105,13 @@
   const PREFIX_MAX = 8;
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "scribe.tightSmall";
+  /** Also read by the inline script in index.html so the first paint already places the panes. */
+  const AGENT_SIDE_KEY = "scribe.agentSide";
+  const LIBRARY_SIDE_KEY = "scribe.librarySide";
+  const PANE_SIDES = [
+    { id: "left", name: "Left" },
+    { id: "right", name: "Right" },
+  ];
   const DEFAULT_THEME = "neutral";
   const THEMES = [
     { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "/favicon.svg?v=4" },
@@ -301,9 +312,14 @@
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
   document.documentElement.classList.toggle("hide-clear", !flagOn(showClearToggle));
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
+  applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
+  applyPaneSideAttr("librarySide", paneSide(LIBRARY_SIDE_KEY));
   renderThemeList();
   renderLinkModes();
+  renderPaneSides();
   renderPalettePrefixSettings();
+  bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
+  bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -742,6 +758,57 @@
     const width = Math.max(220, Math.min(480, px));
     document.documentElement.style.setProperty("--side-width", width + "px");
     localStorage.setItem(SIDE_WIDTH_KEY, String(width));
+  }
+
+  function paneSide(key) {
+    return localStorage.getItem(key) === "left" ? "left" : "right";
+  }
+
+  function applyPaneSideAttr(attr, side) {
+    if (side === "left") {
+      document.documentElement.dataset[attr] = "left";
+    } else {
+      delete document.documentElement.dataset[attr];
+    }
+  }
+
+  function setPaneSide(attr, key, side) {
+    const value = side === "left" ? "left" : "right";
+    localStorage.setItem(key, value);
+    applyPaneSideAttr(attr, value);
+  }
+
+  function renderPaneSide(track, attr, key) {
+    if (!track) {
+      return;
+    }
+    const current = paneSide(key);
+    track.replaceChildren();
+    for (const item of PANE_SIDES) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = item.name;
+      btn.setAttribute("aria-pressed", String(item.id === current));
+      btn.addEventListener("click", () => {
+        setPaneSide(attr, key, item.id);
+        renderPaneSide(track, attr, key);
+      });
+      track.appendChild(btn);
+    }
+  }
+
+  function renderPaneSides() {
+    renderPaneSide(agentSideTrack, "agentSide", AGENT_SIDE_KEY);
+    renderPaneSide(librarySideTrack, "librarySide", LIBRARY_SIDE_KEY);
+  }
+
+  function bindSettingHint(el, description) {
+    if (!el) {
+      return;
+    }
+    el.dataset.hint = description;
+    el.setAttribute("aria-description", description);
+    hoverCard.bind(el, 350);
   }
 
   function loadTheme() {
@@ -2472,6 +2539,9 @@
   }
 
   function describeForCard(el) {
+    if (el.dataset.hint) {
+      return { title: el.textContent.trim(), description: el.dataset.hint, note: true };
+    }
     if (el.dataset.kind === "template-update") {
       return { title: UPDATE_TITLE, description: UPDATE_NOTE, note: true };
     }
@@ -3698,7 +3768,8 @@
       if (move.pointerId !== event.pointerId) {
         return;
       }
-      applySideWidth(startWidth - (move.clientX - startX));
+      const dir = document.documentElement.dataset.librarySide === "left" ? 1 : -1;
+      applySideWidth(startWidth + dir * (move.clientX - startX));
     }
     function onUp(up) {
       if (up.pointerId !== event.pointerId) {

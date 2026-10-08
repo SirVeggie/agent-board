@@ -4794,7 +4794,10 @@
         document.body.classList.add("resizing-side");
         const startX = event.clientX;
         const startW = pane.getBoundingClientRect().width;
-        const move = (e) => applyWidth(startW + (startX - e.clientX));
+        const move = (e) => {
+          const dir = document.documentElement.dataset.agentSide === "left" ? 1 : -1;
+          applyWidth(startW + dir * (e.clientX - startX));
+        };
         const up = () => {
           document.body.classList.remove("resizing-side");
           resizer.removeEventListener("pointermove", move);

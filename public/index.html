@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=60">
-  <link rel="stylesheet" href="/agent.css?v=28">
+  <link rel="stylesheet" href="/app.css?v=61">
+  <link rel="stylesheet" href="/agent.css?v=29">
   <script>
     (() => {
       // Settings saved before the rename from Agent Board keep working.
@@ -25,6 +25,12 @@
       }
       if (localStorage.getItem("scribe.showClear") === "0") {
         document.documentElement.classList.add("hide-clear");
+      }
+      if (localStorage.getItem("scribe.agentSide") === "left") {
+        document.documentElement.dataset.agentSide = "left";
+      }
+      if (localStorage.getItem("scribe.librarySide") === "left") {
+        document.documentElement.dataset.librarySide = "left";
       }
       const theme = localStorage.getItem("scribe.theme");
       if (["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(theme)) {
@@ -203,6 +209,14 @@
       <section class="settings-section">
         <h3>Layout</h3>
         <div class="setting-row">
+          <span id="agent-side-label" class="setting-hinted">Agent sidebar</span>
+          <div class="button-track text-track" id="agent-side" role="group" aria-labelledby="agent-side-label"></div>
+        </div>
+        <div class="setting-row">
+          <span id="library-side-label" class="setting-hinted">Library sidebar</span>
+          <div class="button-track text-track" id="library-side" role="group" aria-labelledby="library-side-label"></div>
+        </div>
+        <div class="setting-row">
           <span id="tight-small-label">No spacing around panels in small windows</span>
           <button type="button" class="pill-toggle" id="tight-small" role="switch" aria-checked="true" aria-labelledby="tight-small-label"></button>
         </div>
@@ -316,7 +330,7 @@
       <div class="confirm-actions" id="choice-actions"></div>
     </form>
   </dialog>
-  <script src="/hovercard.js?v=4"></script>
+  <script src="/hovercard.js?v=5"></script>
   <script src="/select.js?v=2"></script>
   <script src="/library.js?v=11"></script>
   <script src="/trash.js?v=1"></script>
@@ -324,12 +338,12 @@
   <script src="/preview.js?v=1"></script>
   <script src="/permissions.js?v=1"></script>
   <script src="/spaces.js?v=1"></script>
-  <script src="/app.js?v=69"></script>
+  <script src="/app.js?v=70"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
   <script src="/agent-render.js?v=11"></script>
-  <script src="/agent.js?v=39"></script>
+  <script src="/agent.js?v=40"></script>
   <script src="/desktop.js?v=5"></script>
 </body>
 </html>

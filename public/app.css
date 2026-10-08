@@ -651,14 +651,31 @@ main.template-locked iframe[data-role="primary"] {
   transition:
     width 0.28s var(--ease),
     margin-left 0.28s var(--ease),
+    margin-right 0.28s var(--ease),
     opacity 0.2s ease;
 }
 
 .side-pane.closed {
   width: 0;
   margin-left: 0;
+  margin-right: 0;
   opacity: 0;
   pointer-events: none;
+}
+
+/* Left panes sit before main (library outermost, agent next to the page). */
+html[data-library-side="left"] .side-pane {
+  order: -2;
+  margin-left: 0;
+  margin-right: 14px;
+}
+
+html[data-library-side="left"] .side-pane.closed {
+  margin-right: 0;
+}
+
+html[data-library-side="left"] #library-toggle svg {
+  transform: scaleX(-1);
 }
 
 .side-inner {
@@ -745,6 +762,11 @@ main.template-locked iframe[data-role="primary"] {
   cursor: col-resize;
   z-index: 2;
   touch-action: none;
+}
+
+html[data-library-side="left"] .side-resizer {
+  left: auto;
+  right: 0;
 }
 
 body.resizing-side {
@@ -2174,6 +2196,13 @@ kbd {
   color: var(--text);
 }
 
+.setting-hinted {
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
 .tabs-wrap::after,
 .side-pane::after,
 .settings-panel::after {
@@ -2727,6 +2756,7 @@ html.compact button.win-btn {
     flex: 1 1 auto;
     width: auto;
     margin-left: 0;
+    margin-right: 0;
   }
 
   .side-pane:not(.closed) .side-inner {
@@ -2741,6 +2771,12 @@ html.compact button.win-btn {
   .workspace:has(.side-pane:not(.closed)) main {
     flex: 0 0 0;
     visibility: hidden;
+  }
+
+  /* Library is first when it is on the left; don't let a fixed-width agent eat it. */
+  html[data-library-side="left"] .workspace:has(.side-pane:not(.closed)) .agent-pane:not(.closed) {
+    flex: 0 1 auto;
+    max-width: 50%;
   }
 }
 
@@ -2759,6 +2795,12 @@ html.compact button.win-btn {
   html.tight-small .side-pane:not(.closed) {
     margin-left: 0;
     border-left: 1px solid var(--border);
+  }
+
+  html.tight-small[data-library-side="left"] .side-pane:not(.closed) {
+    margin-right: 0;
+    border-left: none;
+    border-right: 1px solid var(--border);
   }
 }
 

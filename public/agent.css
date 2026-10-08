@@ -116,14 +116,26 @@ html[data-theme="cream"] {
   transition:
     width 0.28s var(--ease),
     margin-left 0.28s var(--ease),
+    margin-right 0.28s var(--ease),
     opacity 0.2s ease;
 }
 
 .agent-pane.closed {
   width: 0;
   margin-left: 0;
+  margin-right: 0;
   opacity: 0;
   pointer-events: none;
+}
+
+html[data-agent-side="left"] .agent-pane {
+  order: -1;
+  margin-left: 0;
+  margin-right: 14px;
+}
+
+html[data-agent-side="left"] .agent-pane.closed {
+  margin-right: 0;
 }
 
 body.resizing-side .agent-pane {
@@ -150,6 +162,11 @@ body.resizing-side .agent-pane {
   touch-action: none;
 }
 
+html[data-agent-side="left"] .agent-resizer {
+  left: auto;
+  right: 0;
+}
+
 html.tight-small .agent-pane {
   /* follows the side pane's spacing rules */
 }
@@ -163,6 +180,12 @@ html.tight-small .agent-pane {
   html.tight-small .agent-pane:not(.closed) {
     margin-left: 0;
     border-left: 1px solid var(--border);
+  }
+
+  html.tight-small[data-agent-side="left"] .agent-pane:not(.closed) {
+    margin-right: 0;
+    border-left: none;
+    border-right: 1px solid var(--border);
   }
 }
 

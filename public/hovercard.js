@@ -211,9 +211,11 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
     let left;
     let top;
     if (inLibrary) {
-      left = box.left - gap - width;
+      const libraryLeft = document.documentElement.dataset.librarySide === "left";
+      left = libraryLeft ? box.right + gap : box.left - gap - width;
       top = box.top;
-      if (left < margin) {
+      const overflow = libraryLeft ? left + width > window.innerWidth - margin : left < margin;
+      if (overflow) {
         left = box.left;
         top = box.bottom + gap;
       }
