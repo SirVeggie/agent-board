@@ -587,6 +587,42 @@
     return openWorktree(t)?.home || t?.cwd || null;
   }
 
+  /** Keep in step with src/agent/pageChat.ts. Last AI reply older than this: opening the floating chat on a page starts a new thread. */
+  const PAGE_CHAT_STALE_MS = 2 * 60 * 60 * 1000;
+
+  function pageThreadHome(t) {
+    return t?.worktree?.home || t?.cwd || null;
+  }
+
+  /** Workspace for a new thread on this page: the page thread with the latest AI reply. None if it has no threads. */
+  function pageThreadWorkspace(pageId) {
+    if (!pageId) return null;
+    let best = null;
+    for (const t of S.threads.values()) {
+      if (t.archived || t.scope.kind !== "page" || t.scope.ref !== pageId || !t.finishedAt) continue;
+      if (!best || t.finishedAt > best.finishedAt) best = t;
+    }
+    return pageThreadHome(best);
+  }
+
+  function pageThreadIsStale(t, now) {
+    if (!t || t.status === "running" || t.status === "waiting") return false;
+    if (!t.finishedAt) return false;
+    return t.finishedAt < now - PAGE_CHAT_STALE_MS;
+  }
+
+  /** Which thread the floating chat should show on this page, or null to start a new one. */
+  function pageDockThreadId(tabId, pickId, now) {
+    const picked = pickId ? S.threads.get(pickId) : null;
+    let id = picked && !picked.archived ? pickId : null;
+    if (!id && tabId) {
+      id = [...S.threads.values()].filter((t) => !t.archived && t.scope.kind === "page" && t.scope.ref === tabId).sort((a, b) => b.activityAt - a.activityAt)[0]?.id || null;
+    }
+    const t = id ? S.threads.get(id) : null;
+    if (t && pageThreadIsStale(t, now)) return null;
+    return id;
+  }
+
   function deletePrompt(t) {
     const wt = openWorktree(t);
     const extra = wt ? ` Its worktree folder is removed too; the work stays on branch ${wt.branch}, with uncommitted changes committed there first.` : "";
@@ -1599,7 +1635,14 @@
       const d = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
       const provider = d.settings.provider || (providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id || "cursor");
       const scopeKey = d.scope.kind === "global" ? "global" : `${d.scope.kind}:${d.scope.ref}`;
-      const cwd = d.settings.cwd !== undefined ? d.settings.cwd : d.scope.kind === "workspace" ? d.scope.ref : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null;
+      const cwd =
+        d.settings.cwd !== undefined
+          ? d.settings.cwd
+          : d.scope.kind === "workspace"
+            ? d.scope.ref
+            : d.scope.kind === "page"
+              ? pageThreadWorkspace(d.scope.ref)
+              : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null;
       const model = d.settings.model || p.models?.[provider] || "default";
       const choice = modelChoice(provider, model, p);
       return {
@@ -5033,15 +5076,11 @@
         if (activeTab()?.id === tabId) this.syncThread();
       }
     },
-    /** The dock follows the active page: its picked thread, else its newest page thread, else a draft. */
+    /** The dock follows the active page: its picked thread, else its newest page thread, else a draft. A last AI reply older than two hours starts a new thread. */
     syncThread() {
       if (!this.root) return;
       const tab = activeTab();
-      let id = tab ? S.dockPicks.get(tab.id) : null;
-      if (id && !S.threads.has(id)) id = null;
-      if (!id && tab) {
-        id = [...S.threads.values()].filter((t) => !t.archived && t.scope.kind === "page" && t.scope.ref === tab.id).sort((a, b) => b.activityAt - a.activityAt)[0]?.id || null;
-      }
+      const id = pageDockThreadId(tab?.id || null, tab ? S.dockPicks.get(tab.id) : null, Date.now());
       if (id) {
         if (this.view.threadId !== id) this.view.setThread(id);
       } else {

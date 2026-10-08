@@ -33,7 +33,10 @@ export type Prefs = {
    */
   cursorHostShell: boolean;
   recentWorkspaces: string[];
-  /** Last workspace used for a scope ("page:<id>", "folder:<id>"), so new threads there start in it. */
+  /**
+   * Last workspace used for a folder scope ("folder:<id>"), so new threads there start in it.
+   * Still recorded for pages; new page threads take the latest AI reply on that page instead.
+   */
   scopeWorkspaces: Record<string, string>;
   /** Starred models as "provider:modelId", in the order they were starred. Ctrl+' cycles them. */
   favoriteModels: string[];

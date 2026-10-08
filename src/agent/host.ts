@@ -42,6 +42,7 @@ import type {
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
+import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -725,7 +726,9 @@ export class AgentHost {
         ? input.cwd
         : scope.kind === "workspace"
           ? scope.ref
-          : prefs.scopeWorkspaces[scopeKey] ?? prefs.recentWorkspaces[0] ?? null;
+          : scope.kind === "page" && scope.ref
+            ? this.pageWorkspace(scope.ref)
+            : prefs.scopeWorkspaces[scopeKey] ?? prefs.recentWorkspaces[0] ?? null;
     const model = input.model ?? prefs.models[provider] ?? "default";
     const choice = modelChoice(prefs, provider, model);
     const now = Date.now();
@@ -751,6 +754,29 @@ export class AgentHost {
       activityAt: now,
     };
     return thread;
+  }
+
+  /** Workspace a new thread on this page should start in: latest AI reply there, else none. */
+  private pageWorkspace(pageId: string): string | null {
+    const rows: PageChatThread[] = [];
+    for (const t of this.threads.values()) {
+      if (t.archived || t.scope.kind !== "page" || t.scope.ref !== pageId) continue;
+      let finishedAt: number | undefined;
+      for (const turn of this.loadTurns(t.id)) {
+        if (turn.endedAt) finishedAt = turn.endedAt;
+      }
+      rows.push({
+        id: t.id,
+        archived: t.archived,
+        scope: t.scope,
+        cwd: t.cwd,
+        worktree: t.worktree,
+        finishedAt,
+        activityAt: t.activityAt,
+        status: this.status.get(t.id) ?? "idle",
+      });
+    }
+    return pageThreadWorkspace(rows, pageId);
   }
 
   updateThread(id: string, patch: Partial<Thread>): ThreadView {
