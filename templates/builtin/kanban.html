@@ -511,6 +511,7 @@
     word-break: break-word;
   }
   .m-title:hover { background: rgba(255, 255, 255, .06); }
+  #mTitle:focus-visible { box-shadow: 0 0 0 1px var(--accent); }
   .m-title-input {
     width: 100%;
     font: 650 21px/1.3 ui-sans-serif, system-ui, Segoe UI, sans-serif;
@@ -1008,7 +1009,7 @@
       <button class="modal-close" id="mClose" type="button" aria-label="Close">×</button>
       <div class="m-head">
         <div class="m-num" id="mNum"></div>
-        <h2 class="m-title" id="mTitle"></h2>
+        <h2 class="m-title" id="mTitle" tabindex="0"></h2>
         <input class="m-title-input hidden" id="mTitleInput" type="text" autocomplete="off">
       </div>
       <div class="m-status hidden" id="mStatus"></div>
@@ -2494,6 +2495,7 @@
     var c = card(id);
     if (c && hasUnread(c)) updateCard(id, function (x) { x.seenAt = Date.now(); return x; });
     renderModal();
+    mTitle.focus();
   }
   function closeCard() {
     if (editingDesc) saveDescription();
@@ -2771,6 +2773,13 @@
   mTitle.addEventListener("click", function (e) {
     if (e.target.closest && e.target.closest("a")) return;
     startEditTitle();
+  });
+  mTitle.addEventListener("keydown", function (e) {
+    if (e.target !== mTitle || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      startEditTitle();
+    }
   });
   mTitleInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); mTitleInput.blur(); }
@@ -5588,6 +5597,49 @@
     glide.pos = Math.abs(boardEl.scrollLeft - glide.pos) <= 1 ? glide.pos : boardEl.scrollLeft;
     requestAnimationFrame(stepGlide);
   }
+  function dialogFocusables(root) {
+    var nodes = root.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (node.offsetWidth || node.offsetHeight || node.getClientRects().length) out.push(node);
+    }
+    return out;
+  }
+  function trapDialogTab(e, root) {
+    if (e.key !== "Tab" || e.defaultPrevented) return;
+    var list = dialogFocusables(root);
+    if (!list.length) {
+      e.preventDefault();
+      return;
+    }
+    var first = list[0], last = list[list.length - 1];
+    var active = document.activeElement;
+    if (e.shiftKey) {
+      if (active === first || !root.contains(active)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !root.contains(active)) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+  function topDialog() {
+    var ids = ["stopBack", "workerBack", "settingsBack", "confirmBack"];
+    for (var i = 0; i < ids.length; i++) {
+      var back = $(ids[i]);
+      if (back && !back.classList.contains("hidden")) {
+        return back.querySelector("[role='dialog'], [role='alertdialog']");
+      }
+    }
+    if (!overlay.classList.contains("hidden")) return modal;
+    return null;
+  }
+  document.addEventListener("keydown", function (e) {
+    var dlg = topDialog();
+    if (dlg) trapDialogTab(e, dlg);
+  });
   document.addEventListener("keydown", function (e) {
     var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
     if (e.key === "Escape") {

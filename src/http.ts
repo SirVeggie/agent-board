@@ -1662,7 +1662,7 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   next();
 }
 
-const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/agent.js", "/agent.css", "/agent-render.js", "/vendor/highlight.js"]);
+const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/focusTrap.js", "/preview.js", "/agent.js", "/agent.css", "/agent-render.js", "/vendor/highlight.js"]);
 
 function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (SHELL_PATHS.has(req.path)) {

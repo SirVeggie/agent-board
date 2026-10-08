@@ -283,16 +283,18 @@
     });
     root.append(backdrop);
     document.body.append(root);
-    current = { files: list, index: 0, root, body: null, onClose: opts.onClose, returnFocus: document.activeElement };
+    current = { files: list, index: 0, root, body: null, onClose: opts.onClose, returnFocus: document.activeElement, releaseTrap: null };
     window.addEventListener("keydown", onKey, true);
     show(Math.max(0, Math.min(list.length - 1, index)));
+    current.releaseTrap = window.scribeFocusTrap?.bind(root);
     return true;
   }
 
   function close() {
     if (!current) return false;
-    const { root, onClose, returnFocus } = current;
+    const { root, onClose, returnFocus, releaseTrap } = current;
     current = null;
+    releaseTrap?.();
     window.removeEventListener("keydown", onKey, true);
     root.remove();
     try {

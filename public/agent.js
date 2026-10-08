@@ -1051,8 +1051,13 @@
     const root = el("div", `ag-modal ${cls}`);
     const backdrop = el("div", "ag-modal-backdrop");
     const panel = el("div", "ag-modal-panel");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
     root.append(backdrop, panel);
+    let releaseTrap = null;
     const close = () => {
+      releaseTrap?.();
+      releaseTrap = null;
       root.remove();
       modalStack.splice(modalStack.indexOf(close), 1);
       onClose?.();
@@ -1063,6 +1068,10 @@
     });
     modalStack.push(close);
     document.body.append(root);
+    requestAnimationFrame(() => {
+      if (!root.isConnected) return;
+      releaseTrap = window.scribeFocusTrap?.bind(panel);
+    });
     return { root, panel, close };
   }
   const modalStack = [];
@@ -6546,6 +6555,8 @@
       this.renderWeb();
       this.renderHooks();
       this.root.hidden = false;
+      this.releaseTrap?.();
+      this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"));
       void this.load();
     },
     /** Domains for Limited web access. Scribe's own list (prefs), the same for every workspace. */
@@ -6610,6 +6621,8 @@
     },
     close() {
       if (!this.isOpen()) return false;
+      this.releaseTrap?.();
+      this.releaseTrap = null;
       this.root.hidden = true;
       hideHoverTip();
       return true;
@@ -6989,9 +7002,13 @@
       this.root.hidden = false;
       this.renderUsage();
       this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });
+      this.releaseTrap?.();
+      this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"));
     },
     close() {
       if (!this.isOpen()) return false;
+      this.releaseTrap?.();
+      this.releaseTrap = null;
       this.root.hidden = true;
       hideHoverTip();
       return true;

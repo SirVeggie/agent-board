@@ -953,20 +953,26 @@
     return !settingsEl.hidden;
   }
 
+  let releaseSettingsTrap = null;
   function openSettings() {
     if (isPaletteOpen()) {
       closePalette();
     }
     settingsEl.hidden = false;
     settingsToggle.setAttribute("aria-expanded", "true");
+    releaseSettingsTrap?.();
+    releaseSettingsTrap = window.scribeFocusTrap?.bind(document.getElementById("settings-panel"));
   }
 
   function closeSettings() {
     if (!isSettingsOpen()) {
       return;
     }
+    releaseSettingsTrap?.();
+    releaseSettingsTrap = null;
     settingsEl.hidden = true;
     settingsToggle.setAttribute("aria-expanded", "false");
+    settingsToggle.focus({ preventScroll: true });
   }
 
   function toggleSettings() {
@@ -1936,6 +1942,7 @@
     return state.templates.find((item) => item.id === id) || state.builtinTemplates.find((item) => item.id === id) || null;
   }
 
+  let releaseTemplateTrap = null;
   function isTemplateModalOpen() {
     return !templateModal.hidden;
   }
@@ -1965,12 +1972,16 @@
     templateModal.hidden = false;
     const first = templateModalFields.querySelector("input, textarea, .select-button");
     first?.focus();
+    releaseTemplateTrap?.();
+    releaseTemplateTrap = window.scribeFocusTrap?.bind(templateModal.querySelector(".settings-panel"));
   }
 
   function closeTemplateModal() {
     if (templateModal.hidden) {
       return;
     }
+    releaseTemplateTrap?.();
+    releaseTemplateTrap = null;
     templateModal.hidden = true;
     delete templateModal.dataset.templateId;
     delete templateModal.dataset.mode;
@@ -3264,6 +3275,7 @@
     openPalette();
   }
 
+  let releasePaletteTrap = null;
   function openPalette() {
     closeSettings();
     paletteEl.hidden = false;
@@ -3272,9 +3284,13 @@
     showLocalPaletteRows();
     paletteInput.focus();
     paletteInput.select();
+    releasePaletteTrap?.();
+    releasePaletteTrap = window.scribeFocusTrap?.bind(paletteEl.querySelector(".palette-panel"));
   }
 
   function closePalette() {
+    releasePaletteTrap?.();
+    releasePaletteTrap = null;
     paletteEl.hidden = true;
     clearTimeout(paletteTimer);
     paletteReq += 1;

@@ -362,6 +362,7 @@
     padding: 4px 6px;
   }
   .modal-title:hover { background: rgba(255, 255, 255, .06); }
+  #modalTitle:focus-visible { box-shadow: 0 0 0 1px var(--accent); }
   .modal-title-input {
     flex: 1;
     min-width: 0;
@@ -558,7 +559,7 @@
         <label class="modal-done" title="Mark complete">
           <input class="check" id="modalDone" type="checkbox">
         </label>
-        <h2 class="modal-title" id="modalTitle"></h2>
+        <h2 class="modal-title" id="modalTitle" tabindex="0"></h2>
         <input class="modal-title-input hidden" id="titleInput" type="text" autocomplete="off" aria-label="Title">
       </div>
       <div class="field-label">Description</div>
@@ -1212,6 +1213,7 @@
     modalTitle.classList.remove("hidden");
     scribe.setLocal({ openId: id, draftDesc: "", draftTitle: "" });
     syncModal();
+    modalTitle.focus();
   }
 
   function closeModal() {
@@ -1661,6 +1663,13 @@
     if (event.target.closest && event.target.closest("a")) return;
     startEditTitle();
   };
+  modalTitle.onkeydown = function (event) {
+    if (event.target !== modalTitle || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      startEditTitle();
+    }
+  };
   mdPreview.onclick = function (event) {
     if (event.target.closest && event.target.closest("a")) return;
     startEditDesc();
@@ -1684,6 +1693,7 @@
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       titleInput.blur();
     }
     if (event.key === "Tab" && !event.shiftKey) {
@@ -1696,6 +1706,7 @@
   mdEditor.onkeydown = function (event) {
     if (event.key === "Escape" || ((event.ctrlKey || event.metaKey) && event.key === "Enter")) {
       event.preventDefault();
+      event.stopPropagation();
       mdEditor.blur();
     }
     if (event.key === "Tab" && event.shiftKey) {
@@ -1762,6 +1773,37 @@
     if (found) event.preventDefault();
   });
 
+  function dialogFocusables(root) {
+    var nodes = root.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (node.offsetWidth || node.offsetHeight || node.getClientRects().length) out.push(node);
+    }
+    return out;
+  }
+  function trapDialogTab(event, root) {
+    if (event.key !== "Tab" || event.defaultPrevented) return;
+    var list = dialogFocusables(root);
+    if (!list.length) {
+      event.preventDefault();
+      return;
+    }
+    var first = list[0], last = list[list.length - 1];
+    var active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !root.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !root.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+  document.addEventListener("keydown", function (event) {
+    if (!overlay.classList.contains("hidden")) trapDialogTab(event, modal);
+  });
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
     if (drag) {
