@@ -35,6 +35,7 @@ enum Shortcut {
 const VK_TAB: u32 = 0x09;
 const VK_PRIOR: u32 = 0x21;
 const VK_NEXT: u32 = 0x22;
+const VK_OEM_PERIOD: u32 = 0xBE;
 
 /// The key that types an apostrophe in the current layout (on Nordic layouts the '* key next to
 /// Enter), so the model shortcuts follow the label rather than a US key position.
@@ -53,6 +54,11 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
             (true, false) => Some(Shortcut::Board("agent-mode")),
             (true, true) => None,
         };
+    }
+    // Ctrl+. next workspace (then none), Ctrl+Shift+. next Scribe access. Physical period key so
+    // Shift still hits it when the layout types > or :.
+    if ctrl && !alt && key == VK_OEM_PERIOD {
+        return Some(Shortcut::Board(if shift { "agent-scope" } else { "agent-workspace" }));
     }
     if alt {
         return None;
@@ -77,6 +83,7 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
         (b'S', false) => Some(Shortcut::Board("download")),
         (b'H', false) => Some(Shortcut::Board("help")),
         (b'E', false) => Some(Shortcut::Board("spaces")),
+        (b'B', false) => Some(Shortcut::Board("library")),
         (b'W', false) => Some(Shortcut::Board("close-tab")),
         (b'K', false) => Some(Shortcut::Board("agent-dock")),
         (b'K', true) => Some(Shortcut::Board("agent-new")),
