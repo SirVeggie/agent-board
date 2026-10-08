@@ -5423,7 +5423,7 @@
         row("Approval", enhanced(workerSelect([["", "Default" + (defaults.approval ? " (" + labelOf(approvals, defaults.approval) + ")" : "")]].concat(approvals.map(function (a) { return [a.id, a.label]; })), str(w.approval), "Approval", function (v) { set({ approval: v }); })));
       }
     }
-    var webModes = { on: "On", limited: "Limited", off: "Off" };
+    var webModes = { on: "Full", limited: "Limited", off: "Off" };
     var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (k) { return [k, webModes[k]]; }));
     row("Web", enhanced(workerSelect(webOptions, str(w.web), "Web", function (v) { set({ web: v }); })),
       "Web search and fetch. Limited keeps Claude agents to the web allowlist in Agent settings. Default follows your chat settings.");

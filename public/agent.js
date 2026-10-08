@@ -96,9 +96,9 @@
     { id: "full", label: "Full access", detail: "Approve everything automatically" },
   ];
   const WEB_MODES = [
-    { id: "on", label: "Web", detail: "Web search and fetch on any site" },
-    { id: "limited", label: "Web: limited", detail: "The web allowlist's domains without asking; the agent asks for others" },
-    { id: "off", label: "Web off", detail: "The agent asks before each web search or fetch" },
+    { id: "on", label: "Full", detail: "Web search and fetch on any site" },
+    { id: "limited", label: "Limited", detail: "The web allowlist's domains without asking; the agent asks for others" },
+    { id: "off", label: "Off", detail: "The agent asks before each web search or fetch" },
   ];
   /** Providers that actually apply Limited and Off. */
   function webEnforced(provider) {
@@ -3623,7 +3623,7 @@
         );
         web.append(icon("fetch"));
         // The floating chat is narrow: the icon alone, with the mode in its tooltip and style.
-        if (this.variant !== "dock") web.append(el("span", null, wm.id === "limited" ? "Limited" : "Web"));
+        if (this.variant !== "dock") web.append(el("span", null, wm.label));
         else web.classList.add("ag-web-icon");
         web.setAttribute("aria-label", `${wm.label}: ${detail}`);
         bar.append(web);
