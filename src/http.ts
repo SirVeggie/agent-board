@@ -1720,17 +1720,20 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
       return;
     }
     // Agent chat: Ctrl+K floating chat, Ctrl+Shift+K new thread, Ctrl+L sidebar, Ctrl+Shift+L full window,
-    // Ctrl+J threads, Ctrl+' next favourite model, Ctrl+Alt+' next reasoning level, Ctrl+Shift+' next mode.
+    // Ctrl+J threads, Ctrl+' next favourite model, Ctrl+Alt+' next reasoning level, Ctrl+Shift+' next mode,
+    // Ctrl+. next workspace then none, Ctrl+Shift+. next Scribe access.
     // Pages that use them keep them.
     if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) return;
     // Spaces: Ctrl+E shows them, Ctrl+Shift+PageUp / PageDown switches to the previous / next one.
-    var spaceAction = event.altKey ? ""
+    // Library: Ctrl+B shows or hides the sidebar.
+    var boardAction = event.altKey ? ""
       : event.key.toLowerCase() === "e" && !event.shiftKey ? "spaces"
+      : event.key.toLowerCase() === "b" && !event.shiftKey ? "library"
       : event.shiftKey && event.key === "PageUp" ? "prev-space"
       : event.shiftKey && event.key === "PageDown" ? "next-space" : "";
-    if (spaceAction) {
+    if (boardAction) {
       event.preventDefault();
-      parent.postMessage({ type: "scribe-shortcut", action: spaceAction }, "*");
+      parent.postMessage({ type: "scribe-shortcut", action: boardAction }, "*");
       return;
     }
     var chatKey = event.key.toLowerCase();
@@ -1738,6 +1741,7 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
     var quote = event.key === "'" || event.key === '"' || (event.code === "Backslash" && event.key !== "\\\\" && event.key !== "|");
     var action = quote ? (event.shiftKey ? (event.altKey ? "" : "mode") : event.altKey ? "effort" : "model")
       : event.altKey ? ""
+      : event.code === "Period" ? (event.shiftKey ? "scope" : "workspace")
       : chatKey === "k" ? (event.shiftKey ? "new" : "dock")
       : chatKey === "l" ? (event.shiftKey ? "full" : "side")
       : chatKey === "j" && !event.shiftKey ? "threads" : "";

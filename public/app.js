@@ -2918,6 +2918,8 @@
       downloadActive();
     } else if (action === "help") {
       openWelcome();
+    } else if (action === "library") {
+      setSideOpen(!state.sideOpen);
     } else if (action === "next-tab" || action === "prev-tab") {
       cycleTab(action === "next-tab" ? 1 : -1);
     } else if (action === "close-tab") {
@@ -3037,6 +3039,11 @@
       return;
     }
     const key = event.key.toLowerCase();
+    if (key === "b" && !event.shiftKey) {
+      event.preventDefault();
+      runShortcut("library");
+      return;
+    }
     if (key === "d" && !event.shiftKey) {
       event.preventDefault();
       togglePalette();
@@ -3624,7 +3631,7 @@
     } else if (event.data?.type === "scribe-palette") {
       togglePalette();
     } else if (event.data?.type === "scribe-shortcut") {
-      if (["spaces", "next-space", "prev-space"].includes(event.data.action)) {
+      if (["spaces", "next-space", "prev-space", "library"].includes(event.data.action)) {
         runShortcut(event.data.action);
       }
     } else if (event.data?.type === "scribe-activity") {

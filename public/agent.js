@@ -131,6 +131,7 @@
   }
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
+  const SCOPE_CHIP_TITLE = "Page, folder, or workspace this thread belongs to (Ctrl+. next workspace · Ctrl+Shift+. next Scribe access)";
   const SCOPE_SLASH = [
     { name: "here", description: "This thread belongs to the current page" },
     { name: "folder", description: "This thread belongs to the current page's folder" },
@@ -1909,7 +1910,7 @@
       this.header.append(top);
       const meta = el("div", "ag-thead-meta");
       const needsFolder = s.mode !== "board" && s.mode !== "ask" && !s.cwd;
-      const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
+      const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), SCOPE_CHIP_TITLE);
       fillScopeDisplay(scope, s.scope, t ? workspaceDir(t) : s.cwd);
       meta.append(scope);
       if (t && t.stats.files) {
@@ -4996,7 +4997,7 @@
       // The island style moves status, thread, scope and the window tools into two tabs above the input (see place).
       this.status = el("span", "dock-status");
       this.titleBtn = button("", "dock-title", (event) => this.threadMenu(event.currentTarget), "Switch thread");
-      this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
+      this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), SCOPE_CHIP_TITLE);
       const tools = [
         toggle,
         button(icon("expand"), "ag-icon-btn small", () => {
@@ -5115,7 +5116,7 @@
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread"), icon("chevron", "ag-ico ag-chev-down"));
       fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
       this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
-      this.scopeBtn.title = "Page, folder, or workspace this thread belongs to";
+      this.scopeBtn.title = SCOPE_CHIP_TITLE;
       this.fitScope();
       this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
       // No native title: hovering the orb opens the threads flyout, and a tooltip would sit on top of it.
@@ -6404,6 +6405,8 @@
     ["Ctrl+'", "Next starred model"],
     ["Ctrl+Alt+'", "Next reasoning level"],
     ["Ctrl+Shift+'", "Next mode"],
+    ["Ctrl+.", "Next workspace, then none"],
+    ["Ctrl+Shift+.", "Next Scribe access (this page, its folder, global, none)"],
     ["Enter", "Send (or a new line, from Chat settings)"],
     ["Ctrl+Enter", "Always send"],
     ["Shift+Enter", "Always a new line"],
@@ -7465,6 +7468,10 @@
       void cycleEffort();
     } else if (action === "mode") {
       void cycleMode();
+    } else if (action === "workspace") {
+      void cycleWorkspace();
+    } else if (action === "scope") {
+      void cycleScope();
     } else if (action === "threads") {
       openThreads();
     } else if (action === "new") {
@@ -7612,6 +7619,70 @@
     notice(`Mode: ${next.label}`);
   }
 
+  /** Folders existing threads use, then recent ones, plus the current pick if it is not already listed. */
+  function workspaceCycleList(current) {
+    const dirs = [];
+    const seen = new Set();
+    const add = (dir) => {
+      if (!dir) return;
+      const key = dirKey(dir);
+      if (seen.has(key)) return;
+      seen.add(key);
+      dirs.push(dir);
+    };
+    for (const { path: dir } of threadWorkspaces()) add(dir);
+    for (const dir of prefs().recentWorkspaces || []) add(dir);
+    add(current);
+    return dirs;
+  }
+
+  async function cycleWorkspace() {
+    const view = targetView();
+    const current = view.settings().cwd || null;
+    const dirs = workspaceCycleList(current);
+    const list = [...dirs, null];
+    if (list.length < 2) {
+      notice("No workspaces to cycle");
+      return;
+    }
+    const at = current ? list.findIndex((dir) => dir && dirKey(dir) === dirKey(current)) : list.length - 1;
+    const next = list[(Math.max(at, 0) + 1) % list.length];
+    await view.setWorkspace(next);
+    notice(next ? `Workspace: ${R.basename(next) || next}` : "Workspace: None");
+  }
+
+  /** Scribe access options the scope menu would offer for this chat, in that order. */
+  function scopeCycleList(view) {
+    const s = view.settings();
+    const tab = activeTab();
+    const list = [];
+    const add = (scope) => {
+      if (!scope || list.some((item) => sameScope(item, scope))) return;
+      list.push(scope);
+    };
+    if (tab) add({ kind: "page", ref: tab.id });
+    if (tab?.folderId) add({ kind: "folder", ref: tab.folderId });
+    if (s.scope.kind === "page" || s.scope.kind === "folder") add({ ...s.scope });
+    add({ kind: "global", ref: null });
+    add({ kind: "workspace", ref: s.cwd || null });
+    return list;
+  }
+
+  async function cycleScope() {
+    const view = targetView();
+    const s = view.settings();
+    const list = scopeCycleList(view);
+    if (list.length < 2) {
+      notice("No other Scribe access to cycle");
+      return;
+    }
+    let at = list.findIndex((scope) => sameScope(scope, s.scope));
+    if (at < 0 && s.scope.kind === "workspace") at = list.findIndex((scope) => scope.kind === "workspace");
+    const next = list[(Math.max(at, 0) + 1) % list.length];
+    await view.setScope(next);
+    notice(`Scribe: ${next.kind === "workspace" ? "None" : scopeLabel(next).text}`);
+  }
+
   function escape() {
     if (allowlists.close()) return true;
     if (agentSettings.close()) return true;
@@ -7654,6 +7725,12 @@
       return;
     }
     if (event.altKey) return;
+    // Period key by position so Ctrl+Shift+. stays on that key when Shift types > or :.
+    if (event.code === "Period") {
+      event.preventDefault();
+      shortcut(event.shiftKey ? "scope" : "workspace");
+      return;
+    }
     const key = event.key.toLowerCase();
     if (key === "k") {
       event.preventDefault();
