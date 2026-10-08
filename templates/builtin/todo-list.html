@@ -395,6 +395,7 @@
   .md-preview:hover {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 1px 0 rgba(0, 0, 0, .5);
   }
+  #mdPreview:focus-visible { box-shadow: var(--depth), 0 0 0 1px var(--accent); }
   .md-preview.placeholder {
     color: var(--muted);
   }
@@ -558,11 +559,11 @@
           <input class="check" id="modalDone" type="checkbox">
         </label>
         <h2 class="modal-title" id="modalTitle"></h2>
-        <input class="modal-title-input hidden" id="titleInput" type="text" autocomplete="off">
+        <input class="modal-title-input hidden" id="titleInput" type="text" autocomplete="off" aria-label="Title">
       </div>
       <div class="field-label">Description</div>
-      <div class="md-preview placeholder" id="mdPreview">Click to add a description. Markdown is supported.</div>
-      <textarea class="md-editor hidden" id="mdEditor" placeholder="Write markdown…"></textarea>
+      <div class="md-preview placeholder" id="mdPreview" tabindex="0" role="textbox" aria-multiline="true" aria-label="Description">Click or press Enter to add a description. Markdown is supported.</div>
+      <textarea class="md-editor hidden" id="mdEditor" aria-label="Description" placeholder="Write markdown…"></textarea>
       <div class="field-label" style="margin-top:16px">Images</div>
       <div class="gallery" id="gallery"></div>
       <p class="hint" id="hint">Click the title or description to edit. Click away to save. Paste, drop, or tap + to attach images.</p>
@@ -1240,7 +1241,7 @@
     var desc = item.description || "";
     if (!desc.trim()) {
       mdPreview.className = "md-preview placeholder";
-      mdPreview.textContent = "Click to add a description. Markdown is supported.";
+      mdPreview.textContent = "Click or press Enter to add a description. Markdown is supported.";
       return;
     }
     mdPreview.className = "md-preview";
@@ -1249,13 +1250,15 @@
 
   function startEditTitle() {
     var item = current();
-    if (!item || editingTitle) return;
+    if (!item) return;
     if (editingDesc) saveDesc();
-    editingTitle = true;
-    scribe.setLocal({ draftTitle: item.text });
-    titleInput.value = item.text;
-    modalTitle.classList.add("hidden");
-    titleInput.classList.remove("hidden");
+    if (!editingTitle) {
+      editingTitle = true;
+      scribe.setLocal({ draftTitle: item.text });
+      titleInput.value = item.text;
+      modalTitle.classList.add("hidden");
+      titleInput.classList.remove("hidden");
+    }
     titleInput.focus();
     titleInput.select();
   }
@@ -1276,13 +1279,15 @@
 
   function startEditDesc() {
     var item = current();
-    if (!item || editingDesc) return;
+    if (!item) return;
     if (editingTitle) saveTitle();
-    editingDesc = true;
-    scribe.setLocal({ draftDesc: item.description || "" });
-    mdEditor.value = item.description || "";
-    mdPreview.classList.add("hidden");
-    mdEditor.classList.remove("hidden");
+    if (!editingDesc) {
+      editingDesc = true;
+      scribe.setLocal({ draftDesc: item.description || "" });
+      mdEditor.value = item.description || "";
+      mdPreview.classList.add("hidden");
+      mdEditor.classList.remove("hidden");
+    }
     mdEditor.focus();
   }
 
@@ -1660,6 +1665,17 @@
     if (event.target.closest && event.target.closest("a")) return;
     startEditDesc();
   };
+  mdPreview.onkeydown = function (event) {
+    if (event.target !== mdPreview || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      startEditDesc();
+    } else if (event.key.length === 1) {
+      event.preventDefault();
+      startEditDesc();
+      insertAtCursor(mdEditor, event.key);
+    }
+  };
   titleInput.onblur = saveTitle;
   titleInput.onkeydown = function (event) {
     if (event.key === "Enter") {
@@ -1670,12 +1686,22 @@
       event.preventDefault();
       titleInput.blur();
     }
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+      saveTitle();
+      startEditDesc();
+    }
   };
   mdEditor.onblur = saveDesc;
   mdEditor.onkeydown = function (event) {
     if (event.key === "Escape" || ((event.ctrlKey || event.metaKey) && event.key === "Enter")) {
       event.preventDefault();
       mdEditor.blur();
+    }
+    if (event.key === "Tab" && event.shiftKey) {
+      event.preventDefault();
+      saveDesc();
+      startEditTitle();
     }
   };
 

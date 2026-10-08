@@ -53,6 +53,7 @@
   .md-preview:hover {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 1px 0 rgba(0, 0, 0, .5), var(--shadow);
   }
+  #preview:focus-visible { box-shadow: var(--depth), var(--shadow), 0 0 0 1px var(--accent); }
   .md-preview.placeholder { color: var(--muted); }
   .md-preview h1, .md-preview h2, .md-preview h3, .md-preview h4, .md-preview h5, .md-preview h6 {
     margin: 0.8em 0 0.35em;
@@ -124,8 +125,8 @@
     <header>
       <h1 class="page-title">{{title}}</h1>
     </header>
-    <div class="md-preview placeholder" id="preview">Click to write. Markdown is supported.</div>
-    <textarea class="md-editor hidden" id="editor" placeholder="Write markdown…" spellcheck="false"></textarea>
+    <div class="md-preview placeholder" id="preview" tabindex="0" role="textbox" aria-multiline="true" aria-label="Note">Click or press Enter to write. Markdown is supported.</div>
+    <textarea class="md-editor hidden" id="editor" aria-label="Note" placeholder="Write markdown…" spellcheck="false"></textarea>
   </div>
 <script>
 (function () {
@@ -150,7 +151,7 @@
     var src = text();
     if (!src.trim()) {
       preview.className = "md-preview placeholder";
-      preview.textContent = "Click to write. Markdown is supported; [[page-key]] links another board page.";
+      preview.textContent = "Click or press Enter to write. Markdown is supported; [[page-key]] links another board page.";
       return;
     }
     preview.className = "md-preview";
@@ -312,9 +313,29 @@
     return html.join("");
   }
 
+  function insertAtCursor(textarea, text) {
+    var start = textarea.selectionStart || 0;
+    var end = textarea.selectionEnd || 0;
+    var v = textarea.value;
+    textarea.value = v.slice(0, start) + text + v.slice(end);
+    textarea.selectionStart = textarea.selectionEnd = start + text.length;
+    scribe.setLocal({ draftText: textarea.value });
+  }
+
   preview.onclick = function (event) {
     if (event.target.closest && event.target.closest("a")) return;
     startEdit();
+  };
+  preview.onkeydown = function (event) {
+    if (event.target !== preview || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      startEdit();
+    } else if (event.key.length === 1) {
+      event.preventDefault();
+      startEdit();
+      insertAtCursor(editor, event.key);
+    }
   };
   editor.onblur = stopEdit;
   editor.onkeydown = function (event) {
