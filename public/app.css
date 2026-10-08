@@ -365,13 +365,15 @@ body {
   min-width: 0;
   flex: 1;
   overflow: hidden;
+  --new-tab-room: 34px;
 }
 
 .tabs {
   display: flex;
   align-items: center;
   min-width: 0;
-  flex: 1;
+  /* Only as wide as its tabs, so the New page button sits right after the last one. */
+  flex: 0 1 auto;
   gap: 4px;
   padding: 0 6px;
   overflow: hidden;
@@ -403,6 +405,36 @@ body {
   right: auto;
   left: 0;
   background: linear-gradient(to left, transparent 0%, var(--chrome-solid) 75%);
+}
+
+#tabs-fade {
+  right: var(--new-tab-room);
+}
+
+.new-tab {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 6px 0 0;
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.new-tab:hover {
+  color: var(--heading);
+  background: rgba(var(--lift-rgb), 0.07);
+}
+
+.new-tab.on {
+  color: var(--heading);
+  background: var(--accent-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .tabs-fade[hidden] {
@@ -3736,4 +3768,262 @@ button.space-menu-item.danger {
     transform: none;
     filter: none;
   }
+}
+
+/* ---------- New page (Ctrl+T) ----------
+   Matter that has not taken shape yet: soft blobs of the theme's accent drift on their own paths
+   inside a layer that turns slowly the other way, so they swirl and merge; a faint grain shimmers on top. */
+
+.newpage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  background: var(--panel);
+  display: flex;
+}
+
+.newpage[hidden] {
+  display: none;
+}
+
+main.blank-page #frames {
+  pointer-events: none;
+}
+
+main.blank-page #frames iframe:not(.inactive) {
+  pointer-events: auto;
+}
+
+.newpage-matter {
+  position: absolute;
+  inset: -25%;
+  pointer-events: none;
+  animation: np-turn 140s linear infinite;
+}
+
+.np-blob {
+  position: absolute;
+  width: 42%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, rgba(var(--accent-rgb), 0.22), rgba(var(--accent-rgb), 0.07) 38%, transparent 68%);
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+.np-b1 { left: 22%; top: 18%; animation: np-drift-a 31s ease-in-out infinite alternate; }
+.np-b2 { left: 42%; top: 36%; width: 34%; filter: hue-rotate(40deg) saturate(1.3); animation: np-drift-b 37s ease-in-out infinite alternate; }
+.np-b3 { left: 30%; top: 44%; width: 30%; filter: hue-rotate(-50deg); animation: np-drift-c 43s ease-in-out infinite alternate; }
+.np-b4 { left: 48%; top: 20%; width: 26%; animation: np-drift-b 29s ease-in-out infinite alternate-reverse; opacity: 0.8; }
+.np-b5 { left: 38%; top: 30%; width: 22%; background: radial-gradient(circle, rgba(var(--lift-rgb), 0.16), transparent 65%); animation: np-breathe 11s ease-in-out infinite; }
+
+.np-swirl {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent, rgba(var(--accent-rgb), 0.06) 12%, transparent 26%, rgba(var(--accent-rgb), 0.04) 48%, transparent 62%, rgba(var(--accent-rgb), 0.05) 80%, transparent);
+  -webkit-mask: radial-gradient(circle, #000 8%, transparent 62%);
+  mask: radial-gradient(circle, #000 8%, transparent 62%);
+  animation: np-turn 60s linear infinite reverse;
+}
+
+.np-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.07;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: np-shimmer 1.2s steps(4) infinite;
+}
+
+[data-theme="cream"] .np-blob {
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+}
+
+[data-theme="cream"] .np-b5 {
+  background: radial-gradient(circle, rgba(var(--accent-rgb), 0.12), transparent 65%);
+}
+
+.newpage.working .newpage-matter {
+  animation-duration: 50s;
+}
+
+.newpage.working .np-b5 {
+  animation-duration: 3.5s;
+}
+
+@keyframes np-turn {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes np-drift-a {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(18%, 12%) scale(1.15); }
+  66% { transform: translate(6%, 30%) scale(0.9); }
+  100% { transform: translate(-10%, 14%) scale(1.08); }
+}
+
+@keyframes np-drift-b {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-28%, 18%) scale(1.25); }
+  100% { transform: translate(-8%, -20%) scale(0.85); }
+}
+
+@keyframes np-drift-c {
+  0% { transform: translate(0, 0) scale(0.9); }
+  40% { transform: translate(30%, -14%) scale(1.2); }
+  100% { transform: translate(12%, -32%) scale(1); }
+}
+
+@keyframes np-breathe {
+  0%, 100% { transform: scale(0.85); opacity: 0.6; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+
+@keyframes np-shimmer {
+  0% { background-position: 0 0; }
+  25% { background-position: -40px 20px; }
+  50% { background-position: 30px -50px; }
+  75% { background-position: -60px -10px; }
+  100% { background-position: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .newpage-matter,
+  .newpage-matter * {
+    animation: none !important;
+  }
+}
+
+.newpage-body {
+  position: relative;
+  margin: auto;
+  width: min(760px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 48px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.newpage-title {
+  margin: 0 0 8px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--heading);
+}
+
+.newpage-lede {
+  margin: 0 0 18px;
+  max-width: 460px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.newpage-ask {
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--heading);
+}
+
+.newpage-ask:hover {
+  background: rgba(var(--accent-rgb), 0.22);
+}
+
+.newpage-ask svg {
+  color: var(--accent);
+}
+
+.newpage-ask kbd {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.newpage-ask kbd:first-of-type {
+  margin-left: 4px;
+}
+
+.newpage-templates-head {
+  align-self: stretch;
+  margin: 34px 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--muted);
+}
+
+.newpage-templates-head[hidden] {
+  display: none;
+}
+
+.newpage-templates {
+  align-self: stretch;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.newpage-card {
+  height: auto;
+  min-height: 64px;
+  padding: 12px 14px;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: none;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s var(--ease);
+}
+
+.newpage-card:hover,
+.newpage-card:focus-visible {
+  border-color: var(--accent-ring);
+  background: color-mix(in srgb, var(--panel) 60%, rgba(var(--accent-rgb), 0.12));
+  transform: translateY(-1px);
+}
+
+.newpage-card-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--file-icon);
+  filter: var(--file-glow);
+}
+
+.newpage-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.newpage-card-title {
+  font-weight: 600;
+  color: var(--heading);
+  line-height: 1.25;
+}
+
+.newpage-card-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

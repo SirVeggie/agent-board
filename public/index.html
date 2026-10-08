@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=61">
+  <link rel="stylesheet" href="/app.css?v=62">
   <link rel="stylesheet" href="/agent.css?v=29">
   <script>
     (() => {
@@ -63,6 +63,9 @@
     </button>
     <div class="tabs-wrap">
       <div class="tabs" id="tabs" role="tablist"></div>
+      <button type="button" id="new-tab" class="new-tab" aria-label="New page" title="New page (Ctrl+T)">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
       <div class="tabs-fade tabs-fade-left" id="tabs-fade-left" hidden></div>
       <div class="tabs-fade" id="tabs-fade" hidden></div>
     </div>
@@ -102,6 +105,7 @@
         <h1>Waiting for a page</h1>
         <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
         <ul class="shortcuts">
+          <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>T</kbd></span><span>opens a new page to start from a template or with the agent</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>D</kbd></span><span>searches every page, or threads with <kbd>=</kbd></span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span>downloads the current page as HTML (markup only)</span></li>
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>H</kbd></span><span>opens the help page</span></li>
@@ -111,6 +115,24 @@
           <li><span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span><span>opens the floating agent chat over the page</span></li>
           <li class="desktop-only"><span class="keys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></span><span>switches between the normal and compact window</span></li>
         </ul>
+      </div>
+      <div id="newpage" class="newpage" hidden>
+        <div class="newpage-matter" aria-hidden="true">
+          <div class="np-swirl"></div>
+          <span class="np-blob np-b1"></span>
+          <span class="np-blob np-b2"></span>
+          <span class="np-blob np-b3"></span>
+          <span class="np-blob np-b4"></span>
+          <span class="np-blob np-b5"></span>
+          <div class="np-grain"></div>
+        </div>
+        <div class="newpage-body">
+          <h1 class="newpage-title">New page</h1>
+          <p class="newpage-lede"></p>
+          <button type="button" class="newpage-ask"></button>
+          <h2 class="newpage-templates-head">Templates</h2>
+          <div class="newpage-templates"></div>
+        </div>
       </div>
       <div id="frames"></div>
     </main>
@@ -339,12 +361,13 @@
   <script src="/preview.js?v=2"></script>
   <script src="/permissions.js?v=1"></script>
   <script src="/spaces.js?v=1"></script>
-  <script src="/app.js?v=71"></script>
+  <script src="/newpage.js?v=1"></script>
+  <script src="/app.js?v=72"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
   <script src="/agent-render.js?v=11"></script>
-  <script src="/agent.js?v=41"></script>
+  <script src="/agent.js?v=42"></script>
   <script src="/desktop.js?v=5"></script>
 </body>
 </html>

@@ -57,6 +57,17 @@ test("followToPage leaves a board-owned thread on its page", () => {
   assert.deepEqual(host.getThread(thread.id)?.scope, { kind: "page", ref: "t_board" });
 });
 
+test("createThread on a New page draft promotes it to a real blank page", () => {
+  const draft = store.createDraft();
+  assert.equal(store.get(draft.id), undefined);
+  host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: draft.id } });
+  const tab = store.get(draft.id);
+  assert.ok(tab);
+  assert.equal(tab.html, "");
+  assert.equal(tab.title, "New page");
+  assert.equal(store.isDraft(draft.id), false);
+});
+
 test("followToPage ignores a missing thread or page", () => {
   const pageId = page("follow-missing");
   const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });

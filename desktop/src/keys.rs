@@ -72,6 +72,7 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
     match (u8::try_from(key).ok()?, shift) {
         (b'M', true) => Some(Shortcut::Compact),
         (b'T', true) => Some(Shortcut::Board("reopen")),
+        (b'T' | b'N', false) => Some(Shortcut::Board("new-page")),
         (b'D', false) => Some(Shortcut::Board("palette")),
         (b'S', false) => Some(Shortcut::Board("download")),
         (b'H', false) => Some(Shortcut::Board("help")),

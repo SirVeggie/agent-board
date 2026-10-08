@@ -698,7 +698,7 @@ export class AgentHost {
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     if (input.draft) thread.draft = input.draft;
     // A New page becomes a real page once it has a thread, even one that has not sent anything.
-    if (thread.scope.kind === "page" && thread.scope.ref) store.promoteDraft(thread.scope.ref, { activate: false });
+    if (thread.scope.kind === "page" && thread.scope.ref) store.promoteDraft(thread.scope.ref);
     this.threads.set(thread.id, thread);
     this.items.set(thread.id, []);
     this.turns.set(thread.id, []);
