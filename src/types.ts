@@ -224,7 +224,21 @@ export type TabMeta = Omit<Tab, "html" | "state" | "events" | "eventSeq" | "stri
   htmlBytes: number;
   /** Set when the page asks to be shown as a direct iframe of this URL. */
   embedUrl?: string;
+  /** A new page with nothing on it yet; the board shows its New page screen instead of a frame. */
+  blank?: boolean;
+  /** Not a page yet: a New page that no thread or template has made real. See BoardStore.createDraft. */
+  draft?: boolean;
 };
+
+export const NEW_PAGE_TITLE = "New page";
+
+/**
+ * A page made with New page that has no content yet. Every other way to make a page needs HTML,
+ * so empty HTML without a template only happens here.
+ */
+export function isBlankPage(tab: { html: string; templateId?: string }): boolean {
+  return tab.html === "" && !tab.templateId;
+}
 
 /** One delete operation. A folder delete is one batch however many pages it held. */
 export type DeletedBatch = {
@@ -359,6 +373,8 @@ export type UpsertInput = {
   actor?: PageActor;
   /** Refuse to replace an existing page whose revision is no longer this one. Ignored when the key is new. */
   expectedRevision?: number;
+  /** A blank page (the writing thread's own) that a new, focused page fills instead of making another tab. */
+  into?: string;
 };
 
 export type StateWriteInput = {
@@ -420,6 +436,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.folderInstructions ? { folderInstructions: true } : {}),
     ...(tab.provenance ? { provenance: tab.provenance } : {}),
     ...(embedUrl ? { embedUrl } : {}),
+    ...(isBlankPage(tab) ? { blank: true } : {}),
     ...(tab.templateId
       ? {
           templateId: tab.templateId,

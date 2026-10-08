@@ -51,6 +51,14 @@ test("every thread is told to check a message that looks meant for another threa
   }
 });
 
+test("a thread on a blank New page is told that the page it shows takes that page's place", () => {
+  const thread = { provider: "claude", mode: "board", cwd: null, scope: { kind: "page", ref: "t_1" } } as Thread;
+  const info = (blank: boolean) => ({ page: { id: "t_1", key: "scribe:new-page", title: "New page", folder: null, blank } });
+  assert.match(threadInstructions(thread, info(true)), /takes this blank page's place/);
+  assert.doesNotMatch(threadInstructions(thread, info(false)), /blank page/);
+  assert.match(threadInstructions(thread, info(false)), /This thread belongs to the Scribe page "New page"/);
+});
+
 test("worktree threads with a linked node_modules are told how to change dependencies", () => {
   const wt = (links: string[]) =>
     ({ provider: "claude", mode: "code", cwd: "/wt", scope: { kind: "global", ref: null }, worktree: { home: "/repo", repo: "/repo", path: "/wt", branch: "agent/x", base: "master", baseCommit: "abc", links, createdAt: 0 } }) as Thread;

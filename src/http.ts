@@ -19,7 +19,7 @@ import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, qualityLabel } from "./pageSearch.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
-import { isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isBlankPage, isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import type { SpacesView } from "./spaces.js";
 import { ViewerHub } from "./viewers.js";
 import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
@@ -255,6 +255,7 @@ export async function startHttp(): Promise<http.Server> {
         viewer: viewerOf(req),
         actor: actorOf(req),
         expectedRevision: typeof rawRevision === "number" && Number.isFinite(rawRevision) ? rawRevision : undefined,
+        into: threadBlankPage(req),
       });
       if (!created) {
         agentRewrote(req, tab.id);
@@ -263,6 +264,20 @@ export async function startHttp(): Promise<http.Server> {
     } catch (err) {
       res.status(err instanceof RevisionConflictError ? 409 : 400).json({ error: (err as Error).message });
     }
+  });
+
+  /** New page (Ctrl+T) in the board UI. id brings back the window's draft after a daemon restart. */
+  app.post("/api/drafts", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the board UI can open a new page this way" });
+      return;
+    }
+    const tab = store.createDraft(optionalString(req.body?.id));
+    res.status(201).json({ tab: { ...toMeta(tab), ...(store.isDraft(tab.id) ? { draft: true } : {}) } });
+  });
+
+  app.delete("/api/drafts/:id", (req, res) => {
+    res.json({ discarded: store.discardDraft(req.params.id) });
   });
 
   app.patch("/api/tabs/:id", (req, res) => {
@@ -1179,10 +1194,13 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/templates/:id/open", (req, res) => {
     try {
+      const activate = req.body?.activate !== false;
+      const into = viewerOf(req) === "user" ? optionalString(req.body?.into) : activate ? threadBlankPage(req) : undefined;
       const { tab, template, copiedBuiltin } = store.openFromTemplate(req.params.id, req.body?.values ?? {}, {
-        activate: req.body?.activate !== false,
+        activate,
         agentHidden: viewerOf(req) === "user" && req.body?.agentHidden === true,
         actor: actorOf(req),
+        into,
       });
       res.status(201).json({ tab: toMeta(tab), template: { id: template.id, key: template.key }, copiedBuiltin });
     } catch (err) {
@@ -1570,6 +1588,17 @@ function actorOf(req: express.Request): PageActor | undefined {
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const title = chat?.title?.trim().slice(0, 120);
   return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}) };
+}
+
+/** The page of the chat thread making this request, when that page is still blank: a new page it shows fills it. */
+function threadBlankPage(req: express.Request): string | undefined {
+  if (isContentHost(req) || viewerOf(req) !== "agent") {
+    return undefined;
+  }
+  const thread = req.get(THREAD_HEADER);
+  const scope = thread && agentHost ? agentHost.getThread(thread)?.scope : undefined;
+  const page = scope?.kind === "page" && scope.ref ? store.get(scope.ref) : undefined;
+  return page && isBlankPage(page) ? page.id : undefined;
 }
 
 let sweepQueued: NodeJS.Timeout | null = null;
