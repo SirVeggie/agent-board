@@ -52,7 +52,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
         "",
         thread.provider === "pi"
           ? "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan. Present it with exit_plan: once accepted you get the editing tools and implement it."
-          : "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan."
+          : thread.provider === "codex"
+            ? "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan. Write the plan as your final answer; Scribe will offer it for approval and then switch you to Code."
+            : "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan."
       );
       break;
     case "code":
@@ -61,7 +63,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   }
   if (thread.web === "on" && thread.provider === "pi") lines.push("Web: web_fetch fetches pages; there is no web search.");
   if (thread.web !== "on") {
-    const tools = thread.provider === "claude" ? "WebSearch or WebFetch" : "web_fetch (there is no web search)";
+    const tools = thread.provider === "claude" ? "WebSearch or WebFetch" : thread.provider === "codex" ? "web search" : "web_fetch (there is no web search)";
     lines.push(
       thread.web === "limited"
         ? `Web access is limited to the user's allowlist of domains${thread.provider === "claude" ? " (a web search that names no domains covers those sites)" : ""}. ${tools} elsewhere asks the user first.`

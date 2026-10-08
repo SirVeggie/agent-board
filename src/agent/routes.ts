@@ -9,7 +9,7 @@ import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
-import { isPlainRecord } from "./types.js";
+import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 
 /** /api/agent/* for the board shell. The content origin gate keeps tab pages out of these. */
@@ -39,13 +39,15 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap(async () => ({
       providers: await host.providerStatus(),
       prefs: host.prefs(),
-      models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor"), pi: host.cachedModels("pi") },
+      models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor"), codex: host.cachedModels("codex"), pi: host.cachedModels("pi") },
       limits: host.limits(),
     }))
   );
 
   // Cursor's browser login (the SDK's Cursor.auth.login); the URL also opens in the system browser.
   router.post("/cursor/login", wrap(() => host.cursorLogin()));
+  // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
+  router.post("/codex/login", wrap(() => host.codexLogin()));
 
   // The providers' own allow / deny / ask lists (Claude Code settings, Cursor CLI config).
   router.get("/permissions", wrap((req) => ({ sets: listPermissions(typeof req.query.cwd === "string" ? req.query.cwd : null) })));
@@ -495,8 +497,8 @@ async function listDir(dir: string): Promise<{ path: string; parent: string | nu
 }
 
 function parseProvider(value: unknown): ProviderId {
-  if (value === "claude" || value === "cursor" || value === "pi") return value;
-  throw new Error("provider must be claude, cursor, or pi");
+  if (isProviderId(value)) return value;
+  throw new Error("provider must be claude, cursor, codex, or pi");
 }
 
 function parseScope(value: unknown): ThreadScope {
@@ -515,7 +517,7 @@ function parseScope(value: unknown): ThreadScope {
 function threadPatch(body: Record<string, unknown>): Partial<Thread> {
   const patch: Partial<Thread> = {};
   if (typeof body.title === "string") patch.title = body.title;
-  if (body.provider === "claude" || body.provider === "cursor" || body.provider === "pi") patch.provider = body.provider;
+  if (isProviderId(body.provider)) patch.provider = body.provider;
   if (typeof body.model === "string" && body.model) patch.model = body.model;
   if (body.effort === null || typeof body.effort === "string") patch.effort = (body.effort as string | null) || null;
   if (isPlainRecord(body.modelParams)) {

@@ -102,7 +102,7 @@
   ];
   /** Providers that actually apply Limited and Off. */
   function webEnforced(provider) {
-    return provider === "claude" || provider === "cursor" || provider === "pi";
+    return provider === "claude" || provider === "cursor" || provider === "codex" || provider === "pi";
   }
   /** How long the transcript's spring takes to settle at the bottom, and how long a new row fades in (match .ag-enter). */
   const STICK_SPRING_MS = 600;
@@ -116,6 +116,10 @@
   const CURSOR_ASK = "Would ask first; Cursor Auto-reviews instead (can't ask yet)";
   const CURSOR_EDITS = "Would auto-edit; Cursor Auto-reviews instead (can't ask yet)";
   const CURSOR_REVIEW = "Auto-review approves safe calls and denies the rest; Cursor can't ask you yet";
+  const CODEX_ASK = "Would ask first; Codex exec cannot ask, so it runs commands in the workspace sandbox";
+  const CODEX_EDITS = "Would auto-edit; Codex exec cannot ask, so it runs commands in the workspace sandbox";
+  const CODEX_REVIEW = "Would use Auto review; Codex exec cannot ask, so it runs commands in the workspace sandbox";
+  const CODEX_LIMITED = "Web search is off; Codex has no gated fetch for the allowlist";
   /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */
   const CURSOR_HOST_ASK = "Would ask first; Cursor asks before each shell command, Auto-reviews other tools";
   const CURSOR_HOST_EDITS = "Would auto-edit; Cursor asks before each shell command, Auto-reviews other tools";
@@ -125,6 +129,9 @@
     if (provider === "cursor" && a.id === "ask") return CURSOR_ASK;
     if (provider === "cursor" && a.id === "edits") return CURSOR_EDITS;
     if (provider === "cursor" && a.id === "auto") return CURSOR_REVIEW;
+    if (provider === "codex" && a.id === "ask") return CODEX_ASK;
+    if (provider === "codex" && a.id === "edits") return CODEX_EDITS;
+    if (provider === "codex" && a.id === "auto") return CODEX_REVIEW;
     if (a.id === "auto" && provider === "pi") return "Like Edits, plus read-only commands and tests without asking";
     if (a.id === "auto" && provider !== "claude") return "Claude only";
     return a.detail;
@@ -138,14 +145,14 @@
     { name: "workspace", description: "Set the workspace folder" },
     { name: "global", description: "Not tied to a page or folder" },
   ];
-  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", pi: "Native" };
-  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", pi: "N" };
-  const PROVIDERS = ["cursor", "claude", "pi"];
+  const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
+  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", codex: "X", pi: "N" };
+  const PROVIDERS = ["cursor", "claude", "codex", "pi"];
 
   /* ---------- state ---------- */
 
   const S = {
-    config: { providers: [], prefs: null, models: { claude: [], cursor: [], pi: [] } },
+    config: { providers: [], prefs: null, models: { claude: [], cursor: [], codex: [], pi: [] } },
     threads: new Map(),
     details: new Map(),
     loading: new Map(),
@@ -3614,7 +3621,7 @@
       {
         const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
         const unenforced = wm.id !== "on" && !webEnforced(s.provider);
-        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : wm.detail;
+        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider === "codex" ? CODEX_LIMITED : wm.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : wm.detail;
         const web = button(
           "",
           `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}${unenforced ? " web-unenforced" : ""}`,
@@ -3778,7 +3785,7 @@
       const cur = webMode(s.web);
       const items = WEB_MODES.map((w) => ({
         label: w.label,
-        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : w.detail,
+        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider === "codex" ? CODEX_LIMITED : w.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : w.detail,
         checked: cur === w.id,
         run: () => this.updateSettings({ web: w.id }),
       }));
@@ -6737,7 +6744,7 @@
       providers.append(
         helpHeading(
           "Providers",
-          "Cursor runs through the Cursor SDK (log in below, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login. Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
+          "Cursor runs through the Cursor SDK (log in below, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login; Codex through the Codex SDK (log in below, or set CODEX_API_KEY). Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
         ),
         this.status,
         actions

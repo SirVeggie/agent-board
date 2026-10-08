@@ -100,6 +100,12 @@ test("pageKeysIn finds scribe: keys without trailing punctuation or repeats", ()
   assert.deepEqual(pageKeysIn("See [[scribe:agent-todo]] and scribe:Notes.v2. Also scribe:agent-todo, not xscribe:nope."), ["scribe:agent-todo", "scribe:notes.v2"]);
 });
 
+test("Codex Plan threads are told to write the plan as the final answer", () => {
+  const text = threadInstructions({ provider: "codex", mode: "plan", cwd: "/work", scope: { kind: "global", ref: null }, web: "on" } as Thread, {});
+  assert.match(text, /Write the plan as your final answer/);
+  assert.doesNotMatch(text, /exit_plan/);
+});
+
 test("threads with no Scribe scope are told they have no page tools", () => {
   const thread = (over: Partial<Thread>): Thread =>
     ({ provider: "claude", mode: "board", web: "on", cwd: null, scope: { kind: "workspace", ref: null }, ...over }) as Thread;

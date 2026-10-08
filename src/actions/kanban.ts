@@ -359,7 +359,7 @@ function sameHolder(claim: Claim, ctx: ActionContext): boolean {
   return Boolean(claim.session && claim.session === caller.session);
 }
 
-const PROVIDER_ASSIGNEE: Record<string, string> = { claude: "Claude", cursor: "Cursor" };
+const PROVIDER_ASSIGNEE: Record<string, string> = { claude: "Claude", cursor: "Cursor", codex: "Codex" };
 
 /** Who shows on the card: an explicit arg, else the MCP client name, else Claude/Cursor from the in-app thread. */
 function claimAssignee(args: Record<string, unknown>, ctx: ActionContext): string {

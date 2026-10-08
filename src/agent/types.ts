@@ -7,7 +7,11 @@ import type { BrowserView } from "../browser.js";
 
 export type { WebAccess };
 
-export type ProviderId = "claude" | "cursor" | "pi";
+export type ProviderId = "claude" | "cursor" | "codex" | "pi";
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return value === "claude" || value === "cursor" || value === "codex" || value === "pi";
+}
 
 /** What the agent may touch. Chosen per thread; the provider maps it onto its own tools and modes. */
 export type ThreadMode = "code" | "ask" | "plan" | "board";
@@ -392,7 +396,7 @@ export type ProviderStatus = {
   label: string;
   available: boolean;
   detail?: string;
-  /** Not logged in, and the provider can start a browser login (Cursor). */
+  /** Not logged in, and the provider can start a browser login (Cursor, Codex). */
   login?: boolean;
 };
 

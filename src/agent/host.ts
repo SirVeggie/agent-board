@@ -19,6 +19,7 @@ import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
+import { CodexProvider } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
 import { PiProvider } from "./providers/pi.js";
@@ -292,19 +293,20 @@ export class AgentHost {
 
   constructor(private emit: (event: AgentEvent) => void) {
     this.db = new AgentDb();
-    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), pi: new PiProvider(() => this.modelSources()) };
+    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), codex: new CodexProvider(), pi: new PiProvider(() => this.modelSources()) };
     if (FAKE_AGENTS) {
       const deps = {
         runAction: (page: string, name: string, args: Record<string, unknown>, caller: ActionCaller) => store.runAction(page, name, args, caller, (id) => this.runInfo(id)).result,
         runInfo: (id: string) => this.runInfo(id),
         delayMs: Number(process.env.SCRIBE_FAKE_AGENT_DELAY) || undefined,
       };
-      this.fakes = { claude: new FakeProvider("claude", "Claude", deps), cursor: new FakeProvider("cursor", "Cursor", deps), pi: new FakeProvider("pi", "Native", deps) };
+      this.fakes = { claude: new FakeProvider("claude", "Claude", deps), cursor: new FakeProvider("cursor", "Cursor", deps), codex: new FakeProvider("codex", "Codex", deps), pi: new FakeProvider("pi", "Native", deps) };
       log("SCRIBE_FAKE_AGENTS=1: chats run fake agents (no model, tools or MCP)");
     }
     const claudeModels = this.db.getSetting<ModelOption[]>("models.claude", []);
     (this.providers.claude as ClaudeProvider).setModelCache(claudeModels);
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
+    (this.providers.codex as CodexProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.codex", []));
     for (const thread of this.db.listThreads()) {
       if (migrateOpenaiThread(thread)) this.db.saveThread(thread);
       this.threads.set(thread.id, thread);
@@ -565,6 +567,11 @@ export class AgentHost {
   /** Start Cursor's browser login; resolves with the login URL. */
   cursorLogin(): Promise<{ url: string | null }> {
     return (this.providers.cursor as CursorProvider).startLogin();
+  }
+
+  /** Start Codex's ChatGPT login (`codex login`); resolves with the login URL when the CLI prints one. */
+  codexLogin(): Promise<{ url: string | null }> {
+    return (this.providers.codex as CodexProvider).startLogin();
   }
 
   async providerStatus(): Promise<ProviderStatus[]> {
@@ -2452,8 +2459,8 @@ export class AgentHost {
     if (!pending || pending.kind !== "plan") throw new Error("This plan is no longer waiting.");
     this.pending.delete(requestId);
     const planThread = this.threads.get(pending.threadId);
-    if (decision.accepted && planThread?.provider === "cursor" && planThread.mode === "plan") {
-      // Cursor ends the turn after an accepted plan; continue in Code mode with a follow-up turn.
+    if (decision.accepted && planThread?.mode === "plan" && (planThread.provider === "cursor" || planThread.provider === "codex")) {
+      // Cursor and Codex end the turn after an accepted plan; continue in Code mode with a follow-up turn.
       this.updateThread(planThread.id, { mode: "code" });
       this.send(planThread.id, { text: "Implement the plan." });
     }

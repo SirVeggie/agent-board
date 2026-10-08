@@ -52,8 +52,8 @@ function fileFor(provider: ProviderId, scope: PermissionScope, cwd: string | nul
 }
 
 // Pi has no rule files: Scribe asks by the thread's approval level.
-const SCOPES: Record<ProviderId, PermissionScope[]> = { claude: ["user", "project", "local"], cursor: ["user", "project"], pi: [] };
-const KINDS: Record<ProviderId, RuleKind[]> = { claude: ["allow", "ask", "deny"], cursor: ["allow", "deny"], pi: [] };
+const SCOPES: Record<ProviderId, PermissionScope[]> = { claude: ["user", "project", "local"], cursor: ["user", "project"], codex: [], pi: [] };
+const KINDS: Record<ProviderId, RuleKind[]> = { claude: ["allow", "ask", "deny"], cursor: ["allow", "deny"], codex: [], pi: [] };
 
 function readJson(file: string): { data: Record<string, unknown>; exists: boolean; error?: string } {
   if (!fs.existsSync(file)) return { data: {}, exists: false };

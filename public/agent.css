@@ -2211,6 +2211,11 @@ button.ag-pill.ag-web-icon {
   color: var(--heading);
 }
 
+.ag-prov.p-codex {
+  background: #10a37f;
+  color: #fff;
+}
+
 .ag-prov.p-pi {
   background: #7c5cff;
   color: #fff;

@@ -57,6 +57,8 @@ test("claim assignee uses the arg, else Claude/Cursor for in-app threads", () =>
   assert.equal(card(cursor.state, 1).assignee, "Cursor");
   const claude = run(board(), "claim", { card: 1 }, agent({ label: "Scribe chat: Board", provider: "claude" }));
   assert.equal(card(claude.state, 1).assignee, "Claude");
+  const codex = run(board(), "claim", { card: 1 }, agent({ label: "Scribe chat: Codex", provider: "codex" }));
+  assert.equal(card(codex.state, 1).assignee, "Codex");
   assert.throws(() => run(board(), "claim", { card: 1, assignee: "  " }), /assignee is empty/);
 });
 
