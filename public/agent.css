@@ -203,10 +203,13 @@ html.tight-small .agent-pane {
   line-height: 1.55;
 }
 
-/* No rule under the header: the conversation fades out beneath it instead. */
+/* No rule under the header: the conversation fades out beneath it instead.
+   Title and actions share the top row; scope and changes sit below at full width
+   so a narrow sidebar does not squeeze the chips beside the action buttons. */
 .ag-thead {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   padding: 10px 10px 8px 12px;
   flex-shrink: 0;
@@ -218,24 +221,31 @@ html.tight-small .agent-pane {
   mask-image: linear-gradient(to bottom, transparent, #000 14px);
 }
 
-.ag-thead-title {
-  flex: 1;
-  min-width: 0;
+.ag-thead-top {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .ag-title {
+  flex: 1;
+  min-width: 0;
   font-weight: 600;
   color: var(--heading);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
   cursor: default;
   font-size: 13.5px;
+}
+
+.ag-thead-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .ag-rename {
@@ -292,7 +302,7 @@ button.ag-stat-chip {
   color: var(--muted);
   background: rgba(var(--lift-rgb), 0.05);
   box-shadow: none;
-  max-width: 280px;
+  max-width: 100%;
   border-radius: 6px;
 }
 

@@ -1871,25 +1871,16 @@
       const t = this.thread();
       const s = this.settings();
       this.header.replaceChildren();
+      const top = el("div", "ag-thead-top");
       if (this.variant === "side") {
-        this.header.append(
+        top.append(
           button(icon("list"), `ag-icon-btn${sidebar.listOpen ? " on" : ""}`, () => sidebar.toggleList(), "Threads")
         );
       }
-      const titleWrap = el("div", "ag-thead-title");
       const title = el("div", "ag-title", t ? t.title : "New thread");
       title.title = t ? "Double-click to rename" : "";
       if (t) title.addEventListener("dblclick", () => this.rename(title));
-      const needsFolder = s.mode !== "board" && s.mode !== "ask" && !s.cwd;
-      const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
-      fillScopeDisplay(scope, s.scope, t ? workspaceDir(t) : s.cwd);
-      titleWrap.append(title, scope);
-      if (t && t.stats.files) {
-        const ch = button("", "ag-stat-chip", () => openDiff({ kind: "thread", threadId: t.id }), "Files changed in this thread");
-        ch.append(icon("diff"), el("span", null, `${t.stats.files} file${t.stats.files === 1 ? "" : "s"}`), R.counts(t.stats.added, t.stats.removed));
-        titleWrap.append(ch);
-      }
-      this.header.append(titleWrap);
+      top.append(title);
       const acts = el("div", "ag-thead-actions");
       if (s.cwd && s.mode !== "board") {
         const onBranch = openWorktree(t);
@@ -1905,7 +1896,19 @@
       } else if (this.variant === "full") {
         acts.append(button(icon("collapse"), "ag-icon-btn", () => leaveFull(), "Back to Scribe (Esc)"));
       }
-      this.header.append(acts);
+      top.append(acts);
+      this.header.append(top);
+      const meta = el("div", "ag-thead-meta");
+      const needsFolder = s.mode !== "board" && s.mode !== "ask" && !s.cwd;
+      const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), "Page, folder, or workspace this thread belongs to");
+      fillScopeDisplay(scope, s.scope, t ? workspaceDir(t) : s.cwd);
+      meta.append(scope);
+      if (t && t.stats.files) {
+        const ch = button("", "ag-stat-chip", () => openDiff({ kind: "thread", threadId: t.id }), "Files changed in this thread");
+        ch.append(icon("diff"), el("span", null, `${t.stats.files} file${t.stats.files === 1 ? "" : "s"}`), R.counts(t.stats.added, t.stats.removed));
+        meta.append(ch);
+      }
+      this.header.append(meta);
     }
 
     rename(titleEl) {
