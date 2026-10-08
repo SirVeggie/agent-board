@@ -635,6 +635,7 @@
     box-shadow: var(--depth);
     word-break: break-word;
   }
+  #mdPreview:focus-visible { box-shadow: var(--depth), 0 0 0 1px var(--accent); }
   .md-preview.placeholder { color: var(--muted); }
   .md-preview > :first-child { margin-top: 0; }
   .md-preview > :last-child { margin-bottom: 0; }
@@ -1014,8 +1015,8 @@
       <div class="m-grid">
         <div>
           <div class="section-label">Description</div>
-          <div class="md-preview" id="mdPreview"></div>
-          <textarea class="md-editor hidden" id="mdEditor" placeholder="Markdown. Paste an image to embed it. Ctrl+Enter saves."></textarea>
+          <div class="md-preview" id="mdPreview" tabindex="0" role="textbox" aria-multiline="true" aria-label="Description"></div>
+          <textarea class="md-editor hidden" id="mdEditor" aria-label="Description" placeholder="Markdown. Paste an image to embed it. Ctrl+Enter saves."></textarea>
 
           <div class="section-label">Checklist <span class="progress" id="clProgress"><i></i></span><span id="clCount"></span></div>
           <ul class="checklist" id="checklist"></ul>
@@ -2564,7 +2565,7 @@
         setHtml(mdPreview, renderMarkdown(c.description, c.images));
       } else {
         mdPreview.className = "md-preview placeholder";
-        setHtml(mdPreview, escapeHtml("Click to add a description. Markdown works; paste an image to embed it."));
+        setHtml(mdPreview, escapeHtml("Click or press Enter to add a description. Markdown works; paste an image to embed it."));
       }
     }
 
@@ -2741,6 +2742,19 @@
       renderModal();
     }
   }
+  function startEditTitle() {
+    var c = openId && card(openId);
+    if (!c) return;
+    if (editingDesc) saveDescription();
+    if (!editingTitle) {
+      editingTitle = true;
+      mTitleInput.value = c.title;
+      mTitle.classList.add("hidden");
+      mTitleInput.classList.remove("hidden");
+    }
+    mTitleInput.focus();
+    mTitleInput.select();
+  }
   function startEditDesc() {
     var c = openId && card(openId);
     if (!c) return;
@@ -2756,18 +2770,16 @@
 
   mTitle.addEventListener("click", function (e) {
     if (e.target.closest && e.target.closest("a")) return;
-    var c = card(openId);
-    if (!c) return;
-    editingTitle = true;
-    mTitleInput.value = c.title;
-    mTitle.classList.add("hidden");
-    mTitleInput.classList.remove("hidden");
-    mTitleInput.focus();
-    mTitleInput.select();
+    startEditTitle();
   });
   mTitleInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); mTitleInput.blur(); }
     if (e.key === "Escape") { e.stopPropagation(); editingTitle = false; renderModal(); mTitle.classList.remove("hidden"); mTitleInput.classList.add("hidden"); }
+    if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      saveTitle();
+      startEditDesc();
+    }
   });
   mTitleInput.addEventListener("blur", function () { if (editingTitle) saveTitle(); });
 
@@ -2776,10 +2788,26 @@
     if (e.target.tagName === "A") return;
     startEditDesc();
   });
+  mdPreview.addEventListener("keydown", function (e) {
+    if (e.target !== mdPreview || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      startEditDesc();
+    } else if (e.key.length === 1) {
+      e.preventDefault();
+      startEditDesc();
+      insertAtCursor(mdEditor, e.key);
+    }
+  });
   mdEditor.addEventListener("blur", function () { if (editingDesc) saveDescription(); });
   mdEditor.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { e.stopPropagation(); mdEditor.blur(); }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); mdEditor.blur(); }
+    if (e.key === "Tab" && e.shiftKey) {
+      e.preventDefault();
+      saveDescription();
+      startEditTitle();
+    }
   });
 
   var editingCheck = null;
