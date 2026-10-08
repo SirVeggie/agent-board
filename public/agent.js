@@ -896,13 +896,17 @@
     if (event.button === 0 && !openMenuAnchor?.isConnected && openMenuAnchor?.className && event.target.closest?.("button")?.className === openMenuAnchor.className) return;
     closeMenu();
   }
-  // Clicks inside a page iframe never reach this document; they do take focus, so blur closes the menu.
+  // Clicks inside a page iframe never reach this document; they do take focus, so blur closes the menu
+  // and collapses the floating chat's expanded conversation.
   window.addEventListener("blur", () => {
     closeMenu();
     for (const view of views()) {
       if (view.hidePicker) view.hidePicker();
       else if (view.slash) view.slash.hidden = true;
     }
+    queueMicrotask(() => {
+      if (document.activeElement?.tagName === "IFRAME") dock.collapseOutside(document.activeElement);
+    });
   });
 
   /**
@@ -5042,6 +5046,21 @@
       this.view.root.addEventListener("click", (event) => onLinkClick(event));
       this.feed.addEventListener("click", () => this.setExpanded(true));
       this.apply();
+      document.addEventListener("pointerdown", (event) => this.collapseOutside(event.target), true);
+    },
+    /** Menus, tips and dialogs from this chat sit on document.body, not inside the dock. */
+    owns(node) {
+      if (!(node instanceof Node)) return false;
+      if (this.root?.contains(node)) return true;
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      return Boolean(el?.closest?.(".ag-menu, .ag-fly, .ag-fly-peek, .ag-usage-tip, .ag-modal, .ag-settings-dialog, .ag-perm-dialog, .ag-toasts, .pv, .select-menu"));
+    },
+    /** Collapse the conversation when the pointer leaves the dock; keep the compact composer. */
+    collapseOutside(target) {
+      if (!S.dockShown || !S.dockExpanded || S.fullOpen) return;
+      if (modalStack.length || agentSettings.isOpen() || allowlists.isOpen() || window.scribePreview?.isOpen?.()) return;
+      if (this.owns(target)) return;
+      this.setExpanded(false);
     },
     apply() {
       if (!this.root) return;
