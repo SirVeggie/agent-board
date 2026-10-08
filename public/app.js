@@ -70,6 +70,7 @@
   const noticeUndo = document.getElementById("notice-undo");
   const persistBanner = document.getElementById("persist-banner");
   const persistBannerDetail = document.getElementById("persist-banner-detail");
+  const newTabBtn = document.getElementById("new-tab");
   const tabsWrap = tabsEl.parentElement;
   const mainEl = document.querySelector("main");
   const linkModeTrack = document.getElementById("link-mode");
@@ -154,6 +155,10 @@
     sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "library",
     /** The Trash view replaces the sidebar tabs until Back. */
     trashOpen: false,
+    /** This window's New page while it is not a page yet: active, but with no tab in the strip. */
+    draft: null,
+    /** The tab that was in front when the draft opened, to go back to when it is closed. */
+    draftFrom: null,
   };
 
   /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
@@ -273,7 +278,8 @@
     closed: () => state.closed,
     findAnyTab,
     activeId: () => state.activeId,
-    activeTab,
+    // A blank page has no frame: the New page screen stands in for it.
+    activeTab: () => (isBlank(activeTab()) ? null : activeTab()),
     frame: (id) => frames.get(id) || null,
     frameIds: () => [...frames.keys()],
     ensureFrame,
@@ -296,6 +302,14 @@
       library.closeMenu();
       hoverCard.hide?.();
     },
+  });
+  const newPageView = window.createNewPage({
+    templates: () => state.templates,
+    builtins: () => state.builtinTemplates,
+    pick: fillFromTemplate,
+    threads: (id) => window.scribeChat?.pageThreads?.(id) || 0,
+    working: (id) => window.scribeChat?.pageStatus?.(id) || null,
+    openChat: () => window.scribeChat?.shortcut("dock"),
   });
   const trash = window.createTrash({
     showNotice,
@@ -396,7 +410,15 @@
       const hash = msg.reset ? "" : location.hash.replace(/^#/, "");
       const fromOpen = hash ? state.tabs.find((tab) => tab.id === hash || tab.key === hash) : null;
       const fromClosed = hash ? state.closed.find((tab) => tab.id === hash || tab.key === hash) : null;
-      state.activeId = fromOpen ? fromOpen.id : msg.activeId;
+      if (state.draft && findAnyTab(state.draft.id)) {
+        state.draft = null;
+      }
+      const keepDraft = !msg.reset && draftActive() && !fromOpen && !fromClosed;
+      state.activeId = fromOpen ? fromOpen.id : keepDraft ? state.draft.id : msg.activeId;
+      if (keepDraft) {
+        // After a daemon restart the draft is gone there; bring it back under the same id.
+        fetch("/api/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: state.draft.id }) }).catch(() => undefined);
+      }
       unread.clear();
       unreadLibrary.clear();
       syncHash();
@@ -437,6 +459,10 @@
     if (msg.type === "tab_upserted") {
       if (!findAnyTab(msg.tab.id)) {
         notePagesChanged();
+      }
+      if (state.draft?.id === msg.tab.id) {
+        state.draft = null;
+        state.draftFrom = null;
       }
       if (isClosedMeta(msg.tab)) {
         upsertClosed(msg.tab, msg.structural);
@@ -718,7 +744,98 @@
   }
 
   function activeTab() {
-    return state.tabs.find((tab) => tab.id === state.activeId) || null;
+    return state.tabs.find((tab) => tab.id === state.activeId) || (state.draft?.id === state.activeId ? state.draft : null);
+  }
+
+  /** A New page, as a draft or a saved page that nothing has filled yet. */
+  function isBlank(tab) {
+    return Boolean(tab && (tab.draft || tab.blank));
+  }
+
+  function draftActive() {
+    return Boolean(state.draft && state.activeId === state.draft.id);
+  }
+
+  /** Ctrl+T: a New page in front, with no tab until a thread or a template makes it a page. */
+  async function newPage() {
+    if (draftActive()) {
+      newPageView.focus();
+      return;
+    }
+    const res = await fetch("/api/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => null);
+    const data = res?.ok ? await res.json().catch(() => null) : null;
+    if (!data?.tab) {
+      showNotice("Could not open a new page");
+      return;
+    }
+    const from = draftActive() ? state.draftFrom : state.activeId;
+    views.closePeek();
+    state.draft = data.tab;
+    state.draftFrom = from;
+    state.activeId = data.tab.id;
+    pendingFocus = null;
+    lastInteractedAt = Date.now();
+    syncHash();
+    render();
+    reportViewer();
+    newPageView.focus();
+  }
+
+  /**
+   * Leaving a draft throws it away. The request waits a moment: a chat that keeps its unsent text
+   * as a thread when you leave makes the draft a page, and that has to reach the daemon first.
+   */
+  function dropLeftDraft() {
+    if (!state.draft || state.activeId === state.draft.id) {
+      return;
+    }
+    const id = state.draft.id;
+    state.draft = null;
+    state.draftFrom = null;
+    setTimeout(() => {
+      fetch(`/api/drafts/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => undefined);
+    }, 3000);
+  }
+
+  function closeDraft() {
+    const back = state.tabs.some((tab) => tab.id === state.draftFrom) ? state.draftFrom : state.tabs[state.tabs.length - 1]?.id ?? null;
+    state.activeId = back;
+    syncHash();
+    render();
+    reportViewer();
+  }
+
+  /** A template picked on the New page screen fills this page; one with fields asks for them first. */
+  function fillFromTemplate(template) {
+    const tab = activeTab();
+    if (!isBlank(tab)) {
+      return;
+    }
+    if (template.fields?.length) {
+      openTemplateModal(template, "fill", null, tab.id);
+      return;
+    }
+    void openTemplate(template, {}, { into: tab.id }).then((error) => error && showNotice(error));
+  }
+
+  /** POST a template open; resolves to an error message, or null when it went through. */
+  async function openTemplate(template, values, extra) {
+    const res = await fetch(`/api/templates/${encodeURIComponent(template.id)}/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values, ...extra }),
+    }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
+    if (!res?.ok) {
+      return data.error || "Could not apply template";
+    }
+    if (!extra.into && data.tab?.id) {
+      pendingFocus = { id: data.tab.id, key: data.tab.key };
+    }
+    if (data.copiedBuiltin) {
+      showNotice(`Added “${template.title}” to your templates`);
+    }
+    return null;
   }
 
   function viewUrl(tab) {
@@ -985,7 +1102,8 @@
 
   function renderChrome() {
     clearBtn.disabled = !state.tabs.some((tab) => !tab.pinned);
-    exportPageBtn.disabled = !state.activeId;
+    exportPageBtn.disabled = !state.activeId || draftActive();
+    newTabBtn.classList.toggle("on", draftActive());
     exportAllBtn.disabled = libraryPages().length === 0;
     const blips = unreadLibrary.size;
     libraryBadge.hidden = blips === 0;
@@ -1795,6 +1913,10 @@
     builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
     builtinCountEl.textContent = String(builtins.length);
     builtinList.replaceChildren(...builtins.map((template) => templateRow(template, true)));
+    const active = activeTab();
+    if (isBlank(active)) {
+      newPageView.render(active);
+    }
   }
 
   function templateRow(template, builtin) {
@@ -1947,16 +2069,22 @@
     return !templateModal.hidden;
   }
 
-  function openTemplateModal(template, mode, values) {
+  /** mode: create (a new page), edit (the active page's values), or fill (the blank page `into`). */
+  function openTemplateModal(template, mode, values, into) {
     templateModal.dataset.templateId = template.id;
     templateModal.dataset.mode = mode;
+    if (into) {
+      templateModal.dataset.into = into;
+    } else {
+      delete templateModal.dataset.into;
+    }
     templateModalTitle.textContent = template.title;
     const desc = template.description || "";
     templateModalDesc.hidden = !desc;
     templateModalDesc.textContent = desc;
     templateModalError.hidden = true;
     templateModalError.textContent = "";
-    templateModalSubmit.textContent = mode === "edit" ? "Apply" : "Open";
+    templateModalSubmit.textContent = mode === "edit" ? "Apply" : mode === "fill" ? "Create" : "Open";
     templateModalFields.replaceChildren();
     const current = values || {};
     for (const field of template.fields || []) {
@@ -1985,6 +2113,7 @@
     templateModal.hidden = true;
     delete templateModal.dataset.templateId;
     delete templateModal.dataset.mode;
+    delete templateModal.dataset.into;
     templateModalFields.replaceChildren();
   }
 
@@ -2090,14 +2219,22 @@
     if (mode === "edit" && !editing) {
       return;
     }
-    const url = editing
-      ? `/api/tabs/${encodeURIComponent(editing.id)}/template-values`
-      : `/api/templates/${encodeURIComponent(id)}/open`;
+    if (!editing) {
+      const into = mode === "fill" ? templateModal.dataset.into : undefined;
+      const error = await openTemplate(template, values, { agentHidden, ...(into ? { into } : {}) });
+      if (error) {
+        templateModalError.textContent = error;
+        templateModalError.hidden = false;
+        return;
+      }
+      closeTemplateModal();
+      return;
+    }
     try {
-      const res = await fetch(url, {
+      const res = await fetch(`/api/tabs/${encodeURIComponent(editing.id)}/template-values`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editing ? { values } : { values, agentHidden }),
+        body: JSON.stringify({ values }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -2105,14 +2242,8 @@
         templateModalError.hidden = false;
         return;
       }
-      if (editing && Boolean(editing.agentHidden) !== agentHidden) {
+      if (Boolean(editing.agentHidden) !== agentHidden) {
         await setAgentHidden(editing.id, agentHidden);
-      }
-      if (mode !== "edit" && data.tab?.id) {
-        pendingFocus = { id: data.tab.id, key: data.tab.key };
-      }
-      if (data.copiedBuiltin) {
-        showNotice(`Added “${template.title}” to your templates`);
       }
       closeTemplateModal();
     } catch {
@@ -2256,6 +2387,9 @@
     const tab = activeTab();
     emptyEl.hidden = Boolean(tab);
     document.title = tab ? tab.title + " · Scribe" : "Scribe";
+    const blank = isBlank(tab);
+    mainEl.classList.toggle("blank-page", blank);
+    newPageView.render(blank ? tab : null);
     views.layout();
   }
 
@@ -2437,6 +2571,7 @@
   }
 
   function render() {
+    dropLeftDraft();
     renderFrames();
     renderChrome();
     renderTabs();
@@ -2505,6 +2640,10 @@
 
   /** Closing keeps the page in the Library; `permanent` deletes it (Ctrl+Z or the notice undoes it). */
   async function closeTab(id, { permanent = false } = {}) {
+    if (state.draft?.id === id) {
+      closeDraft();
+      return;
+    }
     const tab = findAnyTab(id);
     if (tab?.key === "scribe:welcome" || !permanent) {
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -2702,7 +2841,7 @@
 
   function downloadActive() {
     const tab = activeTab();
-    if (!tab) {
+    if (!tab || isBlank(tab)) {
       return;
     }
     downloadHref(`/download/${encodeURIComponent(tab.id)}`);
@@ -2932,6 +3071,8 @@
       }
     } else if (action === "reopen") {
       undoClose();
+    } else if (action === "new-page") {
+      void newPage();
     } else if (action === "spaces") {
       spaces.toggle();
     } else if (action === "next-space" || action === "prev-space") {
@@ -3057,6 +3198,11 @@
     if (key === "h" && !event.shiftKey) {
       event.preventDefault();
       openWelcome();
+      return;
+    }
+    if ((key === "t" || key === "n") && !event.shiftKey) {
+      event.preventDefault();
+      runShortcut("new-page");
       return;
     }
     if (key === "z" && !event.shiftKey && !isTypingTarget(event.target)) {
@@ -3603,7 +3749,7 @@
   window.scribeApp = {
     templateActions,
     activeTab,
-    findAnyTab,
+    findAnyTab: (id) => findAnyTab(id) || (state.draft?.id === id ? state.draft : null),
     tabs: () => state.tabs,
     closed: () => state.closed,
     folders: () => state.folders,
@@ -3717,6 +3863,14 @@
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
   libraryToggle.addEventListener("click", () => setSideOpen(!state.sideOpen));
+  newTabBtn.addEventListener("click", () => runShortcut("new-page"));
+  // The New page screen hides its templates once the page has a thread, and says when the agent works.
+  window.addEventListener("scribe:agent-threads", () => {
+    const tab = activeTab();
+    if (isBlank(tab)) {
+      newPageView.render(tab);
+    }
+  });
   sidebarTabLibrary.addEventListener("click", () => setSidebarTab("library"));
   sidebarTabTemplates.addEventListener("click", () => setSidebarTab("templates"));
   builtinHead.addEventListener("click", toggleBuiltinGroup);

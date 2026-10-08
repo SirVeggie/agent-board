@@ -1884,3 +1884,67 @@ test("pages opened from a template with a trashed page's title get the plain key
   assert.equal(second.key, "scribe:scribe-work");
   store.closeDb();
 });
+
+test("a New page draft stays out of the strip and the Library until it is promoted", () => {
+  const store = loaded();
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  const draft = store.createDraft();
+  assert.equal(store.get(draft.id), undefined);
+  assert.equal(store.list().length, 1);
+  assert.equal(store.createDraft(draft.id), draft);
+  const promoted = store.promoteDraft(draft.id, { activate: false });
+  assert.equal(promoted?.id, draft.id);
+  assert.equal(store.isDraft(draft.id), false);
+  assert.deepEqual(titles(store), ["A", "New page"]);
+  assert.equal(toMeta(store.get(draft.id)!).blank, true);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.get(draft.id)?.html, "");
+  again.closeDb();
+});
+
+test("a discarded draft is gone, and restoring a lost draft keeps its id", () => {
+  const store = loaded();
+  const draft = store.createDraft();
+  assert.equal(store.discardDraft(draft.id), true);
+  assert.equal(store.promoteDraft(draft.id), undefined);
+  assert.equal(store.createDraft(draft.id).id, draft.id);
+  assert.equal(store.isDraft(draft.id), true);
+  store.closeDb();
+});
+
+test("a template fills a draft in place", () => {
+  const store = loaded();
+  store.upsertTemplate({
+    key: "todo",
+    title: "Todo",
+    html: "<h1>{{title}}</h1>",
+    fields: [{ key: "title", label: "Title", type: "text", required: true }],
+    titleTemplate: "{{title}}",
+  });
+  const draft = store.createDraft();
+  const { tab } = store.openFromTemplate("todo", { title: "Shop" }, { into: draft.id });
+  assert.equal(tab.id, draft.id);
+  assert.equal(tab.templateId, store.getTemplate("todo")?.id);
+  assert.equal(tab.title, "Shop");
+  assert.equal(store.getActiveId(), draft.id);
+  assert.throws(() => store.openFromTemplate("todo", { title: "Again" }, { into: draft.id }), /not blank/);
+  store.closeDb();
+});
+
+test("a focused new page from the blank page's thread fills it; background pages do not", () => {
+  const store = loaded();
+  const draft = store.createDraft();
+  store.promoteDraft(draft.id, { activate: false });
+  const form = store.upsert({ key: "form", title: "Form", html: "<p>f</p>", activate: false, into: draft.id, viewer: "agent" });
+  assert.notEqual(form.tab.id, draft.id);
+  const shown = store.upsert({ key: "plan", title: "Plan", html: "<p>p</p>", into: draft.id, viewer: "agent" });
+  assert.equal(shown.tab.id, draft.id);
+  assert.equal(shown.created, true);
+  assert.equal(store.get("plan")?.id, draft.id);
+  assert.equal(toMeta(shown.tab).blank, undefined);
+  const next = store.upsert({ key: "other", title: "Other", html: "<p>o</p>", into: draft.id, viewer: "agent" });
+  assert.notEqual(next.tab.id, draft.id);
+  store.closeDb();
+});

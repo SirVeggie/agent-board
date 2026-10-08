@@ -51,7 +51,9 @@ import {
   pageKey,
   WELCOME_KEY,
   isAppTab,
+  isBlankPage,
   isFolderInstructionTitle,
+  NEW_PAGE_TITLE,
   isPlainObject,
   isTemplateBound,
   noteAgentWrite,
@@ -124,6 +126,8 @@ export type CleanupOptions = {
 };
 
 const FOLDER_NAME_MAX = 120;
+/** Drafts only live in memory; a window that never came back to one leaves it behind. */
+const MAX_DRAFTS = 20;
 /** Cap so a huge HTML page cannot blow the agent context. */
 const MAX_FOLDER_INSTRUCTION_CHARS = 16_000;
 
@@ -131,6 +135,8 @@ export class BoardStore extends EventEmitter {
   private tabs = new Map<string, Tab>();
   private order: string[] = [];
   private closed = new Map<string, Tab>();
+  /** New pages that are not pages yet (createDraft): not in the strip or the Library, never saved. */
+  private drafts = new Map<string, Tab>();
   private folders = new Map<string, Folder>();
   private deleted: DeletedBatch[] = [];
   private activeId: string | null = null;
@@ -702,14 +708,18 @@ export class BoardStore extends EventEmitter {
     return template;
   }
 
+  /** into: a blank page or draft that becomes the new page, in its place in the strip. */
   openFromTemplate(
     idOrKey: string,
     values: unknown,
-    opts?: { activate?: boolean; agentHidden?: boolean; actor?: PageActor }
+    opts?: { activate?: boolean; agentHidden?: boolean; actor?: PageActor; into?: string }
   ): { tab: Tab; created: boolean; template: Template; copiedBuiltin: boolean } {
     const found = this.findTemplate(idOrKey);
     if (!found) {
       throw new Error(`template not found: ${idOrKey}`);
+    }
+    if (opts?.into && !this.blankOf(opts.into)) {
+      throw new Error("this page is not blank anymore");
     }
     // Validate against the built-in first so a bad form doesn't leave a stray copy behind.
     parseTemplateValues(found.template.fields, values);
@@ -718,14 +728,16 @@ export class BoardStore extends EventEmitter {
     const parsed = parseTemplateValues(template.fields, values);
     const title = renderTemplateTitle(template, parsed);
     const html = this.renderBoundHtml(template, title, parsed);
-    const { tab } = this.upsert({
-      title,
-      html,
-      pin: true,
-      activate: opts?.activate !== false,
-      state: template.initialState,
-      actor: opts?.actor,
-    });
+    const tab = opts?.into
+      ? this.fillBlank(this.openBlank(opts.into), { title, html, pin: true, state: template.initialState, actor: opts.actor })
+      : this.upsert({
+          title,
+          html,
+          pin: true,
+          activate: opts?.activate !== false,
+          state: template.initialState,
+          actor: opts?.actor,
+        }).tab;
     if (opts?.agentHidden) {
       tab.agentHidden = true;
     }
@@ -738,6 +750,128 @@ export class BoardStore extends EventEmitter {
       structural: true,
     });
     return { tab, created: true, template, copiedBuiltin: Boolean(copy?.created) };
+  }
+
+  /**
+   * A page the user just opened with New page (Ctrl+T). It has no tab, no Library row, and is not
+   * saved until a chat thread starts on it or a template fills it (promoteDraft, openFromTemplate).
+   * Passing the id of one the daemon lost (a restart) brings it back under the same id.
+   */
+  createDraft(id?: string): Tab {
+    const known = id ? this.drafts.get(id) ?? this.locate(id)?.tab : undefined;
+    if (known) {
+      return known;
+    }
+    const draftId = id && /^t_[0-9a-f]{8}$/.test(id) ? id : newId();
+    const now = Date.now();
+    const tab: Tab = {
+      id: draftId,
+      key: uniqueKey(this, undefined, NEW_PAGE_TITLE, draftId),
+      title: NEW_PAGE_TITLE,
+      html: "",
+      pinned: false,
+      createdAt: now,
+      updatedAt: now,
+      libPos: 0,
+      stripSeq: 0,
+      revision: 1,
+      state: {},
+      stateRevision: 0,
+      stateUpdatedAt: 0,
+      eventSeq: 0,
+      events: [],
+      assets: [],
+    };
+    this.drafts.set(draftId, tab);
+    while (this.drafts.size > MAX_DRAFTS) {
+      this.drafts.delete(this.drafts.keys().next().value!);
+    }
+    return tab;
+  }
+
+  isDraft(id: string): boolean {
+    return this.drafts.has(id);
+  }
+
+  getDraft(id: string): Tab | undefined {
+    return this.drafts.get(id);
+  }
+
+  discardDraft(id: string): boolean {
+    return this.drafts.delete(id);
+  }
+
+  /** A draft becomes a real, blank page at the end of the strip. Anything else is left alone. */
+  promoteDraft(id: string, opts: { activate?: boolean } = {}): Tab | undefined {
+    const tab = this.drafts.get(id);
+    if (!tab) {
+      return undefined;
+    }
+    this.drafts.delete(id);
+    const now = Date.now();
+    tab.createdAt = now;
+    tab.updatedAt = now;
+    tab.libPos = this.pagePosAt(null, 0);
+    return this.reopen(tab, "append", opts.activate !== false);
+  }
+
+  /** The draft or saved page with this id, while it is still blank. */
+  private blankOf(id: string): Tab | undefined {
+    const tab = this.drafts.get(id) ?? this.locate(id)?.tab;
+    return tab && isBlankPage(tab) ? tab : undefined;
+  }
+
+  /** A blank page in the strip and focused, made real first if it is still a draft. */
+  private openBlank(id: string): Tab {
+    if (this.drafts.has(id)) {
+      return this.promoteDraft(id)!;
+    }
+    const located = this.locate(id);
+    if (!located || !isBlankPage(located.tab)) {
+      throw new Error("this page is not blank anymore");
+    }
+    if (located.where === "closed") {
+      return this.restore(located.tab.id, { placement: "append", activate: true });
+    }
+    this.activeId = located.tab.id;
+    return located.tab;
+  }
+
+  /**
+   * A new page written into a blank one: it takes the blank page's id, so the chat thread that
+   * belongs to that page stays with what it made. Callers emit the upsert.
+   */
+  private fillBlank(
+    tab: Tab,
+    input: Pick<UpsertInput, "key" | "pin" | "state" | "assets" | "folder" | "actor"> & { title: string; html: string }
+  ): Tab {
+    tab.assets = applyAssets(tab.id, tab.assets ?? [], input.assets);
+    tab.key = uniqueKey(this, input.key, input.title, tab.id);
+    tab.title = input.title;
+    tab.html = input.html;
+    tab.createdAt = Date.now();
+    tab.updatedAt = tab.createdAt;
+    tab.revision += 1;
+    seedState(tab, input.state);
+    if (input.folder && !tab.folderId) {
+      const foldersBefore = this.folders.size;
+      const folderId = this.ensureFolderPath(input.folder);
+      if (folderId) {
+        tab.folderId = folderId;
+        tab.libPos = this.pagePosAt(folderId, 0, tab.id);
+      }
+      if (this.folders.size !== foldersBefore) {
+        this.emitFolders();
+      }
+    }
+    if (input.pin !== undefined && tab.pinned !== input.pin) {
+      this.setPinned(tab, input.pin);
+    }
+    noteAgentWrite(tab, input.actor, true);
+    this.activeId = tab.id;
+    this.markDirty(tab.id);
+    this.persistSoon();
+    return tab;
   }
 
   setTemplateValues(idOrKey: string, values: unknown, actor?: PageActor): Tab {
@@ -951,6 +1085,12 @@ export class BoardStore extends EventEmitter {
     const bytes = Buffer.byteLength(html, "utf8");
     if (bytes > MAX_HTML_BYTES) {
       throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
+    }
+    if (!existing && input.into && input.activate !== false && this.blankOf(input.into)) {
+      const tab = this.fillBlank(this.openBlank(input.into), { ...input, title, html });
+      this.emit("tab_upserted", toMeta(tab), this.order.indexOf(tab.id), actorNotice(true, true, input.actor));
+      this.emit("tab_focused", tab.id);
+      return { tab, created: true, closed: false };
     }
     if (existing?.where === "closed" && input.activate !== false) {
       this.restore(existing.tab.id, { placement: "append", activate: true });

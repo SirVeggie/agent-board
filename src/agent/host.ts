@@ -9,7 +9,7 @@ import { log } from "../log.js";
 import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
-import type { PageEvent } from "../types.js";
+import { isBlankPage, type PageEvent } from "../types.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
@@ -704,6 +704,8 @@ export class AgentHost {
     // createSession also refuses that spare: its MCP still reports this id.
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     if (input.draft) thread.draft = input.draft;
+    // A New page becomes a real page once it has a thread, even one that has not sent anything.
+    if (thread.scope.kind === "page" && thread.scope.ref) store.promoteDraft(thread.scope.ref);
     this.threads.set(thread.id, thread);
     this.items.set(thread.id, []);
     this.turns.set(thread.id, []);
@@ -830,6 +832,7 @@ export class AgentHost {
       next.useWorktree = patch.useWorktree;
     }
     if (patch.scope) next.scope = patch.scope;
+    if (patch.scope?.kind === "page" && patch.scope.ref) store.promoteDraft(patch.scope.ref, { activate: false });
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
     if (typeof patch.archived === "boolean") next.archived = patch.archived;
     if (patch.draft !== undefined) next.draft = patch.draft;
@@ -1063,10 +1066,11 @@ export class AgentHost {
 
   private scopeInfo(thread: Thread): ScopeInfo {
     if (thread.scope.kind === "page" && thread.scope.ref) {
-      const tab = store.get(thread.scope.ref, "agent");
+      // A warmed spare for a New page sees the draft; the thread that takes it makes the page real.
+      const tab = store.get(thread.scope.ref, "agent") ?? store.getDraft(thread.scope.ref);
       if (!tab) return { page: null };
       return {
-        page: { id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId) },
+        page: { id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId), ...(isBlankPage(tab) ? { blank: true } : {}) },
         folderInstructions: store.folderInstructionsFor(tab.folderId ?? null),
       };
     }

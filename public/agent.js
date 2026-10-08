@@ -5453,6 +5453,7 @@
       lastAsks = asks;
       window.dispatchEvent(new Event("scribe:agent-status"));
     }
+    window.dispatchEvent(new Event("scribe:agent-threads"));
     flyout.render();
     toasts.update();
   }
@@ -5470,6 +5471,15 @@
       status = "running";
     }
     return status;
+  }
+
+  /** How many threads (not archived) belong to this page. */
+  function pageThreads(tabId) {
+    let count = 0;
+    for (const t of S.threads.values()) {
+      if (!t.archived && t.scope.kind === "page" && t.scope.ref === tabId) count += 1;
+    }
+    return count;
   }
 
   /** Questions, approvals and plans the user still has to answer, newest thread first, for the palette. */
@@ -7897,7 +7907,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageRequest, ask, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { shortcut, escape, pageStatus, pageThreads, pageRequest, ask, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

@@ -4,7 +4,7 @@ import { noPages, type ContextChip, type Thread } from "./types.js";
 
 /** Scope details the host resolves from the board for a thread's instructions. */
 export type ScopeInfo = {
-  page?: { id: string; key: string; title: string; folder: string | null } | null;
+  page?: { id: string; key: string; title: string; folder: string | null; blank?: boolean } | null;
   folder?: { id: string; path: string } | null;
   folderInstructions?: FolderInstructionPage[];
 };
@@ -74,7 +74,12 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   lines.push(
     "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. The user is asked to allow it first; thread_access says why."
   );
-  if (thread.scope.kind === "page" && scope.page) {
+  if (thread.scope.kind === "page" && scope.page?.blank) {
+    lines.push(
+      "",
+      `This thread belongs to a new, still blank Scribe page (key: ${scope.page.key}): the user opened it to start something here. When they ask for a page, create it with page_show (or template_open) with its own key and title, not in the background: the first page you show that way takes this blank page's place, and this thread stays with it. Pages you show in the background (forms, references) do not.`
+    );
+  } else if (thread.scope.kind === "page" && scope.page) {
     lines.push(
       "",
       `This thread belongs to the Scribe page "${scope.page.title}" (key: ${scope.page.key}${scope.page.folder ? `, folder: ${scope.page.folder}` : ""}). "This page" means that page; read it with page_read before changing it, and prefer page_patch for small edits.`
