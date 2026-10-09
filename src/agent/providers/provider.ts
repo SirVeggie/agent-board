@@ -12,6 +12,7 @@ import type {
   ToolStatus,
   Usage,
 } from "../types.js";
+import type { ResolvedMcpServer } from "../mcpConfig.js";
 import type { WebCall, WebImportance } from "../webAccess.js";
 
 /** What the host hands a provider for one turn. */
@@ -150,6 +151,8 @@ export type SessionContext = {
   claudeHooks?(): boolean;
   /** Whether Scribe runs this Cursor thread's shell commands itself, asking first (experimental; off for board workers). Read when a session opens its agent. */
   cursorHostShell?(threadId: string): boolean;
+  /** The user's MCP servers (Agent settings) this thread gets, for its mode and workspace. Read when a session opens. */
+  mcpServers?(thread: Thread): ResolvedMcpServer[];
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
   /**

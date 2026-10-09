@@ -44,6 +44,7 @@ import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
+import { serversForThread } from "./mcpConfig.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -339,6 +340,7 @@ export class AgentHost {
       scratchDir,
       webAllowlist: () => this.prefs().webAllowlist,
       claudeHooks: () => this.prefs().claudeHooks,
+      mcpServers: (thread) => serversForThread(thread),
       // Not for board workers: nobody watches their threads to approve commands.
       cursorHostShell: (threadId) => this.prefs().cursorHostShell && !pageOwned(this.loadItems(threadId)),
       limits: (provider, info) => this.recordLimits(provider, info),

@@ -4,6 +4,7 @@ import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { isPlainRecord, noPages } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
+import { claudeServerConfig, serversKey, type ResolvedMcpServer } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -21,6 +22,7 @@ type PermissionResult = import("@anthropic-ai/claude-agent-sdk").PermissionResul
 type PermissionMode = import("@anthropic-ai/claude-agent-sdk").PermissionMode;
 type EffortLevel = import("@anthropic-ai/claude-agent-sdk").EffortLevel;
 type HookJSONOutput = import("@anthropic-ai/claude-agent-sdk").HookJSONOutput;
+type McpServerConfig = import("@anthropic-ai/claude-agent-sdk").McpServerConfig;
 
 let sdkPromise: Promise<Sdk> | null = null;
 function loadSdk(): Promise<Sdk> {
@@ -448,7 +450,7 @@ class ClaudeSession implements ProviderSession {
 
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false]);
+    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers())]);
   }
 
   update(thread: Thread): void {
@@ -492,6 +494,11 @@ class ClaudeSession implements ProviderSession {
     return this.thread.cwd;
   }
 
+  /** The user's servers from Agent settings; with them, Claude Code's own MCP config is left out (strictMcpConfig). */
+  private userServers(): ResolvedMcpServer[] {
+    return this.ctx.mcpServers?.(this.thread) ?? [];
+  }
+
   private buildOptions(): Options {
     const thread = this.thread;
     const board = thread.mode === "board";
@@ -501,6 +508,9 @@ class ClaudeSession implements ProviderSession {
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
     const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}) };
     const permissionMode = permissionModeFor(thread);
+    const userServers = this.userServers();
+    // Servers set to run without asking; the rest go through canUseTool like any tool.
+    const autoServers = userServers.filter((s) => s.approve === "auto").map((s) => `mcp__${s.name}__*`);
     const options: Options = {
       cwd: this.cwd(),
       model: thread.model === "default" ? undefined : thread.model,
@@ -512,7 +522,12 @@ class ClaudeSession implements ProviderSession {
       forwardSubagentText: true,
       agentProgressSummaries: true,
       perTaskStopAffordance: true,
-      mcpServers: { [BOARD_SERVER]: { type: "stdio", command, args, env } },
+      mcpServers: {
+        ...Object.fromEntries(userServers.map((s) => [s.name, claudeServerConfig(s) as McpServerConfig])),
+        [BOARD_SERVER]: { type: "stdio", command, args, env },
+      },
+      // Scribe's MCP list (Agent settings) is the one source: no servers from ~/.claude.json, .mcp.json or plugins.
+      strictMcpConfig: true,
       settingSources: board ? ["user"] : ["user", "project", "local"],
       // Hooks from settings files and plugins are written for the user's own Claude Code sessions; a
       // fail-closed one (a plugin posting to a sidecar) denies every tool here for reasons the chat never
@@ -557,13 +572,13 @@ class ClaudeSession implements ProviderSession {
     };
     if (board) {
       options.tools = [...webTools, "Skill", "TodoWrite"];
-      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...webTools, "Skill", "TodoWrite"];
+      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...webTools, "Skill", "TodoWrite"];
     } else if (thread.mode === "ask") {
       options.tools = ["Read", "Grep", "Glob", "Skill", "TodoWrite", ...webTools];
-      options.allowedTools = ["Read", "Grep", "Glob", ...webTools, `mcp__${BOARD_SERVER}__*`];
+      options.allowedTools = ["Read", "Grep", "Glob", ...webTools, `mcp__${BOARD_SERVER}__*`, ...autoServers];
     } else {
       options.tools = { type: "preset", preset: "claude_code" };
-      options.allowedTools = [`mcp__${BOARD_SERVER}__*`];
+      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers];
       // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
       options.disallowedTools = ["EnterWorktree", "ExitWorktree"];
     }

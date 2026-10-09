@@ -10,6 +10,8 @@ import { log } from "../../log.js";
 import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
 import { isPlainRecord, noPages, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
 import { gatedFetchText, webCallAllowed } from "../webAccess.js";
+import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
+import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 type Model = PiModel<Api>;
@@ -449,6 +451,7 @@ class PiSession implements ProviderSession {
   private file: string | null;
   private reported: string | null = null;
   private board: BoardTools | null = null;
+  private bridge: McpBridge | null = null;
   private sink: RunSink | null = null;
   private running = false;
   private cancelled = false;
@@ -505,7 +508,46 @@ class PiSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), noPages(t.scope), this.instructions]);
+    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+  }
+
+  /** Who answers an approval: the running turn, else the host from the thread's rules. */
+  private asker(): BridgeAsk | undefined {
+    const sink = this.sink;
+    if (sink) return (req, signal) => sink.approval(req, signal);
+    const approval = this.ctx.approval;
+    return approval ? (req) => approval(this.thread.id, req) : undefined;
+  }
+
+  /** The user's MCP servers (Agent settings), bridged as tools named "<server>__<tool>". */
+  private async userTools(): Promise<ToolDefinition[]> {
+    const servers = this.ctx.mcpServers?.(this.thread) ?? [];
+    if (this.bridge && (serversKey(this.bridge.servers) !== serversKey(servers) || this.bridge.cwd !== this.cwd())) {
+      this.bridge.close();
+      this.bridge = null;
+    }
+    if (!servers.length) return [];
+    this.bridge ??= new McpBridge(
+      servers,
+      this.cwd(),
+      () => this.thread,
+      () => this.asker(),
+      (name, message) => this.sink?.notice("warn", `MCP server ${name} did not start: ${message}`)
+    );
+    return (await this.bridge.tools()).map(
+      (tool): ToolDefinition => ({
+        name: tool.name,
+        label: `${tool.server}: ${tool.tool}`,
+        description: tool.description,
+        parameters: tool.inputSchema as unknown as ToolDefinition["parameters"],
+        execute: async (id, params, signal) => {
+          const result = await tool.call(isPlainRecord(params) ? params : {}, { toolCallId: id, signal });
+          const content = mcpContent(result.content);
+          if (result.isError) throw new Error(textOf(content) || "The tool failed.");
+          return { content, details: undefined };
+        },
+      })
+    );
   }
 
   private async gateFetch(url: string): Promise<{ allowed: boolean; message?: string }> {
@@ -519,7 +561,7 @@ class PiSession implements ProviderSession {
   /** The tools Scribe adds to Pi: the board's, the web fetch, questions, todos, and Plan mode's exit_plan. */
   private async customTools(): Promise<ToolDefinition[]> {
     this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope));
-    const tools = [...(await this.board.tools())];
+    const tools = [...(await this.board.tools()), ...(await this.userTools())];
     tools.push({
       name: "web_fetch",
       label: "Fetch",
@@ -1033,6 +1075,8 @@ class PiSession implements ProviderSession {
     this.closeSession();
     this.board?.close();
     this.board = null;
+    this.bridge?.close();
+    this.bridge = null;
   }
 
   dispose(): void {

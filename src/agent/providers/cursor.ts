@@ -25,6 +25,8 @@ import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
 import { cursorAccessToken } from "./cursorAuth.js";
 import { SqliteCursorStore } from "./cursorStore.js";
+import { McpBridge } from "../mcpBridge.js";
+import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -497,6 +499,9 @@ class CursorSession implements ProviderSession {
   /** The agent id last reported to the host; the host clearing it (rewind) means start over. */
   private reported: string | null = null;
   private board: BoardTools | null = null;
+  private bridge: McpBridge | null = null;
+  /** Bridged user tools' display titles ("server: tool"), by custom tool name. */
+  private bridgedLabels = new Map<string, string>();
   private current: Run | null = null;
   private sink: RunSink | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
@@ -557,7 +562,48 @@ class CursorSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope)]);
+    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+  }
+
+  /**
+   * The user's MCP servers (Agent settings) as custom tools named "<server>__<tool>": Auto-review would
+   * fail their calls closed as MCP servers, and this way Scribe asks first by the server's setting.
+   */
+  private async userTools(): Promise<Record<string, SDKCustomTool>> {
+    const servers = this.ctx.mcpServers?.(this.thread) ?? [];
+    if (this.bridge && (serversKey(this.bridge.servers) !== serversKey(servers) || this.bridge.cwd !== this.cwd())) {
+      this.bridge.close();
+      this.bridge = null;
+    }
+    if (!servers.length) return {};
+    this.bridge ??= new McpBridge(
+      servers,
+      this.cwd(),
+      () => this.thread,
+      () => {
+        const sink = this.sink;
+        if (sink) return (req, signal) => sink.approval(req, signal);
+        const approval = this.ctx.approval;
+        return approval ? (req) => approval(this.thread.id, req) : undefined;
+      },
+      (name, message) => this.sink?.notice("warn", `MCP server ${name} did not start: ${message}`)
+    );
+    const out: Record<string, SDKCustomTool> = {};
+    for (const tool of await this.bridge.tools()) {
+      this.bridgedLabels.set(tool.name, `${tool.server}: ${tool.tool}`);
+      out[tool.name] = {
+        description: tool.description,
+        inputSchema: tool.inputSchema as Record<string, SDKJsonValue>,
+        ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        execute: async (args, context) => {
+          // The stream reports the call under the same id when it already showed it; the approval then sits on that row.
+          const toolCallId = context.toolCallId && this.tools.has(context.toolCallId) ? context.toolCallId : undefined;
+          const result = await tool.call(args, { toolCallId });
+          return { content: mcpContent(result.content), isError: result.isError };
+        },
+      };
+    }
+    return out;
   }
 
   /** Board workers (threads only a page has written to) keep Cursor's own shell; the host says which these are. */
@@ -578,7 +624,7 @@ class CursorSession implements ProviderSession {
     const t = this.thread;
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
     this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope));
-    const customTools: Record<string, SDKCustomTool> = { ...(await this.board.tools()) };
+    const customTools: Record<string, SDKCustomTool> = { ...(await this.userTools()), ...(await this.board.tools()) };
     if (t.web !== "on") customTools.web_fetch = gatedFetch((url) => this.gateFetch(url));
     const hostShell = this.hostShell();
     if (hostShell) customTools[HOST_SHELL] = this.hostShellTool();
@@ -809,6 +855,8 @@ class CursorSession implements ProviderSession {
     this.closeAgent();
     this.board?.close();
     this.board = null;
+    this.bridge?.close();
+    this.bridge = null;
   }
 
   dispose(): void {
@@ -1029,7 +1077,7 @@ class CursorSession implements ProviderSession {
         return `Subagent: ${str(args.description) ?? "task"}`;
       case "mcp": {
         const tool = str(args.toolName) ?? "tool";
-        return isBoard ? `Scribe: ${tool}` : `${mcpServer ?? "MCP"}: ${tool}`;
+        return isBoard ? this.bridgedLabels.get(tool) ?? `Scribe: ${tool}` : `${mcpServer ?? "MCP"}: ${tool}`;
       }
       case "webSearch":
         return `Web search: ${str(args.query) ?? str(args.searchTerm) ?? ""}`.trim();
