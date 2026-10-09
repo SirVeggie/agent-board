@@ -2241,30 +2241,34 @@ button.ag-pill.ag-web-icon {
   justify-content: center;
   width: 14px;
   height: 14px;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 700;
   flex-shrink: 0;
 }
 
+.ag-prov svg {
+  width: 100%;
+  height: 100%;
+}
+
 .ag-prov.p-claude {
-  background: #d97757;
-  color: #fff;
+  color: light-dark(#a64b30, #ed987b);
 }
 
 .ag-prov.p-cursor {
-  background: rgba(var(--lift-rgb), 0.12);
   color: var(--heading);
 }
 
 .ag-prov.p-codex {
-  background: #10a37f;
-  color: #fff;
+  color: light-dark(#1975ad, #80caff);
 }
 
 .ag-prov.p-pi {
-  background: #7c5cff;
-  color: #fff;
+  color: light-dark(#167c7c, #75d5cb);
+}
+
+.ag-menu-head:has(.ag-prov) {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
 button.ag-send {

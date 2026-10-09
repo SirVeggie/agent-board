@@ -141,7 +141,28 @@
     { name: "global", description: "Not tied to a page or folder" },
   ];
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const PROVIDER_GLYPH = { claude: "C", cursor: "⌘", codex: "X", pi: "N" };
+  // The same symbols used by the floating chat orb, drawn as crisp static marks.
+  const PROVIDER_MARK = {
+    claude: '<path d="M12 3v18M3 12h18M7.5 4.2l9 15.6M4.2 7.5l15.6 9M7.5 19.8l9-15.6M4.2 16.5l15.6-9"/>',
+    cursor: '<path d="m12 2 8.7 5v10L12 22l-8.7-5V7L12 2Zm0 10L3.3 7m8.7 5 8.7-5M12 12v10"/>',
+    codex: '<path d="m4 6 6 6-6 6m10 0h6"/>',
+    pi: '<path d="m4 7 16-.5M9 7 7.5 20M15 7v11l2.5 2"/>',
+  };
+  function providerIcon(provider) {
+    const mark = el("span", `ag-prov p-${provider}`);
+    mark.setAttribute("aria-hidden", "true");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("focusable", "false");
+    svg.innerHTML = PROVIDER_MARK[provider] || '<circle cx="12" cy="12" r="8"/>';
+    mark.append(svg);
+    return mark;
+  }
   const PROVIDERS = ["cursor", "claude", "codex", "pi"];
 
   /* ---------- state ---------- */
@@ -943,6 +964,7 @@
       for (const item of items) {
         if (item.header) {
           lastHeader = el("div", "ag-menu-head", item.header);
+          if (item.provider) lastHeader.prepend(providerIcon(item.provider));
           if (!q) list.append(lastHeader);
           continue;
         }
@@ -3645,7 +3667,7 @@
       this.renderForkNote(t);
       const info = modelInfo(s.provider, s.model);
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model");
-      model.append(el("span", `ag-prov p-${s.provider}`, PROVIDER_GLYPH[s.provider] || "?"), el("span", null, info?.label || s.model));
+      model.append(providerIcon(s.provider), el("span", null, info?.label || s.model));
       bar.append(model);
       const hasEffort = info?.efforts?.length || info?.params?.some((p) => p.id !== CONTEXT_PARAM);
       if (hasEffort) {
@@ -3785,7 +3807,7 @@
         const status = S.config.providers.find((p) => p.id === provider);
         const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (s.provider === provider && s.model === m.id));
         if (!showAll && !models.length) continue;
-        items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}` });
+        items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
         if (!models.length) {
           items.push({ label: status?.available ? "Loading models…" : status?.detail || "Not available", disabled: true });
           continue;
@@ -4861,7 +4883,7 @@
   /** The line under a thread's title: provider, model, when, page, changes and worktree branch. */
   function threadRowMeta(t) {
     const meta = el("span", "ag-row-meta");
-    meta.append(el("span", `ag-prov p-${t.provider}`, PROVIDER_GLYPH[t.provider] || "?"), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
+    meta.append(providerIcon(t.provider), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
     if (t.fromPage) meta.append(el("span", null, "·"), el("span", null, "page"));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
     const wt = openWorktree(t);
@@ -7689,7 +7711,7 @@
       const cur = prefs()?.summarizer;
       this.summarizer.replaceChildren();
       if (!cur) return;
-      this.summarizer.append(el("span", `ag-prov p-${cur.provider}`, PROVIDER_GLYPH[cur.provider] || "?"), el("span", null, modelInfo(cur.provider, cur.model)?.label || cur.model));
+      this.summarizer.append(providerIcon(cur.provider), el("span", null, modelInfo(cur.provider, cur.model)?.label || cur.model));
     },
     open() {
       if (!this.root) return;
