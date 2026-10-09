@@ -78,6 +78,27 @@ A space is a named set of tabs, such as one for home and one for work, or one pe
 - If the daemon cannot be started, or stops while the app is open, the window shows a "daemon isn't running" page with a Start button and the last error. It returns to Scribe as soon as the daemon answers.
 - On launch the app writes `desktop.json` to the data folder. While Settings → Desktop → "Agents open Scribe in this app" is on, agents open the app instead of a browser tab when no Scribe window is open.
 
+### Desktop app vs browser
+
+Pages, state, the Library, spaces and agent chat live in the daemon, so both show the same data. The differences:
+
+| | Desktop app | Browser |
+|---|---|---|
+| Sites that refuse framing | Load anyway | Open in browser card |
+| Scribe shortcuts while an embedded site has focus | Work (caught natively) | Stay with the site |
+| Ctrl+T / Ctrl+N, Ctrl+W, Ctrl+Tab, Ctrl+Shift+T | Scribe's | The browser's (use **+** and Ctrl+Z) |
+| Pages and embeds that use Ctrl+K, Ctrl+B, Ctrl+L, … | Scribe takes the key | The page keeps it |
+| F5 / Ctrl+R | Also drops the HTTP cache | Normal reload (Ctrl+Shift+R for a hard one) |
+| Links and popups, including from embedded sites | Open in the default browser | New browser tab or popup |
+| Sign-ins, cookies, extensions in embeds | WebView2's own profile, none of yours | Your browser profile |
+| Zoom (Ctrl+= / Ctrl+-, Ctrl+wheel) | Off | Works |
+| Dropping files (packs on the strip or Library, attachments on the chat) | Not delivered (Tauri's drop handler) | Works |
+| Daemon down | Offline page with a Start button | Keeps reconnecting |
+| Tray, startup, compact window, agents open the window | Yes | No |
+| DevTools | Debug builds only | Yes |
+
+UI preferences (theme, link mode, sidebar and chat layout) are kept in `localStorage`, and page `scribe.local` per viewer, so the app and each browser (and `localhost` vs `127.0.0.1`) keep their own copies.
+
 ## Agent tools
 
 | Tool | Purpose |
