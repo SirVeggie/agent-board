@@ -442,18 +442,6 @@ test("worker_claim claims a card for the chat the board started, so its agent ne
   assert.equal((card(again, 1).claim as { from?: string }).from, "ready");
 });
 
-test("the sweep clears a legacy agent assignee", () => {
-  const state = {
-    ...board(),
-    cards: [{ id: "c1", num: 1, col: "done", title: "Old", assignee: "agent", comments: [], createdAt: 1, movedAt: 1, doneAt: 1 }],
-  };
-  const ctx: SweepContext = { now: 1000, thread: () => ({ exists: false }), sessionSeenAt: () => undefined };
-  const out = kanbanActions.sweep!(state, ctx)!;
-  assert.equal(out.ops.length, 1);
-  const next = applyStateOps(state, out.ops);
-  assert.equal(card(next, 1).assignee, undefined);
-});
-
 test("the sweep releases a card whose thread failed and flags one whose thread went quiet", () => {
   let state: Record<string, unknown> = board();
   state = run(state, "claim", { card: 1 }, agent({ session: undefined, thread: "th_fail" })).state;

@@ -56,11 +56,6 @@ const labels = (state: BoardState) => arr<Label>(state.labels);
 const cards = (state: BoardState) => arr<Card>(state.cards);
 const cardPath = (card: Card) => `cards/id=${card.id}`;
 
-/** Legacy placeholder before workers named the assignee; not a real person or worker. */
-function isLegacyAssignee(name: unknown): boolean {
-  return str(name).trim().toLowerCase() === "agent";
-}
-
 /** The blocked status a card shows while its agent waits on the user. */
 function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }>["asking"]>): string {
   if (asking.kind === "approval") return `Waiting for your approval: ${asking.title}`;
@@ -741,11 +736,6 @@ export const kanbanActions: ActionSet = {
   sweep(state: BoardState, ctx: SweepContext): ActionOutcome | null {
     const ops: unknown[] = [];
     const events: ActionOutcome["events"] = [];
-    for (const card of cards(state)) {
-      if (isLegacyAssignee(card.assignee)) {
-        ops.push({ op: "merge", path: cardPath(card), value: { assignee: null } });
-      }
-    }
     for (const card of cards(state)) {
       const claim = card.claim;
       if (!claim || claim.stale) continue;
