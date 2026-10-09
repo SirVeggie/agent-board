@@ -23,18 +23,27 @@
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
       gl.compileShader(s);
-      return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
+      if (gl.getShaderParameter(s, gl.COMPILE_STATUS)) return s;
+      gl.deleteShader(s);
+      return null;
     };
     const vs = shader(gl.VERTEX_SHADER, VERT);
     const fs = shader(gl.FRAGMENT_SHADER, frag);
-    if (!vs || !fs) return null;
+    if (!vs || !fs) {
+      if (vs) gl.deleteShader(vs);
+      if (fs) gl.deleteShader(fs);
+      return null;
+    }
     const prog = gl.createProgram();
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { gl.deleteProgram(prog); return null; }
     gl.useProgram(prog);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     const loc = gl.getAttribLocation(prog, "p");
     gl.enableVertexAttribArray(loc);
@@ -57,8 +66,14 @@
 
     return {
       set,
+      destroy() {
+        gl.deleteBuffer(buffer);
+        gl.deleteProgram(prog);
+        gl.getExtension("WEBGL_lose_context")?.loseContext();
+      },
       /** Sizes the canvas to its CSS box times scale, sets values, and draws a frame. False while it has no size. */
       draw(values) {
+        if (gl.isContextLost()) return false;
         const scale = typeof opts.scale === "function" ? opts.scale() : opts.scale || 1;
         if (!canvas.clientWidth || !canvas.clientHeight) return false;
         const w = Math.max(1, Math.round(canvas.clientWidth * scale));
@@ -91,7 +106,7 @@
         last = now;
         step(dt);
       }
-      frame = requestAnimationFrame(tick);
+      if (running) frame = requestAnimationFrame(tick);
     }
     function kick() {
       if (frame || !running || document.hidden) return;
@@ -111,6 +126,10 @@
         running = false;
         if (frame) cancelAnimationFrame(frame);
         frame = 0;
+      },
+      destroy() {
+        this.stop();
+        document.removeEventListener("visibilitychange", kick);
       },
     };
   }
