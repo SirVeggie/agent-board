@@ -101,8 +101,12 @@
   /** How close to the bottom counts as pinned. Opening the queue dock shrinks the scroll by the dock's height, so this must be the hide/show hysteresis too. */
   const STICK_PX = 80;
   const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
-  /** Cursor and Pi have no Limited search: the allowlist covers a fetch tool only. */
+  /** Cursor and Pi have no Limited search unless a SearXNG instance is set: the allowlist covers a fetch tool only. */
   const CURSOR_LIMITED = "Fetch from the web allowlist's domains; the agent asks for others; no web search";
+  const SEARXNG_LIMITED = "Search and fetch the web allowlist's domains (search through your SearXNG); the agent asks for others";
+  function scribeLimited() {
+    return prefs().searxngUrl ? SEARXNG_LIMITED : CURSOR_LIMITED;
+  }
   /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
   const CURSOR_ASK = "Would ask first; Cursor Auto-reviews instead (can't ask yet)";
   const CURSOR_EDITS = "Would auto-edit; Cursor Auto-reviews instead (can't ask yet)";
@@ -3685,7 +3689,7 @@
       {
         const wm = WEB_MODES.find((w) => w.id === webMode(s.web)) || WEB_MODES[0];
         const unenforced = wm.id !== "on" && !webEnforced(s.provider);
-        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider === "codex" ? CODEX_LIMITED : wm.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : wm.detail;
+        const detail = unenforced ? WEB_UNENFORCED : wm.id === "limited" && s.provider === "codex" ? CODEX_LIMITED : wm.id === "limited" && s.provider !== "claude" ? scribeLimited() : wm.detail;
         const web = button(
           "",
           `ag-pill toggle web-${wm.id}${wm.id !== "off" ? " on" : ""}${unenforced ? " web-unenforced" : ""}`,
@@ -3849,7 +3853,7 @@
       const cur = webMode(s.web);
       const items = WEB_MODES.map((w) => ({
         label: w.label,
-        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider === "codex" ? CODEX_LIMITED : w.id === "limited" && s.provider !== "claude" ? CURSOR_LIMITED : w.detail,
+        detail: w.id !== "on" && !webEnforced(s.provider) ? WEB_UNENFORCED : w.id === "limited" && s.provider === "codex" ? CODEX_LIMITED : w.id === "limited" && s.provider !== "claude" ? scribeLimited() : w.detail,
         checked: cur === w.id,
         run: () => this.updateSettings({ web: w.id }),
       }));
@@ -6745,13 +6749,34 @@
       rows.append(input);
       const actions = el("div", "settings-actions");
       actions.append(button("Reset to defaults", null, () => this.saveWeb(null)));
+      const search = el("input", "ag-input small");
+      search.value = prefs().searxngUrl || "";
+      search.placeholder = "http://192.168.1.20:8080";
+      search.spellcheck = false;
+      const saveSearch = async () => {
+        const value = search.value.trim();
+        if (value === (prefs().searxngUrl || "")) return;
+        try {
+          S.config.prefs = await api("PUT", "/prefs", { searxngUrl: value });
+          search.value = prefs().searxngUrl || "";
+        } catch (err) {
+          notice(err.message);
+        }
+      };
+      search.addEventListener("change", () => void saveSearch());
+      search.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") search.blur();
+      });
       this.web.replaceChildren(
         helpHeading(
           "Web",
-          "With web set to Limited, Claude threads may search and fetch only these domains and their subdomains, without asking. Fetches anywhere else are refused."
+          "With web set to Limited, threads may search and fetch only these domains and their subdomains, without asking. Anything else asks you first."
         ),
         rows,
-        actions
+        actions,
+        settingRow("SearXNG search", search, {
+          hint: "Your SearXNG instance's address. Native threads, and Cursor threads with web Limited or Off, get a web_search tool through it, gated by the thread's web setting. The instance must allow JSON results (search.formats in its settings.yml). Leave empty for no search. Applies to new sessions.",
+        })
       );
     },
     /** Whether Claude threads run the hooks from Claude Code's settings files and plugins (prefs). */

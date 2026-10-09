@@ -46,3 +46,51 @@ test("web calls: the setting, the allowlist and the thread's grants", async () =
   assert.equal(parseWebImportance("trivial"), "trivial");
   assert.equal(parseWebImportance("urgent"), undefined);
 });
+
+test("SearXNG addresses are cleaned to a base URL", async () => {
+  const { cleanSearxngUrl } = await import("./webAccess.js");
+  assert.equal(cleanSearxngUrl(" http://box:8080/ "), "http://box:8080");
+  assert.equal(cleanSearxngUrl("https://s.example.com/searx/search?q=x"), "https://s.example.com/searx");
+  assert.equal(cleanSearxngUrl("ftp://box"), "");
+  assert.equal(cleanSearxngUrl("not a url"), "");
+});
+
+test("web_search through SearXNG: open search keeps to the allowlist, named domains ask", async () => {
+  const { gatedSearchText } = await import("./webAccess.js");
+  const queries: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q") ?? "");
+    assert.equal(url.searchParams.get("format"), "json");
+    return new Response(
+      JSON.stringify({
+        results: [
+          { url: "https://docs.python.org/3/x", title: "Py", content: "snippet" },
+          { url: "https://evil.example/y", title: "Evil" },
+        ],
+      })
+    );
+  }) as typeof fetch;
+  try {
+    const asked: unknown[] = [];
+    const limited = { allowed: () => false, reach: () => ["python.org"], ask: async (call: unknown) => (asked.push(call), { allowed: false, message: "no" }) };
+    const open = await gatedSearchText("http://sx", { query: "asyncio" }, limited);
+    assert.equal(open.isError, false);
+    assert.equal(queries.at(-1), "asyncio site:python.org");
+    assert.match(open.text, /docs\.python\.org/);
+    assert.doesNotMatch(open.text, /evil/);
+    assert.equal(asked.length, 0);
+
+    const refused = await gatedSearchText("http://sx", { query: "x", domains: ["evil.example"] }, limited);
+    assert.ok(refused.isError);
+    assert.match(refused.text, /Refused: no/);
+    assert.equal(asked.length, 1);
+
+    const full = await gatedSearchText("http://sx", { query: "x" }, { allowed: () => true, reach: () => [], ask: async () => ({ allowed: false }) });
+    assert.equal(queries.at(-1), "x");
+    assert.match(full.text, /evil\.example/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

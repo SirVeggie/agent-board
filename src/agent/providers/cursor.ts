@@ -21,7 +21,7 @@ import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
 import { isPlainRecord, noPages } from "../types.js";
-import { gatedFetchText, webCallAllowed } from "../webAccess.js";
+import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
 import { cursorAccessToken } from "./cursorAuth.js";
 import { SqliteCursorStore } from "./cursorStore.js";
@@ -371,7 +371,7 @@ export class CursorProvider implements AgentProvider {
 /** A spare is bound to what its agent was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web, thread.approval, noPages(thread.scope)]);
+  return JSON.stringify([where, thread.mode, thread.web, thread.approval, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
 }
 
 /**
@@ -437,15 +437,28 @@ function mcpContent(content: unknown): SDKCustomToolContent[] {
 /**
  * Web off or limited: the built-in web tools are off and this fetch takes their place. A URL (or
  * redirect) the thread's web setting does not cover goes through gate, which asks the user.
- * There is no gated search.
+ * Search comes from gatedSearch when a SearXNG instance is set.
  */
-function gatedFetch(gate: (url: string) => Promise<{ allowed: boolean; message?: string }>): SDKCustomTool {
+function gatedFetch(gate: (url: string) => Promise<{ allowed: boolean; message?: string }>, search: boolean): SDKCustomTool {
   return {
-    description: "Fetch a web page or file over HTTP(S) and return its text. Sites the user has not allowed ask the user first, who may refuse. Web search is not available.",
+    description: `Fetch a web page or file over HTTP(S) and return its text. Sites the user has not allowed ask the user first, who may refuse.${search ? "" : " Web search is not available."}`,
     inputSchema: { type: "object", properties: { url: { type: "string", description: "Absolute http(s) URL" } }, required: ["url"] },
     annotations: { readOnlyHint: true, openWorldHint: true },
     execute: async (args) => {
       const { text, isError } = await gatedFetchText(args.url, gate);
+      return { content: [{ type: "text", text }], isError };
+    },
+  };
+}
+
+/** Web off or limited, with a SearXNG instance set: web_search in place of Cursor's own search. */
+function gatedSearch(baseUrl: string, web: WebAccess, access: Parameters<typeof gatedSearchText>[2]): SDKCustomTool {
+  return {
+    description: webSearchDescription(web),
+    inputSchema: WEB_SEARCH_SCHEMA,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    execute: async (args) => {
+      const { text, isError } = await gatedSearchText(baseUrl, args, access);
       return { content: [{ type: "text", text }], isError };
     },
   };
@@ -562,7 +575,7 @@ class CursorSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /**
@@ -610,8 +623,16 @@ class CursorSession implements ProviderSession {
   /** A fetch through web_fetch: the allowlist (limited) and the thread's grants, else the user is asked. */
   private async gateFetch(url: string): Promise<{ allowed: boolean; message?: string }> {
     const call = { kind: "fetch" as const, url };
+    if (this.webCovered(call)) return { allowed: true };
+    return this.askWeb(call);
+  }
+
+  private webCovered(call: WebCall): boolean {
     const allowlist = this.thread.web === "limited" ? this.ctx.webAllowlist() : [];
-    if (webCallAllowed(call, this.thread.web, allowlist, this.thread.webGrants)) return { allowed: true };
+    return webCallAllowed(call, this.thread.web, allowlist, this.thread.webGrants);
+  }
+
+  private async askWeb(call: WebCall): Promise<{ allowed: boolean; message?: string }> {
     if (!this.ctx.webRequest) return { allowed: false, message: "web access is off for this thread." };
     return this.ctx.webRequest(this.thread.id, call);
   }
@@ -625,7 +646,15 @@ class CursorSession implements ProviderSession {
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
     this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope));
     const customTools: Record<string, SDKCustomTool> = { ...(await this.userTools()), ...(await this.board.tools()) };
-    if (t.web !== "on") customTools.web_fetch = gatedFetch((url) => this.gateFetch(url));
+    const searchUrl = t.web !== "on" ? (this.ctx.webSearchUrl?.() ?? "") : "";
+    if (t.web !== "on") customTools.web_fetch = gatedFetch((url) => this.gateFetch(url), Boolean(searchUrl));
+    if (searchUrl) {
+      customTools.web_search = gatedSearch(searchUrl, t.web, {
+        allowed: (call) => this.webCovered(call),
+        reach: () => [...(t.web === "limited" ? this.ctx.webAllowlist() : []), ...(this.thread.webGrants?.domains ?? [])],
+        ask: (call) => this.askWeb(call),
+      });
+    }
     const hostShell = this.hostShell();
     if (hostShell) customTools[HOST_SHELL] = this.hostShellTool();
     return {

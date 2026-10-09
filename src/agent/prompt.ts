@@ -10,6 +10,8 @@ export type ScopeInfo = {
   page?: { id: string; key: string; title: string; folder: string | null; blank?: boolean } | null;
   folder?: { id: string; path: string } | null;
   folderInstructions?: FolderInstructionPage[];
+  /** A SearXNG instance is set in Agent settings: Pi threads (and Cursor ones without full web) have web_search. */
+  webSearch?: boolean;
 };
 
 /**
@@ -91,12 +93,16 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   if (thread.provider === "codex" && thread.mode !== "board") {
     lines.push("Files: prefer the scribe MCP read_file tool for routine local text reads instead of shell commands. It accepts path, a 1-based offset and limit, and returns numbered lines and nextOffset for continuation. Reads cover the workspace, Scribe-recorded worktree links and this thread's attachments, with resolved link targets checked. Code mode with Full access permits outside reads. A denied read does not authorize bypassing the scope through a shell.");
   }
-  if (thread.web === "on" && thread.provider === "pi") lines.push("Web: web_fetch fetches pages; there is no web search.");
+  // Pi always and Cursor without full web get Scribe's web_search when a SearXNG instance is set.
+  const scribeSearch = Boolean(scope.webSearch) && (thread.provider === "pi" || thread.provider === "cursor");
+  if (thread.web === "on" && thread.provider === "pi") lines.push(scribeSearch ? "Web: web_search searches the web and web_fetch fetches pages." : "Web: web_fetch fetches pages; there is no web search.");
   if (thread.web !== "on") {
-    const tools = thread.provider === "claude" ? "WebSearch or WebFetch" : thread.provider === "codex" ? "web search" : "web_fetch (there is no web search)";
+    const tools =
+      thread.provider === "claude" ? "WebSearch or WebFetch" : thread.provider === "codex" ? "web search" : scribeSearch ? "web_search or web_fetch" : "web_fetch (there is no web search)";
+    const openSearch = thread.provider === "claude" || scribeSearch;
     lines.push(
       thread.web === "limited"
-        ? `Web access is limited to the user's allowlist of domains${thread.provider === "claude" ? " (a web search that names no domains covers those sites)" : ""}. ${tools} elsewhere asks the user first.`
+        ? `Web access is limited to the user's allowlist of domains${openSearch ? " (a web search that names no domains covers those sites)" : ""}. ${tools} elsewhere asks the user first.`
         : `Web access is off in this thread: ${tools} asks the user first.`,
       "To say why and how much you need it, call web_request first with importance: necessary (waits until answered), important (about 2 hours), useful (15 minutes) or trivial (2 minutes). In a chat run by a board worker an unanswered request is refused after that wait; then carry on without the web, doing what you can."
     );

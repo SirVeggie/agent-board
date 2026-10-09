@@ -24,6 +24,8 @@ export type Prefs = {
   web: WebAccess;
   /** Domains a thread with limited web access may search and fetch (subdomains included). */
   webAllowlist: string[];
+  /** A SearXNG instance (base URL) that gives Pi threads, and Cursor threads without full web, a web_search tool. "" for none. */
+  searxngUrl: string;
   /**
    * Run the hooks in Claude Code's settings files and plugins in Claude threads. Off by default: a
    * fail-closed hook meant for the user's own terminal sessions can deny every tool call here.
@@ -60,6 +62,7 @@ export const DEFAULT_PREFS: Prefs = {
   approvals: {},
   web: "on",
   webAllowlist: DEFAULT_WEB_ALLOWLIST,
+  searxngUrl: "",
   claudeHooks: false,
   cursorHostShell: false,
   recentWorkspaces: [],

@@ -154,6 +154,8 @@ export type SessionContext = {
   scratchDir: string;
   /** Domains a thread with limited web access may reach. Read on each call, so edits apply at once. */
   webAllowlist(): string[];
+  /** The SearXNG instance web_search goes through (Agent settings), or "" for no web_search tool. Read when a session opens. */
+  webSearchUrl?(): string;
   /** Whether Claude threads run the hooks from Claude Code's settings files and plugins. Read when a session starts. */
   claudeHooks?(): boolean;
   /** Whether Scribe runs this Cursor thread's shell commands itself, asking first (experimental; off for board workers). Read when a session opens its agent. */

@@ -53,7 +53,7 @@ import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage } from "./usage.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
-import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
+import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
   ApprovalOption,
@@ -357,6 +357,7 @@ export class AgentHost {
         this.emit({ type: "agent_thread", thread: this.view(thread) });
       },
       webAllowlist: () => this.prefs().webAllowlist,
+      webSearchUrl: () => this.prefs().searxngUrl,
       claudeHooks: () => this.prefs().claudeHooks,
       mcpServers: (thread) => serversForThread(thread),
       // Not for board workers: nobody watches their threads to approve commands.
@@ -615,6 +616,7 @@ export class AgentHost {
       // Older prefs kept web as a boolean.
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
+      searxngUrl: cleanSearxngUrl(saved.searxngUrl),
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
       disabledModes: cleanDisabledModes(saved.disabledModes),
@@ -628,6 +630,10 @@ export class AgentHost {
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
     if (patch.disabledModes !== undefined) next.disabledModes = cleanDisabledModes(patch.disabledModes);
+    if (patch.searxngUrl !== undefined) {
+      next.searxngUrl = cleanSearxngUrl(patch.searxngUrl);
+      if (patch.searxngUrl && !next.searxngUrl) throw new Error("The SearXNG address must be an http(s) URL.");
+    }
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     this.db.setSetting("prefs", next);
     return next;
@@ -1205,6 +1211,11 @@ export class AgentHost {
   }
 
   private scopeInfo(thread: Thread): ScopeInfo {
+    const info = this.scopePages(thread);
+    return this.prefs().searxngUrl ? { ...info, webSearch: true } : info;
+  }
+
+  private scopePages(thread: Thread): ScopeInfo {
     if (thread.scope.kind === "page" && thread.scope.ref) {
       // A warmed spare for a New page sees the draft; the thread that takes it makes the page real.
       const tab = store.get(thread.scope.ref, "agent") ?? store.getDraft(thread.scope.ref);

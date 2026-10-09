@@ -146,3 +146,12 @@ test("cursorScribeServers finds Scribe servers in a Cursor MCP config", () => {
   assert.deepEqual(cursorScribeServers(path.join(dir, "missing.json")), []);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("Pi threads hear about web_search only when a SearXNG instance is set", () => {
+  const thread = (over: Partial<Thread>): Thread =>
+    ({ provider: "pi", mode: "code", cwd: "/work", web: "on", scope: { kind: "global", ref: null }, ...over }) as Thread;
+  assert.match(threadInstructions(thread({}), {}), /there is no web search/);
+  assert.match(threadInstructions(thread({}), { webSearch: true }), /web_search searches the web/);
+  assert.match(threadInstructions(thread({ web: "limited" }), { webSearch: true }), /covers those sites\)\. web_search or web_fetch elsewhere/);
+  assert.match(threadInstructions(thread({ web: "limited", provider: "cursor" }), {}), /web_fetch \(there is no web search\)/);
+});

@@ -9,7 +9,7 @@ import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
 import { isPlainRecord, noPages, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
-import { gatedFetchText, webCallAllowed } from "../webAccess.js";
+import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
@@ -174,6 +174,7 @@ function toolKind(name: string): ToolKind {
     case "write":
       return "edit";
     case "web_fetch":
+    case "web_search":
       return "fetch";
     case "todo_write":
       return "todo";
@@ -376,7 +377,7 @@ export class PiProvider implements AgentProvider {
 /** A spare is bound to what its session was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web, noPages(thread.scope)]);
+  return JSON.stringify([where, thread.mode, thread.web, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
 }
 
 /** The board MCP server's tools as Pi custom tools: one MCP client per session, started with the thread's id so card claims point at it. */
@@ -439,6 +440,21 @@ function mcpContent(content: unknown): Array<TextContent | ImageContent> {
 }
 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }], details: undefined });
+
+/** web_search through the user's SearXNG instance (Agent settings), gated like web_fetch. */
+function webSearchTool(baseUrl: string, web: WebAccess, access: Parameters<typeof gatedSearchText>[2]): ToolDefinition {
+  return {
+    name: "web_search",
+    label: "Web search",
+    description: webSearchDescription(web),
+    parameters: WEB_SEARCH_SCHEMA as unknown as ToolDefinition["parameters"],
+    execute: async (_id, params, signal) => {
+      const result = await gatedSearchText(baseUrl, isPlainRecord(params) ? params : {}, access, signal);
+      if (result.isError) throw new Error(result.text);
+      return text(result.text);
+    },
+  };
+}
 
 type Steer = { text: string; state: "queued" | "delivered" | "dropped" };
 
@@ -508,7 +524,7 @@ class PiSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /** Who answers an approval: the running turn, else the host from the thread's rules. */
@@ -552,8 +568,21 @@ class PiSession implements ProviderSession {
 
   private async gateFetch(url: string): Promise<{ allowed: boolean; message?: string }> {
     const call = { kind: "fetch" as const, url };
+    if (this.webCovered(call)) return { allowed: true };
+    return this.askWeb(call);
+  }
+
+  private webCovered(call: WebCall): boolean {
     const allowlist = this.thread.web === "limited" ? this.ctx.webAllowlist() : [];
-    if (webCallAllowed(call, this.thread.web, allowlist, this.thread.webGrants)) return { allowed: true };
+    return webCallAllowed(call, this.thread.web, allowlist, this.thread.webGrants);
+  }
+
+  /** The domains an open search keeps to when the thread's setting does not cover it. */
+  private webReach(): string[] {
+    return [...(this.thread.web === "limited" ? this.ctx.webAllowlist() : []), ...(this.thread.webGrants?.domains ?? [])];
+  }
+
+  private async askWeb(call: WebCall): Promise<{ allowed: boolean; message?: string }> {
     if (!this.ctx.webRequest) return { allowed: false, message: "web access is off for this thread." };
     return this.ctx.webRequest(this.thread.id, call);
   }
@@ -562,13 +591,15 @@ class PiSession implements ProviderSession {
   private async customTools(): Promise<ToolDefinition[]> {
     this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope));
     const tools = [...(await this.board.tools()), ...(await this.userTools())];
+    const searchUrl = this.ctx.webSearchUrl?.() ?? "";
+    const noSearch = searchUrl ? "" : " Web search is not available.";
     tools.push({
       name: "web_fetch",
       label: "Fetch",
       description:
         this.thread.web === "on"
-          ? "Fetch a web page or file over HTTP(S) and return its text. Web search is not available."
-          : "Fetch a web page or file over HTTP(S) and return its text. Sites the user has not allowed ask the user first, who may refuse. Web search is not available.",
+          ? `Fetch a web page or file over HTTP(S) and return its text.${noSearch}`
+          : `Fetch a web page or file over HTTP(S) and return its text. Sites the user has not allowed ask the user first, who may refuse.${noSearch}`,
       parameters: { type: "object", properties: { url: { type: "string", description: "Absolute http(s) URL" } }, required: ["url"] } as unknown as ToolDefinition["parameters"],
       execute: async (_id, params) => {
         const result = await gatedFetchText(isPlainRecord(params) ? params.url : undefined, (url) => this.gateFetch(url));
@@ -576,6 +607,7 @@ class PiSession implements ProviderSession {
         return text(result.text);
       },
     });
+    if (searchUrl) tools.push(webSearchTool(searchUrl, this.thread.web, { allowed: (call) => this.webCovered(call), reach: () => this.webReach(), ask: (call) => this.askWeb(call) }));
     tools.push({
       name: "ask_user",
       label: "Question",
@@ -1056,6 +1088,8 @@ class PiSession implements ProviderSession {
         return `Find ${str(args.pattern) ?? ""}`.trim();
       case "web_fetch":
         return `Fetch ${str(args.url) ?? ""}`.trim();
+      case "web_search":
+        return `Web search: ${str(args.query) ?? ""}`.trim();
       default:
         return `Scribe: ${name}`;
     }
