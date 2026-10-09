@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./app.css?v=63">
+  <link rel="stylesheet" href="./app.css?v=64">
   <link rel="stylesheet" href="./agent.css?v=29">
   <script>
     (() => {
@@ -85,6 +85,7 @@
       </button>
     </div>
   </header>
+  <div class="chrome-edge" aria-hidden="true"><div class="chrome-edge-tint"></div><canvas></canvas></div>
   <div id="persist-banner" class="persist-banner" hidden role="alert">
     <p><strong>Could not save Scribe's data.</strong> Changes live only in this session until this is fixed. Ask an agent to look at it, or export the page.</p>
     <p id="persist-banner-detail" class="persist-banner-detail"></p>
@@ -249,6 +250,14 @@
           <span id="ui-fx-label" class="setting-hinted">Animated effects on buttons</span>
           <button type="button" class="pill-toggle" id="ui-fx" role="switch" aria-checked="true" aria-labelledby="ui-fx-label"></button>
         </div>
+        <div class="setting-row">
+          <span id="aurora-edge-label" class="setting-hinted">Moving glow under the title bar while an agent works</span>
+          <button type="button" class="pill-toggle" id="aurora-edge" role="switch" aria-checked="true" aria-labelledby="aurora-edge-label"></button>
+        </div>
+        <div class="setting-row">
+          <span id="aurora-idle-label" class="setting-hinted">Tinted line under the title bar</span>
+          <button type="button" class="pill-toggle" id="aurora-idle" role="switch" aria-checked="true" aria-labelledby="aurora-idle-label"></button>
+        </div>
       </section>
       <section class="settings-section">
         <h3>Import / Export</h3>
@@ -371,12 +380,13 @@
   <script src="./spaces.js?v=2"></script>
   <script src="./glfx.js?v=1"></script>
   <script src="./newpage.js?v=3"></script>
-  <script src="./app.js?v=74"></script>
+  <script src="./aurora.js?v=1"></script>
+  <script src="./app.js?v=75"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
   <script src="./agent-render.js?v=12"></script>
-  <script src="./agent.js?v=45"></script>
+  <script src="./agent.js?v=46"></script>
   <script src="./desktop.js?v=6"></script>
 </body>
 </html>

@@ -5643,6 +5643,7 @@ gl_FragColor=vec4(min(col,1.)*alpha,alpha);}`;
     const running = threads.filter((t) => t.status === "running").length;
     const unread = threads.filter((t) => t.unread && !t.archived && !t.fromPage).length;
     btn.classList.toggle("busy", running > 0);
+    window.scribeAurora?.setBusy(running > 0);
     btn.classList.toggle("waiting", waiting);
     const badge = document.getElementById("agent-badge");
     if (badge) {

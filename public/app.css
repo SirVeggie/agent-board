@@ -284,6 +284,45 @@ body {
   overflow: hidden;
 }
 
+/* Aurora edge (aurora.js): a line along the bottom of the title bar, with a short glow below it.
+   Takes no room: the box sits at the chrome's bottom edge and overhangs the workspace gutter. */
+.chrome-edge {
+  position: relative;
+  flex-shrink: 0;
+  height: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.chrome-edge > * {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  width: 100%;
+  height: 16px;
+  opacity: 0;
+  transition: opacity 0.9s ease;
+  -webkit-mask: linear-gradient(#000 0 2px, rgba(0, 0, 0, 0.4) 3px, transparent);
+  mask: linear-gradient(#000 0 2px, rgba(0, 0, 0, 0.4) 3px, transparent);
+}
+
+.chrome-edge-tint {
+  background: linear-gradient(90deg, rgba(77, 158, 255, 0.35), rgba(143, 66, 245, 0.35) 60%, rgba(77, 158, 255, 0.25));
+}
+
+.chrome-edge.tint:not(.on) .chrome-edge-tint {
+  opacity: 1;
+}
+
+.chrome-edge.on canvas {
+  opacity: 0.8;
+}
+
+html.spaces-open .chrome-edge {
+  display: none;
+}
+
 .persist-banner {
   flex-shrink: 0;
   padding: 12px 18px 14px;

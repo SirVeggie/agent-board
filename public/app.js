@@ -58,6 +58,8 @@
   const showClearToggle = document.getElementById("show-clear");
   const tightSmallToggle = document.getElementById("tight-small");
   const uiFxToggle = document.getElementById("ui-fx");
+  const auroraEdgeToggle = document.getElementById("aurora-edge");
+  const auroraIdleToggle = document.getElementById("aurora-idle");
   const agentSideTrack = document.getElementById("agent-side");
   const librarySideTrack = document.getElementById("library-side");
   const agentSideLabel = document.getElementById("agent-side-label");
@@ -114,6 +116,9 @@
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "scribe.tightSmall";
   const UI_FX_KEY = "scribe.uiEffects";
+  /** Also read by aurora.js, which draws the title bar edge. */
+  const AURORA_EDGE_KEY = "scribe.auroraEdge";
+  const AURORA_IDLE_KEY = "scribe.auroraIdle";
   /** Also read by the inline script in index.html so the first paint already places the panes. */
   const AGENT_SIDE_KEY = "scribe.agentSide";
   const LIBRARY_SIDE_KEY = "scribe.librarySide";
@@ -344,6 +349,8 @@
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   applyFlag(uiFxToggle, UI_FX_KEY, true);
   document.documentElement.classList.toggle("no-ui-fx", !flagOn(uiFxToggle));
+  applyFlag(auroraEdgeToggle, AURORA_EDGE_KEY, true);
+  applyFlag(auroraIdleToggle, AURORA_IDLE_KEY, true);
   applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
   applyPaneSideAttr("librarySide", paneSide(LIBRARY_SIDE_KEY));
   renderThemeList();
@@ -354,6 +361,14 @@
   bindSettingHint(
     document.getElementById("ui-fx-label"),
     "Shader motion on controls that stay on screen, like the chat orb while the agent works. Off, they hold a still frame. The New page background still moves."
+  );
+  bindSettingHint(
+    document.getElementById("aurora-edge-label"),
+    "A thin blue and violet glow drifts along the bottom of the title bar while any agent chat runs, and fades out when they're done. It pauses while the window is in the background."
+  );
+  bindSettingHint(
+    document.getElementById("aurora-idle-label"),
+    "A faint, still blue and violet line under the title bar when no agent is working. It doesn't move, so it costs nothing."
   );
   bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
@@ -1035,6 +1050,9 @@
     if (el === uiFxToggle) {
       document.documentElement.classList.toggle("no-ui-fx", !on);
       window.dispatchEvent(new Event("scribe:ui-fx"));
+    }
+    if (el === auroraEdgeToggle || el === auroraIdleToggle) {
+      window.dispatchEvent(new Event("scribe:aurora"));
     }
   }
 
@@ -4096,6 +4114,8 @@
   showClearToggle.addEventListener("click", () => toggleFlag(showClearToggle, SHOW_CLEAR_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   uiFxToggle.addEventListener("click", () => toggleFlag(uiFxToggle, UI_FX_KEY));
+  auroraEdgeToggle.addEventListener("click", () => toggleFlag(auroraEdgeToggle, AURORA_EDGE_KEY));
+  auroraIdleToggle.addEventListener("click", () => toggleFlag(auroraIdleToggle, AURORA_IDLE_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
