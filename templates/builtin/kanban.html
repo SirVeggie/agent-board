@@ -4054,8 +4054,11 @@
   function fastParamOf(opts, provider, modelId) {
     return modelParamsOf(opts, provider, modelId).filter(function (p) { return p.id === "fast"; })[0] || null;
   }
+  function workerInstructions(w) {
+    return [str(settings().workerInstructions).trim(), str(w && w.instructions).trim()].filter(Boolean).join("\n\n");
+  }
   function workerReady(w) {
-    return Boolean(w && workerName(w) && str(w.instructions).trim() && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
+    return Boolean(w && workerName(w) && workerInstructions(w) && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
   }
   /** Scribe's run of a chat (phase running | waiting | ended, wait, outcome), as last reported. */
   function chatRun(threadId) {
@@ -4397,7 +4400,7 @@
       "You are the agent worker \"" + name + "\" on the Kanban board \"" + boardTitle() + "\" (Scribe page id " + scribe.id + "). You take the cards in the board's agent (ready) columns that are assigned to \"" + name + "\".",
       "",
       "The user's instructions:",
-      str(w.instructions).trim() || fallbackInstructions || "",
+      workerInstructions(w) || fallbackInstructions || "",
       "",
       cardBrief(c),
       "",
@@ -5134,6 +5137,7 @@
   /** The worker whose settings are open in the panel, and its editor (kept across renders so typing isn't lost). */
   var panelOpen = null;
   var panelEditor = null;
+  var sharedInstructionsEditor = null;
   function renderWorkersButton() {
     workersBtn.classList.toggle("hidden", !AGENT_MODE);
     if (!AGENT_MODE) return;
@@ -5182,7 +5186,7 @@
     var logListEl = workersPop.querySelector(".wp-log-list");
     var logScroll = logListEl ? logListEl.scrollTop : 0;
     var logStick = !logListEl || (logListEl.scrollHeight - logListEl.scrollTop - logListEl.clientHeight < 48);
-    var keep = panelEditor && panelEditor.contains(document.activeElement) ? document.activeElement : null;
+    var keep = (panelEditor && panelEditor.contains(document.activeElement)) || (sharedInstructionsEditor && sharedInstructionsEditor.contains(document.activeElement)) ? document.activeElement : null;
     workersPop.replaceChildren();
     var head = el("div", "wp-head");
     head.appendChild(el("b", null, "Workers"));
@@ -5196,6 +5200,27 @@
     head.appendChild(el("span", null, inboxLine));
     workersPop.appendChild(head);
     if (!hasWorkerApi()) workersPop.appendChild(el("p", "worker-note", "Restart Scribe to run agent workers."));
+    if (!sharedInstructionsEditor) {
+      sharedInstructionsEditor = el("div", "wedit worker-form compact");
+      var sharedLabel = el("label", "top", "Shared instructions");
+      sharedLabel.htmlFor = "sharedWorkerInstructions";
+      var sharedHelp = "Sent to every worker before its own instructions. Changes apply when a new card chat starts.";
+      sharedLabel.dataset.tooltip = sharedHelp;
+      sharedLabel.setAttribute("aria-description", sharedHelp);
+      var sharedInput = el("textarea", "field");
+      sharedInput.id = "sharedWorkerInstructions";
+      sharedInput.placeholder = "Rules for all workers: how to test, commit, and when to ask you...";
+      sharedInput.addEventListener("input", function () {
+        flushWorker();
+        panelEditor = null;
+        saveSetting("workerInstructions", sharedInput.value);
+      });
+      sharedInstructionsEditor.appendChild(sharedLabel);
+      sharedInstructionsEditor.appendChild(sharedInput);
+    }
+    var sharedField = sharedInstructionsEditor.querySelector("textarea");
+    if (document.activeElement !== sharedField) sharedField.value = str(settings().workerInstructions);
+    workersPop.appendChild(sharedInstructionsEditor);
     var ids = workerIds();
     if (!ids.length) workersPop.appendChild(el("p", "worker-note", "No workers yet. Add one, give it instructions, then assign cards to it and start it."));
     if (panelOpen && !worker(panelOpen)) { panelOpen = null; panelEditor = null; }
@@ -5451,7 +5476,13 @@
     instructions.value = str(w.instructions);
     instructions.placeholder = "What it should do with each card: where the code is, how to test, commit rules, when to ask you…";
     instructions.addEventListener("input", function () { setLater({ instructions: instructions.value }); });
-    row("Instructions", instructions, null, true);
+    instructions.setAttribute("aria-label", "Worker instructions");
+    var instructionHelp = "Added after the shared instructions. Leave empty to use only the shared instructions.";
+    var instructionLabel = el("label", "top", "Worker instructions");
+    instructionLabel.dataset.tooltip = instructionHelp;
+    instructionLabel.setAttribute("aria-description", instructionHelp);
+    form.appendChild(instructionLabel);
+    form.appendChild(instructions);
     if (!compact) {
       form.appendChild(workerGuideHint(w));
       row("Context", enhanced(workerSelect([
@@ -5549,8 +5580,8 @@
       var text = "";
       if (!workerReady(cur)) {
         text = !workerName(cur) ? "Give it a name to assign cards to it."
-          : FOLDER_MODES[workerMode(cur)] && str(cur && cur.instructions).trim() ? "Pick a folder so it can start."
-          : "Write instructions so it can start.";
+          : FOLDER_MODES[workerMode(cur)] && !str(cur && cur.cwd).trim() ? "Pick a folder so it can start."
+          : "Write shared or worker instructions so it can start.";
       }
       note.classList.toggle("warn", Boolean(text));
       note.classList.toggle("hidden", !text);

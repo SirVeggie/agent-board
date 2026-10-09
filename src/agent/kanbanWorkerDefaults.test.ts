@@ -89,3 +89,40 @@ test("provider fallback is stable and page-only workers also receive fixed defau
   assert.equal(settings.web, "off");
   assert.equal(settings.cwd, null);
 });
+
+// Exercise the actual readiness and prompt helpers against changing board settings.
+test("shared instructions enable workers and precede their own instructions in every launch", () => {
+  const context = vm.createContext({
+    shared: {},
+    settings: () => vm.runInContext("shared", context),
+    str: (value: unknown) => value == null ? "" : String(value),
+    workerName: (w: { name?: string }) => w.name || "",
+    FOLDER_MODES: { code: true, plan: true },
+    workerMode: (w: { mode?: string }) => w.mode || "code",
+    boardTitle: () => "Board",
+    scribe: { id: "test-board" },
+    cardBrief: () => "Your card: #303 Shared instructions",
+  });
+  vm.runInContext([fn(board, "workerInstructions"), fn(board, "workerReady"), fn(board, "workerPrompt")].join("\n"), context);
+  const run = (code: string) => vm.runInContext(code, context);
+  run("w = { name: 'Sol', cwd: 'C:/project', context: 'fresh' }; c = { num: 303, title: 'Shared instructions' }");
+  assert.equal(run("workerReady(w)"), false);
+  run("shared.workerInstructions = '  Shared rule.  '");
+  assert.equal(run("workerReady(w)"), true);
+  assert.equal(run("workerReady({ name: 'Sol' })"), false); // Code still needs a folder.
+  assert.equal(run("workerReady({ name: 'Sol', mode: 'board' })"), true);
+  assert.equal(run("workerReady({ mode: 'board' })"), false); // All workers need a name.
+  assert.match(run("workerPrompt(w, c)"), /The user's instructions:\nShared rule\.\n\nYour card/);
+  run("w.instructions = '  Worker rule.  '");
+  for (const solo of [false, true]) {
+    assert.match(run(`workerPrompt(w, c, '', ${solo})`), /Shared rule\.\n\nWorker rule\./);
+  }
+  run("shared.workerInstructions = 'Changed shared rule.'");
+  assert.match(run("workerPrompt(w, c)"), /Changed shared rule\.\n\nWorker rule\./);
+  run("delete shared.workerInstructions");
+  assert.equal(run("workerReady(w)"), true); // Legacy worker-only setups still run.
+  assert.equal(run("workerInstructions(w)"), "Worker rule.");
+  run("w.instructions = '  '; shared.workerInstructions = '  '");
+  assert.equal(run("workerReady(w)"), false);
+  assert.match(run("workerPrompt(w, c, 'Preview placeholder')"), /The user's instructions:\nPreview placeholder/);
+});
