@@ -6189,7 +6189,9 @@
     else if (limits.ordinaryUsageAllowed == null) notes.push("Included usage permission is unavailable. Worker recovery needs confirmation from Codex.");
     for (const bucket of limits.buckets || []) {
       const c = bucket.credits;
-      if (c) notes.push(`${bucket.label}: ${c.unlimited ? "unlimited credits" : c.balance != null ? `${c.balance} credits` : c.hasCredits ? "credits available" : "no credits"}`);
+      if (c && (c.unlimited || (c.balance != null ? Number(c.balance) > 0 : c.hasCredits))) {
+        notes.push(`${bucket.label}: ${c.unlimited ? "unlimited credits" : c.balance != null ? `${c.balance} credits` : "credits available"}`);
+      }
     }
     return notes;
   }
