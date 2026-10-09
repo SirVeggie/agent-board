@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { dataDir } from "../config.js";
@@ -266,6 +267,8 @@ export type McpImportCandidate = {
   server: McpServer;
   /** Scribe already has a server by this name in that layer. */
   exists: boolean;
+  /** Exact Cursor file contents when offered, so cleanup refuses intervening edits. */
+  revision?: string;
 };
 
 function readJson(file: string): unknown {
@@ -287,7 +290,8 @@ export function importCandidates(workspaces: string[], current: McpFile = readMc
     for (const [name, server] of Object.entries(cleanLayer(layer).mcpServers)) {
       if (!server.command && !server.url) continue;
       const have = scope === "global" ? current.mcpServers : current.workspaces[workspaceKey(scope)]?.mcpServers ?? {};
-      out.push({ source, file, scope, name, server, exists: name in have });
+      out.push({ source, file, scope, name, server, exists: name in have,
+        ...(source === "cursor" ? { revision: cursorRevision(fs.readFileSync(file, "utf8")) } : {}) });
     }
   };
   const claudeFile = path.join(home, ".claude.json");
@@ -333,4 +337,52 @@ export function applyImport(file: McpFile, picked: Array<{ scope: string; name: 
     }
   }
   return next;
+}
+
+function cursorRevision(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** Remove only confirmed, imported Cursor entries. Each file keeps an exact backup before editing. */
+export function removeCursorImports(picked: McpImportCandidate[], current: McpFile, home = os.homedir()): Array<{ file: string; backup?: string; names?: string[]; error?: string }> {
+  const groups = new Map<string, McpImportCandidate[]>();
+  for (const item of picked) {
+    const file = path.join(item.scope === "global" ? home : item.scope, ".cursor", "mcp.json");
+    if (item.source !== "cursor" || path.resolve(item.file) !== path.resolve(file)) throw new Error("Not a Cursor MCP import file");
+    groups.set(file, [...(groups.get(file) ?? []), item]);
+  }
+  return [...groups].map(([file, items]) => {
+    let backup: string | undefined;
+    try {
+      const original = fs.readFileSync(file, "utf8");
+      const json: unknown = JSON.parse(original);
+      if (!isPlainRecord(json) || !isPlainRecord(json.mcpServers)) throw new Error("No mcpServers object");
+      for (const item of items) {
+        if (!item.revision || item.revision !== cursorRevision(original)) throw new Error("Cursor's file changed. Import again before removing its entries.");
+        const saved = item.scope === "global" ? current.mcpServers : current.workspaces[workspaceKey(item.scope)]?.mcpServers;
+        const imported = cleanServer(item.server);
+        if (!validName(item.name) || !Object.hasOwn(json.mcpServers, item.name) || !imported ||
+          JSON.stringify(cleanServer(json.mcpServers[item.name])) !== JSON.stringify(imported) ||
+          JSON.stringify(saved?.[item.name]) !== JSON.stringify(imported)) {
+          throw new Error(`Scribe's imported copy of ${item.name} no longer matches. Import again before removing it.`);
+        }
+      }
+      const names = [...new Set(items.map((item) => item.name))];
+      for (const name of names) delete json.mcpServers[name];
+      backup = `${file}.scribe-backup-${randomUUID()}`;
+      const mode = fs.statSync(file).mode;
+      fs.writeFileSync(backup, original, { flag: "wx", mode });
+      const tmp = `${backup}.tmp`;
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(json, null, 2) + "\n", { flag: "wx", mode });
+        if (fs.readFileSync(file, "utf8") !== original) throw new Error("Cursor's file changed during cleanup; it was left alone.");
+        fs.renameSync(tmp, file);
+      } finally {
+        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+      }
+      return { file, backup, names };
+    } catch (err) {
+      return { file, ...(backup && fs.existsSync(backup) ? { backup } : {}), error: (err as Error).message };
+    }
+  });
 }

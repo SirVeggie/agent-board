@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { bridgeAsks } from "./mcpBridge.js";
-import { applyImport, bridgedToolName, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, serversForThread, writeMcpFile } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, bridgedToolName, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, serversForThread, writeMcpFile } from "./mcpConfig.js";
 
 const thread = (mode: "code" | "ask" | "plan" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
 
@@ -83,4 +83,56 @@ test("import lists other apps' servers and applies the picked ones", () => {
   const back = readMcpFile(file);
   assert.deepEqual(Object.keys(Object.values(back.workspaces)[0].mcpServers).sort(), ["b", "d"]);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+
+test("Cursor cleanup backs up global and workspace files and preserves unselected and unknown fields", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-cursor-cleanup-"));
+  try {
+    const ws = path.join(home, "project");
+    const files = [home, ws].map((dir) => path.join(dir, ".cursor", "mcp.json"));
+    const original = '{\r\n  "other": {"keep": true}, "mcpServers": {"take": {"command": "take", "cursorOnly": 42}, "leave": {"command": "leave", "unknown": true}}\r\n}\r\n';
+    for (const file of files) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, original);
+    }
+    const picked = importCandidates([ws], cleanFile({}), home).filter((c) => c.name === "take");
+    const current = applyImport(cleanFile({}), picked);
+    const results = removeCursorImports(picked, current, home);
+    assert.equal(results.length, 2);
+    for (const result of results) {
+      assert.equal(result.error, undefined);
+      assert.deepEqual(result.names, ["take"]);
+      assert.equal(fs.readFileSync(result.backup!, "utf8"), original);
+      assert.deepEqual(JSON.parse(fs.readFileSync(result.file, "utf8")), {
+        other: { keep: true }, mcpServers: { leave: { command: "leave", unknown: true } },
+      });
+    }
+    assert.equal(current.mcpServers.take.command, "take");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Cursor cleanup refuses changed source files, changed Scribe copies and unrelated paths", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-cursor-cleanup-"));
+  try {
+    const file = path.join(home, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(file));
+    const original = JSON.stringify({ mcpServers: { take: { command: "take" } } });
+    fs.writeFileSync(file, original);
+    const picked = importCandidates([], cleanFile({}), home);
+    const current = applyImport(cleanFile({}), picked);
+    fs.writeFileSync(file, original + "\n");
+    assert.match(removeCursorImports(picked, current, home)[0].error!, /file changed/);
+    assert.equal(fs.readFileSync(file, "utf8"), original + "\n");
+    fs.writeFileSync(file, original);
+    current.mcpServers.take.command = "edited";
+    assert.match(removeCursorImports(picked, current, home)[0].error!, /no longer matches/);
+    assert.throws(() => removeCursorImports([{ ...picked[0], file: path.join(home, "other.json") }], current, home), /Not a Cursor/);
+    assert.equal(fs.readFileSync(file, "utf8"), original);
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ["mcp.json"]);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

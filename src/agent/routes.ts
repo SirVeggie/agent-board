@@ -11,7 +11,7 @@ import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYT
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
-import { applyImport, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, writeMcpFile, type McpFile } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey } from "./prefs.js";
 
 function mcpView() {
@@ -112,6 +112,18 @@ export function agentRouter(host: AgentHost): express.Router {
       const picked = items.flatMap((item) => (typeof item.scope === "string" && typeof item.name === "string" ? [{ scope: item.scope, name: item.name, server: item.server }] : []));
       writeMcpFile(applyImport(writableMcpFile(), picked));
       return mcpView();
+    })
+  );
+
+  router.post(
+    "/mcp/import/cursor-cleanup",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      if (!Array.isArray(body.items) || !body.items.every((item) => isPlainRecord(item) && item.source === "cursor" &&
+        typeof item.file === "string" && typeof item.scope === "string" && typeof item.name === "string" && typeof item.revision === "string")) {
+        throw new Error("Expected confirmed Cursor imports");
+      }
+      return { results: removeCursorImports(body.items as McpImportCandidate[], writableMcpFile()) };
     })
   );
 

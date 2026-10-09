@@ -7116,6 +7116,47 @@
       );
       setTimeout(() => text.focus(), 0);
     },
+    /** A separate, explicit choice after import; never edits Cursor as part of copying. */
+    cursorCleanupDialog(items) {
+      const { panel, close } = modal("ag-source ag-mcp-import");
+      const list = el("div", "ag-mcp-list");
+      for (const file of new Set(items.map((c) => c.file))) {
+        const row = el("div", "ag-mcp-label");
+        row.append(el("code", "ag-mcp-target", file), el("span", null, items.filter((c) => c.file === file).map((c) => c.name).join(", ")));
+        list.append(row);
+      }
+      const error = el("p", "ag-source-error");
+      const actions = el("div", "ag-modal-actions");
+      const keep = button("Keep Cursor entries", "ag-btn", close);
+      const remove = button("Back up and remove Cursor entries", "ag-btn primary", async () => {
+        keep.disabled = remove.disabled = true;
+        try {
+          const { results } = await api("POST", "/mcp/import/cursor-cleanup", { items });
+          list.replaceChildren();
+          for (const result of results) {
+            const row = el("div", "ag-mcp-label");
+            row.append(el("code", "ag-mcp-target", result.file));
+            if (result.error) row.append(el("p", "ag-source-error", `Left unchanged: ${result.error}`));
+            else row.append(el("span", null, `Removed: ${result.names.join(", ")}`));
+            if (result.backup) row.append(el("code", "ag-mcp-target", `Backup: ${result.backup}`));
+            list.append(row);
+          }
+          actions.replaceChildren(button("Done", "ag-btn primary", close));
+        } catch (err) {
+          error.textContent = err.message;
+          keep.disabled = remove.disabled = false;
+        }
+      });
+      actions.append(keep, remove);
+      panel.append(
+        el("h2", "ag-modal-title", "Remove imported entries from Cursor?"),
+        el("p", "ag-modal-hint", "Import succeeded. Cursor also loads its own MCP files, which can duplicate these servers and bypass Scribe's mode and approval settings in Full access."),
+        el("p", "ag-modal-hint", "This removes only the entries listed below from Cursor's files. They will also stop being available in Cursor outside Scribe. Scribe keeps the imported copies. Each file gets an exact backup beside it before editing."),
+        list,
+        el("p", "ag-modal-hint", "To undo, copy the backup over its original file. Restart Cursor and start a new Scribe chat to use the changed configuration."),
+        error, actions
+      );
+    },
     /** Pick servers from Claude Code, Cursor and Pi to copy into Scribe's list. */
     async importDialog() {
       const { panel, close } = modal("ag-source ag-mcp-import");
@@ -7199,6 +7240,8 @@
         close();
         this.render();
         notice(`Imported ${picked.size} server${picked.size === 1 ? "" : "s"}.`);
+        const cursor = [...picked].filter((c) => c.source === "cursor");
+        if (cursor.length) this.cursorCleanupDialog(cursor);
       };
       const tools = el("div", "ag-modal-actions");
       tools.append(filter, button("All", "ag-btn small", () => all(true)), button("None", "ag-btn small", () => all(false)));
