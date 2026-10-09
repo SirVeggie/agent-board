@@ -19,6 +19,7 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
   let suppressed = false;
 
   function bind(el, delay) {
+    el.dataset.richTooltip = "";
     el.addEventListener("pointerenter", (event) => {
       if (event.pointerType !== "mouse" || suppressed || event.buttons) {
         return;
@@ -76,6 +77,7 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
       anchor.removeAttribute("aria-describedby");
     }
     anchor = el;
+    window.scribeTooltip?.hide();
     render(info);
     card.classList.toggle("note", Boolean(info.note));
     card.hidden = false;
@@ -177,13 +179,13 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
       link.className = "hover-card-thread hover-card-actor";
       link.dataset.thread = actor.threadId;
       link.textContent = actor.text;
-      link.title = `Open thread: ${actor.text}`;
+      link.dataset.tooltip = `Open thread: ${actor.text}`;
       dd.appendChild(link);
     } else {
       const text = document.createElement("span");
       text.className = "hover-card-actor";
       text.textContent = actor.text;
-      text.title = actor.text;
+      text.dataset.tooltip = actor.text;
       dd.appendChild(text);
     }
     if (actor.at) {
@@ -251,6 +253,7 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
     return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
+  window.addEventListener("scribe-tooltip-show", hide);
   window.addEventListener("scroll", hide, true);
   window.addEventListener("wheel", hide, { passive: true, capture: true });
   window.addEventListener("blur", hide);

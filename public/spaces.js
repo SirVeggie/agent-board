@@ -42,7 +42,7 @@ window.createSpaces = function createSpaces(host) {
   const chip = document.createElement("button");
   chip.type = "button";
   chip.className = "space-chip";
-  chip.title = "Spaces (Ctrl+E)";
+  chip.dataset.tooltip = "Spaces (Ctrl+E)";
   chip.setAttribute("aria-label", "Spaces");
   chip.setAttribute("aria-haspopup", "dialog");
   chip.addEventListener("click", () => toggle());
@@ -279,10 +279,10 @@ window.createSpaces = function createSpaces(host) {
       const dot = el("span", "space-chip-dot");
       const name = el("span", "space-chip-name", space.name);
       chip.append(dot, name);
-      chip.title = `Space: ${space.name} (Ctrl+E)`;
+      chip.dataset.tooltip = `Space: ${space.name} (Ctrl+E)`;
     } else {
       chip.innerHTML = ICONS.spaces;
-      chip.title = "Spaces (Ctrl+E)";
+      chip.dataset.tooltip = "Spaces (Ctrl+E)";
     }
   }
 
@@ -292,7 +292,7 @@ window.createSpaces = function createSpaces(host) {
     const add = el("button", "space-card space-new");
     add.type = "button";
     add.innerHTML = `${ICONS.plus}<span>New space</span>`;
-    add.title = "New empty space (N)";
+    add.dataset.tooltip = "New empty space (N)";
     add.addEventListener("click", () => void createSpace());
     grid.append(add);
     renderDeleted();
@@ -345,7 +345,7 @@ window.createSpaces = function createSpaces(host) {
       top.append(input);
     } else {
       const name = el("span", "space-name", space.name);
-      name.title = "Double-click to rename";
+      name.dataset.tooltip = "Double-click to rename";
       name.addEventListener("dblclick", (event) => {
         event.stopPropagation();
         selected = index;
@@ -360,7 +360,7 @@ window.createSpaces = function createSpaces(host) {
     const more = el("button", "space-more");
     more.type = "button";
     more.innerHTML = ICONS.more;
-    more.title = "Rename, color, delete";
+    more.dataset.tooltip = "Rename, color, delete";
     more.setAttribute("aria-label", `Options for ${space.name}`);
     more.addEventListener("pointerdown", (event) => event.stopPropagation());
     more.addEventListener("click", (event) => {
@@ -402,7 +402,7 @@ window.createSpaces = function createSpaces(host) {
       const chipEl = el("span", "space-tab" + (entry.pinned ? " pinned" : "") + (entry.id === space.activeId ? " focused" : ""));
       if (entry.pinned) {
         chipEl.innerHTML = ICONS.pin;
-        chipEl.title = tab.title;
+        chipEl.dataset.tooltip = tab.title;
       } else {
         chipEl.textContent = tab.title;
       }
@@ -458,7 +458,7 @@ window.createSpaces = function createSpaces(host) {
       button.style.setProperty("--space", COLORS[space.color] || COLORS.slate);
       button.innerHTML = ICONS.restore;
       button.append(document.createTextNode(` ${space.name}`));
-      button.title = `Restore “${space.name}” (${space.tabs} tab${space.tabs === 1 ? "" : "s"})`;
+      button.dataset.tooltip = `Restore “${space.name}” (${space.tabs} tab${space.tabs === 1 ? "" : "s"})`;
       button.addEventListener("click", () => void restore(space.id));
       deletedRow.append(button);
     }
@@ -475,7 +475,7 @@ window.createSpaces = function createSpaces(host) {
       const swatch = el("button", "space-swatch" + (space.color === id ? " on" : ""));
       swatch.type = "button";
       swatch.style.setProperty("--swatch", hex);
-      swatch.title = id[0].toUpperCase() + id.slice(1);
+      swatch.dataset.tooltip = id[0].toUpperCase() + id.slice(1);
       swatch.addEventListener("click", () => {
         closeMenu();
         void run("PATCH", `/api/spaces/${encodeURIComponent(space.id)}`, { color: id });

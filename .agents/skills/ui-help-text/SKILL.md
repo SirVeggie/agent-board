@@ -21,7 +21,8 @@ Help text is for the few people who need it, so it must not cost everyone else r
 - Prefer the custom tips over the native `title` attribute: they match the theme, show without the OS delay where wanted, and can hold more than one line. Reuse what exists rather than adding a new tooltip:
   - agent UI (public/agent.js): `bindHoverTip(anchor, build, { delay, start })`, `noteTip(text)` for plain text, styles `.ag-usage-tip`;
   - shell (public/app.js, library.js): `hoverCard.bind(el, delay)` with a `{ title, description, note: true }` entry in `describeForCard`.
-- Native `title` is still fine for a short name on an icon-only button (`button(icon, cls, onClick, "Close (Esc)")`).
+- Plain text tooltips use the shared `public/tooltip.js` component: set `data-tooltip` (or `element.dataset.tooltip`). Icon-only buttons use it too; keep their `aria-label`. Rendered pages also convert legacy `title` attributes at runtime.
+- Rich hover cards mark their anchors with `data-rich-tooltip` to take precedence over plain text tips.
 - Give the anchor an accessible description (`aria-description`) so the text is not mouse-only, and make a `?` a real button (focus and click show it too).
 
 ## Writing the text

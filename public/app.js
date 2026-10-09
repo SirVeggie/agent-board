@@ -1962,7 +1962,7 @@
       const version = document.createElement("span");
       version.className = "template-version";
       version.textContent = `v${template.stateVersion}`;
-      version.title = builtin ? "Built-in template version" : "Copied from a built-in template";
+      version.dataset.tooltip = builtin ? "Built-in template version" : "Copied from a built-in template";
       line.appendChild(version);
     }
     text.appendChild(line);
@@ -1981,7 +1981,7 @@
       close.className = "tab-close";
       close.type = "button";
       close.textContent = "×";
-      close.title = "Delete template";
+      close.dataset.tooltip = "Delete template";
       close.addEventListener("click", (event) => {
         event.stopPropagation();
         deleteTemplate(template);
@@ -2545,7 +2545,7 @@
       input.value = def.prefix;
       input.setAttribute("aria-labelledby", label.id);
       if (dups.has(def.id)) {
-        input.title = "Same as another prefix; the longer one wins, then list order.";
+        input.dataset.tooltip = "Same as another prefix; the longer one wins, then list order.";
       }
       const commit = (raw) => {
         const next = currentPalettePrefixes().map((item) =>

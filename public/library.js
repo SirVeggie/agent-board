@@ -271,9 +271,9 @@ window.createLibrary = function createLibrary(host) {
     const instruction = page.folderInstructions || (page.title || "").trim().toLowerCase() === "instructions";
     icon.innerHTML = page.agentHidden ? host.icons.agentHidden : instruction ? host.icons.folderInstructions : host.icons.file;
     if (page.agentHidden) {
-      icon.title = host.icons.agentHiddenTitle;
+      icon.dataset.tooltip = host.icons.agentHiddenTitle;
     } else if (instruction) {
-      icon.title = host.icons.folderInstructionsTitle;
+      icon.dataset.tooltip = host.icons.folderInstructionsTitle;
     }
     el.appendChild(icon);
 
@@ -308,7 +308,7 @@ window.createLibrary = function createLibrary(host) {
     del.className = "tab-close";
     del.type = "button";
     del.textContent = "×";
-    del.title = "Delete";
+    del.dataset.tooltip = "Delete";
     del.tabIndex = -1;
     el.appendChild(del);
 
@@ -364,7 +364,7 @@ window.createLibrary = function createLibrary(host) {
     if (unreadInside) {
       const dot = document.createElement("span");
       dot.className = "lib-unread-dot";
-      dot.title = "Has unread pages";
+      dot.dataset.tooltip = "Has unread pages";
       el.appendChild(dot);
     }
     const count = document.createElement("span");

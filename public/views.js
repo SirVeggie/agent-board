@@ -88,7 +88,7 @@ window.createViews = function createViews(host) {
     btn.type = "button";
     btn.className = "view-btn";
     btn.innerHTML = icon;
-    btn.title = label;
+    btn.dataset.tooltip = label;
     btn.setAttribute("aria-label", label);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -470,7 +470,7 @@ window.createViews = function createViews(host) {
     title.textContent = titleOf(target);
     wrap.appendChild(title);
     if (target.kind === "url") {
-      wrap.title = target.href;
+      wrap.dataset.tooltip = target.href;
       const path = el("span", "view-title-sub");
       try {
         const url = new URL(target.href);
@@ -482,7 +482,7 @@ window.createViews = function createViews(host) {
         wrap.appendChild(path);
       }
     } else {
-      wrap.title = titleOf(target);
+      wrap.dataset.tooltip = titleOf(target);
     }
     return wrap;
   }

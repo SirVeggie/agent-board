@@ -118,7 +118,7 @@
     btn.className = "icon-btn";
     btn.innerHTML = icon;
     if (label) {
-      btn.title = label;
+      btn.dataset.tooltip = label;
       btn.setAttribute("aria-label", label);
     }
     return btn;
@@ -249,7 +249,7 @@
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.innerHTML = button.id === "maximize" ? ICONS.maximize : ICONS[button.id];
-      toggle.title = button.setting;
+      toggle.dataset.tooltip = button.setting;
       toggle.setAttribute("aria-label", button.setting);
       toggle.addEventListener("click", () => {
         if (hidden.has(button.id)) {
@@ -303,7 +303,7 @@
       const el = elements[button.id];
       el.hidden = hidden.has(button.id);
       const label = button.hint ? `${button.label()} (${button.hint})` : button.label();
-      el.title = label;
+      el.dataset.tooltip = label;
       el.setAttribute("aria-label", label);
     }
     moreBtn.hidden = hidden.size < BUTTONS.length;

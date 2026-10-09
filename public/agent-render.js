@@ -85,7 +85,7 @@
     b.type = "button";
     if (typeof label === "string") b.textContent = label;
     else if (label) b.append(label);
-    if (title) b.title = title;
+    if (title) b.dataset.tooltip = title;
     if (onClick) b.addEventListener("click", onClick);
     return b;
   }
@@ -202,7 +202,7 @@
         a.className = "ag-board-link";
         a.dataset.boardTarget = target;
         a.tabIndex = 0;
-        a.title = `Scribe page · ${target} (Ctrl navigate, Shift split, Alt peek)`;
+        a.dataset.tooltip = `Scribe page · ${target} (Ctrl navigate, Shift split, Alt peek)`;
         if (auto) autoLinks.push(a);
       } else if (/^https?:/i.test(href)) {
         a.classList.add("ag-web-link");
@@ -211,7 +211,7 @@
         // Relative and other links would navigate the board itself.
         a.removeAttribute("href");
         a.classList.add("ag-dead-link");
-        a.title = href;
+        a.dataset.tooltip = href;
       }
     }
     if (autoLinks.length && ctx?.resolvePages) {
@@ -279,7 +279,7 @@
     const block = el("div", "ag-code");
     const head = el("div", "ag-code-head");
     const name = el("span", "ag-code-lang", label || (resolved === lang && grammar?.name) || lang || "Text");
-    if (title) name.title = title;
+    if (title) name.dataset.tooltip = title;
     const copyLabel = el("span", "ag-copy-label", "Copy");
     const copy = button(icon("copy"), "ag-copy", () => {
       navigator.clipboard?.writeText(text).then(() => {

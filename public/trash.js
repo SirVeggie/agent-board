@@ -127,7 +127,7 @@ window.createTrash = function createTrash(host) {
     btn.className = "tab-close trash-restore";
     btn.type = "button";
     btn.innerHTML = RESTORE_SVG;
-    btn.title = "Restore to the Library";
+    btn.dataset.tooltip = "Restore to the Library";
     btn.ariaLabel = "Restore";
     btn.tabIndex = -1;
     return btn;

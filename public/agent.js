@@ -267,7 +267,7 @@
     const chip = el("span", `ag-chip small file${isImage ? " img" : ""}`);
     chip.tabIndex = 0;
     chip.setAttribute("role", "button");
-    chip.title = `Preview ${file.name}`;
+    chip.dataset.tooltip = `Preview ${file.name}`;
     chip.addEventListener("click", onOpen);
     chip.addEventListener("keydown", (event) => {
       if (event.target !== chip || (event.key !== "Enter" && event.key !== " ")) return;
@@ -952,17 +952,17 @@
         if (item.detail) text.append(el("span", "ag-menu-detail", item.detail));
         row.append(text);
         // Ellipsis on the label or hint: hover shows the full string.
-        row.addEventListener("pointerenter", () => {
+        row.addEventListener("pointerover", () => {
           const cut = (node) => node && node.scrollWidth > node.clientWidth + 1;
           const detailEl = text.querySelector(".ag-menu-detail");
-          if (cut(detailEl)) row.title = item.detail;
-          else if (cut(labelEl)) row.title = item.label;
-          else row.removeAttribute("title");
+          if (cut(detailEl)) row.dataset.tooltip = item.detail;
+          else if (cut(labelEl)) row.dataset.tooltip = item.label;
+          else row.removeAttribute("data-tooltip");
         });
         if (item.checked) row.append(icon("check", "ag-ico ag-menu-check"));
         if (item.star) {
           const star = el("span", `ag-star${item.star.on ? " on" : ""}`, item.star.on ? "★" : "☆");
-          star.title = item.star.on ? "Remove from favourites" : "Add to favourites (Ctrl+' cycles them)";
+          star.dataset.tooltip = item.star.on ? "Remove from favourites" : "Add to favourites (Ctrl+' cycles them)";
           star.addEventListener("click", (event) => {
             // Starring keeps the menu open.
             event.stopPropagation();
@@ -1347,7 +1347,7 @@
       const view = JSON.parse(event.data);
       const tab = view?.tabs.find((t) => t.current);
       address.textContent = tab ? tab.url : "";
-      address.title = tab ? `${tab.title}\n${tab.url}` : "";
+      address.dataset.tooltip = tab ? `${tab.title}\n${tab.url}` : "";
       if (!tab) {
         frame = null;
         screen.hidden = true;
@@ -1542,7 +1542,7 @@
           for (const b of side.querySelectorAll(".ag-diff-filebtn")) b.classList.toggle("on", b === row);
         });
         row.append(el("span", `ag-fstat s-${f.status || "M"}`, f.status || "M"), el("span", "ag-fname", R.basename(f.path)), el("span", "ag-fdir", R.dirname(f.path)), R.counts(f.added, f.removed));
-        row.title = f.path;
+        row.dataset.tooltip = f.path;
         side.append(row);
       }
       for (const f of files) {
@@ -1891,7 +1891,7 @@
         );
       }
       const title = el("div", "ag-title", t ? t.title : "New thread");
-      title.title = t ? "Double-click to rename" : "";
+      title.dataset.tooltip = t ? "Double-click to rename" : "";
       if (t) title.addEventListener("dblclick", () => this.rename(title));
       top.append(title);
       const acts = el("div", "ag-thead-actions");
@@ -2413,7 +2413,7 @@
         const chips = el("div", "ag-chips");
         for (const c of item.context || []) {
           const chip = el("span", "ag-chip small");
-          chip.title = chipTitle(c);
+          chip.dataset.tooltip = chipTitle(c);
           chip.append(icon(chipIcon(c)), el("span", null, chipLabel(c)));
           chips.append(chip);
         }
@@ -2653,13 +2653,13 @@
           const chip = el("span", "ag-file");
           chip.append(el("span", "ag-fname", R.basename(f.path)));
           if (f.added !== undefined) chip.append(R.counts(f.added, f.removed));
-          chip.title = f.path;
+          chip.dataset.tooltip = f.path;
           label.append(chip);
         }
         if (files.length > 3) label.append(el("span", "ag-muted", `+${files.length - 3} more`));
       } else if (it.tool === "execute") {
         label.append(el("code", "ag-cmd", it.detail || it.title));
-        if (it.detail && it.title && it.title !== it.detail && !it.title.startsWith("`")) label.title = it.title;
+        if (it.detail && it.title && it.title !== it.detail && !it.title.startsWith("`")) label.dataset.tooltip = it.title;
       } else {
         label.append(el("span", "ag-tool-title", it.title));
       }
@@ -2724,7 +2724,7 @@
       if (page.name === "page_action") {
         if (chip) parts.push(chip);
         const text = el("span", "ag-tool-verb ag-tool-title", page.summary);
-        text.title = page.summary;
+        text.dataset.tooltip = page.summary;
         parts.push(text);
         return parts;
       }
@@ -2737,7 +2737,7 @@
     pageChip(page) {
       const chip = el("span", "ag-page-chip", page.title);
       chip.setAttribute("role", "link");
-      chip.title = `Scribe page · ${page.ref} (opens as a peek; Ctrl navigate, Shift split)`;
+      chip.dataset.tooltip = `Scribe page · ${page.ref} (opens as a peek; Ctrl navigate, Shift split)`;
       chip.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -2813,7 +2813,7 @@
       // A stopped task reports its own description as the summary; the head already says it.
       if (what && !(it.title || "").endsWith(what)) {
         const text = el("span", "ag-task-summary", what);
-        text.title = what;
+        text.dataset.tooltip = what;
         line.append(text);
       }
       const usage = [];
@@ -2892,7 +2892,7 @@
           return `${q.prompt}: ${answer}${note ? ` (${note})` : ""}`;
         });
         const line = el("span", "ag-card-line", parts.join(" · ") || (it.status === "skipped" ? "Skipped" : "Not answered"));
-        line.title = line.textContent;
+        line.dataset.tooltip = line.textContent;
         node.append(
           icon(it.status === "answered" ? "check" : "cross", `ag-ico ${it.status === "answered" ? "ag-st-ok" : "ag-st-err"}`),
           line
@@ -2957,7 +2957,7 @@
       const open = (event) => app()?.openLink(it.page.key, event, { mode: "peek" });
       const pageLink = el("a", "ag-board-link", pageTitle);
       pageLink.tabIndex = 0;
-      pageLink.title = `Scribe page · ${it.page.key} (Ctrl navigate, Shift split; opens as a peek)`;
+      pageLink.dataset.tooltip = `Scribe page · ${it.page.key} (Ctrl navigate, Shift split; opens as a peek)`;
       pageLink.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -3080,7 +3080,7 @@
         for (const f of files.slice(0, 12)) {
           const row = button("", "ag-change-row", () => openDiff({ kind: "turn", threadId: turn.threadId, turnId: turn.id, path: f.path }));
           row.append(el("span", `ag-fstat s-${f.status}`, f.status), el("span", "ag-fname", R.basename(f.path)), el("span", "ag-fdir", R.dirname(f.path)), R.counts(f.added, f.removed));
-          row.title = f.path;
+          row.dataset.tooltip = f.path;
           list.append(row);
         }
         if (files.length > 12) list.append(el("div", "ag-muted small ag-pad-x", `and ${files.length - 12} more`));
@@ -3304,7 +3304,7 @@
       this.input = el("textarea", "ag-textarea");
       this.input.rows = 1;
       this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
-      this.input.title = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
+      this.input.dataset.tooltip = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
       this.input.addEventListener("input", () => {
         this.autosize();
         this.updatePicker();
@@ -3444,7 +3444,7 @@
       }
       this.mentions.forEach((chip, index) => {
         const node = el("span", "ag-chip small");
-        node.title = chipTitle(chip);
+        node.dataset.tooltip = chipTitle(chip);
         node.append(icon(chipIcon(chip)), el("span", null, chipLabel(chip)));
         node.append(button(icon("close"), "ag-chip-x", (event) => {
           event.stopPropagation();
@@ -3657,7 +3657,7 @@
       if (running) {
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
       }
-      this.input.title = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
+      this.input.dataset.tooltip = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
       tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)"));
     }
 
@@ -4028,7 +4028,7 @@
           const detail = item.kind === "page" ? item.folder : item.kind === "file" ? R.dirname(item.path) : "";
           row.append(icon(chipIcon(item)), el("span", "ag-slash-title", name));
           if (detail) row.append(el("span", "ag-slash-desc", detail));
-          row.title = item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
+          row.dataset.tooltip = item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
           this.slash.append(row);
         }
       }
@@ -4457,7 +4457,7 @@
   /** Clock time of a finished turn; tooltip has the full datetime. */
   function finishStamp(ms) {
     const span = el("span", "ag-muted", R.finishTime(ms));
-    span.title = new Date(ms).toLocaleString();
+    span.dataset.tooltip = new Date(ms).toLocaleString();
     return span;
   }
 
@@ -4474,7 +4474,7 @@
   function threadWhen(t) {
     const ms = threadWhenMs(t);
     const span = el("span", null, threadWhenText(t));
-    span.title = new Date(ms).toLocaleString();
+    span.dataset.tooltip = new Date(ms).toLocaleString();
     return span;
   }
 
@@ -4730,7 +4730,7 @@
         head.append(icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
         if (S.filter === "workspaces") {
           const dir = workspaceDir(first);
-          if (dir) head.title = dir;
+          if (dir) head.dataset.tooltip = dir;
         }
         if (S.filter !== "archived") {
           const add = button(icon("plus"), "ag-icon-btn small ag-list-group-new", () => {
@@ -4785,7 +4785,7 @@
     if (wt) {
       const branch = el("span", `ag-row-branch${wt.ahead || wt.dirty ? " pending" : ""}`);
       branch.append(icon("git"), el("span", null, wt.branch.replace(/^agent\//, "")));
-      branch.title = `${wt.branch}${wt.ahead || wt.dirty ? ": work not merged yet" : ""}`;
+      branch.dataset.tooltip = `${wt.branch}${wt.ahead || wt.dirty ? ": work not merged yet" : ""}`;
       meta.append(branch);
     }
     return meta;
@@ -4796,8 +4796,8 @@
     row.dataset.id = t.id;
     const quiet = t.status === "idle" && !t.background && !(t.unread && !t.fromPage);
     const dot = quiet && hasDraft(t) ? icon("pen", "ag-row-pen") : el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
-    if (quiet && hasDraft(t)) dot.title = "Unsent message";
-    if (t.background) dot.title = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
+    if (quiet && hasDraft(t)) dot.dataset.tooltip = "Unsent message";
+    if (t.background) dot.dataset.tooltip = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
     const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : t.title;
@@ -4806,7 +4806,7 @@
     else main.append(title, threadRowMeta(t));
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
-    row.title = name;
+    row.dataset.tooltip = name;
     const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
     wrap.addEventListener("contextmenu", (event) => {
       event.preventDefault();
@@ -4976,7 +4976,7 @@
         root.style.removeProperty("--ag-full-side");
         localStorage.removeItem(LS.fullSide);
       });
-      resizer.title = "Drag to resize, double-click to reset";
+      resizer.dataset.tooltip = "Drag to resize, double-click to reset";
       document.addEventListener(
         "click",
         (event) => {
@@ -5165,10 +5165,10 @@
       const s = this.view.settings();
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread"), icon("chevron", "ag-ico ag-chev-down"));
       fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
-      this.scopeBtn.title = SCOPE_CHIP_TITLE;
+      this.scopeBtn.dataset.tooltip = SCOPE_CHIP_TITLE;
       this.fitScope();
       this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
-      // No native title: hovering the orb opens the threads flyout, and a tooltip would sit on top of it.
+      // Hovering the orb opens the threads flyout, so it has no plain tooltip.
       this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
     },
@@ -5751,9 +5751,9 @@
       this.close();
       this.anchor = anchor;
       this.from = from;
-      // The native title would sit on top of the panel.
-      anchor.dataset.flyTitle = anchor.title;
-      anchor.removeAttribute("title");
+      // Keep the plain tip out of the flyout.
+      anchor.dataset.flyTitle = anchor.dataset.tooltip;
+      anchor.removeAttribute("data-tooltip");
       hideHoverTip();
       this.node = el("div", `ag-fly from-${from}`);
       this.hold(this.node);
@@ -5767,7 +5767,7 @@
       this.peek?.remove();
       this.node = this.peek = this.peekId = this.sig = null;
       if (this.anchor && this.anchor.dataset.flyTitle !== undefined) {
-        this.anchor.title = this.anchor.dataset.flyTitle;
+        this.anchor.dataset.tooltip = this.anchor.dataset.flyTitle;
         delete this.anchor.dataset.flyTitle;
       }
       this.anchor = null;
@@ -6226,6 +6226,7 @@
 
   let hoverTipEl = null;
   let hoverTipTimer = 0;
+  window.addEventListener("scribe-tooltip-show", hideHoverTip);
 
   function hideHoverTip() {
     clearTimeout(hoverTipTimer);
@@ -6235,6 +6236,7 @@
 
   /** `start`: the tip's left edge at the anchor's, for a small anchor at the start of a line; otherwise its right edges. */
   function placeHoverTip(anchor, tip, width = 280, start = false) {
+    window.scribeTooltip?.hide();
     hideHoverTip();
     document.body.append(tip);
     const rect = anchor.getBoundingClientRect();
@@ -6249,6 +6251,7 @@
   }
 
   function bindHoverTip(anchor, build, { delay = 160, start = false } = {}) {
+    anchor.dataset.richTooltip = "";
     anchor.addEventListener("pointerenter", (event) => {
       if (event.pointerType !== "mouse") return;
       clearTimeout(hoverTipTimer);
