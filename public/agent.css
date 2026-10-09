@@ -1908,7 +1908,7 @@ button.ag-change-row .ag-fname {
   margin: 0 auto 18px;
 }
 
-/* Sidebar and full window: the floating chat's bar style. One raised card, the input and send
+/* Sidebar and full window: one raised card, the input and send
    button on top, a strip with the run status and the settings below. */
 .ag-view .ag-composer {
   padding: 0;
@@ -2902,8 +2902,8 @@ html.tight-small .agent-full {
 
 /* ---------- floating dock ---------- */
 
-/* Two styles share one structure: output (conversation or step feed), input, and bar.
-   "bar" is a single card; "island" is a round capsule with the output and bars sliding out from behind it. */
+/* Capsule with two tabs above the input (thread, scope) and the settings tab below, sliding out from behind.
+   With output showing, the tabs' panels disappear and thread and scope sit on the output surface. */
 
 .agent-dock {
   --dock-surface: var(--panel);
@@ -2912,7 +2912,7 @@ html.tight-small .agent-full {
   position: absolute;
   left: 50%;
   bottom: 16px;
-  width: min(720px, calc(100% - 32px));
+  width: min(680px, calc(100% - 40px));
   transform: translateX(-50%);
   z-index: 30;
   pointer-events: none;
@@ -2949,21 +2949,114 @@ html.tight-small .agent-full {
   overflow: clip;
 }
 
-/* output; the island style also puts status, thread and scope in tabs at its foot (.dock-top) */
-
 .dock-head {
-  display: contents;
-}
-
-.dock-top {
-  display: none;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0 18px -14px;
 }
 
 .dock-out {
   position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+/* The output runs down behind the tabs and leaves room at its foot so its lines never sit under them. */
+.agent-dock.expanded .dock-out,
+.agent-dock .dock-out:has(> .dock-feed:not(:empty)) {
+  margin-bottom: -44px;
+  padding-bottom: 44px;
+}
+
+.dock-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dock-top-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding: 2px 6px 12px 2px;
+  border-radius: 11px 11px 0 0;
+  background-color: var(--dock-surface-2);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transition:
+    background-color 0.4s ease,
+    box-shadow 0.4s ease;
+}
+
+.dock-top-left {
+  max-width: 50%;
+  flex-shrink: 3;
+}
+
+.dock-top-right {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.agent-dock.expanded .dock-top-tab,
+.agent-dock .dock-head:has(.dock-feed:not(:empty)) .dock-top-tab {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.dock-top .dock-status {
+  padding-right: 0;
+}
+
+.dock-top-sep {
+  width: 1px;
+  height: 12px;
+  margin: 0 4px;
+  flex-shrink: 0;
+  background: rgba(var(--lift-rgb), 0.12);
+}
+
+.dock-top button.dock-title,
+.dock-top button.dock-scope,
+.dock-top button.ag-icon-btn {
+  height: 22px;
+  font-size: 11.5px;
+}
+
+.dock-top button.dock-scope {
+  flex-shrink: 2;
+}
+
+/* The surface fades out sooner than the text and blurs what is behind it, so lines stay readable over busy pages. */
+.dock-out::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px 14px 0 0;
+  background: var(--dock-surface-2);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  -webkit-mask-image: linear-gradient(to top, #000 0, #000 62%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0, #000 62%, transparent 100%);
+  pointer-events: none;
+}
+
+.agent-dock.expanded .dock-out::before {
+  background: var(--panel);
+  border-radius: 16px;
+  box-shadow: var(--ag-raised);
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .dock-history {
@@ -2976,12 +3069,17 @@ html.tight-small .agent-full {
   flex-direction: column;
 }
 
+.dock-history,
+.dock-feed {
+  position: relative;
+}
+
 .dock-history .ag-scroll {
   max-height: 55vh;
 }
 
-.dock-sweep {
-  display: none;
+.dock-history .ag-transcript {
+  padding-top: 16px;
 }
 
 /* live step feed: new steps arrive at the bottom, older ones glide up and fade out at the top */
@@ -2991,8 +3089,9 @@ html.tight-small .agent-full {
   flex-direction: column;
   justify-content: flex-end;
   gap: 2px;
-  max-height: 84px;
+  max-height: 96px;
   overflow: hidden;
+  padding: 10px 16px 8px;
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
@@ -3091,6 +3190,46 @@ html.tight-small .agent-full {
   }
 }
 
+/* A long, slow ember sweep along the output's visible bottom edge while the agent works. */
+.dock-sweep {
+  display: block;
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 14px;
+  height: 1.5px;
+  overflow: hidden;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.agent-dock.busy.expanded .dock-sweep,
+.agent-dock.busy .dock-out:has(> .dock-feed:not(:empty)) .dock-sweep {
+  opacity: 1;
+}
+
+.dock-sweep::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 60%;
+  background: linear-gradient(90deg, transparent, var(--ag-live) 50%, transparent);
+  opacity: 0.8;
+  animation: dock-sweep 4.6s ease-in-out infinite;
+}
+
+@keyframes dock-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 /* input */
 
 .dock-input {
@@ -3098,6 +3237,13 @@ html.tight-small .agent-full {
   align-items: flex-end;
   gap: 8px;
   min-width: 0;
+  position: relative;
+  z-index: 2;
+  min-height: 46px;
+  padding: 8px;
+  border-radius: 23px;
+  background: var(--dock-surface);
+  box-shadow: var(--ag-raised);
 }
 
 .dock-input .ag-composer,
@@ -3112,8 +3258,8 @@ html.tight-small .agent-full {
 }
 
 .dock-input .ag-textarea {
-  padding: 4px 0;
-  min-height: calc(1lh + 8px);
+  padding: 3px 4px;
+  min-height: calc(1lh + 6px);
   max-height: 220px;
 }
 
@@ -3124,9 +3270,29 @@ html.tight-small .agent-full {
   flex-shrink: 0;
 }
 
-button.dock-orb,
-.dock-input .dock-toggle {
-  display: none;
+button.dock-orb {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #151518;
+  background: conic-gradient(from 200deg, #d0a578, #9db8a4, #8fb3d9, #d0a578);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25), 0 0 12px rgba(208, 165, 120, 0.25);
+}
+
+.agent-dock.busy button.dock-orb {
+  animation: ag-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-dock .ag-send-slot button.ag-send {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
 }
 
 .agent-dock.expanded .dock-toggle {
@@ -3138,25 +3304,32 @@ button.dock-orb,
   background: rgba(var(--lift-rgb), 0.08);
 }
 
-/* bar */
+/* settings tab below the input */
 
 .dock-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
   min-width: 0;
+  margin: 0 18px;
+  position: relative;
+  z-index: 1;
 }
 
-.dock-bar-left,
 .dock-bar-right {
   display: flex;
   align-items: center;
   gap: 2px;
   min-width: 0;
-}
-
-.dock-bar-right {
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 100%;
+  height: 42px;
+  margin-top: -13px;
+  padding: 13px 6px 0;
+  border-radius: 0 0 12px 12px;
+  background: var(--dock-surface-2);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
 }
 
 .dock-bar .ag-bar {
@@ -3166,18 +3339,21 @@ button.dock-orb,
   min-width: 0;
 }
 
-.dock-bar-right > .ag-grow {
-  display: none;
-}
-
 .dock-bar button.ag-pill {
   background: transparent;
   box-shadow: none;
   padding: 0 6px;
+  height: 22px;
+  font-size: 11.5px;
 }
 
 .dock-bar button.ag-pill:hover {
   background: rgba(var(--lift-rgb), 0.06);
+}
+
+.dock-bar button.ag-icon-btn {
+  height: 22px;
+  font-size: 11.5px;
 }
 
 .dock-status {
@@ -3222,6 +3398,7 @@ button.dock-scope {
 button.dock-title {
   min-width: 64px;
   max-width: 260px;
+  color: var(--text);
 }
 
 /* No room for both scope parts: keep the workspace, the more important one (see dock.fitScope). */
@@ -3245,302 +3422,6 @@ button.dock-scope:hover {
 .ag-chev-down {
   transform: rotate(90deg);
   opacity: 0.6;
-}
-
-/* ----- bar style: one card, input on top, settings bar below ----- */
-
-.agent-dock.style-bar .dock-panel {
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  backdrop-filter: blur(16px) saturate(1.2);
-  border-radius: 16px;
-  box-shadow: var(--ag-raised);
-}
-
-.style-bar .dock-history .ag-scroll {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px);
-  mask-image: linear-gradient(to bottom, transparent, #000 8px);
-}
-
-.style-bar .dock-feed {
-  margin: 12px 16px 0;
-}
-
-.style-bar .dock-input {
-  padding: 10px 10px 10px 16px;
-}
-
-/* With the conversation open, a faint shadow (not a line) separates it from the input. */
-.style-bar.expanded .dock-input {
-  position: relative;
-  box-shadow: 0 -6px 8px -8px rgba(0, 0, 0, 0.45);
-}
-
-.style-bar .dock-bar {
-  padding: 6px 8px;
-  border-top: 1px solid var(--border);
-  background: var(--ag-bar-bg);
-  border-radius: 0 0 16px 16px;
-}
-
-.style-bar .dock-bar-left::after {
-  content: "";
-  width: 1px;
-  height: 14px;
-  margin: 0 4px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
-.style-bar button.dock-scope {
-  display: none;
-}
-
-/* ----- island style: capsule with two tabs above (thread, scope) and the settings tab below, sliding out from behind.
-   With output showing, the tabs' panels disappear and thread and scope sit on the output surface. ----- */
-
-.agent-dock.style-island {
-  width: min(680px, calc(100% - 40px));
-}
-
-.style-island .dock-head {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  margin: 0 18px -14px;
-}
-
-.style-island .dock-out {
-  z-index: 1;
-}
-
-/* The output runs down behind the tabs and leaves room at its foot so its lines never sit under them. */
-.style-island.expanded .dock-out,
-.style-island .dock-out:has(> .dock-feed:not(:empty)) {
-  margin-bottom: -44px;
-  padding-bottom: 44px;
-}
-
-.style-island .dock-top {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.style-island .dock-top-tab {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 0 1 auto;
-  min-width: 0;
-  height: 44px;
-  padding: 2px 6px 12px 2px;
-  border-radius: 11px 11px 0 0;
-  background-color: var(--dock-surface-2);
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  transition:
-    background-color 0.4s ease,
-    box-shadow 0.4s ease;
-}
-
-.style-island .dock-top-left {
-  max-width: 50%;
-  flex-shrink: 3;
-}
-
-.style-island .dock-top-right {
-  padding-left: 4px;
-  padding-right: 4px;
-}
-
-.style-island.expanded .dock-top-tab,
-.style-island .dock-head:has(.dock-feed:not(:empty)) .dock-top-tab {
-  background-color: transparent;
-  box-shadow: none;
-}
-
-.style-island .dock-top .dock-status {
-  padding-right: 0;
-}
-
-.style-island .dock-top-sep {
-  width: 1px;
-  height: 12px;
-  margin: 0 4px;
-  flex-shrink: 0;
-  background: rgba(var(--lift-rgb), 0.12);
-}
-
-.style-island .dock-top button.dock-title,
-.style-island .dock-top button.dock-scope,
-.style-island .dock-top button.ag-icon-btn {
-  height: 22px;
-  font-size: 11.5px;
-}
-
-.style-island .dock-top button.dock-scope {
-  flex-shrink: 2;
-}
-
-/* The surface fades out sooner than the text and blurs what is behind it, so lines stay readable over busy pages. */
-.style-island .dock-out::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 14px 14px 0 0;
-  background: var(--dock-surface-2);
-  backdrop-filter: blur(10px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  -webkit-mask-image: linear-gradient(to top, #000 0, #000 62%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0, #000 62%, transparent 100%);
-  pointer-events: none;
-}
-
-.style-island.expanded .dock-out::before {
-  background: var(--panel);
-  border-radius: 16px;
-  box-shadow: var(--ag-raised);
-  -webkit-mask-image: none;
-  mask-image: none;
-}
-
-.style-island .dock-history,
-.style-island .dock-feed {
-  position: relative;
-}
-
-.style-island .dock-history .ag-scroll {
-  -webkit-mask-image: none;
-  mask-image: none;
-}
-
-.style-island .dock-history .ag-transcript {
-  padding-top: 16px;
-}
-
-.style-island .dock-feed {
-  padding: 10px 16px 8px;
-  max-height: 96px;
-}
-
-/* A long, slow ember sweep along the output's visible bottom edge while the agent works. */
-.style-island .dock-sweep {
-  display: block;
-  position: absolute;
-  left: 1px;
-  right: 1px;
-  bottom: 14px;
-  height: 1.5px;
-  overflow: hidden;
-  z-index: 1;
-  opacity: 0;
-  transition: opacity 0.3s;
-  pointer-events: none;
-}
-
-.style-island.busy.expanded .dock-sweep,
-.style-island.busy .dock-out:has(> .dock-feed:not(:empty)) .dock-sweep {
-  opacity: 1;
-}
-
-.style-island .dock-sweep::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 60%;
-  background: linear-gradient(90deg, transparent, var(--ag-live) 50%, transparent);
-  opacity: 0.8;
-  animation: dock-sweep 4.6s ease-in-out infinite;
-}
-
-@keyframes dock-sweep {
-  from {
-    transform: translateX(-110%);
-  }
-  to {
-    transform: translateX(300%);
-  }
-}
-
-.style-island .dock-input {
-  position: relative;
-  z-index: 2;
-  min-height: 46px;
-  padding: 8px;
-  border-radius: 23px;
-  background: var(--dock-surface);
-  box-shadow: var(--ag-raised);
-}
-
-.style-island .dock-input .ag-textarea {
-  padding: 3px 4px;
-  min-height: calc(1lh + 6px);
-}
-
-.style-island button.dock-orb {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: 50%;
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 700;
-  color: #151518;
-  background: conic-gradient(from 200deg, #d0a578, #9db8a4, #8fb3d9, #d0a578);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25), 0 0 12px rgba(208, 165, 120, 0.25);
-}
-
-.style-island.busy button.dock-orb {
-  animation: ag-pulse 1.6s ease-in-out infinite;
-}
-
-.style-island .ag-send-slot button.ag-send {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-}
-
-.style-island .dock-bar {
-  margin: 0 18px;
-  justify-content: flex-end;
-  position: relative;
-  z-index: 1;
-}
-
-.style-island .dock-bar-left {
-  display: none;
-}
-
-.style-island .dock-bar-right {
-  flex: 0 1 auto;
-  max-width: 100%;
-  height: 42px;
-  margin-top: -13px;
-  padding: 13px 6px 0;
-  border-radius: 0 0 12px 12px;
-  background: var(--dock-surface-2);
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-}
-
-.style-island .dock-bar-right > .ag-grow {
-  display: none;
-}
-
-.style-island .dock-bar button.ag-pill,
-.style-island .dock-bar button.ag-icon-btn {
-  height: 22px;
-  font-size: 11.5px;
-}
-
-.style-island button.dock-title {
-  color: var(--text);
 }
 
 /* ----- the conversation: dock spacing here, the turn styling below is shared by every view ----- */
@@ -3571,7 +3452,7 @@ button.dock-scope:hover {
   white-space: pre;
 }
 
-.style-island .ag-scope-mark {
+.agent-dock .ag-scope-mark {
   display: none;
 }
 
