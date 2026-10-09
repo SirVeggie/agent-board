@@ -6439,7 +6439,7 @@
         el(
           "p",
           "ag-muted ag-meter-none",
-          provider === "codex" ? "Checking Codex subscription quota…" : provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Shows after the next Cursor turn, then refreshes after turns at most every 30 minutes. Uses the Cursor app's login on this PC, so the Cursor app must be installed and signed in."
+          provider === "codex" ? "Checking Codex subscription quota…" : provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Shows after the next Cursor turn, then refreshes after turns at most every 10 minutes. Uses the Cursor app's login on this PC, so the Cursor app must be installed and signed in."
         )
       );
       return box;

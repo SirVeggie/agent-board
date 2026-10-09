@@ -82,7 +82,7 @@ export { workspaceKey } from "./prefs.js";
 
 const FLUSH_MS = 700;
 /** Cursor's usage comes from a private API call, so refresh it at most this often (after turns). */
-const CURSOR_USAGE_TTL_MS = 30 * 60 * 1000;
+const CURSOR_USAGE_TTL_MS = 10 * 60 * 1000;
 /** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
 const MAX_RECAP = 24_000;
 /** Providers drop the saved sessions no thread uses a few minutes after start, then every few hours. */
