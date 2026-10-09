@@ -42,7 +42,8 @@ import { normalizeSignalName } from "./signal.js";
 import { applyOps } from "./stateOps.js";
 import { normalizeEvents } from "./events.js";
 import { upgradeLegacyHtml } from "./legacyPages.js";
-import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type SweepContext } from "./actions/index.js";
+import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type RunEvent, type SweepContext } from "./actions/index.js";
+import type { RunNote } from "./agent/pageRuns.js";
 import {
   TRASH_TTL_MS,
   USER_TITLE_HOLD_MS,
@@ -562,6 +563,42 @@ export class BoardStore extends EventEmitter {
       } catch (err) {
         log(`Action sweep failed on ${tab.key}`, String(err));
       }
+    }
+  }
+
+  /** A page's reason to keep a finished run's branch unmerged (see ActionSet.runHold), or null. */
+  runHold(pageId: string, threadId: string): string | null {
+    const tab = this.locate(pageId)?.tab;
+    const set = tab ? this.actionsFor(tab) : undefined;
+    if (!tab || !set?.runHold) return null;
+    try {
+      return set.runHold(tab.state, threadId);
+    } catch (err) {
+      log(`Run hold check failed on ${tab.key}`, String(err));
+      return null;
+    }
+  }
+
+  /**
+   * Scribe moved one of a page's runs on: log an agent_run event on the page (agents and pages can
+   * wait on it) and let the page's actions record it (a Kanban board's worker log).
+   */
+  runEvent(pageId: string, threadId: string, run: RunEvent["run"], note: RunNote): void {
+    const tab = this.locate(pageId)?.tab;
+    if (!tab) return;
+    const event: RunEvent = { ...note, thread: threadId, run };
+    try {
+      const set = this.actionsFor(tab);
+      const outcome = set?.runEvent?.(tab.state, event, Date.now());
+      if (outcome?.ops.length) this.writeState(tab.id, { ops: outcome.ops, lenient: true });
+      for (const extra of outcome?.events ?? []) this.logEvent(tab.id, { name: extra.name, data: extra.data, by: "scribe" });
+      this.logEvent(tab.id, {
+        name: "agent_run",
+        data: { thread: threadId, kind: note.kind, text: note.text, ...(run.tag ? { tag: run.tag } : {}), ...(run.data ? { data: run.data } : {}), phase: run.phase, ...(run.outcome ? { outcome: run.outcome } : {}) },
+        by: "scribe",
+      });
+    } catch (err) {
+      log(`Run event failed on ${tab.key}`, String(err));
     }
   }
 

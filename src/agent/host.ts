@@ -44,6 +44,7 @@ import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
+import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { serversForThread } from "./mcpConfig.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
@@ -294,6 +295,9 @@ export class AgentHost {
   /** Threads whose turn a restart cut off, until resumeInterrupted sends them on. They count as running meanwhile. */
   private resuming = new Set<string>();
   private ctx: SessionContext;
+  /** Chats pages handed over to be seen through: limit waits, resumes, merges (#285). */
+  private pageRuns: PageRuns;
+  private pageRunTimer: NodeJS.Timeout | null = null;
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
 
@@ -351,6 +355,32 @@ export class AgentHost {
       webRequest: (threadId, call, opts) => this.requestWeb(threadId, call, opts),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
+    this.pageRuns = new PageRuns(
+      {
+        now: () => Date.now(),
+        exists: (id) => this.threads.has(id),
+        idle: (id) => this.threads.has(id) && !this.runs.has(id) && !this.resuming.has(id) && (this.status.get(id) ?? "idle") === "idle" && !this.queues.get(id)?.length,
+        lastTurn: (id) => this.db.listTurns(id).at(-1),
+        recoveryAllowed: (id, turn) => {
+          if (this.threads.get(id)?.provider !== "codex") return true;
+          const allowed = codexUsageRecoveryAllowed(this.planLimits.codex, turn.endedAt ?? turn.startedAt);
+          if (!allowed) void this.refreshCodexUsage();
+          return allowed;
+        },
+        hasWorktree: (id) => Boolean(this.threads.get(id) && openWorktree(this.threads.get(id)!)),
+        hold: (run) => store.runHold(run.pageId, run.threadId),
+        send: (id, text) => void this.send(id, { text, from: "page" }),
+        merge: async (id) => (await this.finishWorktree(id, "merge")).message,
+        save: (runs) => this.db.setSetting("pageRuns", runs),
+        changed: (run, note) => {
+          this.emitThread(run.threadId);
+          if (note) store.runEvent(run.pageId, run.threadId, runView(run), note);
+        },
+      },
+      this.db.getSetting<PageRun[]>("pageRuns", [])
+    );
+    this.pageRunTimer = setInterval(() => this.pageRuns.tick(), 30_000);
+    this.pageRunTimer.unref?.();
     this.scheduleClaudeUsageRefresh();
     if (!this.fakes) {
       this.codexUsageTimer = setTimeout(() => void this.refreshCodexUsage(), 1000);
@@ -546,6 +576,7 @@ export class AgentHost {
   dispose(): void {
     this.closed = true;
     if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
+    if (this.pageRunTimer) clearInterval(this.pageRunTimer);
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
     if (this.usageTimer) {
       clearTimeout(this.usageTimer);
@@ -668,8 +699,10 @@ export class AgentHost {
       ? codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt) : undefined;
     if (recovery === false) void this.refreshCodexUsage();
     const asking = status === "waiting" ? this.asking(id) : undefined;
+    const run = this.pageRuns.get(id);
     return {
       exists: true,
+      ...(run ? { run: runView(run) } : {}),
       running: status !== "idle" || this.resuming.has(id),
       title: thread.title,
       ...(outputAt !== undefined ? { outputAt } : {}),
@@ -677,6 +710,23 @@ export class AgentHost {
       ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}), ...(recovery !== undefined ? { usageRecoveryAllowed: recovery } : {}) } } : {}),
       ...(usage ? { usage } : {}),
     };
+  }
+
+  /**
+   * A page hands one of its threads to Scribe to see through (scribe.agent.start's run option, or
+   * scribe.agent.watch): see pageRuns.ts. Only threads a page started can be handed over.
+   */
+  watchPageThread(id: string, input: RunInput): ThreadView {
+    const thread = this.requireThread(id);
+    if (thread.scope?.kind !== "page" || !thread.scope.ref) throw new Error("Only a page's own threads can be handed over as a run.");
+    this.pageRuns.register(id, thread.scope.ref, input);
+    return this.view(this.requireThread(id));
+  }
+
+  /** Scribe stops seeing the thread through (and forgets an ended run); the chat is left as it is. */
+  releasePageThread(id: string): ThreadView {
+    this.pageRuns.release(id);
+    return this.view(this.requireThread(id));
   }
 
   /**
@@ -966,6 +1016,7 @@ export class AgentHost {
       }
     }
     this.threads.delete(id);
+    this.pageRuns.release(id);
     this.items.delete(id);
     this.turns.delete(id);
     this.queues.delete(id);
@@ -1050,6 +1101,7 @@ export class AgentHost {
     else this.activitySent.delete(thread.id);
     const grants = grantRows(thread, this.scopeLookup());
     const usage = sumThreadUsage(turns);
+    const pageRun = this.pageRuns.get(thread.id);
     return {
       ...thread,
       status,
@@ -1064,6 +1116,7 @@ export class AgentHost {
       ...(asking ? { asking } : {}),
       ...(activity ? { activity } : {}),
       ...(grants.length ? { grants } : {}),
+      ...(pageRun ? { run: runView(pageRun) } : {}),
     };
   }
 
@@ -2212,6 +2265,7 @@ export class AgentHost {
       return;
     }
     this.drainQueue(threadId);
+    void this.pageRuns.check(threadId);
   }
 
   private toolFiles(run: RunState): FileChange[] {

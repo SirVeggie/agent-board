@@ -7593,6 +7593,20 @@
       // As of its last turn, so a board can tell a finished chat whose branch is still unmerged.
       ...(openWorktree(t) ? { worktree: { branch: t.worktree.branch, ahead: t.worktree.ahead || 0, dirty: Boolean(t.worktree.dirty) } } : {}),
       ...(t.usage ? { usage: t.usage } : {}),
+      // While Scribe sees the thread through for the page (start's run option, or watch), and once that ended.
+      ...(t.run ? { run: t.run } : {}),
+    };
+  }
+
+  /** start's run option and watch's settings, as the daemon takes them. */
+  function pageRunInput(run) {
+    const src = run && typeof run === "object" && !Array.isArray(run) ? run : {};
+    return {
+      ...(typeof src.tag === "string" ? { tag: src.tag } : {}),
+      ...(src.data && typeof src.data === "object" && !Array.isArray(src.data) ? { data: src.data } : {}),
+      ...(src.merge === false ? { merge: false } : {}),
+      ...(typeof src.resumePrompt === "string" ? { resumePrompt: src.resumePrompt.slice(0, PAGE_PROMPT_MAX) } : {}),
+      ...(typeof src.after === "number" && Number.isFinite(src.after) ? { after: src.after } : {}),
     };
   }
 
@@ -7679,7 +7693,7 @@
   /** Tell the page about its thread's status changes, and settle board.agent.wait calls once it is idle. */
   function pageThreadChanged(t, prev) {
     if (t.scope.kind !== "page" || !t.scope.ref) return;
-    if (prev && prev.status === t.status && prev.title === t.title && prev.queued === t.queued) return;
+    if (prev && prev.status === t.status && prev.title === t.title && prev.queued === t.queued && JSON.stringify(prev.run || null) === JSON.stringify(t.run || null)) return;
     const settle = t.status === "idle" && !t.queued;
     const send = (reply) => app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-event", thread: { ...pageBrief(t), ...(reply !== undefined ? { reply } : {}) } });
     if (!settle) {
@@ -7912,6 +7926,11 @@
         });
         S.threads.set(created.id, created);
         S.details.set(created.id, { items: [], byId: new Map(), turns: new Map() });
+        if (data.run) {
+          // Handed over before its first message, so Scribe sees its first turn through.
+          const { thread: watched } = await api("POST", `/threads/${encodeURIComponent(created.id)}/run`, { ...pageRunInput(data.run), after: Date.now() });
+          if (watched) S.threads.set(created.id, watched);
+        }
         pageSentAt.set(created.id, Date.now());
         const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page" });
         showPageThread(created.id, data.show, { reveal: activated });
@@ -7964,6 +7983,25 @@
         });
         if (sent.delivered && own) pageSentAt.set(thread.id, Date.now());
         return { ok: true, delivered: sent.delivered || null };
+      }
+      case "watch": {
+        // Hand a thread of the page's to Scribe to see through: limit waits, resumes, merges (#285).
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        const may = await pageMayWrite(tab, activated);
+        if (!may.ok) return may;
+        if (FOLDER_MODES.has(thread.mode)) {
+          const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
+          if (!folder.ok) return folder;
+        }
+        const { thread: watched } = await api("POST", `/threads/${encodeURIComponent(thread.id)}/run`, pageRunInput(data.run));
+        if (watched) S.threads.set(watched.id, watched);
+        return { ok: true, thread: pageBrief(watched || thread) };
+      }
+      case "release": {
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        const { thread: released } = await api("DELETE", `/threads/${encodeURIComponent(thread.id)}/run`);
+        if (released) S.threads.set(released.id, released);
+        return { ok: true };
       }
       case "stop": {
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };

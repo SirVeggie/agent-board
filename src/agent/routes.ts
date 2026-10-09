@@ -377,6 +377,9 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.get("/threads/:id/worktree", wrap((req) => host.worktreeInfo(req.params.id)));
+  // A page hands its thread to Scribe to see through (limit waits, resumes, merges), or takes it back.
+  router.post("/threads/:id/run", wrap((req) => ({ thread: host.watchPageThread(req.params.id, req.body ?? {}) })));
+  router.delete("/threads/:id/run", wrap((req) => ({ thread: host.releasePageThread(req.params.id) })));
 
   // The thread's agent browser, watched and driven from the chat (the agent drives it over MCP).
   router.get("/browsers", wrap(async () => ({ browsers: await browserViews() })));

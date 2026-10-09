@@ -1,3 +1,4 @@
+import type { PageRunView } from "./pageRuns.js";
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
 import type { GrantRow } from "./grants.js";
@@ -178,6 +179,8 @@ export type ThreadView = Thread & {
   activity?: { line: string; lastText?: string };
   /** Permissions the user granted while it ran (web domains, readable threads), each revocable by key. Missing when none. */
   grants?: GrantRow[];
+  /** While a page has handed the thread to Scribe to see through (pageRuns.ts), and once that run ended until the page releases it. */
+  run?: PageRunView;
 };
 
 export type FileChange = {

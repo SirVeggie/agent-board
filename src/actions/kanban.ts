@@ -1,3 +1,4 @@
+import type { PageRunView } from "../agent/pageRuns.js";
 import type { BoardState } from "../types.js";
 import {
   ActionError,
@@ -7,6 +8,7 @@ import {
   type ActionContext,
   type ActionOutcome,
   type ActionSet,
+  type RunEvent,
   type SweepContext,
   type ThreadRunInfo,
 } from "./types.js";
@@ -274,10 +276,14 @@ function soloRunOf(w: Worker, threadId: string): SoloRun | undefined {
   return run && typeof run === "object" ? run : undefined;
 }
 
-/** Last turn of an idle thread, or null if it is gone. Throws while the agent is still working. */
+/**
+ * Last turn of an idle thread, or null if it is gone. Throws while the agent is still working, or
+ * while Scribe still sees its run through (a limit wait, a merge, a merge fix).
+ */
 function workerLastTurn(info: ThreadRunInfo | undefined): Extract<ThreadRunInfo, { exists: true }>["lastTurn"] | null {
   if (!info?.exists) return null;
   if (info.running || !info.lastTurn || info.lastTurn.status === "running") throw new ActionError("the agent is still working");
+  if (info.run && info.run.phase !== "ended") throw new ActionError(info.run.phase === "waiting" ? "the agent waits for its usage limit to reset" : "Scribe is still seeing the agent through");
   const { status, endedAt, error, limitResetsAt, usageRecoveryAllowed } = info.lastTurn;
   return { status, ...(endedAt ? { endedAt } : {}), ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}), ...(usageRecoveryAllowed !== undefined ? { usageRecoveryAllowed } : {}) };
 }
@@ -288,10 +294,11 @@ function workerUsage(info: ThreadRunInfo | undefined): UsageTotals | undefined {
   return compactUsage(info.usage);
 }
 
-function workerStepResult(info: ThreadRunInfo | undefined): { lastTurn: ReturnType<typeof workerLastTurn>; usage?: UsageTotals } {
+function workerStepResult(info: ThreadRunInfo | undefined): { lastTurn: ReturnType<typeof workerLastTurn>; usage?: UsageTotals; run?: PageRunView } {
   const lastTurn = workerLastTurn(info);
   const usage = workerUsage(info);
-  return { lastTurn, ...(usage ? { usage } : {}) };
+  const run = info?.exists ? info.run : undefined;
+  return { lastTurn, ...(usage ? { usage } : {}), ...(run ? { run } : {}) };
 }
 
 /**
@@ -820,7 +827,13 @@ export const kanbanActions: ActionSet = {
           } else {
             release = "The chat thread working on this card was deleted.";
           }
-        } else if (!info.running && info.lastTurn?.limitResetsAt && workerWaits(state, claim.thread)) {
+        } else if (!info.running && info.run?.phase === "waiting") {
+          // Scribe sends the chat on once the provider confirms the limit reset; it ends the run if it can't.
+          const resetsAt = info.lastTurn?.limitResetsAt ?? info.run.wait?.until ?? ctx.now;
+          const text = `Out of plan usage. The worker goes on after the limit resets (${resetTime(resetsAt)}).`;
+          if (card.status?.text !== text) ops.push({ op: "merge", path: cardPath(card), value: { status: { kind: "info", text } } });
+        } else if (!info.running && info.lastTurn?.limitResetsAt && !info.run && workerWaits(state, claim.thread)) {
+          // Boards whose saved HTML predates Scribe's runs wait out the limit themselves.
           // A plan limit stopped the turn; the worker goes on in the same chat once the limit resets.
           const resetsAt = info.lastTurn.limitResetsAt;
           if (resetsAt < ctx.now - THREAD_STALE_MS) {
@@ -865,6 +878,47 @@ export const kanbanActions: ActionSet = {
       }
     }
     return ops.length ? { ops, result: null, events } : null;
+  },
+
+  runHold(state: BoardState, threadId: string): string | null {
+    const held = cards(state).filter((c) => !c.archived && c.claim && !c.claim.stale && c.claim.thread === threadId);
+    return held.length ? `it still holds ${held.map((c) => `#${c.num}`).join(", ")}` : null;
+  },
+
+  runEvent(state: BoardState, event: RunEvent, now: number): ActionOutcome | null {
+    // The worker log keeps what Scribe did for a worker's chat; the page logs what the board did about it.
+    const data = event.run.data ?? {};
+    const workerId = str(data.worker);
+    const w = workerId ? workerMap(state)[workerId] : undefined;
+    if (!w || typeof w !== "object") return null;
+    const card = Number(data.card) || undefined;
+    const solo = data.solo === true;
+    const what = solo ? `One-card run${card ? ` #${card}` : ""}` : "";
+    let kind: string = event.kind;
+    let text: string;
+    if (event.kind === "limit") {
+      const wait = event.run.wait;
+      text = `${what ? `${what} out` : "Out"} of plan usage until ${resetTime(event.resetsAt ?? wait?.until ?? now)}${wait ? ` (wait ${wait.count})` : ""}`;
+    } else if (event.kind === "end") {
+      const outcome = event.run.outcome;
+      if (outcome?.kind !== "done" || !outcome.merged) return null;
+      kind = "merge";
+      text = `Merged ${what ? `${what.charAt(0).toLowerCase()}${what.slice(1)}` : card ? `#${card}` : "the agent's branch"}`;
+    } else {
+      text = what ? `${what}: ${event.text}` : event.text;
+    }
+    const entry: WorkerLogEntry = { id: newId("lg"), at: now, kind, text: text.slice(0, 500), workerId, ...(w.name ? { worker: w.name } : {}), ...(card ? { card } : {}), thread: event.thread };
+    const list = workerLogEntries(state);
+    const settings = state.settings as { workerLog?: unknown } | undefined;
+    const ops: unknown[] = [];
+    if (!Array.isArray(settings?.workerLog)) ops.push({ op: "set", path: "settings/workerLog", value: [entry] });
+    else {
+      ops.push({ op: "insert", path: "settings/workerLog", value: entry });
+      for (const old of list.slice(0, Math.max(0, list.length - MAX_WORKER_LOG + 1))) {
+        if (old.id) ops.push({ op: "remove", path: `settings/workerLog/${old.id}` });
+      }
+    }
+    return { ops, result: null };
   },
 };
 

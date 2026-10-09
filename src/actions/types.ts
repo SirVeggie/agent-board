@@ -1,3 +1,4 @@
+import type { PageRunView, RunNote } from "../agent/pageRuns.js";
 import type { BoardState, TemplateValues } from "../types.js";
 
 /** Who runs an action. Agents carry their MCP session, and the chat thread when Scribe started them. */
@@ -60,6 +61,8 @@ export type ThreadRunInfo =
         reasoningTokens?: number;
         costUsd?: number;
       };
+      /** While the page has handed the thread to Scribe as a run: its phase, limit wait, and outcome once ended. */
+      run?: PageRunView;
       /** While the turn waits on the user: the question (a page_ask page too), approval or plan. */
       asking?: { kind: "approval" | "question" | "plan"; title: string; page?: { key: string; title: string } };
     };
@@ -75,7 +78,13 @@ export type ActionSet = {
   actions: Record<string, ActionDef>;
   /** Periodic check, e.g. for claims whose agent stopped. Returns null when nothing changes. */
   sweep?(state: BoardState, ctx: SweepContext): ActionOutcome | null;
+  /** A run of this page's (see agent/pageRuns.ts) is done and would merge: a reason to keep its branch unmerged, or null. */
+  runHold?(state: BoardState, threadId: string): string | null;
+  /** Scribe moved one of the page's runs on (a limit wait, a resume, a merge fix, its end), e.g. to log it on the page. */
+  runEvent?(state: BoardState, event: RunEvent, now: number): ActionOutcome | null;
 };
+
+export type RunEvent = RunNote & { thread: string; run: PageRunView };
 
 export class ActionError extends Error {}
 

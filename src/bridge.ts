@@ -1041,6 +1041,17 @@ export const BOARD_BRIDGE_JS = `
     });
   }
 
+  /** A run's settings for start({ run }) and watch(): { tag, data, merge, resumePrompt, after }. */
+  function agentRun(run) {
+    var out = {};
+    if (typeof run.tag === "string") out.tag = run.tag;
+    if (run.data && typeof run.data === "object" && !Array.isArray(run.data)) out.data = JSON.parse(JSON.stringify(run.data));
+    if (run.merge === false) out.merge = false;
+    if (typeof run.resumePrompt === "string") out.resumePrompt = run.resumePrompt;
+    if (typeof run.after === "number") out.after = run.after;
+    return out;
+  }
+
   /** The thread settings a page may pass to start(); Scribe checks them against the page's permissions. */
   function agentSettings(opts) {
     var out = {};
@@ -1055,6 +1066,8 @@ export const BOARD_BRIDGE_JS = `
       }
     });
     if (opts.web === "on" || opts.web === "limited" || opts.web === "off") out.web = opts.web;
+    if (opts.run === true) out.run = {};
+    else if (opts.run && typeof opts.run === "object") out.run = agentRun(opts.run);
     if (opts.modelParams && typeof opts.modelParams === "object" && !Array.isArray(opts.modelParams)) {
       var params = {};
       Object.keys(opts.modelParams).forEach(function (key) {
@@ -1071,7 +1084,8 @@ export const BOARD_BRIDGE_JS = `
      * New thread for this page: { ok, threadId, queued }. opts: { title, show: "dock" | "sidebar",
      * mode: "board" | "ask" | "code" | "plan", provider, model, effort, fast (Cursor),
      * modelParams, and for Code and Plan: cwd (folder), approval: "ask" | "edits" | "auto" | "full",
-     * worktree, web: "on" | "limited" | "off" (or a boolean) }.
+     * worktree, web: "on" | "limited" | "off" (or a boolean) }. run: true or { tag, data, merge,
+     * resumePrompt } hands the thread to Scribe to see through (see watch).
      */
     start: function (prompt, opts) {
       var message = agentSettings(opts || {});
@@ -1109,6 +1123,25 @@ export const BOARD_BRIDGE_JS = `
         { op: "card", threadId: agentText(threadId), card: Number(opts.card), title: agentText(opts.title), prompt: agentText(opts.text), resume: opts.resume === true },
         AGENT_ASK_MS
       );
+    },
+    /**
+     * Hand one of this page's threads to Scribe to see through, even while no window shows the
+     * page: when a plan usage limit stops its turn, Scribe waits until the provider confirms the
+     * reset and sends it on (resumePrompt); when its turn is done, Scribe merges its worktree branch
+     * (unless merge: false), asking the agent to rebase and fix a branch that won't merge. The
+     * thread's run ({ phase: "running" | "waiting" | "ended", wait?, fixes, outcome?, tag, data })
+     * shows on threads(), get() and onChange; the page logs an agent_run event at each step.
+     * outcome.kind: done (merged true/false, held) | failed | cancelled | limit | merge_failed.
+     * opts: { tag, data (small JSON, returned as given), merge, resumePrompt, after (only turns
+     * started from then count; default now, 0 for the thread as it is) }. Resolves { ok, thread }.
+     */
+    watch: function (threadId, opts) {
+      var message = { op: "watch", threadId: agentText(threadId), run: agentRun(opts || {}) };
+      return agentCall(message, AGENT_ASK_MS);
+    },
+    /** Scribe stops seeing the thread through, and forgets an ended run once the page has dealt with it: { ok }. */
+    release: function (threadId) {
+      return agentCall({ op: "release", threadId: agentText(threadId) });
     },
     /** Stop the thread's current turn and drop its queued messages: { ok }. */
     stop: function (threadId) {
@@ -1174,7 +1207,7 @@ export const BOARD_BRIDGE_JS = `
       }
       return agentCall({ op: "pickFolder", initial: agentText(opts && opts.initial) }, AGENT_ASK_MS);
     },
-    /** fn({ id, title, status, queued, reply? }) whenever one of this page's threads changes status. */
+    /** fn({ id, title, status, queued, run?, reply? }) whenever one of this page's threads changes status or run. */
     onChange: function (fn) {
       agentListeners.push(fn);
       return function () {
