@@ -388,6 +388,7 @@
   .badge.full .ic .box { fill: var(--ok); stroke: var(--ok); }
   .badge.full .ic .mark { stroke: #0b1a12; }
   .badge.blocked { color: var(--danger); }
+  .badge.heavy { color: var(--warn); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; }
   .avatar {
     width: 20px;
@@ -910,6 +911,7 @@
   .wp-log-line .msg { min-width: 0; overflow-wrap: anywhere; }
   .wp-log-line.pause .msg, .wp-log-line.merge_fail .msg { color: var(--danger); }
   .wp-log-line.blocked .msg { color: var(--warn); }
+  .wp-log-line.heavy .msg { color: var(--warn); }
   .wp-log-empty { color: var(--muted); font-size: 12px; padding: 8px 2px; }
   .worker-box { width: min(560px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
   .worker-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; overflow-y: auto; padding: 10px 2px 2px; }
@@ -1338,6 +1340,12 @@
     if (!out.movedAt) out.movedAt = out.createdAt;
     if (doneIds.indexOf(out.col) !== -1) { if (!out.doneAt) out.doneAt = out.movedAt; }
     else delete out.doneAt;
+    var usage = compactUsage(out.usage);
+    if (usage) {
+      if (Number(out.usage.at)) usage.at = Number(out.usage.at);
+      if (str(out.usage.thread)) usage.thread = str(out.usage.thread);
+      out.usage = usage;
+    } else delete out.usage;
     return out;
   }
 
@@ -1944,6 +1952,12 @@
       badges.appendChild(cm);
     }
     if (c.images.length > 1) badges.appendChild(el("span", "badge", "🖼 " + c.images.length));
+    var usageText = formatUsage(c.usage);
+    if (usageText) {
+      var tok = el("span", "badge" + (usageHeavy(c.usage) ? " heavy" : ""), usageText);
+      tok.title = usageTip(c.usage);
+      badges.appendChild(tok);
+    }
     var blockers = openBlockers(c);
     if (blockers.length) {
       var nums = blockers.map(function (b) { return "#" + b.num; });
@@ -2737,6 +2751,8 @@
     if (c.claim) times.push("Held by " + c.claim.holder + (c.claim.stale ? " (gone quiet)" : "") + " since " + ago(c.claim.at));
     if (c.doneAt) times.push("Done " + ago(c.doneAt));
     if (c.archivedAt && c.archived) times.push("Archived " + ago(c.archivedAt));
+    var usageLine = formatUsage(c.usage);
+    if (usageLine) times.push("Last chat " + usageLine);
     mTimes.replaceChildren();
     times.forEach(function (t) { mTimes.appendChild(el("div", null, t)); });
   }
@@ -3924,7 +3940,8 @@
   // worker itself (it can't launch, a merge no agent can fix) pauses it with its reason in the
   // Workers panel. Starts, pauses, merges, and usage-limit waits are appended to
   // settings.workerLog (newest 200) and shown on the Workers panel, so they can be read even when
-  // Keeper process logs are not available. A branch that won't merge first goes back to its agent
+  // Keeper process logs are not available. When a chat ends, its token totals go on that log line
+  // and as a small field on the card. A branch that won't merge first goes back to its agent
   // to rebase and commit (MAX_MERGE_FIXES times); if it still won't, the cards that chat finished
   // come back to their ready column, blocked, and the worker goes on. "Stop when its card is done" sets stop on the worker
   // (list shows it as stopRequested) and logs worker_stop. When a plan usage limit stops the agent's
@@ -4092,6 +4109,67 @@
   function formatLogLine(e) {
     return logTime(e.at) + "  " + (str(e.worker) || "board") + "  " + str(e.text);
   }
+  function fmtTokens(n) {
+    n = Math.round(Number(n) || 0);
+    if (n >= 1000000) {
+      var m = n / 1000000;
+      return (m >= 10 ? String(Math.round(m)) : m.toFixed(1).replace(/\.0$/, "")) + "M";
+    }
+    if (n >= 1000) return (n >= 10000 ? String(Math.round(n / 1000)) : (n / 1000).toFixed(1).replace(/\.0$/, "")) + "k";
+    return String(n);
+  }
+  function compactUsage(value) {
+    if (!value || typeof value !== "object") return null;
+    var out = {};
+    ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd"].forEach(function (key) {
+      var n = Number(value[key]);
+      if (isFinite(n) && n > 0) out[key] = n;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+  function formatUsage(value) {
+    var u = compactUsage(value);
+    if (!u) return "";
+    var parts = [];
+    var input = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0);
+    if (input) parts.push(fmtTokens(input) + " in");
+    if (u.outputTokens) parts.push(fmtTokens(u.outputTokens) + " out");
+    if (u.turns) parts.push(u.turns + (u.turns === 1 ? " round" : " rounds"));
+    return parts.join(" · ");
+  }
+  function usageTip(value) {
+    var u = compactUsage(value);
+    if (!u) return "";
+    var parts = [];
+    if (u.inputTokens) parts.push(fmtTokens(u.inputTokens) + " input");
+    if (u.cacheReadTokens) parts.push(fmtTokens(u.cacheReadTokens) + " cached");
+    if (u.cacheWriteTokens) parts.push(fmtTokens(u.cacheWriteTokens) + " cache write");
+    if (u.outputTokens) parts.push(fmtTokens(u.outputTokens) + " output");
+    if (u.reasoningTokens) parts.push(fmtTokens(u.reasoningTokens) + " reasoning");
+    if (u.turns) parts.push(u.turns + (u.turns === 1 ? " round" : " rounds"));
+    return "Last worker chat: " + parts.join(" · ");
+  }
+  function usageHeavy(value) {
+    var u = compactUsage(value);
+    return Boolean(u && (u.inputTokens || 0) + (u.cacheReadTokens || 0) >= 1000000);
+  }
+  /** Last worker chat's totals on the card (and any other card that chat claimed). */
+  function applyCardUsage(cardNum, threadId, usage) {
+    var compact = compactUsage(usage);
+    if (!compact) return;
+    compact.at = Date.now();
+    if (threadId) compact.thread = threadId;
+    var seen = {};
+    var ops = [];
+    function add(c) {
+      if (!c || seen[c.id]) return;
+      seen[c.id] = true;
+      ops.push({ op: "merge", path: "cards/id=" + c.id, value: { usage: compact } });
+    }
+    if (cardNum) add(byNum(cardNum));
+    if (threadId) allCards().forEach(function (c) { if (c.thread === threadId) add(c); });
+    if (ops.length) scribe.update(ops);
+  }
   /**
    * Append a line to the board's worker log (settings.workerLog). Kept even if Keeper logs are
    * not available. Newest MAX_WORKER_LOG lines; agents read them with the logs action.
@@ -4099,13 +4177,20 @@
   function appendLog(id, kind, text, extra) {
     if (!scribe.state.settings || typeof scribe.state.settings !== "object") return;
     var w = id ? worker(id) : null;
-    var entry = { id: newId("lg"), at: Date.now(), kind: kind, text: str(text).slice(0, 500) };
+    var usage = extra ? compactUsage(extra.usage) : null;
+    var line = str(text);
+    if (usage) {
+      var suffix = formatUsage(usage);
+      if (suffix && line.indexOf(suffix) === -1) line = line + " · " + suffix;
+    }
+    var entry = { id: newId("lg"), at: Date.now(), kind: kind, text: line.slice(0, 500) };
     if (id) entry.workerId = id;
     if (w) entry.worker = workerName(w);
     if (extra) {
       if (extra.card != null && extra.card !== "") entry.card = extra.card;
       if (extra.thread) entry.thread = extra.thread;
     }
+    if (usage) entry.usage = usage;
     var ops = [{ op: "insert", path: "settings/workerLog", value: entry }];
     var list = workerLog();
     if (list.length >= MAX_WORKER_LOG) {
@@ -4115,6 +4200,7 @@
       }
     }
     scribe.update(ops);
+    if (usage) applyCardUsage(extra && extra.card, extra && extra.thread, usage);
     try { console.warn("[scribe worker] " + formatLogLine(entry)); } catch (err) { /* ignore */ }
   }
   function buildWorkerLog() {
@@ -4146,12 +4232,12 @@
     }
     box.appendChild(head);
     if (!list.length) {
-      box.appendChild(el("p", "wp-log-empty", "Starts, pauses, merges, and usage-limit waits show up here, so they can be read even when Keeper logs are not available."));
+      box.appendChild(el("p", "wp-log-empty", "Starts, pauses, merges, and usage-limit waits show up here, so they can be read even when Keeper logs are not available. Token totals land on the line when a chat ends."));
       return box;
     }
     var lines = el("div", "wp-log-list");
     list.forEach(function (e) {
-      var row = el("div", "wp-log-line " + str(e.kind));
+      var row = el("div", "wp-log-line " + str(e.kind) + (usageHeavy(e.usage) ? " heavy" : ""));
       row.appendChild(el("span", "at", logTime(e.at)));
       var who = el("span", "who-name", str(e.worker) || "board");
       if (e.workerId) who.style.setProperty("--who", workerColor(e.workerId));
@@ -4462,12 +4548,13 @@
    */
   function wrapUp(id, threadId, r) {
     var w = worker(id), run = w.run || {};
+    var usage = r && r.usage;
     if (r) {
       var turn = r.lastTurn;
       if (turn && turn.status === "error" && turn.limitResetsAt) {
         var waits = (Number(w.wait && w.wait.count) || 0) + 1;
         if (waits > MAX_LIMIT_WAITS) {
-          endRun(id, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true);
+          endRun(id, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true, usage);
         } else {
           patchWorker(id, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
           appendLog(id, "limit", "Out of plan usage until " + limitTime(Number(turn.limitResetsAt)) + " (wait " + waits + " of " + MAX_LIMIT_WAITS + ")", { card: run.card, thread: threadId });
@@ -4477,47 +4564,50 @@
       var fixing = Boolean(w.fix && w.fix.thread === threadId);
       if (fixing && turn && (turn.status === "error" || turn.status === "cancelled")) {
         // Its card is finished; only the branch is left, and it stays unmerged in its chat.
-        mergeFailed(id, threadId, "the agent's turn to fix it " + (turn.status === "error" ? "failed" + (turn.error ? " (" + turn.error + ")" : "") : "was stopped") + ".");
+        mergeFailed(id, threadId, "the agent's turn to fix it " + (turn.status === "error" ? "failed" + (turn.error ? " (" + turn.error + ")" : "") : "was stopped") + ".", usage);
         return Promise.resolve(true);
       }
       // The rest are problems with this card's chat, not with the worker: block the card and go on
       // with the next one. The branch isn't merged; the chat keeps it.
       if (turn && (turn.status === "error" || turn.status === "cancelled")) {
         var how = turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped";
-        blockChatCards(id, threadId, "The agent's turn " + how + " before it finished this card. " + KEPT_NOTE, turn.status === "error" ? "Agent turn failed" : "Agent turn stopped");
-        return Promise.resolve(chatFailed(id, "the last agent's turn " + how));
+        blockChatCards(id, threadId, "The agent's turn " + how + " before it finished this card. " + KEPT_NOTE, turn.status === "error" ? "Agent turn failed" : "Agent turn stopped", usage);
+        return Promise.resolve(chatFailed(id, "the last agent's turn " + how, usage));
       }
       var held = liveCards().filter(function (c) { return c.claim && !c.claim.stale && c.claim.thread === threadId; });
       if (held.length) {
-        blockChatCards(id, threadId, "The agent ended its turn without finishing this card. " + KEPT_NOTE, "Agent didn't finish");
-        return Promise.resolve(chatFailed(id, "the last agent ended without finishing #" + held[0].num));
+        blockChatCards(id, threadId, "The agent ended its turn without finishing this card. " + KEPT_NOTE, "Agent didn't finish", usage);
+        return Promise.resolve(chatFailed(id, "the last agent ended without finishing #" + held[0].num, usage));
       }
       var given = run.card ? byNum(run.card) : null;
       if (given && isReadyCol(column(given.col)) && (Number(given.movedAt) || 0) <= (Number(run.startedAt) || 0)) {
-        blockCards(id, [given.id], "The agent's chat ended without taking this card. Comment here to let the worker try again.", "Agent didn't take it", threadId);
-        return Promise.resolve(chatFailed(id, "the last agent didn't take #" + given.num));
+        blockCards(id, [given.id], "The agent's chat ended without taking this card. Comment here to let the worker try again.", "Agent didn't take it", threadId, false, usage);
+        return Promise.resolve(chatFailed(id, "the last agent didn't take #" + given.num, usage));
       }
       if (w.fails) patchWorker(id, { fails: null });
     }
-    if (!FOLDER_MODES[workerMode(w)]) return Promise.resolve(true);
+    if (!FOLDER_MODES[workerMode(w)]) {
+      if (r) appendLog(id, "done", run.card ? "Finished #" + run.card : "Finished the agent's chat", { card: run.card, thread: threadId, usage: usage });
+      return Promise.resolve(true);
+    }
     return scribe.agent.merge(threadId).then(function (m) {
       if (m && (m.ok || m.error === "not_found")) {
         restoreMergeCards(id);
         appendLog(id, "merge", m.ok
           ? (run.card ? "Merged #" + run.card : "Merged the agent's branch")
-          : "No worktree to merge (chat gone)", { card: run.card, thread: threadId });
+          : "No worktree to merge (chat gone)", { card: run.card, thread: threadId, usage: usage });
         return true;
       }
       var why = m && m.error === "merge_failed" ? m.message : launchError(m);
       var cur = worker(id) || {};
       var asked = cur.fix && cur.fix.thread === threadId ? Number(cur.fix.count) || 0 : 0;
       if (m && m.error === "merge_failed" && agentCanFixMerge(why)) {
-        if (asked < MAX_MERGE_FIXES) return askToFixMerge(id, threadId, why, asked + 1);
-        mergeFailed(id, threadId, why);
+        if (asked < MAX_MERGE_FIXES) return askToFixMerge(id, threadId, why, asked + 1, usage);
+        mergeFailed(id, threadId, why, usage);
         return true;
       }
       // The main checkout's branch, permissions, or Scribe itself: the next merge would fail too.
-      pauseOnMerge(id, threadId, why);
+      pauseOnMerge(id, threadId, why, usage);
       return false;
     });
   }
@@ -4526,13 +4616,13 @@
    * One more card whose chat failed. A few in a row point at the worker itself (its provider, model,
    * or folder), so it pauses then instead of blocking every card it has. Returns whether to go on.
    */
-  function chatFailed(id, why) {
+  function chatFailed(id, why, usage) {
     var fails = (Number(worker(id).fails) || 0) + 1;
     if (fails < MAX_CHAT_FAILS) {
       patchWorker(id, { fails: fails });
       return true;
     }
-    endRun(id, MAX_CHAT_FAILS + " cards in a row didn't get done (" + why + "), so the worker paused: check its setup. Those cards are blocked with the reason; press ▶ to go on.", true);
+    endRun(id, MAX_CHAT_FAILS + " cards in a row didn't get done (" + why + "), so the worker paused: check its setup. Those cards are blocked with the reason; press ▶ to go on.", true, usage);
     patchWorker(id, { fails: null });
     return false;
   }
@@ -4544,11 +4634,11 @@
    * The branch didn't merge: send the agent's chat on to rebase and commit; its next idle retries the
    * merge. Resolves whether the worker goes on now (when the send fails, the cards are blocked instead).
    */
-  function askToFixMerge(id, threadId, why, count) {
+  function askToFixMerge(id, threadId, why, count, usage) {
     var prompt = "The board could not merge your branch: " + why + "\n\n" + MERGE_FIX_PROMPT;
     return scribe.agent.send(threadId, prompt).then(function (r) {
       if (!r || !r.ok) {
-        mergeFailed(id, threadId, why);
+        mergeFailed(id, threadId, why, usage);
         return true;
       }
       threadStatus[threadId] = { status: "running", queued: 0 };
@@ -4562,7 +4652,7 @@
    * a ready column goes back to its own, on top. A worker skips a blocked card until the user answers
    * on it, so it goes on with its other cards. Logs it under threadId unless quiet. Returns { ids, nums, list, backTo }.
    */
-  function blockCards(id, cardIds, why, statusText, threadId, quiet) {
+  function blockCards(id, cardIds, why, statusText, threadId, quiet, usage) {
     var now = Date.now();
     var ids = [];
     var nums = [];
@@ -4590,20 +4680,21 @@
       scribe.set({ cards: cards });
     }
     var list = nums.map(function (n) { return "#" + n; }).join(", ");
-    if (!quiet) appendLog(id, "blocked", (list ? "Left " + list + " blocked: " : "") + why, { card: nums[0], thread: threadId });
+    if (!quiet) appendLog(id, "blocked", (list ? "Left " + list + " blocked: " : "") + why, { card: nums[0], thread: threadId, usage: usage });
+    else if (usage) applyCardUsage(nums[0], threadId, usage);
     return { ids: ids, nums: nums, list: list, backTo: backTo };
   }
   /**
    * A chat ended without finishing: block the cards it still holds, and the ones the daemon's sweep
    * already released from it on a failed turn. A card the agent released itself keeps its own note.
    */
-  function blockChatCards(id, threadId, why, statusText) {
+  function blockChatCards(id, threadId, why, statusText, usage) {
     var ids = liveCards().filter(function (c) {
       if (c.thread !== threadId) return false;
       if (c.claim && !c.claim.stale) return c.claim.thread === threadId;
       return isReadyCol(colOf(c)) && Boolean(c.status && c.status.kind === "blocked" && /^The (agent's turn|chat thread)/.test(str(c.status.text)));
     }).map(function (c) { return c.id; });
-    return blockCards(id, ids, why, statusText, threadId);
+    return blockCards(id, ids, why, statusText, threadId, false, usage);
   }
   /** The cards a chat finished (review or done), whose work waits on its branch's merge. */
   function unmergedCards(threadId) {
@@ -4616,19 +4707,19 @@
    * A branch the agent couldn't get to merge: the cards its chat finished go back to their ready
    * column, blocked, so it shows which work isn't in. The branch stays in that chat; the worker goes on.
    */
-  function mergeFailed(id, threadId, why) {
-    blockCards(id, unmergedCards(threadId), "The board could not merge this card's branch, so its work isn't in yet: " + why + " Sort it out from its chat's branch menu, then move the card on.", "Branch didn't merge", threadId);
+  function mergeFailed(id, threadId, why, usage) {
+    blockCards(id, unmergedCards(threadId), "The board could not merge this card's branch, so its work isn't in yet: " + why + " Sort it out from its chat's branch menu, then move the card on.", "Branch didn't merge", threadId, false, usage);
   }
   /**
    * Pause on a branch that won't merge for a reason no agent can fix (the main checkout's branch,
    * permissions, Scribe not answering), so the next merge would fail too. The cards its chat finished
    * go back to their ready column, blocked; a later ▶ that merges it sends them on to review again.
    */
-  function pauseOnMerge(id, threadId, why) {
-    var r = blockCards(id, unmergedCards(threadId), "The board could not merge this card's branch, so its work isn't in yet: " + why, "Branch didn't merge", threadId, true);
+  function pauseOnMerge(id, threadId, why, usage) {
+    var r = blockCards(id, unmergedCards(threadId), "The board could not merge this card's branch, so its work isn't in yet: " + why, "Branch didn't merge", threadId, true, usage);
     var which = r.list ? "the branch of " + r.list : "the agent's branch";
     var back = r.list && r.backTo ? " " + r.list + (r.nums.length === 1 ? " is" : " are") + " back in " + r.backTo.title + "." : "";
-    endRun(id, "Could not merge " + which + ": " + why + back + " Sort it out from its chat's branch menu, or press ▶ to try again.", false);
+    endRun(id, "Could not merge " + which + ": " + why + back + " Sort it out from its chat's branch menu, or press ▶ to try again.", false, usage);
     if (r.ids.length) patchWorker(id, { mergeCards: r.ids });
   }
   /** The branch merged after a pause: send the cards it sent back on to review (or done) again. */
@@ -4884,7 +4975,7 @@
           if (turn && turn.status === "error" && turn.limitResetsAt) {
             var waits = (Number(run.wait && run.wait.count) || 0) + 1;
             if (waits > MAX_LIMIT_WAITS) {
-              blockChatCards(id, tid, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). " + KEPT_NOTE, "Out of plan usage");
+              blockChatCards(id, tid, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). " + KEPT_NOTE, "Out of plan usage", r && r.usage);
               forgetSolo(id, tid);
               return;
             }
@@ -4892,7 +4983,7 @@
             appendLog(id, "limit", "One-card run #" + run.card + " out of plan usage until " + limitTime(Number(turn.limitResetsAt)) + " (wait " + waits + " of " + MAX_LIMIT_WAITS + ")", { card: run.card, thread: tid });
             return;
           }
-          return mergeSolo(id, tid);
+          return mergeSolo(id, tid, r && r.usage);
         },
         function () { /* another window, or the agent isn't done */ }
       ).then(function () {
@@ -4939,20 +5030,21 @@
       appendLog(id, "resume", "Sent the one-card run on after its usage limit reset", { card: run.card, thread: threadId });
     });
   }
-  function mergeSolo(id, threadId) {
+  function mergeSolo(id, threadId, usage) {
     var w = worker(id), runs = soloRuns(w);
+    var cardNum = runs[threadId] && runs[threadId].card;
     if (!FOLDER_MODES[workerMode(w)]) {
+      appendLog(id, "done", cardNum ? "Finished #" + cardNum : "Finished the one-card run", { card: cardNum, thread: threadId, usage: usage });
       forgetSolo(id, threadId);
       return Promise.resolve();
     }
     return scribe.agent.merge(threadId).then(function (m) {
       if (m && (m.ok || m.error === "not_found")) {
-        var cardNum = runs[threadId] && runs[threadId].card;
         appendLog(id, "merge", !m.ok
           ? "No worktree to merge for the one-card run (chat gone)"
           : m.merged === false
             ? "One-card run" + (cardNum ? " #" + cardNum : "") + " had no worktree open to merge"
-            : "Merged one-card run" + (cardNum ? " #" + cardNum : ""), { card: cardNum, thread: threadId });
+            : "Merged one-card run" + (cardNum ? " #" + cardNum : ""), { card: cardNum, thread: threadId, usage: usage });
         forgetSolo(id, threadId);
         return;
       }
@@ -4967,7 +5059,7 @@
         // Same as the worker's own chat: the agent rebases and commits, and its next idle merges again.
         return scribe.agent.send(threadId, "The board could not merge your branch: " + why + "\n\n" + MERGE_FIX_PROMPT).then(function (r) {
           if (!r || !r.ok) {
-            mergeFailed(id, threadId, why);
+            mergeFailed(id, threadId, why, usage);
             forgetSolo(id, threadId);
             return;
           }
@@ -4976,15 +5068,15 @@
           appendLog(id, "merge_fix", "Asked the one-card run" + (run.card ? " on #" + run.card : "") + " to fix the merge (" + (asked + 1) + " of " + MAX_MERGE_FIXES + "): " + why, { card: run.card, thread: threadId });
         });
       }
-      mergeFailed(id, threadId, why);
+      mergeFailed(id, threadId, why, usage);
       forgetSolo(id, threadId);
     });
   }
 
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
-  function endRun(id, error, clearThread) {
+  function endRun(id, error, clearThread, usage) {
     var w = worker(id);
-    var extra = { card: w && w.run && w.run.card, thread: w && w.threadId };
+    var extra = { card: w && w.run && w.run.card, thread: w && w.threadId, usage: usage };
     var patch = { run: null, step: null, stop: null, error: error || null, merge: null, wait: null, fix: null };
     if (clearThread) patch.threadId = null;
     else if (w && w.threadId) patch.merge = w.threadId;
@@ -5298,7 +5390,7 @@
     left.appendChild(add);
     var logTog = el("button", "log-tog" + (workersLogOpen ? " on" : ""), "Log");
     logTog.type = "button";
-    logTog.title = "Starts, pauses, merges, and usage-limit waits — kept on the board, not in Keeper";
+    logTog.title = "Starts, pauses, merges, token totals when a chat ends, and usage-limit waits — kept on the board, not in Keeper";
     logTog.addEventListener("click", function () {
       workersLogOpen = !workersLogOpen;
       renderWorkersPanel();

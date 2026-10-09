@@ -50,10 +50,12 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             due?, assignee?, checklist: [{ id, text, done }],
             comments: [{ id, by, at, text }], images: [{ id, name, data }],  // by: "user" | assignee name | "agent"
             blockedBy: [cardId], status?, claim?, thread?, from?, archived?,
-            cover?, createdAt, movedAt, doneAt? }]
+            cover?, createdAt, movedAt, doneAt?,
+            usage?: { turns, inputTokens?, outputTokens?, at?, thread? } }]  // last worker chat; page writes it
 nextNum: number
 settings: { hideAddColumn?, showDoneDate?, maxWorkers?,    // the user's page settings; leave them alone
-            workerLog?: [{ id, at, kind, text, worker?, workerId?, card?, thread? }],  // the page's; read with logs
+            workerLog?: [{ id, at, kind, text, worker?, workerId?, card?, thread?,
+                           usage?: { turns, inputTokens?, outputTokens? } }],  // the page's; read with logs
             workers?: { [workerId]: { name, color?, instructions, context?, provider?, model?, effort?, fast?, mode?,
                                       cwd?, approval?, worktree?, web?, show?,
                                       threadId?, run?, step?, stop?, merge?, error?, fails?, solo? } } }  // run..solo: the page's
@@ -64,8 +66,9 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?,    // the user's page se
 - Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. Use keys you created or found with `page_list` / `library_search`.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
 - `thread` is the in-app agent thread that last claimed the card (set by `claim`, kept after `finish`). The card's right-click menu opens it.
+- `usage` is the last worker chat's token totals (input, output, rounds), written when that chat ends. Leave it alone; `list` includes it so cost outliers are easy to spot.
 - Images: insert into `cards/num=12/images` with `page_update`, pass the file in `assets`, and write `data: "asset:<file name>"`. The first image is the card's cover unless `cover` is `false` (the card dialog's Show cover switch). `get` (and a `page_state` path to one card) attaches those images so you can see them; a whole-board read does not inline every cover.
 - `paused` on an agent column: workers skip it until the inbox tag is clicked again. Leave it alone; the user toggles it from the tag.
-- `workerLog` is the board's own run log (starts, pauses, merges, usage-limit waits). Leave it alone; read it with `logs`.
+- `workerLog` is the board's own run log (starts, pauses, merges, usage-limit waits). End-of-chat lines include `usage` when the daemon reported totals. Leave it alone; read it with `logs`.
 - `from` is the last agent column the card entered. Sweep, `release` (no `to`), and Request changes send it back there when there is more than one agent column.
 - Keep `archived` cards; they are the user's archive.

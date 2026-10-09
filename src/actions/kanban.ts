@@ -38,6 +38,18 @@ type Card = {
   claim?: Claim;
   /** Last in-app agent thread that claimed the card; kept after the claim ends. */
   thread?: string;
+  /** Last worker chat's token totals (set by the page when that chat ends). */
+  usage?: {
+    turns?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    reasoningTokens?: number;
+    costUsd?: number;
+    at?: number;
+    thread?: string;
+  };
   /** Last agent column this card entered; sweep/release/changes return it there. */
   from?: string;
   archived?: boolean;
@@ -88,6 +100,38 @@ const STEP_LEASE_MS = 15 * 60 * 1000;
 const MAX_WORKER_LOG = 200;
 const DEFAULT_LOG_LIMIT = 80;
 
+const USAGE_KEYS = ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd"] as const;
+
+type UsageTotals = {
+  turns?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  costUsd?: number;
+};
+
+function compactUsage(value: unknown): UsageTotals | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const src = value as Record<string, unknown>;
+  const out: UsageTotals = {};
+  for (const key of USAGE_KEYS) {
+    const n = Number(src[key]);
+    if (Number.isFinite(n) && n > 0) out[key] = n;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function cardUsage(value: unknown): (UsageTotals & { at?: number; thread?: string }) | undefined {
+  const usage = compactUsage(value);
+  if (!usage) return undefined;
+  const src = value as { at?: unknown; thread?: unknown };
+  const at = Number(src.at);
+  const thread = str(src.thread);
+  return { ...usage, ...(Number.isFinite(at) && at > 0 ? { at } : {}), ...(thread ? { thread } : {}) };
+}
+
 /** One line in the board's worker log: starts, pauses, merges, usage-limit waits. */
 type WorkerLogEntry = {
   id?: string;
@@ -98,6 +142,7 @@ type WorkerLogEntry = {
   workerId?: string;
   card?: number;
   thread?: string;
+  usage?: UsageTotals;
 };
 
 function workerLogEntries(state: BoardState): WorkerLogEntry[] {
@@ -107,6 +152,7 @@ function workerLogEntries(state: BoardState): WorkerLogEntry[] {
 
 function compactLog(e: WorkerLogEntry): Record<string, unknown> {
   const card = Number(e.card);
+  const usage = compactUsage(e.usage);
   return {
     at: Number(e.at) || 0,
     kind: str(e.kind) || "info",
@@ -115,6 +161,7 @@ function compactLog(e: WorkerLogEntry): Record<string, unknown> {
     ...(str(e.workerId) ? { workerId: str(e.workerId) } : {}),
     ...(Number.isFinite(card) && card > 0 ? { card } : {}),
     ...(str(e.thread) ? { thread: str(e.thread) } : {}),
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -235,6 +282,18 @@ function workerLastTurn(info: ThreadRunInfo | undefined): Extract<ThreadRunInfo,
   return { status, ...(endedAt ? { endedAt } : {}), ...(error ? { error } : {}), ...(limitResetsAt ? { limitResetsAt } : {}), ...(usageRecoveryAllowed !== undefined ? { usageRecoveryAllowed } : {}) };
 }
 
+/** Thread token totals from runInfo, once workerLastTurn has confirmed the chat is idle. */
+function workerUsage(info: ThreadRunInfo | undefined): UsageTotals | undefined {
+  if (!info?.exists) return undefined;
+  return compactUsage(info.usage);
+}
+
+function workerStepResult(info: ThreadRunInfo | undefined): { lastTurn: ReturnType<typeof workerLastTurn>; usage?: UsageTotals } {
+  const lastTurn = workerLastTurn(info);
+  const usage = workerUsage(info);
+  return { lastTurn, ...(usage ? { usage } : {}) };
+}
+
 /**
  * The thread is a worker chat the board will send on after a plan limit resets: its own run, or a
  * one-card run from the card menu (`solo`).
@@ -296,6 +355,7 @@ function summary(state: BoardState, card: Card) {
   const col = columns(state).find((c) => c.id === card.col);
   const comments = arr<Comment>(card.comments);
   const last = comments.at(-1);
+  const usage = cardUsage(card.usage);
   return {
     num: card.num,
     id: card.id,
@@ -314,6 +374,7 @@ function summary(state: BoardState, card: Card) {
     comments: comments.length,
     ...(last ? { lastComment: { by: last.by, at: last.at } } : {}),
     ...(card.archived ? { archived: true } : {}),
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -459,7 +520,7 @@ export const kanbanActions: ActionSet = {
     },
     logs: {
       description:
-        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, blocked, limit, resume, wait, or solo; q matches text, worker, kind, or #card.",
+        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, blocked, limit, resume, wait, solo, or done; q matches text, worker, kind, or #card. End-of-chat lines include usage { turns, inputTokens, outputTokens } when the daemon reported them.",
       args: "{ worker?, kind?, q?, limit? }",
       run(state, args) {
         let list = workerLogEntries(state);
@@ -704,10 +765,10 @@ export const kanbanActions: ActionSet = {
           if (!w.run) throw new ActionError("the worker is not running");
           if (w.step && w.step.token !== token && w.step.at > ctx.now - STEP_LEASE_MS) throw new ActionError("another window is on it");
         }
-        const lastTurn = w.threadId && ctx.thread ? workerLastTurn(ctx.thread(w.threadId)) : null;
+        const step = w.threadId && ctx.thread ? workerStepResult(ctx.thread(w.threadId)) : { lastTurn: null };
         const value: Record<string, unknown> = { step: { token, at: ctx.now } };
         if (args.start) Object.assign(value, { run: { since: ctx.now }, stop: null, error: null });
-        return { ops: [{ op: "merge", path: `settings/workers/${workerId}`, value }], result: { ok: true, lastTurn } };
+        return { ops: [{ op: "merge", path: `settings/workers/${workerId}`, value }], result: { ok: true, ...step } };
       },
     },
     worker_solo_step: {
@@ -724,10 +785,10 @@ export const kanbanActions: ActionSet = {
         const run = soloRunOf(w, threadId);
         if (!run) throw new ActionError("that chat is not a one-card run of this worker");
         if (run.step && run.step.token !== token && run.step.at > ctx.now - STEP_LEASE_MS) throw new ActionError("another window is on it");
-        const lastTurn = ctx.thread ? workerLastTurn(ctx.thread(threadId)) : null;
+        const step = ctx.thread ? workerStepResult(ctx.thread(threadId)) : { lastTurn: null };
         return {
           ops: [{ op: "merge", path: `settings/workers/${workerId}/solo/${threadId}`, value: { step: { token, at: ctx.now } } }],
-          result: { ok: true, lastTurn },
+          result: { ok: true, ...step },
         };
       },
     },

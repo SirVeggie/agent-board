@@ -343,6 +343,28 @@ test("logs returns recent worker log lines, filtered and capped", () => {
   assert.equal(numbered.total, 1);
   assert.equal((numbered.logs as Array<{ card: number }>)[0].card, 13);
 
+  const withUsage = {
+    ...state,
+    settings: {
+      ...state.settings,
+      workerLog: [
+        {
+          id: "lg_u",
+          at: 2000,
+          kind: "merge",
+          text: "Merged #12 · 3.3M in · 800 out · 2 rounds",
+          worker: "Grok",
+          workerId: "w_grok",
+          card: 12,
+          thread: "th_12",
+          usage: { turns: 2, inputTokens: 3_300_000, outputTokens: 800, cacheReadTokens: 0 },
+        },
+      ],
+    },
+  };
+  const usageLog = (run(withUsage, "logs", {}).result.logs as Array<{ usage?: { inputTokens: number } }>)[0];
+  assert.deepEqual(usageLog.usage, { turns: 2, inputTokens: 3_300_000, outputTokens: 800 });
+
   const many = {
     ...state,
     settings: {
@@ -383,6 +405,28 @@ test("list filters by assignee regardless of case", () => {
   assert.deepEqual((run(state, "list", { assignee: "opus" }).result.cards as Array<{ num: number }>).map((c) => c.num), [2]);
 });
 
+test("list and get include a card's last-chat usage", () => {
+  const state = {
+    ...board(),
+    cards: [
+      {
+        id: "c1",
+        num: 1,
+        col: "ready",
+        title: "One",
+        comments: [],
+        createdAt: 1,
+        movedAt: 1,
+        usage: { turns: 2, inputTokens: 3300000, outputTokens: 800, at: 9, thread: "th_1" },
+      },
+    ],
+  };
+  const row = (run(state, "list", {}).result.cards as Array<{ usage?: { inputTokens: number; at?: number } }>)[0];
+  assert.deepEqual(row.usage, { turns: 2, inputTokens: 3300000, outputTokens: 800, at: 9, thread: "th_1" });
+  const got = run(state, "get", { card: 1 }).result as { usage?: { inputTokens: number } };
+  assert.equal(got.usage?.inputTokens, 3300000);
+});
+
 test("worker_step lets one window at a time move a worker on, once its thread is done", () => {
   const threads: Record<string, ThreadRunInfo> = {
     busy: { exists: true, running: true, title: "Busy" },
@@ -417,6 +461,20 @@ test("worker_step lets one window at a time move a worker on, once its thread is
   assert.deepEqual(failed.result, { ok: true, lastTurn: { status: "error", endedAt: 900, error: "rate limited" } });
   const gone = run(withWorker({ ...running, threadId: "deleted" }), "worker_step", { worker: "w_op", from: "deleted", token: "a" }, page());
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
+
+  threads.failed = {
+    exists: true,
+    running: false,
+    title: "Failed",
+    lastTurn: { status: "error", endedAt: 900, error: "rate limited" },
+    usage: { turns: 2, inputTokens: 3_300_000, outputTokens: 800 },
+  };
+  const withUsage = run(withWorker({ ...running, threadId: "failed" }), "worker_step", { worker: "w_op", from: "failed", token: "u" }, page());
+  assert.deepEqual(withUsage.result, {
+    ok: true,
+    lastTurn: { status: "error", endedAt: 900, error: "rate limited" },
+    usage: { turns: 2, inputTokens: 3_300_000, outputTokens: 800 },
+  });
 });
 
 test("worker_claim claims a card for the chat the board started, so its agent needn't", () => {
@@ -659,9 +717,20 @@ test("worker_solo_step lets one window wrap up a one-card run and passes on a pl
   assert.throws(() => run(limited.state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "b" }, page()), /another window/);
   run(limited.state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "b" }, page(1000 + 16 * 60 * 1000));
 
+  threads.done = {
+    exists: true,
+    running: false,
+    title: "D",
+    lastTurn: { status: "done", endedAt: 900 },
+    usage: { turns: 1, inputTokens: 40, outputTokens: 12 },
+  };
   const done = run(withSolo({ done: { card: 2, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "done", token: "c" }, page());
   // endedAt lets the page tell a Continue's turn from the one before it (#253).
-  assert.deepEqual(done.result, { ok: true, lastTurn: { status: "done", endedAt: 900 } });
+  assert.deepEqual(done.result, {
+    ok: true,
+    lastTurn: { status: "done", endedAt: 900 },
+    usage: { turns: 1, inputTokens: 40, outputTokens: 12 },
+  });
   const gone = run(withSolo({ missing: { card: 3, at: 1 } }), "worker_solo_step", { worker: "w_1", thread: "missing", token: "d" }, page());
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });
