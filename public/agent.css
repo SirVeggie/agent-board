@@ -4057,6 +4057,7 @@ button.ag-help:focus-visible {
 }
 
 .ag-transcript .ag-turn:not(.latest):not(.open) .ag-rail,
+.ag-transcript .ag-turn:not(.latest):not(.open) .ag-answer-earlier,
 .ag-transcript .ag-turn:not(.latest) .ag-turn-end,
 .ag-transcript .ag-turn:not(.latest) .ag-turn-foot,
 .ag-transcript .ag-turn-foot.s-running {

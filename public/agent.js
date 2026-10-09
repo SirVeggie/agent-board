@@ -2299,6 +2299,8 @@
       for (const user of users) wrap.append(this.renderUser(user, !group.turn && !user.dropped));
       const body = el("div", "ag-turn-body");
       const rest = group.items.filter((it) => !opens(it));
+      const answers = rest.filter((it) => it.kind === "text" && !it.parentToolId);
+      const lastAnswer = answers[answers.length - 1];
       const byParent = new Map();
       for (const it of rest) {
         if (it.parentToolId) {
@@ -2339,15 +2341,18 @@
         }
         flush();
         const node = this.renderItem(it, byParent, group.turn);
-        if (node) put(node);
+        if (node) {
+          if (it.kind === "text" && it !== lastAnswer) node.classList.add("ag-answer-earlier");
+          put(node);
+        }
       }
       flush();
       if (railed) {
         const rails = body.querySelectorAll(":scope > .ag-rail");
         rails[rails.length - 1]?.lastElementChild?.classList.add("ag-step-last");
         if (this.turnIsLive(group.key)) wrap.classList.add("running");
-        // Earlier turns fold their steps into one summary line, which expands them again.
-        if (rails.length && group.turn) {
+        // Earlier turns fold their steps and earlier answers into one expandable summary.
+        if ((rails.length || answers.length > 1) && group.turn) {
           const key = `s:${group.key}`;
           wrap.classList.toggle("open", this.expanded.has(key));
           const sum = button("", "ag-sum", () => this.toggle(key, wrap), "Show the steps");
