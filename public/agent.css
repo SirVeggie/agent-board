@@ -3304,7 +3304,7 @@ button.dock-scope.warn {
 }
 
 /* ----- island style: capsule with two tabs above (thread, scope) and the settings tab below, sliding out from behind.
-   With output showing, the tabs' panels fade away and thread and scope sit on the output's faded surface. ----- */
+   With output showing, the tabs' panels disappear and thread and scope sit on the output surface. ----- */
 
 .agent-dock.style-island {
   width: min(680px, calc(100% - 40px));
@@ -3409,8 +3409,11 @@ button.dock-scope.warn {
 }
 
 .style-island.expanded .dock-out::before {
-  -webkit-mask-image: linear-gradient(to top, #000 0, #000 88%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0, #000 88%, transparent 100%);
+  background: var(--panel);
+  border-radius: 16px;
+  box-shadow: var(--ag-raised);
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .style-island .dock-history,
@@ -3419,8 +3422,8 @@ button.dock-scope.warn {
 }
 
 .style-island .dock-history .ag-scroll {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
-  mask-image: linear-gradient(to bottom, transparent, #000 16px);
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .style-island .dock-history .ag-transcript {
