@@ -1996,3 +1996,42 @@ test("a focused new page from the blank page's thread fills it; background pages
   assert.notEqual(next.tab.id, draft.id);
   store.closeDb();
 });
+
+test("a page's reply target is set by agents, persists, and sends a reply event to a page without a reply hook", () => {
+  const store = loaded();
+  store.upsert({ key: "notes", title: "Notes", html: "<p>n</p>" });
+  const { tab: form } = store.upsert({ key: "form", title: "Form", html: "<p>f</p>" });
+  assert.throws(() => store.receiveReply(form.id, { data: { a: 1 } }), /no reply target/);
+  assert.throws(() => store.setReplyTo(form.id, { page: "missing" }), /not found/);
+  assert.throws(() => store.setReplyTo(form.id, { page: "form" }), /another page/);
+  assert.throws(() => store.setReplyTo(form.id, { page: "notes", card: "x" }), /card number/);
+  const notes = store.get("notes")!;
+  store.setReplyTo(form.id, { page: "scribe:notes", card: 4 });
+  assert.deepEqual(store.get(form.id)?.replyTo, { page: notes.id, card: 4 });
+
+  const { target, deliver } = store.receiveReply(form.id, { summary: "  Picked\n A ", data: { approach: "A" } });
+  assert.equal(target.id, notes.id);
+  assert.equal(deliver, undefined);
+  const event = store.get("notes")!.events.at(-1)!;
+  assert.equal(event.name, "reply");
+  assert.deepEqual(event.data, { from: { id: form.id, key: form.key, title: "Form" }, card: 4, summary: "Picked A", data: { approach: "A" } });
+  assert.throws(() => store.receiveReply(form.id, { data: ["no"] }), /object/);
+  assert.throws(() => store.receiveReply(form.id, { data: { big: "x".repeat(25_000) } }), /over 20 KB/);
+  store.closeDb();
+
+  const again = loaded();
+  assert.deepEqual(again.get(form.id)?.replyTo, { page: notes.id, card: 4 });
+  again.setReplyTo(form.id, null);
+  assert.equal(again.get(form.id)?.replyTo, undefined);
+  again.closeDb();
+
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
+  db.exec("ALTER TABLE tabs DROP COLUMN reply_to");
+  db.close();
+  const migrated = loaded();
+  migrated.setReplyTo(form.id, { page: "notes" });
+  migrated.closeDb();
+  const last = loaded();
+  assert.deepEqual(last.get(form.id)?.replyTo, { page: notes.id });
+  last.closeDb();
+});

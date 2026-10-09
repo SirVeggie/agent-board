@@ -42,7 +42,7 @@ import { normalizeSignalName } from "./signal.js";
 import { applyOps } from "./stateOps.js";
 import { normalizeEvents } from "./events.js";
 import { upgradeLegacyHtml } from "./legacyPages.js";
-import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type RunEvent, type SweepContext } from "./actions/index.js";
+import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type InboundReply, type ReplyDelivery, type RunEvent, type SweepContext } from "./actions/index.js";
 import type { RunNote } from "./agent/pageRuns.js";
 import {
   TRASH_TTL_MS,
@@ -58,6 +58,7 @@ import {
   isPlainObject,
   isTemplateBound,
   noteAgentWrite,
+  normalizeReplyTo,
   toMeta,
   toTemplateMeta,
   visibleTo,
@@ -70,6 +71,7 @@ import {
   type EventInput,
   type PageActor,
   type PageEvent,
+  type ReplyTarget,
   type StateWriteInput,
   type StateWriteResult,
   type Tab,
@@ -129,6 +131,8 @@ export type CleanupOptions = {
 const FOLDER_NAME_MAX = 120;
 /** Drafts only live in memory; a window that never came back to one leaves it behind. */
 const MAX_DRAFTS = 20;
+/** Most JSON a page's scribe.reply may carry. */
+const REPLY_DATA_MAX = 20_000;
 /** Cap so a huge HTML page cannot blow the agent context. */
 const MAX_FOLDER_INSTRUCTION_CHARS = 16_000;
 
@@ -540,6 +544,117 @@ export class BoardStore extends EventEmitter {
       this.logEvent(tab.id, { name: event.name, data: event.data, by: caller.by });
     }
     return { result: outcome.result, stateRevision: tab.stateRevision, tab };
+  }
+
+  /**
+   * Point a page's scribe.reply at another page (and a card on it), or clear it with null. Agents
+   * set it with page_show / page_patch; the page's own code cannot. Stored by the target's id.
+   */
+  setReplyTo(idOrKey: string, target: { page: string; card?: unknown } | null): Tab {
+    const tab = this.requireAny(idOrKey);
+    let next: ReplyTarget | undefined;
+    if (target) {
+      const to = this.get(target.page, "agent");
+      if (!to) {
+        throw new Error(`replyTo page not found: ${target.page}`);
+      }
+      if (to.id === tab.id) {
+        throw new Error("replyTo must name another page");
+      }
+      next = normalizeReplyTo({ page: to.id, card: target.card });
+      if (target.card !== undefined && next?.card === undefined) {
+        throw new Error("replyTo card must be a card number");
+      }
+    }
+    if (JSON.stringify(next ?? null) === JSON.stringify(tab.replyTo ?? null)) {
+      return tab;
+    }
+    if (next) {
+      tab.replyTo = next;
+    } else {
+      delete tab.replyTo;
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
+  }
+
+  /**
+   * A page's scribe.reply, sent by the user's click: hand it to the page's reply target. A target
+   * whose template has a reply hook (Kanban) makes its own change, and may ask for a delivery to an
+   * agent chat, which the caller passes on and reports back with replyDelivered. Every other target
+   * logs a `reply` event an agent can page_wait on.
+   */
+  receiveReply(
+    idOrKey: string,
+    input: { summary?: unknown; data?: unknown },
+    thread?: ActionContext["thread"]
+  ): { target: Tab; result: unknown; deliver?: ReplyDelivery } {
+    const source = this.requireAny(idOrKey);
+    if (!source.replyTo) {
+      throw new Error("This page has no reply target. The agent that made it sets one with page_show replyTo.");
+    }
+    const target = this.locate(source.replyTo.page)?.tab;
+    if (!target) {
+      throw new Error("The page this one replies to is gone");
+    }
+    if (input.data !== undefined && !isPlainObject(input.data)) {
+      throw new Error("reply data must be an object");
+    }
+    const data = (input.data ?? {}) as Record<string, unknown>;
+    if (JSON.stringify(data).length > REPLY_DATA_MAX) {
+      throw new Error(`reply data is over ${REPLY_DATA_MAX / 1000} KB`);
+    }
+    const summary = typeof input.summary === "string" ? input.summary.trim().replace(/\s+/g, " ").slice(0, 300) : "";
+    const reply: InboundReply = {
+      from: { id: source.id, key: source.key, title: source.title },
+      ...(source.replyTo.card !== undefined ? { card: source.replyTo.card } : {}),
+      summary,
+      data,
+    };
+    const set = this.actionsFor(target);
+    if (!set?.reply) {
+      this.logEvent(target.id, { name: "reply", data: reply, by: "user" });
+      return { target, result: { event: "reply" } };
+    }
+    const outcome = set.reply(target.state, reply, this.replyContext(target, thread));
+    this.applyOutcome(target, outcome);
+    return { target, result: outcome.result, ...(outcome.deliver ? { deliver: outcome.deliver } : {}) };
+  }
+
+  /** How a reply's delivery to an agent chat went, for the target's template to record. */
+  replyDelivered(
+    targetId: string,
+    deliver: ReplyDelivery,
+    delivered: "steered" | "queued" | "started" | null,
+    thread?: ActionContext["thread"]
+  ): void {
+    const target = this.locate(targetId)?.tab;
+    const set = target ? this.actionsFor(target) : undefined;
+    if (!target || !set?.replyDelivered) {
+      return;
+    }
+    const outcome = set.replyDelivered(target.state, deliver, delivered, this.replyContext(target, thread));
+    if (outcome) {
+      this.applyOutcome(target, outcome);
+    }
+  }
+
+  private replyContext(target: Tab, thread?: ActionContext["thread"]): ActionContext {
+    return { caller: { by: "user", label: "reply" }, now: Date.now(), values: target.templateValues ?? {}, ...(thread ? { thread } : {}) };
+  }
+
+  private applyOutcome(tab: Tab, outcome: { ops: unknown[]; events?: Array<{ name: string; data?: unknown }> }): void {
+    if (outcome.ops.length) {
+      const write = this.writeState(tab.id, { ops: outcome.ops });
+      if (!write.ok) {
+        throw new Error("the page changed while the reply was handled; try again");
+      }
+    }
+    for (const event of outcome.events ?? []) {
+      this.logEvent(tab.id, { name: event.name, data: event.data, by: "user" });
+    }
   }
 
   /** Let each page's actions tidy up after agents that stopped (stale claims). */

@@ -207,8 +207,18 @@ export async function startMcp(): Promise<void> {
         .describe(
           "Refuse to replace an existing page whose revision is no longer this one. Without it, re-showing a page you read or wrote earlier in this session is refused if someone changed it since."
         ),
+      replyTo: z
+        .object({
+          page: z.string().describe("The page replies go to: its key (scribe:agent-todo) or id."),
+          card: z.number().int().positive().optional().describe("On a Kanban board: the card number the form is about."),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "Where the page's scribe.reply(data, { summary }) goes when the user clicks its submit button. Set it on a form you make for a Kanban card (page: the board, card: its number): the reply is posted on the card as the user's comment and sent on to the card's chat (into its running turn, or Continue). On another page it is a reply event you can page_wait on. Kept with the page, not in its HTML, so the page's code cannot change it; null clears it."
+        ),
     },
-    async ({ key, title, html: htmlArg, htmlPath, assets, pin, state, background, folder, expectedRevision }) => {
+    async ({ key, title, html: htmlArg, htmlPath, assets, pin, state, background, folder, expectedRevision, replyTo }) => {
       const resolved = resolveShowHtml(htmlArg, htmlPath);
       if ("error" in resolved) {
         return errorResult(resolved.error);
@@ -232,6 +242,7 @@ export async function startMcp(): Promise<void> {
         folder,
         assets: resolvedAssets.length ? resolvedAssets : undefined,
         expectedRevision: guard,
+        replyTo,
       });
       if (status === 409 && expectedRevision === undefined) {
         return errorResult(
@@ -342,8 +353,18 @@ export async function startMcp(): Promise<void> {
         .describe(
           "If true, do not focus this tab and do not bring the Scribe window forward. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
         ),
+      replyTo: z
+        .object({
+          page: z.string().describe("The page replies go to: its key (scribe:agent-todo) or id."),
+          card: z.number().int().positive().optional().describe("On a Kanban board: the card number the form is about."),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "Where the page's scribe.reply(data, { summary }) goes when the user clicks its submit button. Set it on a form you make for a Kanban card (page: the board, card: its number): the reply is posted on the card as the user's comment and sent on to the card's chat (into its running turn, or Continue). On another page it is a reply event you can page_wait on. Kept with the page, not in its HTML, so the page's code cannot change it; null clears it."
+        ),
     },
-    async ({ id, key, edits, htmlPath, expectedRevision, title, background }) => {
+    async ({ id, key, edits, htmlPath, expectedRevision, title, background, replyTo }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -352,8 +373,8 @@ export async function startMcp(): Promise<void> {
       if (hasEdits && htmlPath) {
         return errorResult("Pass either edits or htmlPath, not both");
       }
-      if (!hasEdits && !htmlPath && !title) {
-        return errorResult("Provide edits, htmlPath, or title");
+      if (!hasEdits && !htmlPath && !title && replyTo === undefined) {
+        return errorResult("Provide edits, htmlPath, title, or replyTo");
       }
       let html: string | undefined;
       if (htmlPath) {
@@ -370,6 +391,7 @@ export async function startMcp(): Promise<void> {
         expectedRevision,
         title,
         activate,
+        replyTo,
       });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);

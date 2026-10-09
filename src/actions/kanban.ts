@@ -8,6 +8,8 @@ import {
   type ActionContext,
   type ActionOutcome,
   type ActionSet,
+  type InboundReply,
+  type ReplyOutcome,
   type RunEvent,
   type SweepContext,
   type ThreadRunInfo,
@@ -457,6 +459,51 @@ function commentAuthor(state: BoardState, card: Card, ctx: ActionContext): strin
   return claimAssignee({}, ctx);
 }
 
+/** Longest reply comment; a longer one is cut and points to the form for the rest. */
+const REPLY_TEXT_MAX = 4000;
+
+function replyValue(value: unknown): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.map(replyValue).filter(Boolean).join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value).trim();
+}
+
+/**
+ * A reply as the card's comment: a summary line with a peek link to the form, then the answers.
+ * Short answers are a list; longer or multi-line ones get a quote each. The agent reads them with
+ * the card, without reading the form's state.
+ */
+export function replyComment(reply: InboundReply): string {
+  const link = `[[peek:${reply.from.key}]]`;
+  const head = reply.summary ? `**Reply from ${link}:** ${reply.summary}` : `**Reply from ${link}**`;
+  const short: string[] = [];
+  const long: string[] = [];
+  for (const [name, raw] of Object.entries(reply.data)) {
+    const value = replyValue(raw);
+    if (!value) continue;
+    if (value.length <= 80 && !value.includes("\n")) short.push(`- **${name}:** ${value}`);
+    else long.push(`**${name}:**\n${value.split(/\r?\n/).map((line) => `> ${line}`).join("\n")}`);
+  }
+  const text = [head, short.join("\n"), ...long].filter(Boolean).join("\n\n");
+  if (text.length <= REPLY_TEXT_MAX) return text;
+  return `${text.slice(0, REPLY_TEXT_MAX).trimEnd()}…\n\n_Cut short: the rest is on ${link}._`;
+}
+
+/** The name a chat works a card under: its worker's, else the card's assignee. */
+function threadAssignee(state: BoardState, card: Card, thread: string): string {
+  for (const [, w] of workerList(state)) {
+    const name = str(w.name).trim().slice(0, 60);
+    if (name && (str(w.threadId) === thread || soloRunOf(w, thread))) return name;
+  }
+  return str(card.assignee).trim().slice(0, 60) || "agent";
+}
+
+function cardEvent(state: BoardState, card: Card): Record<string, unknown> {
+  const col = columnById(state, card.col);
+  return { card: card.id, num: card.num, column: col?.title ?? null, columnId: card.col, ...(col?.role ? { role: col.role } : {}) };
+}
+
 export const kanbanActions: ActionSet = {
   actions: {
     list: {
@@ -801,6 +848,67 @@ export const kanbanActions: ActionSet = {
     },
   },
 
+  /**
+   * A form page's scribe.reply about one of the cards (#320): a comment by the user, sent on to the
+   * card's chat like a comment from the board's own box. Into its running turn when it works on the
+   * card; else Continue for the chat that holds or last worked on it, unless that chat waits on a
+   * plan limit (its resume reads the card again anyway).
+   */
+  reply(state: BoardState, reply: InboundReply, ctx: ActionContext): ReplyOutcome {
+    if (reply.card === undefined) throw new ActionError("This reply names no card");
+    const card = findCard(state, reply.card);
+    const text = replyComment(reply);
+    const id = newId("cm");
+    const comment = { id, by: "user", at: ctx.now, text };
+    const ops: unknown[] = [{ op: "insert", path: `${cardPath(card)}/comments`, value: comment }];
+    const events = [{ name: "comment", data: { ...cardEvent(state, card), reply: reply.from.key } }];
+    const title = str(card.title).slice(0, 200);
+    const holder = card.claim && !card.claim.stale ? str(card.claim.thread) : "";
+    const holderInfo = holder ? ctx.thread?.(holder) : undefined;
+    if (holder && holderInfo?.exists && holderInfo.running) {
+      return { ops, result: { num: card.num }, events, deliver: { thread: holder, num: card.num, title, text, resume: false, ref: { card: card.id, comment: id } } };
+    }
+    const last = holder || str(card.thread);
+    const info = last ? ctx.thread?.(last) : undefined;
+    if (last && info?.exists && !info.running && info.run?.phase !== "waiting") {
+      return { ops, result: { num: card.num }, events, deliver: { thread: last, num: card.num, title, text, resume: true, ref: { card: card.id, comment: id } } };
+    }
+    // No chat to send it to: the board's Continue button, as for any comment, when there was one.
+    if (last) ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
+    return { ops, result: { num: card.num }, events };
+  },
+  replyDelivered(state, deliver, delivered, ctx) {
+    const card = cards(state).find((c) => c.id === deliver.ref?.card);
+    if (!card) return null;
+    const i = arr<Comment>(card.comments).findIndex((cm) => cm.id === deliver.ref?.comment);
+    const path = `${cardPath(card)}/comments/id=${deliver.ref?.comment}`;
+    if (!delivered) {
+      return i < 0 || !card.thread ? null : { ops: [{ op: "merge", path, value: { followUp: "offer" } }], result: null };
+    }
+    if (!deliver.resume) {
+      return i < 0 ? null : { ops: [{ op: "merge", path, value: { sent: delivered === "steered" ? "steered" : "queued" } }], result: null };
+    }
+    // Continue: claim the card for that chat again, as the board's Continue button does.
+    const ops: unknown[] = i < 0 ? [] : [{ op: "merge", path, value: { followUp: "continued" } }];
+    if (!card.claim || card.claim.stale || card.claim.thread === deliver.thread) {
+      const from = claimFrom(state, card);
+      const name = threadAssignee(state, card, deliver.thread);
+      ops.push({
+        op: "merge",
+        path: cardPath(card),
+        value: {
+          assignee: name,
+          status: { kind: "working", text: "Agent continuing after a reply" },
+          claim: { holder: name, thread: deliver.thread, at: ctx.now, seenAt: ctx.now, ...(from ? { from } : {}) },
+          thread: deliver.thread,
+          ...(from ? { from } : {}),
+        },
+      });
+      const working = roleColumn(state, "working");
+      if (working && working.id !== card.col) ops.push(...moveOps(state, card, working, ctx.now));
+    }
+    return { ops, result: null };
+  },
   sweep(state: BoardState, ctx: SweepContext): ActionOutcome | null {
     const ops: unknown[] = [];
     const events: ActionOutcome["events"] = [];

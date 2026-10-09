@@ -3277,6 +3277,44 @@
     chat.pageRequest(tab, data, { activated }).then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
   }
 
+  /**
+   * scribe.reply from a page (#320): sends the form's answers to the page its agent wired it to
+   * (replyTo), e.g. a comment on a Kanban card that goes on to the card's chat. Only after the
+   * user's click reached the page's frame, and only to that target: the daemon looks it up.
+   */
+  function onPageReply(event) {
+    const data = event.data;
+    const reply = (result) => {
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    const frameId = frameIdByWindow(event.source);
+    const tab = frameId ? findAnyTab(frameId) : null;
+    if (!tab || tab.embedUrl) {
+      reply({ ok: false, error: "not_a_page" });
+      return;
+    }
+    if (!frameActivated(frameId)) {
+      reply({ ok: false, error: "no_gesture" });
+      return;
+    }
+    fetch(`/api/tabs/${encodeURIComponent(tab.id)}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: data.data, summary: data.summary }),
+    })
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          reply({ ok: false, error: String(body.error || `HTTP ${res.status}`) });
+          return;
+        }
+        const num = Number(body.result?.num);
+        showNotice(`Reply sent to ${body.target?.title || "its page"}${num ? ` #${num}` : ""}`);
+        reply({ ok: true, target: body.target, delivered: body.delivered || null });
+      })
+      .catch((err) => reply({ ok: false, error: String(err?.message || err) }));
+  }
+
   /** scribe.permissions from a page: read its own, or ask the user for one (after a click). */
   function onPagePermissions(event) {
     const data = event.data;
@@ -3795,6 +3833,8 @@
       onPageAgent(event);
     } else if (event.data?.type === "scribe-permissions") {
       onPagePermissions(event);
+    } else if (event.data?.type === "scribe-reply") {
+      onPageReply(event);
     } else if (event.data?.type === "scribe-preview") {
       onPagePreview(event);
     } else if (event.data?.type === "scribe-chat-key") {

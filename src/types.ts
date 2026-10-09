@@ -202,6 +202,20 @@ export type Tab = {
   folderInstructions?: boolean;
   /** Which in-app agent created the page and last changed it. Omitted until an agent writes. */
   provenance?: PageProvenance;
+  /**
+   * Where the page's scribe.reply goes, set by the agent that made it (page_show replyTo). Kept
+   * with the page's metadata, not its HTML or state, so the page's own code cannot change it.
+   */
+  replyTo?: ReplyTarget;
+};
+
+/**
+ * A page's reply target: the page (by id) its scribe.reply goes to, and what on it. The target
+ * page's template decides what a reply does (see ActionSet.reply); card is for Kanban boards.
+ */
+export type ReplyTarget = {
+  page: string;
+  card?: number;
 };
 
 /** An in-app chat thread, or an external MCP client with no thread. */
@@ -435,6 +449,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.agentHidden ? { agentHidden: true } : {}),
     ...(tab.folderInstructions ? { folderInstructions: true } : {}),
     ...(tab.provenance ? { provenance: tab.provenance } : {}),
+    ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(isBlankPage(tab) ? { blank: true } : {}),
     ...(tab.templateId
@@ -524,4 +539,15 @@ export function noteAgentWrite(tab: Tab, actor: PageActor | undefined, created =
     provenance.created = stamped;
   }
   tab.provenance = provenance;
+}
+
+export function normalizeReplyTo(value: unknown): ReplyTarget | undefined {
+  if (!isPlainObject(value) || typeof value.page !== "string" || !value.page.trim()) {
+    return undefined;
+  }
+  const target: ReplyTarget = { page: value.page.trim().slice(0, 200) };
+  if (typeof value.card === "number" && Number.isInteger(value.card) && value.card > 0) {
+    target.card = value.card;
+  }
+  return target;
 }

@@ -151,13 +151,16 @@ type QueuedMessage = {
 };
 
 /** The Kanban card a board message is about: its number and the board page it is on. */
-export type CardRef = { num: number; title?: string; board: string; boardKey?: string; resume?: boolean };
+/** reply: the key of the form page whose scribe.reply sent this (#320), posted on the card as the user's comment. */
+export type CardRef = { num: number; title?: string; board: string; boardKey?: string; resume?: boolean; reply?: string };
 
 /** Where a board message about a card came from; the host words it, so a page cannot pass one off as the user's. */
 function cardOrigin(card: CardRef): string {
   const board = card.board ? `the Kanban board "${card.board}"${card.boardKey ? ` (${card.boardKey})` : ""}` : "its Kanban board";
   const name = `card #${card.num}${card.title ? ` "${card.title}"` : ""}`;
-  const why = card.resume
+  const why = card.reply
+    ? `The user answered ${card.reply} about ${name} of ${board}, which you worked on. Their answer is posted on the card as a comment; the board sent this, not the user in this chat.`
+    : card.resume
     ? `The user pressed Continue on ${name} of ${board}, which you worked on before. The board sent this, not the user in this chat.`
     : `A new comment on ${name} of ${board}, which you are working on. The board passed it on: it was posted on the card, not typed in this chat. Take it into account in your work on the card, and answer it on the card if it asks something.`;
   return `<context>\n${why}\n</context>\n\n`;
@@ -1478,7 +1481,9 @@ export class AgentHost {
       if (!this.runs.has(threadId)) return { delivered: null };
       if (!text.trim()) throw new Error("Empty comment");
     }
-    const body = card.resume
+    const body = card.resume && card.reply
+      ? `Continue the work on card #${card.num} with the user's answer: it is the card's newest comment. Get the card again and read it before you go on. The board has claimed it for you again and moved it to the working column, so don't claim it; finish it when you are done.`
+      : card.resume
       ? `Continue the work on card #${card.num}. Its description, checklist, or comments may have changed since you last worked on it: get the card again and read it in full before you go on. The board has claimed it for you again and moved it to the working column, so don't claim it; finish it when you are done.`
       : text;
     const { queued } = this.send(threadId, { text: body, from: "page", card });

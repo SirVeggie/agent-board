@@ -259,6 +259,11 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const assets = prepareAssets(parseAssetInputs(req.body?.assets));
       const rawRevision = req.body?.expectedRevision;
+      const replyTo = parseReplyTo(req.body?.replyTo);
+      // Refuse a bad target before the page is made or replaced.
+      if (replyTo && !store.get(replyTo.page, "agent")) {
+        throw new Error(`replyTo page not found: ${replyTo.page}`);
+      }
       const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
@@ -276,7 +281,8 @@ export async function startHttp(): Promise<http.Server> {
       if (!created) {
         agentRewrote(req, tab.id);
       }
-      res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(tab) });
+      const shown = replyTo === undefined ? tab : store.setReplyTo(tab.id, replyTo);
+      res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(shown) });
     } catch (err) {
       res.status(err instanceof RevisionConflictError ? 409 : 400).json({ error: (err as Error).message });
     }
@@ -349,6 +355,14 @@ export async function startHttp(): Promise<http.Server> {
       const expectedRevision = typeof rawRevision === "number" && Number.isFinite(rawRevision) ? rawRevision : undefined;
       const rawEdits = req.body?.edits;
       const noEdits = rawEdits === undefined || (Array.isArray(rawEdits) && rawEdits.length === 0);
+      const replyTo = parseReplyTo(req.body?.replyTo);
+      if (replyTo !== undefined) {
+        const tab = store.setReplyTo(req.params.id, replyTo);
+        if (noEdits && html === undefined && !title) {
+          res.json({ applied: 0, closed: store.isClosed(tab.id), tab: libraryMeta(tab) });
+          return;
+        }
+      }
       if (noEdits && html === undefined && title) {
         const { tab, titleKept } = store.update(req.params.id, {
           title,
@@ -496,6 +510,44 @@ export async function startHttp(): Promise<http.Server> {
         skipped: result.skipped,
         ...(result.assets ? { assets: result.assets.map(assetView), usage: store.pageAssetUsageOf(result.tab.id) } : {}),
       });
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
+  /**
+   * A page's scribe.reply (#320). The board UI posts it once the user's click reached the page's
+   * frame; pages cannot call it themselves (content origin) and agents may not (no click). The page's
+   * reply target, set by the agent that made it, decides where it goes; a Kanban card's chat gets it
+   * like a comment from the board's own box.
+   */
+  app.post("/api/tabs/:id/reply", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the user's click on the page sends a reply" });
+      return;
+    }
+    try {
+      const threadInfo = (id: string) => (agentHost ? agentHost.runInfo(id) : ({ exists: false } as const));
+      const { target, result, deliver } = store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data }, threadInfo);
+      let delivered: "steered" | "queued" | "started" | null = null;
+      if (deliver && agentHost) {
+        const source = store.get(req.params.id);
+        try {
+          delivered = agentHost.cardMessage(deliver.thread, {
+            num: deliver.num,
+            board: target.title || "Kanban board",
+            boardKey: target.key,
+            ...(deliver.title ? { title: deliver.title } : {}),
+            ...(deliver.resume ? { resume: true } : {}),
+            ...(source ? { reply: source.key } : {}),
+          }, deliver.text).delivered;
+        } catch (err) {
+          log("Reply delivery failed", String(err));
+        }
+        store.replyDelivered(target.id, deliver, delivered, threadInfo);
+      }
+      res.json({ ok: true, target: { id: target.id, key: target.key, title: target.title }, delivered, result: result ?? null });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
@@ -1651,6 +1703,16 @@ function scheduleSweep(delayMs: number): void {
 /** A viewer id from the page's boot (set per desktop app or browser by the Scribe UI). */
 function viewerIdOf(value: unknown): string | null {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(value) ? value : null;
+}
+
+/** page_show / page_patch replyTo: undefined leaves it, null clears it. */
+function parseReplyTo(value: unknown): { page: string; card?: unknown } | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!isPlainObject(value) || typeof value.page !== "string" || !value.page.trim()) {
+    throw new Error("replyTo must be { page, card? } or null");
+  }
+  return { page: value.page.trim(), ...(value.card !== undefined ? { card: value.card } : {}) };
 }
 
 function isContentHost(req: express.Request): boolean {

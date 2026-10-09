@@ -3,12 +3,13 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
   isPlainObject,
   normalizeProvenance,
+  normalizeReplyTo,
   type BoardState,
   type Folder,
   type Tab,
@@ -110,6 +111,7 @@ type TabRow = {
   deleted_batch: string | null;
   user_title_at: number | null;
   provenance: string | null;
+  reply_to: string | null;
 };
 
 type LegacyPersisted = {
@@ -160,12 +162,12 @@ INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
   revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
-  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance
+  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -191,7 +193,8 @@ ON CONFLICT(id) DO UPDATE SET
   lib_pos = excluded.lib_pos,
   deleted_batch = excluded.deleted_batch,
   user_title_at = excluded.user_title_at,
-  provenance = excluded.provenance
+  provenance = excluded.provenance,
+  reply_to = excluded.reply_to
 `;
 
 const INSERT_FOLDER_SQL = `
@@ -280,6 +283,7 @@ export class BoardDb {
       ensurePagePermissionSchema(db);
       ensureFolderInstructionsColumn(db);
       ensureProvenanceColumn(db);
+      ensureReplyToColumn(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -614,6 +618,7 @@ export class BoardDb {
       ensurePagePermissionSchema(db);
       ensureFolderInstructionsColumn(db);
       ensureProvenanceColumn(db);
+      ensureReplyToColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -703,6 +708,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     status === "deleted" ? (deletedBatch ?? null) : null,
     tab.userTitleAt ?? null,
     tab.provenance ? JSON.stringify(tab.provenance) : null,
+    tab.replyTo ? JSON.stringify(tab.replyTo) : null,
   ];
 }
 
@@ -795,6 +801,16 @@ function rowToStored(row: TabRow): StoredTab {
       const provenance = normalizeProvenance(JSON.parse(row.provenance) as unknown);
       if (provenance) {
         tab.provenance = provenance;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  if (row.reply_to) {
+    try {
+      const replyTo = normalizeReplyTo(JSON.parse(row.reply_to) as unknown);
+      if (replyTo) {
+        tab.replyTo = replyTo;
       }
     } catch {
       /* ignore */

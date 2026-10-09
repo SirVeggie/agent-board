@@ -9,6 +9,7 @@ import { createStateOps } from "./stateOps.js";
  * - `scribe.local` / `scribe.setLocal`: this viewer's own state (filters, open panels, drafts).
  * - `scribe.signal(name, data)` and `data-scribe-signal`: events agents wait on.
  * - `scribe.action(name, args)`: the page template's actions.
+ * - `scribe.reply(data, { summary })`: a form's answers to the page its agent wired it to (replyTo).
  * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
  *   `scribe.preview` for Scribe's file viewer, and `scribe.agent` for chat threads the page starts.
  *
@@ -1242,6 +1243,32 @@ export const BOARD_BRIDGE_JS = `
     }
   };
 
+  // ---------- reply ----------
+  /**
+   * Send this form's answers where the agent that made the page pointed it (page_show replyTo), e.g.
+   * a comment on a Kanban card that goes on to the card's chat. Needs a click; the page cannot pick
+   * the target. Saves pending state first. Resolves { ok, target: { id, key, title }, delivered }
+   * (delivered: "steered" | "queued" | "started" | null), or { ok: false, error }.
+   */
+  function reply(data, opts) {
+    if (!hasGesture()) {
+      console.warn("[scribe] scribe.reply needs a click or key press; ignored");
+      return Promise.resolve({ ok: false, error: "no_gesture" });
+    }
+    if (data !== undefined && (typeof data !== "object" || data === null || Array.isArray(data))) {
+      return Promise.resolve({ ok: false, error: "data must be an object" });
+    }
+    flushAll();
+    var summary = opts && typeof opts.summary === "string" ? opts.summary : "";
+    var payload;
+    try {
+      payload = data === undefined ? {} : JSON.parse(JSON.stringify(data));
+    } catch (err) {
+      return Promise.resolve({ ok: false, error: "data must be JSON" });
+    }
+    return askBoard({ type: "scribe-reply", data: payload, summary: summary }, AGENT_ASK_MS);
+  }
+
   window.scribe = {
     id: tabId,
     template: template,
@@ -1265,6 +1292,7 @@ export const BOARD_BRIDGE_JS = `
     flush: flushAll,
     signal: signal,
     action: action,
+    reply: reply,
     open: open,
     resolve: resolve,
     preview: preview,

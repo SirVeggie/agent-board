@@ -191,3 +191,15 @@ export function ensureProvenanceColumn(db: DatabaseSync): void {
   }
   db.exec("ALTER TABLE tabs ADD COLUMN provenance TEXT");
 }
+
+/**
+ * Boards created before reply targets (scribe.reply) have no tabs.reply_to.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureReplyToColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "reply_to")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN reply_to TEXT");
+}

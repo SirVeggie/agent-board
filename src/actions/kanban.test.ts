@@ -868,3 +868,76 @@ test("sweep keeps a card claimed while Scribe waits out its chat's usage limit",
   assert.ok(c.claim && !c.claim.stale);
   assert.match(c.status!.text, /^Out of plan usage\. The worker goes on after the limit resets/);
 });
+
+const reply = (over: Record<string, unknown> = {}) => ({
+  from: { id: "t_form", key: "scribe:card-2-form", title: "Form" },
+  card: 2,
+  summary: "Picked A",
+  data: { approach: "A", skipped: "", notes: "line one\nline two" },
+  ...over,
+});
+
+const threads = (map: Record<string, ThreadRunInfo>) => (id: string): ThreadRunInfo => map[id] ?? { exists: false };
+const userCtx = (thread?: (id: string) => ThreadRunInfo): ActionContext => ({ caller: { by: "user" }, now: 5000, values: {}, ...(thread ? { thread } : {}) });
+const idle: ThreadRunInfo = { exists: true, running: false, title: "chat" };
+const running: ThreadRunInfo = { exists: true, running: true, title: "chat" };
+
+test("a reply becomes the user's comment, with the answers and a peek link to the form", () => {
+  const outcome = kanbanActions.reply!(board(), reply(), userCtx());
+  const state = applyStateOps(board(), outcome.ops);
+  const comments = card(state, 2).comments as Array<{ by: string; text: string; followUp?: string }>;
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].by, "user");
+  assert.equal(comments[0].followUp, undefined);
+  assert.equal(comments[0].text, "**Reply from [[peek:scribe:card-2-form]]:** Picked A\n\n- **approach:** A\n\n**notes:**\n> line one\n> line two");
+  assert.equal(outcome.deliver, undefined);
+  assert.deepEqual(outcome.events, [{ name: "comment", data: { card: "c2", num: 2, column: "Ready for agent", columnId: "ready", role: "agent", reply: "scribe:card-2-form" } }]);
+  assert.throws(() => kanbanActions.reply!(board(), reply({ card: undefined }), userCtx()), /no card/);
+});
+
+test("a reply goes into the running turn of the card's holder, and records how", () => {
+  const start = board();
+  card(start, 2).claim = { holder: "Opus", thread: "th1", at: 1 };
+  card(start, 2).thread = "th1";
+  const outcome = kanbanActions.reply!(start, reply(), userCtx(threads({ th1: running })));
+  assert.equal(outcome.deliver?.thread, "th1");
+  assert.equal(outcome.deliver?.resume, false);
+  const state = applyStateOps(start, outcome.ops);
+  const after = kanbanActions.replyDelivered!(state, outcome.deliver!, "steered", userCtx())!;
+  const done = applyStateOps(state, after.ops);
+  assert.equal((card(done, 2).comments as Array<{ sent?: string }>)[0].sent, "steered");
+  assert.equal(card(done, 2).col, "ready");
+});
+
+test("a reply on a card whose chat is idle continues that chat and claims the card for it", () => {
+  const start = board();
+  card(start, 2).col = "rev";
+  card(start, 2).thread = "th1";
+  card(start, 2).assignee = "Opus";
+  const outcome = kanbanActions.reply!(start, reply(), userCtx(threads({ th1: idle })));
+  assert.equal(outcome.deliver?.resume, true);
+  const state = applyStateOps(start, outcome.ops);
+  const done = applyStateOps(state, kanbanActions.replyDelivered!(state, outcome.deliver!, "started", userCtx())!.ops);
+  const c = card(done, 2);
+  assert.equal(c.col, "work");
+  assert.equal((c.claim as { thread: string }).thread, "th1");
+  assert.equal(c.assignee, "Opus");
+  assert.equal((c.comments as Array<{ followUp?: string }>)[0].followUp, "continued");
+
+  // Not sent (the chat went away meanwhile): the board's Continue button instead.
+  const missed = applyStateOps(state, kanbanActions.replyDelivered!(state, outcome.deliver!, null, userCtx())!.ops);
+  assert.equal((card(missed, 2).comments as Array<{ followUp?: string }>)[0].followUp, "offer");
+  assert.equal(card(missed, 2).col, "rev");
+});
+
+test("a reply waits for a chat on a plan limit, and offers Continue for a chat that is gone", () => {
+  const start = board();
+  card(start, 2).thread = "th1";
+  const waiting: ThreadRunInfo = { ...idle, run: { phase: "waiting" } as never };
+  const held = kanbanActions.reply!(start, reply(), userCtx(threads({ th1: waiting })));
+  assert.equal(held.deliver, undefined);
+  const gone = kanbanActions.reply!(start, reply(), userCtx(threads({})));
+  assert.equal(gone.deliver, undefined);
+  const state = applyStateOps(start, gone.ops);
+  assert.equal((card(state, 2).comments as Array<{ followUp?: string }>)[0].followUp, "offer");
+});

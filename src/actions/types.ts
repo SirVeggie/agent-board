@@ -74,8 +74,43 @@ export type SweepContext = {
   sessionSeenAt(session: string): number | undefined;
 };
 
+/** A page's scribe.reply, as its reply target's template gets it. */
+export type InboundReply = {
+  /** The page that replied. */
+  from: { id: string; key: string; title: string };
+  /** What on the target the reply is about, from the page's reply target (a Kanban card's number). */
+  card?: number;
+  /** One line from the page, e.g. "Picked option A". May be empty. */
+  summary: string;
+  /** The page's answers: field name to value. */
+  data: Record<string, unknown>;
+};
+
+/**
+ * What a reply handler wants passed on to an agent chat once its ops applied: a message into the
+ * running turn of thread, or (resume) Continue for it. See AgentHost.cardMessage.
+ */
+export type ReplyDelivery = {
+  thread: string;
+  num: number;
+  title: string;
+  text: string;
+  resume: boolean;
+  /** Handler's own bookkeeping, handed back to replyDelivered as given. */
+  ref?: Record<string, string>;
+};
+
+export type ReplyOutcome = ActionOutcome & { deliver?: ReplyDelivery };
+
 export type ActionSet = {
   actions: Record<string, ActionDef>;
+  /**
+   * Another page's scribe.reply aimed at this page (its reply target). Without this hook the
+   * target only gets a `reply` event. Runs as the user: the user's click sent it.
+   */
+  reply?(state: BoardState, reply: InboundReply, ctx: ActionContext): ReplyOutcome;
+  /** How the reply's delivery went (null: not sent); ops to record it, e.g. on the comment. */
+  replyDelivered?(state: BoardState, deliver: ReplyDelivery, delivered: "steered" | "queued" | "started" | null, ctx: ActionContext): ActionOutcome | null;
   /** Periodic check, e.g. for claims whose agent stopped. Returns null when nothing changes. */
   sweep?(state: BoardState, ctx: SweepContext): ActionOutcome | null;
   /** A run of this page's (see agent/pageRuns.ts) is done and would merge: a reason to keep its branch unmerged, or null. */
