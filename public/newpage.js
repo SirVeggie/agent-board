@@ -11,6 +11,146 @@
   const SPARK_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.2l1.5 3.9 3.9 1.5-3.9 1.5L8 12l-1.5-3.9L2.6 6.6l3.9-1.5z" fill="currentColor"/><circle cx="12.8" cy="12.6" r="1.5" fill="currentColor"/></svg>';
 
+  const VERT = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+  /**
+   * A slow nebula: fractal noise warped through itself twice (domain warping), coloured from deep
+   * navy through indigo and violet to a cool blue rim, laid over the theme's panel colour and faded
+   * out at the edges. Dithered so the soft gradients don't band.
+   */
+  const FRAG = `precision mediump float;
+uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;uniform float u_energy;
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
+return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y);}
+float fbm(vec2 p){float v=0.,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);
+for(int i=0;i<5;i++){v+=a*noise(p);p=m*p;a*=.5;}return v;}
+void main(){
+vec2 uv=(gl_FragCoord.xy-.5*u_res)/min(u_res.x,u_res.y);
+float t=u_time*.05;
+vec2 p=uv*1.35;
+vec2 q=vec2(fbm(p+vec2(0.,t)),fbm(p+vec2(5.2,1.3)-t*.8));
+vec2 r=vec2(fbm(p+3.*q+vec2(1.7,9.2)+t*.6),fbm(p+3.*q+vec2(8.3,2.8)-t*.5));
+float f=fbm(p+3.2*r);
+vec3 deep=vec3(.05,.06,.20),indigo=vec3(.20,.19,.72),violet=vec3(.56,.26,.96),blue=vec3(.30,.62,1.);
+vec3 col=mix(deep,indigo,smoothstep(.2,.7,f));
+col=mix(col,violet,smoothstep(.45,.95,length(q))*.85);
+col=mix(col,blue,smoothstep(.5,.85,r.y)*.65);
+float lum=smoothstep(.3,.85,f);
+col*=.4+1.5*lum*lum*(.85+.3*u_energy);
+col+=vec3(.78,.7,1.)*pow(smoothstep(.5,.88,f),4.)*(.7+.5*u_energy);
+float vig=smoothstep(1.3,.1,length(uv*vec2(.8,1.)));
+float a=clamp((.3+.9*lum)*vig,0.,1.);
+vec3 outc=u_light>.5?mix(u_bg,mix(col,vec3(1.),.2),lum*vig*.6):mix(u_bg,col,a);
+outc+=(hash(gl_FragCoord.xy+fract(u_time))-.5)/128.;
+gl_FragColor=vec4(outc,1.);}`;
+
+  /** The shader behind the New page screen; null when WebGL isn't there (the CSS blobs show then). */
+  function createNebula(canvas) {
+    const gl = canvas.getContext("webgl", { alpha: false, antialias: false, depth: false, powerPreference: "low-power" });
+    if (!gl) return null;
+    const shader = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
+    };
+    const vs = shader(gl.VERTEX_SHADER, VERT);
+    const fs = shader(gl.FRAGMENT_SHADER, FRAG);
+    if (!vs || !fs) return null;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, "p");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const u = (name) => gl.getUniformLocation(prog, name);
+    const uRes = u("u_res");
+    const uTime = u("u_time");
+    const uBg = u("u_bg");
+    const uLight = u("u_light");
+    const uEnergy = u("u_energy");
+
+    const still = matchMedia("(prefers-reduced-motion: reduce)");
+    // Starts somewhere along the drift, so each new page doesn't open on the same frame.
+    let time = Math.random() * 400;
+    let energy = 0;
+    let target = 0;
+    let running = false;
+    let frame = 0;
+    let last = 0;
+
+    function theme() {
+      const m = getComputedStyle(canvas.parentElement).backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
+      const [r, g, b] = m.slice(0, 3).map((v) => v / 255);
+      gl.uniform3f(uBg, r, g, b);
+      gl.uniform1f(uLight, 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0);
+    }
+
+    function draw() {
+      // Half resolution: the nebula is all soft gradients, and this keeps it cheap on big screens.
+      const w = Math.max(1, Math.round(canvas.clientWidth / 2));
+      const h = Math.max(1, Math.round(canvas.clientHeight / 2));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        gl.viewport(0, 0, w, h);
+      }
+      gl.uniform2f(uRes, w, h);
+      gl.uniform1f(uTime, time);
+      gl.uniform1f(uEnergy, energy);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    function tick(now) {
+      frame = 0;
+      if (!running) return;
+      // About 30 fps is plenty for motion this slow.
+      if (now - last >= 32) {
+        const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
+        last = now;
+        energy += (target - energy) * Math.min(1, dt * 1.5);
+        time += dt * (1 + energy * 2.5);
+        draw();
+      }
+      frame = requestAnimationFrame(tick);
+    }
+
+    function start() {
+      theme();
+      if (still.matches) {
+        energy = target;
+        draw();
+        return;
+      }
+      if (!frame) {
+        last = 0;
+        frame = requestAnimationFrame(tick);
+      }
+    }
+
+    new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    document.addEventListener("visibilitychange", () => running && !document.hidden && start());
+    new ResizeObserver(() => running && draw()).observe(canvas);
+
+    return {
+      /** Run while the screen is shown; working speeds the drift up and brightens it. */
+      set(on, working) {
+        target = working ? 1 : 0;
+        running = on;
+        if (on) start();
+        else if (frame) {
+          cancelAnimationFrame(frame);
+          frame = 0;
+        }
+      },
+    };
+  }
+
   function el(tag, cls, text) {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -30,6 +170,8 @@
     const gridHead = root.querySelector(".newpage-templates-head");
     askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
     askBtn.addEventListener("click", () => host.openChat());
+    const nebula = createNebula(root.querySelector(".np-canvas"));
+    root.classList.toggle("gl", Boolean(nebula));
     /** The page shown and what was drawn for it, so a re-render with nothing new keeps focus and scroll. */
     let shown = null;
     let drawn = "";
@@ -57,6 +199,7 @@
 
     function render(tab) {
       root.hidden = !tab;
+      nebula?.set(Boolean(tab), tab ? host.working(tab.id) : false);
       if (!tab) {
         shown = null;
         drawn = "";
