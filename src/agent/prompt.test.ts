@@ -39,8 +39,17 @@ test("threads with a workspace are told their shell already starts there", () =>
   const thread = (over: Partial<Thread>): Thread =>
     ({ provider: "claude", mode: "code", cwd: "/work", scope: { kind: "global", ref: null }, ...over }) as Thread;
   assert.match(threadInstructions(thread({}), {}), /Workspace: \/work\nShell commands already run in the workspace folder/);
-  assert.doesNotMatch(threadInstructions(thread({ cwd: null }), {}), /Shell commands/);
+  assert.doesNotMatch(threadInstructions(thread({ cwd: null }), {}), /Shell commands already run/);
   assert.doesNotMatch(threadInstructions(thread({ mode: "board" }), {}), /Shell commands/);
+});
+
+test("Code threads with no workspace are told they start in a scratch folder", () => {
+  const thread = (over: Partial<Thread>): Thread =>
+    ({ provider: "claude", mode: "code", cwd: null, scope: { kind: "global", ref: null }, ...over }) as Thread;
+  assert.match(threadInstructions(thread({}), {}), /Workspace: none\. .*scratch folder/);
+  assert.match(threadInstructions(thread({ mode: "plan" }), {}), /Workspace: none/);
+  assert.doesNotMatch(threadInstructions(thread({ mode: "board" }), {}), /Workspace: none/);
+  assert.doesNotMatch(threadInstructions(thread({ cwd: "/work" }), {}), /Workspace: none/);
 });
 
 test("every thread is told to check a message that looks meant for another thread", () => {

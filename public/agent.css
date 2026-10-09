@@ -337,10 +337,6 @@ button.ag-stat-chip:hover {
   color: var(--text);
 }
 
-button.ag-scope-chip.warn {
-  color: var(--ag-warn);
-}
-
 /*
  * Chat scrollbars: app.css's arrowless thin bars on a transparent track, with a dimmer handle.
  * No scrollbar-width here: Chromium would drop these rules and draw native bars with arrows.
@@ -3244,10 +3240,6 @@ button.dock-title:hover,
 button.dock-scope:hover {
   color: var(--text);
   background: rgba(var(--lift-rgb), 0.06);
-}
-
-button.dock-scope.warn {
-  color: var(--ag-warn);
 }
 
 .ag-chev-down {

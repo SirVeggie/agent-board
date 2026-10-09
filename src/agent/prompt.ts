@@ -115,6 +115,12 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
         );
       }
     }
+  } else if (thread.mode === "code" || thread.mode === "plan") {
+    // Code without a folder is for machine tasks (installing a tool, editing a config file) that belong nowhere yet.
+    lines.push(
+      "",
+      "Workspace: none. This thread is not tied to a project folder: shell commands start in a Scribe scratch folder. Work on files wherever the task needs them, with absolute paths, and do not leave project files in the scratch folder."
+    );
   }
   return lines.join("\n");
 }

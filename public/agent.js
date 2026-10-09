@@ -1923,8 +1923,7 @@
       top.append(acts);
       this.header.append(top);
       const meta = el("div", "ag-thead-meta");
-      const needsFolder = s.mode !== "board" && s.mode !== "ask" && !s.cwd;
-      const scope = button("", `ag-scope-chip${needsFolder ? " warn" : ""}`, (event) => this.scopeMenu(event.currentTarget), SCOPE_CHIP_TITLE);
+      const scope = button("", "ag-scope-chip", (event) => this.scopeMenu(event.currentTarget), SCOPE_CHIP_TITLE);
       fillScopeDisplay(scope, s.scope, t ? workspaceDir(t) : s.cwd);
       meta.append(scope);
       if (t && t.stats.files) {
@@ -2054,17 +2053,16 @@
       const cur = this.settings();
       if (dirKey(cur.cwd) === dirKey(dir)) return;
       const scope = cur.scope.kind === "workspace" ? { kind: "workspace", ref: dir } : cur.scope;
-      // Code and Plan work on files: with no workspace, fall back to Pages (or plain chat with no app scope).
-      const mode = !dir && (cur.mode === "code" || cur.mode === "plan") ? "board" : undefined;
+      // Code and Plan keep their mode with no workspace: the agent starts in a scratch folder (#273).
       const t = this.thread();
       if (!t) {
-        this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir, ...(mode ? { mode } : {}) } };
+        this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir } };
         this.renderAll();
         if (this.variant === "dock") dock.renderTitle();
         if (dir) await this.rememberDraftPrefs();
         return;
       }
-      await this.updateSettings({ scope, cwd: dir, ...(mode ? { mode } : {}) });
+      await this.updateSettings({ scope, cwd: dir });
     }
 
     async pickOtherWorkspace() {
@@ -3390,7 +3388,6 @@
       const s = this.settings();
       const t = this.thread();
       if (t && t.status !== "idle") return;
-      if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) return;
       const key = JSON.stringify([this.threadId || `draft:${this.variant}`, s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope, s.useWorktree]);
       const now = Date.now();
       if (this.lastWarm && this.lastWarm.key === key && now - this.lastWarm.at < 60_000) return;
@@ -4223,14 +4220,6 @@
         // Still being read (a large file just dropped): try again in a moment.
         setTimeout(() => this.send(), 100);
         return;
-      }
-      const s = this.settings();
-      if (s.mode !== "board" && s.mode !== "ask" && !s.cwd) {
-        const dir = await pickWorkspace(null);
-        if (!dir) return;
-        const patch = { cwd: dir };
-        if (s.scope.kind === "workspace") patch.scope = { kind: "workspace", ref: dir };
-        await this.updateSettings(patch);
       }
       const context = this.composerContext();
       const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
@@ -5205,7 +5194,6 @@
       const s = this.view.settings();
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread"), icon("chevron", "ag-ico ag-chev-down"));
       fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
-      this.scopeBtn.classList.toggle("warn", s.mode !== "board" && s.mode !== "ask" && !s.cwd);
       this.scopeBtn.title = SCOPE_CHIP_TITLE;
       this.fitScope();
       this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";

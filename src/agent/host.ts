@@ -738,7 +738,6 @@ export class AgentHost {
     if (this.runs.has(id) || thread.archived) return;
     // Its session is set up on the first turn, from the thread it was forked from.
     if (thread.fork) return;
-    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) return;
     // The session would start in the main checkout and restart once the worktree is made.
     if (wantsWorktree(thread)) return;
     const session = this.session(thread);
@@ -749,7 +748,6 @@ export class AgentHost {
   /** Warm a spare session for a thread the user is about to start with these settings. */
   warmDraft(input: Partial<Thread> & { scope?: ThreadScope }): void {
     const draft = this.draftThread(input);
-    if (draft.mode !== "board" && draft.mode !== "ask" && !draft.cwd) return;
     if (wantsWorktree(draft)) return;
     this.agent(draft.provider).prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
   }
@@ -1329,10 +1327,6 @@ export class AgentHost {
     const text = input.text.trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
     const context = freshContext(input.context, this.knownContext(threadId, thread));
-    if (thread.mode !== "board" && thread.mode !== "ask" && !thread.cwd) {
-      // Code and plan work on files; without a workspace the agent would work in a scratch folder.
-      throw new Error("Pick a workspace folder for this thread first, or switch it to Pages mode.");
-    }
     const wt = openWorktree(thread);
     if (wt && !fs.existsSync(wt.path)) {
       throw new Error(`This thread's worktree is gone (${wt.path}). Use Leave branch in the branch menu to go back to the main checkout; the branch ${wt.branch} keeps its commits.`);
