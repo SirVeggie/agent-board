@@ -390,11 +390,47 @@ export function sandboxFor(thread: Pick<Thread, "mode" | "approval">): SandboxMo
   return "workspace-write";
 }
 
-export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web">, cwd: string): RpcRecord {
+/**
+ * The repository git dir behind `cwd` when it lies outside `cwd`'s own `.git`, so commits work
+ * in a sandbox. A worktree's `.git` is a file pointing into the main checkout's `.git/worktrees`,
+ * and git also writes the shared objects and refs there.
+ */
+export function gitCommonDir(cwd: string): string | null {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    const dotGit = path.join(dir, ".git");
+    let stat: fs.Stats;
+    try { stat = fs.statSync(dotGit); } catch { if (path.dirname(dir) === dir) return null; continue; }
+    if (stat.isDirectory()) return dotGit;
+    try {
+      const match = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, "utf8"));
+      if (!match) return null;
+      const gitDir = path.resolve(dir, match[1]);
+      let common = gitDir;
+      try { common = path.resolve(gitDir, fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim()); } catch { /* not a linked worktree */ }
+      return common;
+    } catch { return null; }
+  }
+}
+
+/**
+ * Codex config for a sandboxed Code thread on Windows. Without a selected Windows sandbox Codex
+ * silently turns workspace-write into read-only (#322); the unelevated one needs no admin setup.
+ */
+export function windowsSandboxConfig(sandbox: SandboxMode, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
+  if (platform !== "win32" || sandbox !== "workspace-write") return {};
+  const gitDir = gitCommonDir(cwd);
+  return {
+    "windows.sandbox": "unelevated",
+    ...(gitDir ? { "sandbox_workspace_write.writable_roots": [gitDir] } : {}),
+  };
+}
+
+export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web">, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
   const effort = thread.effort && thread.effort in EFFORT_LABELS ? (thread.effort as ModelReasoningEffort) : undefined;
+  const sandbox = sandboxFor(thread);
   return {
     ...(thread.model && thread.model !== "default" ? { model: thread.model } : {}),
-    sandbox: sandboxFor(thread),
+    sandbox,
     cwd,
     approvalPolicy: thread.approval === "full" ? "never" : "on-request",
     // Native review only handles actions that need approval; keep the mode's sandbox.
@@ -403,6 +439,7 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
       ...(effort ? { model_reasoning_effort: effort } : {}),
       web_search: thread.web === "on" ? "live" : "disabled",
       "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code",
+      ...windowsSandboxConfig(sandbox, cwd, platform),
     },
   };
 }

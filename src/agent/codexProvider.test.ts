@@ -10,7 +10,7 @@ import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
 import { CodexSession, readCodexPlanUsage, syncAuthFiles, guardianDenialEvent } from "./providers/codex.js";
 import type { ApprovalDecision, ApprovalRequest, RunSink, SessionContext } from "./providers/provider.js";
-import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides } from "./providers/codex.js";
+import { FALLBACK_MODELS, gitCommonDir, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides, windowsSandboxConfig } from "./providers/codex.js";
 import { codexPermissions, permissionBoundaryProblem, scribeToolAvailability, workerPermissionProblem } from "./effectivePermissions.js";
 import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
@@ -53,6 +53,33 @@ test("threadOptions maps app-server model, sandbox, web and interactive approval
   assert.equal((pages.config as Record<string, unknown>).model_reasoning_effort, undefined);
   assert.equal(threadOptions(thread({ approval: "full" }), "/work").approvalPolicy, "never");
   assert.equal((threadOptions(thread({ web: "limited" }), "/work").config as Record<string, unknown>).web_search, "disabled");
+});
+
+test("windowsSandboxConfig selects the unelevated sandbox and opens a worktree's git dir", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-codex-git-"));
+  try {
+    const main = path.join(root, "main");
+    const wtGit = path.join(main, ".git", "worktrees", "wt");
+    fs.mkdirSync(wtGit, { recursive: true });
+    fs.writeFileSync(path.join(wtGit, "commondir"), "../..\n");
+    const wt = path.join(root, "wt");
+    fs.mkdirSync(path.join(wt, "src"), { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${wtGit}\n`);
+
+    assert.equal(gitCommonDir(path.join(wt, "src")), path.join(main, ".git"));
+    assert.equal(gitCommonDir(main), path.join(main, ".git"));
+    assert.deepEqual(windowsSandboxConfig("workspace-write", wt, "win32"), {
+      "windows.sandbox": "unelevated",
+      "sandbox_workspace_write.writable_roots": [path.join(main, ".git")],
+    });
+    assert.deepEqual(windowsSandboxConfig("workspace-write", wt, "linux"), {});
+    assert.deepEqual(windowsSandboxConfig("read-only", wt, "win32"), {});
+    assert.deepEqual(windowsSandboxConfig("danger-full-access", wt, "win32"), {});
+    const config = threadOptions(thread({ approval: "auto" }), wt, "win32").config as Record<string, unknown>;
+    assert.equal(config["windows.sandbox"], "unelevated");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("turnStartOverrides always send model and effort; Default is JSON null", () => {
