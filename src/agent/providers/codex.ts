@@ -25,14 +25,18 @@ import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type
 /**
  * Codex through @openai/codex-sdk, which spawns `codex exec` for each turn. Sessions resume by
  * thread id under Scribe's own CODEX_HOME (data/agent/codex), using the user's ChatGPT login by
- * copying ~/.codex/auth.json (Agent settings Log in runs the bundled `codex login`). The SDK has
- * no approval callback or steer, so Ask / Auto-edit / Auto review all run with approval_policy=never
- * and a sandbox from the thread's mode; Full access is danger-full-access. The board's tools reach
- * the agent as a Codex MCP server named `scribe`.
+ * copying ~/.codex/auth.json (Agent settings Log in runs the bundled `codex login`). The model
+ * picker is the live ChatGPT catalog from `codex app-server` `model/list` (same list as Codex web
+ * work mode), with FALLBACK_MODELS only when that call fails. The SDK has no approval callback or
+ * steer, so Ask / Auto-edit / Auto review all run with approval_policy=never and a sandbox from the
+ * thread's mode; Full access is danger-full-access. The board's tools reach the agent as a Codex MCP
+ * server named `scribe`.
  */
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const LOGIN_URL_WAIT_MS = 15_000;
+const MODELS_TTL_MS = 30 * 60 * 1000;
+const APP_SERVER_TIMEOUT_MS = 20_000;
 
 const IDLE_CLOSE_MS = 15 * 60 * 1000;
 const EFFORT_LABELS: Record<string, string> = {
@@ -134,6 +138,78 @@ function stopChild(child: ChildProcess): void {
   }
 }
 
+type AppServerCall = (method: string, params?: unknown) => Promise<unknown>;
+
+/** One `codex app-server --stdio` process for a handful of JSON-RPC calls, then killed. */
+function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall) => Promise<T>, timeoutMs = APP_SERVER_TIMEOUT_MS): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [codexCliJs(), "app-server", "--stdio"], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let buf = "";
+    let nextId = 1;
+    const pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
+    let settled = false;
+
+    const finish = (err?: Error, value?: T) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      stopChild(child);
+      for (const wait of pending.values()) wait.reject(err ?? new Error("Codex app-server closed"));
+      pending.clear();
+      if (err) reject(err);
+      else resolve(value as T);
+    };
+
+    const timeout = setTimeout(() => finish(new Error("Codex model list timed out")), timeoutMs);
+    timeout.unref?.();
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buf += chunk.toString("utf8");
+      let nl: number;
+      while ((nl = buf.search(/\r?\n/)) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(buf[nl] === "\r" ? nl + 2 : nl + 1);
+        if (!line.startsWith("{")) continue;
+        let msg: { id?: unknown; result?: unknown; error?: { message?: string } };
+        try {
+          msg = JSON.parse(line) as typeof msg;
+        } catch {
+          continue;
+        }
+        if (msg.id == null) continue;
+        const wait = pending.get(Number(msg.id));
+        if (!wait) continue;
+        pending.delete(Number(msg.id));
+        if (msg.error) wait.reject(new Error(msg.error.message || "Codex RPC error"));
+        else wait.resolve(msg.result);
+      }
+    });
+    child.once("error", (err) => finish(err));
+    child.once("exit", () => {
+      if (!settled) finish(new Error("Codex app-server exited"));
+    });
+
+    const call: AppServerCall = (method, params) =>
+      new Promise((res, rej) => {
+        if (settled) {
+          rej(new Error("Codex app-server closed"));
+          return;
+        }
+        const id = nextId++;
+        pending.set(id, { resolve: res, reject: rej });
+        child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} })}\n`);
+      });
+
+    run(call)
+      .then((value) => finish(undefined, value))
+      .catch((err) => finish(err instanceof Error ? err : new Error(String(err))));
+  });
+}
+
 function hasApiKey(): string | null {
   if (process.env.CODEX_API_KEY?.trim()) return "CODEX_API_KEY";
   if (process.env.OPENAI_API_KEY?.trim()) return "OPENAI_API_KEY";
@@ -154,6 +230,78 @@ export const FALLBACK_MODELS: ModelOption[] = [
   { id: "gpt-5", label: "GPT-5", provider: "codex", efforts: EFFORTS, defaultEffort: null, params: [] },
   { id: "o3", label: "o3", provider: "codex", efforts: EFFORTS, defaultEffort: null, params: [] },
 ];
+
+function effortChoices(ids: string[]): Array<{ id: string; label: string }> {
+  return ids.map((id) => ({ id, label: EFFORT_LABELS[id] ?? id }));
+}
+
+/** ChatGPT catalog rows from `model/list` → picker options. Hidden and unavailable models are dropped. */
+export function mapCodexModels(rows: unknown[]): ModelOption[] {
+  type Row = {
+    id?: unknown;
+    model?: unknown;
+    displayName?: unknown;
+    description?: unknown;
+    hidden?: unknown;
+    isDefault?: unknown;
+    isCurrentlyUnavailable?: unknown;
+    supportedReasoningEfforts?: unknown;
+    defaultReasoningEffort?: unknown;
+  };
+  const parsed: Row[] = [];
+  for (const row of rows) {
+    if (isPlainRecord(row)) parsed.push(row);
+  }
+  parsed.sort((a, b) => Number(!!b.isDefault) - Number(!!a.isDefault));
+  const out: ModelOption[] = [];
+  const seen = new Set<string>();
+  for (const row of parsed) {
+    if (row.hidden || row.isCurrentlyUnavailable) continue;
+    const id = String(row.model || row.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const rawEfforts = Array.isArray(row.supportedReasoningEfforts)
+      ? row.supportedReasoningEfforts.filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+    const option: ModelOption = {
+      id,
+      label: String(row.displayName || id).trim(),
+      provider: "codex",
+      efforts: rawEfforts.length ? effortChoices(rawEfforts) : EFFORTS,
+      defaultEffort: typeof row.defaultReasoningEffort === "string" ? row.defaultReasoningEffort : null,
+      params: [],
+    };
+    if (typeof row.description === "string" && row.description.trim()) option.description = row.description.trim();
+    out.push(option);
+  }
+  return out;
+}
+
+/** Live ChatGPT catalog via experimental `codex app-server` JSON-RPC. Same list as Codex web work mode. */
+export async function fetchCodexModels(): Promise<ModelOption[]> {
+  const env = fs.existsSync(userAuthFile()) ? loginEnv() : cliEnv();
+  return withAppServer(env, async (call) => {
+    await call("initialize", {
+      clientInfo: { name: "scribe", title: "Scribe", version: "1.0.0" },
+      capabilities: { experimentalApi: false },
+    });
+    const rows: unknown[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = await call("model/list", {
+        includeHidden: false,
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!isPlainRecord(result) || !Array.isArray(result.data)) break;
+      rows.push(...result.data);
+      const next = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : "";
+      if (!next) break;
+      cursor = next;
+    }
+    return mapCodexModels(rows);
+  });
+}
 
 /** Ask / Plan / Pages stay read-only; Full access drops the sandbox; otherwise workspace-write. */
 export function sandboxFor(thread: Pick<Thread, "mode" | "approval">): SandboxMode {
@@ -207,6 +355,7 @@ export class CodexProvider implements AgentProvider {
   readonly id = "codex" as const;
   readonly label = "Codex";
   private modelCache: { at: number; models: ModelOption[] } | null = null;
+  private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<CodexSession>();
   private spares = new SparePool<CodexSession>();
   private login: { url: string | null; done: Promise<void> } | null = null;
@@ -270,6 +419,7 @@ export class CodexProvider implements AgentProvider {
           clearTimeout(timeout);
           if (code === 0) {
             syncCodexAuth();
+            this.modelCache = null;
             log("Codex login done");
           } else {
             const tail = output.trim().split(/\r?\n/).filter(Boolean).slice(-4).join(" ");
@@ -286,18 +436,48 @@ export class CodexProvider implements AgentProvider {
     return { url: this.login?.url ?? null };
   }
 
-  models(_refresh = false): Promise<ModelOption[]> {
-    const models = this.modelCache?.models?.length ? this.modelCache.models : FALLBACK_MODELS;
-    this.modelCache = { at: Date.now(), models };
-    return Promise.resolve(models);
+  models(refresh = false): Promise<ModelOption[]> {
+    const cached = this.modelCache?.models.length ? this.modelCache.models : null;
+    const fetchedAt = this.modelCache?.at ?? 0;
+    const stale = !cached || Date.now() - fetchedAt >= MODELS_TTL_MS;
+    // A real fetch (at > 0) that aged out is still close enough to show; refresh behind.
+    // A restart seed (at === 0) may be the old hardcoded list — wait for the live catalog.
+    if (!refresh && cached && !stale) return Promise.resolve(cached);
+    if (!refresh && cached && fetchedAt > 0) {
+      if (!this.modelLoad) void this.models(true);
+      return Promise.resolve(cached);
+    }
+    if (this.modelLoad) return this.modelLoad;
+    this.modelLoad = this.loadModels().finally(() => {
+      this.modelLoad = null;
+    });
+    return this.modelLoad;
   }
 
   cachedModels(): ModelOption[] {
     return this.modelCache?.models ?? FALLBACK_MODELS;
   }
 
+  /** Seed from the saved list so the first turn after a restart does not wait. Marked stale. */
   setModelCache(models: ModelOption[]): void {
-    if (models.length) this.modelCache = { at: Date.now(), models };
+    if (models.length && !this.modelCache) this.modelCache = { at: 0, models };
+  }
+
+  private async loadModels(): Promise<ModelOption[]> {
+    if (!hasAuthFile() && !hasApiKey()) {
+      return this.modelCache?.models.length ? this.modelCache.models : FALLBACK_MODELS;
+    }
+    try {
+      syncCodexAuth();
+      const models = await fetchCodexModels();
+      if (models.length) {
+        this.modelCache = { at: Date.now(), models };
+        return models;
+      }
+    } catch (err) {
+      log(`Codex model list failed: ${(err as Error).message}`);
+    }
+    return this.modelCache?.models.length ? this.modelCache.models : FALLBACK_MODELS;
   }
 
   async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {

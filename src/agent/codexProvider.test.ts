@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapUsage, mcpConfig, sandboxFor, threadOptions } from "./providers/codex.js";
+import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions } from "./providers/codex.js";
 import type { Thread } from "./types.js";
 
 const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "mode" | "approval" | "web"> => ({
@@ -73,6 +73,52 @@ test("fallback models include Default (omit --model) and Codex ids", () => {
   assert.equal(FALLBACK_MODELS[0]?.id, "default");
   assert.ok(FALLBACK_MODELS.some((m) => m.id === "gpt-5-codex"));
   assert.ok(FALLBACK_MODELS.every((m) => m.provider === "codex" && m.efforts.length));
+});
+
+test("mapCodexModels keeps the live Plus catalog and drops hidden rows", () => {
+  const models = mapCodexModels([
+    {
+      id: "gpt-reserve",
+      model: "gpt-reserve",
+      displayName: "GPT-Reserve",
+      hidden: true,
+      supportedReasoningEfforts: ["low", "medium"],
+    },
+    {
+      id: "gpt-5.6-sol",
+      model: "gpt-5.6-sol",
+      displayName: "GPT-5.6-Sol",
+      hidden: false,
+      isDefault: false,
+      description: "Older Sol",
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "low",
+    },
+    {
+      id: "gpt-6.1-sol",
+      model: "gpt-6.1-sol",
+      displayName: "GPT-6.1-Sol",
+      hidden: false,
+      isDefault: true,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultReasoningEffort: "low",
+    },
+    { id: "down", model: "down", hidden: false, isCurrentlyUnavailable: true },
+  ]);
+  assert.deepEqual(
+    models.map((m) => m.id),
+    ["gpt-6.1-sol", "gpt-5.6-sol"]
+  );
+  assert.equal(models[0]?.label, "GPT-6.1-Sol");
+  assert.equal(models[0]?.defaultEffort, "low");
+  assert.ok(models[0]?.efforts.some((e) => e.id === "ultra" && e.label === "Ultra"));
+  assert.equal(models[1]?.description, "Older Sol");
+});
+
+test("threadOptions passes a live catalog id such as gpt-6.1-sol", () => {
+  const opts = threadOptions(thread({ model: "gpt-6.1-sol", effort: "ultra" }), "/work");
+  assert.equal(opts.model, "gpt-6.1-sol");
+  assert.equal(opts.modelReasoningEffort, "ultra");
 });
 
 test("loginUrlFromOutput picks the ChatGPT HTTPS URL and skips localhost", () => {
