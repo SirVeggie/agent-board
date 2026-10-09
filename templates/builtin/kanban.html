@@ -914,6 +914,11 @@
   .wp-log-line.heavy .msg { color: var(--warn); }
   .wp-log-empty { color: var(--muted); font-size: 12px; padding: 8px 2px; }
   .worker-box { width: min(560px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+  .wp-shared { display: flex; align-items: center; gap: 8px; padding: 8px 6px; color: var(--muted); font-size: 12px; }
+  .wp-shared .edit { color: var(--accent); padding: 0; }
+  .wp-shared .edit:hover { text-decoration: underline; }
+  .shared-instructions-box { width: min(800px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; }
+  .shared-instructions-box textarea { display: block; width: 100%; min-height: min(240px, 45vh); max-height: 65vh; margin-top: 16px; resize: none; overflow-y: auto; line-height: 1.5; }
   .worker-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; overflow-y: auto; padding: 10px 2px 2px; }
   .worker-form > label { color: var(--muted); font-size: 12.5px; }
   .worker-form > label.top { align-self: start; padding-top: 7px; }
@@ -1100,6 +1105,15 @@
       </label>
       <div class="confirm-row">
         <button class="ghost" id="settingsClose" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+  <div class="confirm-back hidden" id="sharedInstructionsBack">
+    <div class="confirm-box shared-instructions-box" role="dialog" aria-modal="true" aria-labelledby="sharedInstructionsTitle">
+      <h3 id="sharedInstructionsTitle">Shared instructions</h3>
+      <textarea class="field" id="sharedWorkerInstructions" aria-label="Shared instructions" placeholder="Rules for all workers: how to test, commit, and when to ask you..."></textarea>
+      <div class="confirm-row">
+        <button class="ghost" id="sharedInstructionsClose" type="button">Close</button>
       </div>
     </div>
   </div>
@@ -5138,7 +5152,40 @@
   /** The worker whose settings are open in the panel, and its editor (kept across renders so typing isn't lost). */
   var panelOpen = null;
   var panelEditor = null;
-  var sharedInstructionsEditor = null;
+  var sharedInstructionsBack = $("sharedInstructionsBack"), sharedInstructionsInput = $("sharedWorkerInstructions");
+  var sharedInstructionsHelp = "Sent to every worker before its own instructions. Changes save as you type and apply when a new card chat starts.";
+  $("sharedInstructionsTitle").dataset.tooltip = sharedInstructionsHelp;
+  sharedInstructionsInput.setAttribute("aria-description", sharedInstructionsHelp);
+  function resizeSharedInstructions() {
+    sharedInstructionsInput.style.height = "auto";
+    sharedInstructionsInput.style.height = sharedInstructionsInput.scrollHeight + 2 + "px";
+  }
+  function openSharedInstructions() {
+    flushWorker();
+    panelEditor = null;
+    sharedInstructionsInput.value = str(settings().workerInstructions);
+    sharedInstructionsBack.classList.remove("hidden");
+    resizeSharedInstructions();
+    sharedInstructionsInput.focus();
+  }
+  function closeSharedInstructions() {
+    sharedInstructionsBack.classList.add("hidden");
+    renderWorkersPanel();
+    var edit = workersPop.querySelector(".wp-shared .edit");
+    if (edit) edit.focus();
+  }
+  sharedInstructionsInput.addEventListener("input", function () {
+    resizeSharedInstructions();
+    saveSetting("workerInstructions", sharedInstructionsInput.value);
+  });
+  $("sharedInstructionsClose").addEventListener("click", closeSharedInstructions);
+  sharedInstructionsBack.addEventListener("pointerdown", function (e) {
+    e.stopPropagation();
+    if (e.target === sharedInstructionsBack) closeSharedInstructions();
+  });
+  window.addEventListener("resize", function () {
+    if (!sharedInstructionsBack.classList.contains("hidden")) resizeSharedInstructions();
+  });
   function renderWorkersButton() {
     workersBtn.classList.toggle("hidden", !AGENT_MODE);
     if (!AGENT_MODE) return;
@@ -5187,7 +5234,7 @@
     var logListEl = workersPop.querySelector(".wp-log-list");
     var logScroll = logListEl ? logListEl.scrollTop : 0;
     var logStick = !logListEl || (logListEl.scrollHeight - logListEl.scrollTop - logListEl.clientHeight < 48);
-    var keep = (panelEditor && panelEditor.contains(document.activeElement)) || (sharedInstructionsEditor && sharedInstructionsEditor.contains(document.activeElement)) ? document.activeElement : null;
+    var keep = panelEditor && panelEditor.contains(document.activeElement) ? document.activeElement : null;
     workersPop.replaceChildren();
     var head = el("div", "wp-head");
     head.appendChild(el("b", null, "Workers"));
@@ -5201,27 +5248,21 @@
     head.appendChild(el("span", null, inboxLine));
     workersPop.appendChild(head);
     if (!hasWorkerApi()) workersPop.appendChild(el("p", "worker-note", "Restart Scribe to run agent workers."));
-    if (!sharedInstructionsEditor) {
-      sharedInstructionsEditor = el("div", "wedit worker-form compact");
-      var sharedLabel = el("label", "top", "Shared instructions");
-      sharedLabel.htmlFor = "sharedWorkerInstructions";
-      var sharedHelp = "Sent to every worker before its own instructions. Changes apply when a new card chat starts.";
-      sharedLabel.dataset.tooltip = sharedHelp;
-      sharedLabel.setAttribute("aria-description", sharedHelp);
-      var sharedInput = el("textarea", "field");
-      sharedInput.id = "sharedWorkerInstructions";
-      sharedInput.placeholder = "Rules for all workers: how to test, commit, and when to ask you...";
-      sharedInput.addEventListener("input", function () {
-        flushWorker();
-        panelEditor = null;
-        saveSetting("workerInstructions", sharedInput.value);
-      });
-      sharedInstructionsEditor.appendChild(sharedLabel);
-      sharedInstructionsEditor.appendChild(sharedInput);
-    }
-    var sharedField = sharedInstructionsEditor.querySelector("textarea");
-    if (document.activeElement !== sharedField) sharedField.value = str(settings().workerInstructions);
-    workersPop.appendChild(sharedInstructionsEditor);
+    var sharedSummary = el("div", "wp-shared");
+    var sharedLabel = el("span", null, "Shared instructions");
+    sharedLabel.dataset.tooltip = sharedInstructionsHelp;
+    sharedLabel.setAttribute("aria-description", sharedInstructionsHelp);
+    sharedSummary.appendChild(sharedLabel);
+    var sharedText = str(settings().workerInstructions).trim();
+    var wordCount = sharedText ? sharedText.split(/\s+/).length : 0;
+    sharedSummary.appendChild(el("span", null, wordCount + (wordCount === 1 ? " word" : " words")));
+    var sharedEdit = el("button", "edit", "Edit");
+    sharedEdit.type = "button";
+    sharedEdit.setAttribute("aria-label", "Edit shared instructions");
+    sharedEdit.setAttribute("aria-haspopup", "dialog");
+    sharedEdit.addEventListener("click", openSharedInstructions);
+    sharedSummary.appendChild(sharedEdit);
+    workersPop.appendChild(sharedSummary);
     var ids = workerIds();
     if (!ids.length) workersPop.appendChild(el("p", "worker-note", "No workers yet. Add one, give it instructions, then assign cards to it and start it."));
     if (panelOpen && !worker(panelOpen)) { panelOpen = null; panelEditor = null; }
@@ -5632,7 +5673,8 @@
   // Capture phase: Esc closes only the top dialog.
   window.addEventListener("keydown", function (e) {
     if (e.key !== "Escape" || confirmDone || openSelect) return;
-    if (!stopBack.classList.contains("hidden")) closeStop();
+    if (!sharedInstructionsBack.classList.contains("hidden")) closeSharedInstructions();
+    else if (!stopBack.classList.contains("hidden")) closeStop();
     else if (!workerBack.classList.contains("hidden")) closeWorker();
     else if (!workersPop.classList.contains("hidden") && !menuEl) closeWorkersPanel();
     else return;
@@ -5757,7 +5799,7 @@
     }
   }
   function topDialog() {
-    var ids = ["stopBack", "workerBack", "settingsBack", "confirmBack"];
+    var ids = ["sharedInstructionsBack", "stopBack", "workerBack", "settingsBack", "confirmBack"];
     for (var i = 0; i < ids.length; i++) {
       var back = $(ids[i]);
       if (back && !back.classList.contains("hidden")) {
