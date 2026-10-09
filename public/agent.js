@@ -6305,7 +6305,7 @@
     hoverTipEl = tip;
   }
 
-  function bindHoverTip(anchor, build, { delay = 160, start = false } = {}) {
+  function bindHoverTip(anchor, build, { delay = 320, start = false } = {}) {
     anchor.dataset.richTooltip = "";
     anchor.addEventListener("pointerenter", (event) => {
       if (event.pointerType !== "mouse") return;
@@ -6598,7 +6598,7 @@
     if (hint) {
       label.classList.add("ag-hinted");
       label.setAttribute("aria-description", hint);
-      bindHoverTip(label, () => noteTip(hint), { delay: 350, start: true });
+      bindHoverTip(label, () => noteTip(hint), { delay: 700, start: true });
     }
     if (id) {
       label.id = id;

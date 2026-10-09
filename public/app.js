@@ -925,7 +925,7 @@
     }
     el.dataset.hint = description;
     el.setAttribute("aria-description", description);
-    hoverCard.bind(el, 350);
+    hoverCard.bind(el, 700);
   }
 
   function loadTheme() {
@@ -1955,7 +1955,7 @@
       update.ariaLabel = `${UPDATE_TITLE}. ${UPDATE_NOTE}`;
       update.dataset.kind = "template-update";
       update.dataset.id = template.id;
-      hoverCard.bind(update, 120);
+      hoverCard.bind(update, 240);
       line.appendChild(update);
     }
     if (builtin || template.builtinSource) {
