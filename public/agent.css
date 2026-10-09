@@ -4824,6 +4824,16 @@ button.ag-menu-item:hover .ag-star {
   width: min(440px, calc(100vw - 40px));
 }
 
+.ag-queued-edit .ag-modal-panel {
+  width: min(480px, calc(100vw - 40px));
+}
+
+.ag-queued-editor {
+  min-height: 100px;
+  max-height: 45vh;
+  resize: vertical;
+}
+
 .ag-check {
   display: flex;
   align-items: center;

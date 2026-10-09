@@ -55,6 +55,7 @@
   /** Empty Enter acts on the waiting steered message, else the first queued one. */
   function emptyEnterTarget(threadId) {
     const items = S.details.get(threadId)?.items || [];
+    if (items.some((it) => it.kind === "user" && it.editing)) return null;
     const waiting = items.find((it) => it.kind === "user" && it.steer === "waiting");
     if (waiting) return { id: waiting.id, action: "send-now" };
     const queued = items.find((it) => it.kind === "user" && it.turnId == null && !it.dropped && !it.steer);
@@ -64,6 +65,7 @@
 
   /** What the hover button on this queued or waiting message does. None while another is already steering. */
   function queuedItemAction(threadId, item) {
+    if ((S.details.get(threadId)?.items || []).some((it) => it.kind === "user" && it.editing)) return null;
     if (item.steer === "waiting") return "send-now";
     if (item.steer || item.dropped || item.turnId) return null;
     const items = S.details.get(threadId)?.items || [];
@@ -1059,7 +1061,7 @@
 
   /* ---------- modal helper ---------- */
 
-  function modal(cls, onClose) {
+  function modal(cls, onClose, canClose) {
     const root = el("div", `ag-modal ${cls}`);
     const backdrop = el("div", "ag-modal-backdrop");
     const panel = el("div", "ag-modal-panel");
@@ -1068,6 +1070,7 @@
     root.append(backdrop, panel);
     let releaseTrap = null;
     const close = () => {
+      if (!root.isConnected || (canClose && !canClose())) return;
       releaseTrap?.();
       releaseTrap = null;
       root.remove();
@@ -2465,8 +2468,17 @@
           button(icon("edit"), "ag-icon-btn", () => this.rewindTo(item, false), "Edit: go back to before this message and change it")
         );
       }
+      if (!item.dropped && !item.turnId && item.steer !== "folded" && !item.editing) {
+        actions.append(
+          button(icon("close"), "ag-icon-btn", () => this.queueAction("withdraw", item.id), "Cancel message"),
+          button(icon("edit"), "ag-icon-btn", () => this.editQueued(item), "Edit message")
+        );
+      }
+      if (item.editing) actions.append(button(icon("edit"), "ag-icon-btn", () => this.editQueued(item), "Resume editing message"));
       if (actions.childElementCount) row.append(actions);
-      if (item.steer === "waiting") {
+      if (item.editing) {
+        row.append(el("div", "ag-queued", "Editing — delivery paused"));
+      } else if (item.steer === "waiting") {
         row.classList.add("steering");
         const target = emptyEnterTarget(this.threadId);
         const text = target?.id === item.id ? "Steering — waiting for a safe stop · Enter again to send it now" : "Steering — waiting for a safe stop";
@@ -4102,28 +4114,80 @@
     }
 
     /** Up on an empty composer: take the latest queued or waiting steered message back into the input. */
-    withdrawQueued() {
+    withdrawQueued(itemId) {
       const t = this.thread();
-      if (!t) return false;
+      if (!t || this.withdrawing) return false;
       const steering = (S.details.get(t.id)?.items || []).some((it) => it.kind === "user" && it.steer === "waiting");
       if (!t.queued && !steering) return false;
-      api("POST", `/threads/${encodeURIComponent(t.id)}/withdraw`)
+      this.withdrawing = true;
+      this.input.readOnly = true;
+      api("POST", `/threads/${encodeURIComponent(t.id)}/withdraw`, { itemId })
         .then((msg) => {
-          if (this.input.value || this.threadId !== t.id) return;
+          const attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
+          if (this.threadId !== t.id) {
+            const content = { text: msg.text || "", attachments, mentions: msg.context || [] };
+            S.composers.set(t.id, content);
+            syncThreadDraft(t, content);
+            return;
+          }
           this.input.value = msg.text || "";
           this.clearAttachments();
-          this.attachments = [...(msg.images || []), ...(msg.files || [])].map((f) => ({ ...f, size: Math.floor((f.data.length * 3) / 4), url: base64Url(f.data, f.mimeType) }));
+          this.attachments = attachments;
           this.restoreContextChips(msg.context);
           this.renderContext();
           this.autosize();
           this.focus();
           this.input.setSelectionRange(this.input.value.length, this.input.value.length);
         })
-        .catch((err) => notice(err.message));
+        .catch((err) => notice(err.message))
+        .finally(() => { this.withdrawing = false; this.input.readOnly = false; });
       return true;
     }
 
+    async editQueued(item) {
+      const threadId = this.threadId;
+      const pending = (S.details.get(threadId)?.items || []).filter((it) => it.kind === "user" && !it.turnId && !it.dropped && it.steer !== "folded");
+      if (!item.editing && pending[pending.length - 1]?.id === item.id && !this.composerContent()) {
+        this.withdrawQueued(item.id);
+        return;
+      }
+      const path = `/threads/${encodeURIComponent(threadId)}/queued/${encodeURIComponent(item.id)}`;
+      let token;
+      try { ({ token } = await api("POST", `${path}/edit`, { recover: Boolean(item.editing) })); }
+      catch (err) { notice(err.message); return; }
+      let finished = false;
+      let saving = false;
+      const { panel, close } = modal("ag-queued-edit", () => {
+        if (!finished) api("POST", `${path}/edit-finish`, { token }).catch((err) => notice(err.message));
+      }, () => finished || !saving);
+      panel.setAttribute("aria-label", "Edit pending message");
+      panel.append(el("h2", "ag-modal-title", "Edit message"));
+      const input = el("textarea", "ag-input ag-queued-editor");
+      input.value = item.text || "";
+      input.setAttribute("aria-label", "Message");
+      const actions = el("div", "ag-modal-actions");
+      const save = button("Save", "ag-btn small primary", async () => {
+        if (saving) return;
+        saving = true;
+        save.disabled = true;
+        try {
+          await api("POST", `${path}/edit-finish`, { token, text: input.value });
+          finished = true;
+          close();
+        } catch (err) { notice(err.message); }
+        finally { saving = false; save.disabled = false; }
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); save.click(); }
+      });
+      actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn small", close), save);
+      panel.append(input, actions);
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+
     async send() {
+      if (this.withdrawing) return;
       const text = this.input.value.trim();
       const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
       if (scopeCmd && !this.attachments.length) {

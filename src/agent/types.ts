@@ -307,6 +307,8 @@ export type ItemBody =
       dropped?: boolean;
       /** Sent into a running turn: "waiting" until the agent takes it in, then "folded" (it belongs to that turn). */
       steer?: "waiting" | "folded";
+      /** Temporarily held in the queue while an editing popup is open. */
+      editing?: boolean;
       /** Sent by the code of the thread's page (board.agent), or by Scribe itself (going on after a restart); not typed by the user. */
       from?: "page" | "scribe";
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */

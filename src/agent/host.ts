@@ -132,6 +132,8 @@ function planUsed(before: PlanLimits["windows"], after: PlanLimits["windows"]): 
 }
 
 type QueuedMessage = {
+  itemId?: string;
+  edit?: { token: string; steer: boolean; withdrawal?: Promise<boolean> };
   text: string;
   images: ChatImage[];
   /** Attached files other than images. */
@@ -691,10 +693,12 @@ export class AgentHost {
       const queue: QueuedMessage[] = [];
       for (const item of leftovers) {
         delete item.steer;
+        delete item.editing;
         if (item.images?.length || item.files?.length) {
           item.dropped = true;
         } else {
           queue.push({
+            itemId: item.id,
             text: item.text,
             images: [],
             files: [],
@@ -1345,12 +1349,14 @@ export class AgentHost {
       thread.draft = null;
       this.db.saveThread(thread);
     }
-    if (this.runs.has(threadId)) {
+    if (this.runs.has(threadId) || this.queues.get(threadId)?.length) {
       const queue = this.queues.get(threadId) ?? [];
       queue.push(msg);
       this.queues.set(threadId, queue);
       const item = this.addItem(threadId, null, userBody(msg));
+      msg.itemId = item.id;
       this.emitThread(threadId);
+      this.drainQueue(threadId);
       return { queued: true, item };
     }
     const item = this.addItem(threadId, null, userBody(msg));
@@ -1385,7 +1391,7 @@ export class AgentHost {
     }
     const queue = this.queues.get(threadId);
     if (!queue?.length) throw new Error("Nothing is queued");
-    this.steerFirst(threadId);
+    if (!this.steerFirst(threadId)) throw new Error("Finish editing the queued message first");
     return { steered: true };
   }
 
@@ -1412,10 +1418,10 @@ export class AgentHost {
 
   /** Put this queued item first so steer / send-now acts on it. */
   private preferQueued(threadId: string, itemId: string): boolean {
-    const items = this.queuedItems(threadId);
-    const i = items.findIndex((it) => it.id === itemId);
     const queue = this.queues.get(threadId);
+    const i = queue?.findIndex((msg) => msg.itemId === itemId) ?? -1;
     if (i < 0 || !queue || i >= queue.length) return false;
+    if (queue.slice(0, i + 1).some((msg) => msg.edit)) throw new Error("Finish editing the queued message first");
     if (i > 0) {
       const [msg] = queue.splice(i, 1);
       queue.unshift(msg);
@@ -1429,9 +1435,10 @@ export class AgentHost {
     const queue = this.queues.get(threadId);
     const session = this.sessions.get(threadId);
     if (!run || run.steer || !session?.steer || !queue?.length) return false;
+    if (queue[0].edit) return false;
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
-    const item = this.queuedItems(threadId)[0];
+    const item = this.loadItems(threadId).find((it) => it.id === msg.itemId);
     const thread = this.requireThread(threadId);
     const id = session.steer({ text: promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
     run.steer = { id, msg, itemId: item?.id };
@@ -1443,33 +1450,103 @@ export class AgentHost {
     return true;
   }
 
-  /**
-   * Take the latest queued message back, or the waiting steered one when nothing else is queued, and
-   * remove it from the transcript so it can be edited and sent again.
-   */
-  async withdraw(threadId: string): Promise<{ text: string; images: ChatImage[]; files: ChatFile[]; context: ContextChip[] }> {
-    const queue = this.queues.get(threadId);
-    const queued = this.queuedItems(threadId);
-    if (queue?.length) {
-      const msg = queue.pop()!;
-      if (!queue.length) this.queues.delete(threadId);
-      const item = queued[queued.length - 1];
-      if (item) this.removeItem(item);
-      this.forgetFiles(threadId, msg);
-      this.emitThread(threadId);
-      return { text: msg.text, images: msg.images, files: msg.files, context: msg.context };
+  private pendingMessage(threadId: string, itemId?: string): QueuedMessage {
+    const queue = this.queues.get(threadId) ?? [];
+    const waiting = this.runs.get(threadId)?.steer;
+    const msg = itemId
+      ? queue.find((msg) => msg.itemId === itemId) ?? (waiting?.itemId === itemId ? waiting.msg : undefined)
+      : queue[queue.length - 1] ?? waiting?.msg;
+    if (!msg) throw new Error("That message is no longer pending");
+    return msg;
+  }
+
+  /** Hold before awaiting withdrawal so turn completion cannot drain this message meanwhile. */
+  async beginQueuedEdit(threadId: string, itemId: string, recover = false): Promise<{ token: string }> {
+    const msg = this.pendingMessage(threadId, itemId);
+    if (msg.edit) {
+      if (!recover || msg.edit.withdrawal) throw new Error("That message is already being edited");
+      // A reloaded view can reopen a stranded edit; stale popup tokens cannot save or release it.
+      msg.edit.token = crypto.randomBytes(12).toString("hex");
+      return { token: msg.edit.token };
     }
     const run = this.runs.get(threadId);
-    const steer = run?.steer;
-    if (!run || !steer) throw new Error("Nothing is queued");
-    const session = this.sessions.get(threadId);
-    if (!(await session?.withdrawSteer?.(steer.id)) || run.steer !== steer) throw new Error("The agent has already read that message");
-    run.steer = null;
-    const item = steer.itemId ? this.loadItems(threadId).find((it) => it.id === steer.itemId) : undefined;
-    if (item) this.removeItem(item);
-    this.forgetFiles(threadId, steer.msg);
+    const waiting = run?.steer;
+    const wasSteered = waiting?.msg === msg;
+    const token = crypto.randomBytes(12).toString("hex");
+    msg.edit = { token, steer: wasSteered };
+    if (wasSteered && waiting) {
+      msg.edit.withdrawal = this.sessions.get(threadId)?.withdrawSteer?.(waiting.id).catch(() => false) ?? Promise.resolve(false);
+      const withdrawn = await msg.edit.withdrawal;
+      if (!withdrawn) {
+        delete msg.edit;
+        this.drainQueue(threadId);
+        throw new Error("That message has already been handed to the agent");
+      }
+      if (run?.steer === waiting) {
+        run.steer = null;
+        const queue = this.queues.get(threadId) ?? [];
+        queue.unshift(msg);
+        this.queues.set(threadId, queue);
+      }
+      delete msg.edit?.withdrawal;
+    }
+    const item = this.loadItems(threadId).find((it) => it.id === itemId);
+    if (!item || item.kind !== "user" || item.turnId || item.dropped) {
+      delete msg.edit;
+      throw new Error("That message is no longer pending");
+    }
+    delete item.steer;
+    item.editing = true;
+    this.touch(item);
     this.emitThread(threadId);
-    return { text: steer.msg.text, images: steer.msg.images, files: steer.msg.files, context: steer.msg.context };
+    return { token };
+  }
+
+  finishQueuedEdit(threadId: string, itemId: string, token: string, text?: string): void {
+    const msg = this.pendingMessage(threadId, itemId);
+    if (!msg.edit || msg.edit.token !== token) throw new Error("That edit is no longer active");
+    if (text !== undefined && !text.trim() && !msg.images.length && !msg.files.length) throw new Error("Empty message");
+    const steer = msg.edit.steer;
+    const item = this.loadItems(threadId).find((it) => it.id === itemId);
+    if (text !== undefined) msg.text = text;
+    delete msg.edit;
+    if (item?.kind === "user") {
+      item.text = msg.text;
+      delete item.editing;
+      this.touch(item);
+    }
+    if (steer && this.queues.get(threadId)?.[0] === msg) this.steerFirst(threadId);
+    this.emitThread(threadId);
+    this.drainQueue(threadId);
+  }
+
+  async withdraw(threadId: string, itemId?: string): Promise<{ text: string; images: ChatImage[]; files: ChatFile[]; context: ContextChip[] }> {
+    const msg = this.pendingMessage(threadId, itemId);
+    const id = msg.itemId;
+    if (!id) throw new Error("That message is no longer pending");
+    await this.beginQueuedEdit(threadId, id);
+    const queue = this.queues.get(threadId);
+    const at = queue?.indexOf(msg) ?? -1;
+    if (at < 0 || !queue) throw new Error("That message is no longer pending");
+    queue.splice(at, 1);
+    if (!queue.length) this.queues.delete(threadId);
+    const item = this.loadItems(threadId).find((it) => it.id === id);
+    if (item) this.removeItem(item);
+    this.forgetFiles(threadId, msg);
+    this.emitThread(threadId);
+    this.drainQueue(threadId);
+    return { text: msg.text, images: msg.images, files: msg.files, context: msg.context };
+  }
+
+  /** Never pass an edited head of the queue, even when the preceding turn has ended. */
+  private drainQueue(threadId: string): void {
+    if (this.runs.has(threadId) || !this.threads.has(threadId)) return;
+    const queue = this.queues.get(threadId);
+    if (!queue?.length || queue[0].edit) return;
+    const next = queue.shift()!;
+    if (!queue.length) this.queues.delete(threadId);
+    const item = this.loadItems(threadId).find((it) => it.id === next.itemId);
+    void this.runTurn(threadId, next, item ?? this.addItem(threadId, null, userBody(next)));
   }
 
   /** A withdrawn message's saved files: the composer has them again and saves them anew on send. */
@@ -1503,7 +1580,9 @@ export class AgentHost {
         if (waiting.id !== itemId) return;
       } else if (!this.preferQueued(threadId, itemId)) return;
     }
-    if (!run || (!run.steer && !this.queues.get(threadId)?.length)) return;
+    if (this.queues.get(threadId)?.[0]?.edit) throw new Error("Finish editing the queued message first");
+    if (!run) { this.drainQueue(threadId); return; }
+    if (!run.steer && !this.queues.get(threadId)?.length) return;
     await this.cancel(threadId, { keepQueue: true });
   }
 
@@ -1902,6 +1981,7 @@ export class AgentHost {
       for (const item of this.queuedItems(threadId)) {
         if (item.kind === "user") {
           item.dropped = true;
+          delete item.editing;
           this.touch(item);
         }
       }
@@ -2028,6 +2108,8 @@ export class AgentHost {
       }
     }
     if (run.cancelled && result.status !== "error") result = { status: "cancelled", next: result.next };
+    // An edit's withdrawal must settle before deciding whether to adopt or requeue a steer.
+    await run.steer?.msg.edit?.withdrawal;
     // A steered message the turn did not take in: the provider runs it next (adopted below), or it lost it and it goes back to the front of the queue.
     const carried = run.steer && result.next === run.steer.id ? run.steer : null;
     if (run.steer && !carried) {
@@ -2123,13 +2205,7 @@ export class AgentHost {
       void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id });
       return;
     }
-    const queue = this.queues.get(threadId);
-    const next = queue?.shift();
-    if (queue && !queue.length) this.queues.delete(threadId);
-    if (next && latest) {
-      const pendingUser = this.queuedItems(threadId)[0];
-      void this.runTurn(threadId, next, pendingUser ?? this.addItem(threadId, null, { kind: "user", text: next.text }));
-    }
+    this.drainQueue(threadId);
   }
 
   private toolFiles(run: RunState): FileChange[] {

@@ -289,7 +289,13 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   // Up on an empty composer: take the latest queued (or waiting steered) message back for editing.
-  router.post("/threads/:id/withdraw", wrap((req) => host.withdraw(req.params.id)));
+  router.post("/threads/:id/withdraw", wrap((req) => host.withdraw(req.params.id, typeof req.body?.itemId === "string" ? req.body.itemId : undefined)));
+  router.post("/threads/:id/queued/:itemId/edit", wrap((req) => host.beginQueuedEdit(req.params.id, req.params.itemId, req.body?.recover === true)));
+  router.post("/threads/:id/queued/:itemId/edit-finish", wrap((req) => {
+    if (typeof req.body?.token !== "string" || (req.body.text !== undefined && typeof req.body.text !== "string")) throw new Error("Invalid edit");
+    host.finishQueuedEdit(req.params.id, req.params.itemId, req.body.token, req.body.text);
+    return { ok: true };
+  }));
 
   router.post(
     "/threads/:id/send-now",
