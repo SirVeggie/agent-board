@@ -2083,6 +2083,7 @@
           { header: wt.branch },
           { label: "Changes on this branch", detail: state, icon: "diff", run: () => openDiff({ kind: "git", threadId: t.id }) },
           { label: "Copy worktree path", detail: wt.path, icon: "folder", run: () => navigator.clipboard?.writeText(wt.path) },
+          { label: "Preview UI", detail: "Open this worktree’s public/ with the running daemon", icon: "globe", run: () => window.open(`/preview/${encodeURIComponent(t.id)}/`, "_blank", "noopener") },
           { separator: true },
           {
             label: wt.base ? `Merge into ${wt.base}` : "Merge",

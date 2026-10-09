@@ -41,6 +41,7 @@ import {
 import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
+import { worktreePreviewRouter } from "./worktreePreview.js";
 import { agentRouter } from "./agent/routes.js";
 import { readScopedFile } from "./agent/readFile.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
@@ -146,6 +147,7 @@ export async function startHttp(): Promise<http.Server> {
   });
   app.use(express.json({ limit: "6mb" }));
   app.use(noteAgentSession);
+  app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));
 
   app.param("id", (req, res, next, id: string) => {

@@ -12,6 +12,12 @@ You keep **http://127.0.0.1:4747** open in the browser (or the desktop app). Age
 
 The MCP process can come and go with Cursor. The daemon stays up so Scribe does not reset when a chat ends.
 
+## Preview UI changes in a worktree
+
+In an open worktree's branch menu, choose **Preview UI**. The browser opens `/preview/<thread-id>/`, serving that worktree's `public/index.html`, CSS, JavaScript and other public files directly. Reload to see edits; preview responses are not cached. Use `/preview/<thread-id>/<public-file>` for a specific file.
+
+Only open worktrees registered by Scribe can be previewed, over loopback and GET only. Hidden files, traversal and links outside `public/` are refused. Closing the worktree ends its preview. The preview uses the running daemon's APIs and live data: actions there change the same pages and threads as the normal UI. Server changes still need a separate daemon or rebuild/restart. UI assets should use relative URLs (such as `./agent.css`); API and shared `/vendor/` URLs stay rooted at the daemon.
+
 ## Setup on a new PC
 
 `dist/` is not in git, and Cursor only sees the MCP server and skill if they are registered on that machine. After clone:

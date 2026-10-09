@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scribe</title>
-  <link rel="icon" href="/favicon.svg?v=4" type="image/svg+xml" sizes="any">
+  <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml" sizes="any">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=62">
-  <link rel="stylesheet" href="/agent.css?v=29">
+  <link rel="stylesheet" href="./app.css?v=62">
+  <link rel="stylesheet" href="./agent.css?v=29">
   <script>
     (() => {
       // Settings saved before the rename from Agent Board keep working.
@@ -37,13 +37,13 @@
         document.documentElement.dataset.theme = theme;
       }
       const icons = {
-        ember: "/favicon-ember.svg?v=4",
-        spectrum: "/favicon-spectrum.svg?v=4",
-        garnet: "/favicon-garnet.svg?v=5",
-        dusk: "/favicon-dusk.svg?v=5",
-        cream: "/favicon-cream.svg?v=5",
+        ember: "./favicon-ember.svg?v=4",
+        spectrum: "./favicon-spectrum.svg?v=4",
+        garnet: "./favicon-garnet.svg?v=5",
+        dusk: "./favicon-dusk.svg?v=5",
+        cream: "./favicon-cream.svg?v=5",
       };
-      const href = icons[theme] || "/favicon.svg?v=4";
+      const href = icons[theme] || "./favicon.svg?v=4";
       const link = document.querySelector('link[rel="icon"]');
       if (link && link.getAttribute("href") !== href) {
         link.href = href;
@@ -354,23 +354,23 @@
       <div class="confirm-actions" id="choice-actions"></div>
     </form>
   </dialog>
-  <script src="/tooltip.js?v=2"></script>
-  <script src="/hovercard.js?v=7"></script>
-  <script src="/select.js?v=2"></script>
-  <script src="/library.js?v=12"></script>
-  <script src="/trash.js?v=2"></script>
-  <script src="/views.js?v=5"></script>
-  <script src="/focusTrap.js?v=1"></script>
-  <script src="/preview.js?v=3"></script>
-  <script src="/permissions.js?v=1"></script>
-  <script src="/spaces.js?v=2"></script>
-  <script src="/newpage.js?v=1"></script>
-  <script src="/app.js?v=73"></script>
+  <script src="./tooltip.js?v=2"></script>
+  <script src="./hovercard.js?v=7"></script>
+  <script src="./select.js?v=2"></script>
+  <script src="./library.js?v=12"></script>
+  <script src="./trash.js?v=2"></script>
+  <script src="./views.js?v=5"></script>
+  <script src="./focusTrap.js?v=1"></script>
+  <script src="./preview.js?v=3"></script>
+  <script src="./permissions.js?v=1"></script>
+  <script src="./spaces.js?v=2"></script>
+  <script src="./newpage.js?v=1"></script>
+  <script src="./app.js?v=73"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
-  <script src="/agent-render.js?v=12"></script>
-  <script src="/agent.js?v=44"></script>
-  <script src="/desktop.js?v=6"></script>
+  <script src="./agent-render.js?v=12"></script>
+  <script src="./agent.js?v=44"></script>
+  <script src="./desktop.js?v=6"></script>
 </body>
 </html>

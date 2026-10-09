@@ -115,12 +115,12 @@
   ];
   const DEFAULT_THEME = "neutral";
   const THEMES = [
-    { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "/favicon.svg?v=4" },
-    { id: "ember", name: "Ember", swatch: "#d0a578", icon: "/favicon-ember.svg?v=4" },
-    { id: "spectrum", name: "Spectrum", swatch: "#9db8a4", icon: "/favicon-spectrum.svg?v=4" },
-    { id: "garnet", name: "Garnet", swatch: "#d56f6c", icon: "/favicon-garnet.svg?v=5" },
-    { id: "dusk", name: "Dusk", swatch: "#b7a2dc", icon: "/favicon-dusk.svg?v=5" },
-    { id: "cream", name: "Cream", swatch: "#f3ede1", icon: "/favicon-cream.svg?v=5" },
+    { id: "neutral", name: "Neutral", swatch: "#c9c9d0", icon: "./favicon.svg?v=4" },
+    { id: "ember", name: "Ember", swatch: "#d0a578", icon: "./favicon-ember.svg?v=4" },
+    { id: "spectrum", name: "Spectrum", swatch: "#9db8a4", icon: "./favicon-spectrum.svg?v=4" },
+    { id: "garnet", name: "Garnet", swatch: "#d56f6c", icon: "./favicon-garnet.svg?v=5" },
+    { id: "dusk", name: "Dusk", swatch: "#b7a2dc", icon: "./favicon-dusk.svg?v=5" },
+    { id: "cream", name: "Cream", swatch: "#f3ede1", icon: "./favicon-cream.svg?v=5" },
   ];
   const PIN_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.6 1.4l5 5-1.4 1.4-.9-.2-2.3 2.3.2 2.5-1.5 1.5-2.4-2.4-3.1 3.1-.8-.8 3.1-3.1-2.4-2.4 1.5-1.5 2.5.2 2.3-2.3-.2-.9z" fill="currentColor"/></svg>';
@@ -2804,7 +2804,7 @@
   }
 
   async function openWelcome() {
-    const html = await fetch("/welcome.html").then((res) => res.text());
+    const html = await fetch("./welcome.html").then((res) => res.text());
     pendingFocus = { key: "scribe:welcome" };
     const res = await fetch("/api/tabs", {
       method: "POST",
