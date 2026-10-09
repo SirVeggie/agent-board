@@ -761,6 +761,8 @@ window.createSpaces = function createSpaces(host) {
   renderChip();
 
   return {
+    activeId: () => data.activeId,
+    ids: () => data.spaces.map((space) => space.id),
     apply,
     show,
     close,

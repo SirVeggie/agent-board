@@ -1,12 +1,12 @@
 /**
  * Page links and the views they open: a peek (a fixed card over the page area) and a split
- * (a second pane tied to the tab that opened it). app.js owns the frame pool; this decides
+ * (a second pane tied to the space that opened it). app.js owns the frame pool; this decides
  * which pooled iframe sits where. Frames are only ever restyled, never moved in the DOM,
  * because moving an iframe reloads it.
  */
 window.createViews = function createViews(host) {
   const mainEl = host.mainEl;
-  const SPLITS_KEY = "scribe.splits";
+  const SPLITS_KEY = "scribe.spaceSplits";
   const SPLIT_RATIO_KEY = "scribe.splitRatio";
   /** Below this page-area width a split opens as a peek instead. */
   const SPLIT_MIN_MAIN = 720;
@@ -28,9 +28,9 @@ window.createViews = function createViews(host) {
 
   /** @typedef {{ kind: "page", id: string } | { kind: "url", href: string }} Target */
 
-  /** @type {null | { stack: Target[] }} */
-  let peek = null;
-  /** Host tab id → its split. Kept per window: a split is a temporary view, not board data. */
+  /** Space and host tab → its peek stack. */
+  const peeks = new Map();
+  /** Space id → its split. A split is a temporary view, not board data. */
   /** @type {Map<string, { target: Target, ratio: number }>} */
   const splits = loadSplits();
   let lastRatio = clampStoredRatio(Number(readStorage(SPLIT_RATIO_KEY)));
@@ -123,10 +123,10 @@ window.createViews = function createViews(host) {
     const map = new Map();
     try {
       const raw = JSON.parse(readStorage(SPLITS_KEY) || "{}");
-      for (const [hostId, value] of Object.entries(raw || {})) {
+      for (const [spaceId, value] of Object.entries(raw || {})) {
         const target = value?.page ? { kind: "page", id: String(value.page) } : value?.url ? { kind: "url", href: String(value.url) } : null;
         if (target) {
-          map.set(hostId, { target, ratio: clampStoredRatio(Number(value.ratio)) });
+          map.set(spaceId, { target, ratio: clampStoredRatio(Number(value.ratio)) });
         }
       }
     } catch {
@@ -137,8 +137,8 @@ window.createViews = function createViews(host) {
 
   function saveSplits() {
     const out = {};
-    for (const [hostId, split] of splits) {
-      out[hostId] = split.target.kind === "page" ? { page: split.target.id, ratio: split.ratio } : { url: split.target.href, ratio: split.ratio };
+    for (const [spaceId, split] of splits) {
+      out[spaceId] = split.target.kind === "page" ? { page: split.target.id, ratio: split.ratio } : { url: split.target.href, ratio: split.ratio };
     }
     writeStorage(SPLITS_KEY, JSON.stringify(out));
   }
@@ -238,13 +238,28 @@ window.createViews = function createViews(host) {
 
   /* ---------- state queries ---------- */
 
+  function peekKey() {
+    return JSON.stringify([host.spaceId(), host.activeId()]);
+  }
+
+  function activePeek() {
+    return peeks.get(peekKey()) || null;
+  }
+
+  function setPeek(value) {
+    if (value) peeks.set(peekKey(), value);
+    else peeks.delete(peekKey());
+  }
+
   function peekTarget() {
+    const peek = activePeek();
     return peek ? peek.stack[peek.stack.length - 1] : null;
   }
 
   function activeSplit() {
     const active = host.activeId();
-    return active ? splits.get(active) || null : null;
+    const split = active ? splits.get(host.spaceId()) || null : null;
+    return split?.target.kind === "page" && split.target.id === active ? null : split;
   }
 
   /** Every frame the current view puts on screen, so the pool never evicts one of them. */
@@ -309,9 +324,13 @@ window.createViews = function createViews(host) {
     }
   }
 
-  /** URL frames are not pages; drop them once nothing shows them. */
+  /** URL frames are not pages; keep them while a view still references them. */
   function dropUnusedUrlFrames() {
     const keep = shownIds();
+    for (const peek of peeks.values()) {
+      for (const target of peek.stack) keep.add(frameIdOf(target));
+    }
+    for (const split of splits.values()) keep.add(frameIdOf(split.target));
     for (const id of host.frameIds()) {
       if (id.startsWith("url:") && !keep.has(id)) {
         host.discardFrame(id);
@@ -380,7 +399,7 @@ window.createViews = function createViews(host) {
   /** Put every pooled frame where the view wants it. Called from app.js's render. */
   function layout() {
     const primary = host.activeTab();
-    const split = primary ? splits.get(primary.id) || null : null;
+    const split = primary ? activeSplit() : null;
     const top = peekTarget();
     const roles = new Map();
     if (primary) {
@@ -418,13 +437,13 @@ window.createViews = function createViews(host) {
       mainEl.style.setProperty("--split", String(ratio));
       divider.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
     }
-    renderSplitChrome(primary, split);
+    renderSplitChrome(split);
     renderPeekChrome(top);
     dropUnusedUrlFrames();
     deliverAnchor();
   }
 
-  function renderSplitChrome(primary, split) {
+  function renderSplitChrome(split) {
     const show = Boolean(split);
     splitHead.hidden = !show;
     splitBody.hidden = !show;
@@ -435,7 +454,7 @@ window.createViews = function createViews(host) {
     const target = split.target;
     splitHead.replaceChildren(
       headTitle(target),
-      openOutButton(target, () => promote(target, { fromSplit: primary.id })),
+      openOutButton(target, () => promote(target, { fromSplit: host.spaceId() })),
       iconButton(ICONS.peek, "Show as peek", () => splitToPeek()),
       iconButton(ICONS.close, "Close split", () => closeSplit())
     );
@@ -450,7 +469,7 @@ window.createViews = function createViews(host) {
       return;
     }
     const parts = [];
-    if (peek.stack.length > 1) {
+    if (activePeek().stack.length > 1) {
       parts.push(iconButton(ICONS.back, "Back", () => peekBack()));
     }
     parts.push(
@@ -526,10 +545,10 @@ window.createViews = function createViews(host) {
   }
 
   function closePeek({ refocus = true } = {}) {
-    if (!peek) {
+    if (!activePeek()) {
       return false;
     }
-    peek = null;
+    setPeek(null);
     host.render();
     if (refocus) {
       host.frame(host.activeId())?.el.focus();
@@ -538,6 +557,7 @@ window.createViews = function createViews(host) {
   }
 
   function peekBack() {
+    const peek = activePeek();
     if (!peek || peek.stack.length < 2) {
       return;
     }
@@ -553,8 +573,8 @@ window.createViews = function createViews(host) {
     }
   }
 
-  function closeSplit(hostId = host.activeId()) {
-    if (!hostId || !splits.delete(hostId)) {
+  function closeSplit() {
+    if (!splits.delete(host.spaceId())) {
       return false;
     }
     saveSplits();
@@ -562,8 +582,9 @@ window.createViews = function createViews(host) {
     return true;
   }
 
-  function setSplit(hostId, target) {
-    splits.set(hostId, { target, ratio: splits.get(hostId)?.ratio || lastRatio });
+  function setSplit(target) {
+    const spaceId = host.spaceId();
+    splits.set(spaceId, { target, ratio: splits.get(spaceId)?.ratio || lastRatio });
     saveSplits();
   }
 
@@ -572,9 +593,9 @@ window.createViews = function createViews(host) {
     if (!split) {
       return;
     }
-    splits.delete(host.activeId());
+    splits.delete(host.spaceId());
     saveSplits();
-    peek = { stack: [split.target] };
+    setPeek({ stack: [split.target] });
     host.render();
     focusPeek();
   }
@@ -589,8 +610,8 @@ window.createViews = function createViews(host) {
       host.showNotice(active ? "The window is too narrow for a split" : "Open a tab first to split beside it");
       return;
     }
-    setSplit(active, top);
-    peek = null;
+    setSplit(top);
+    setPeek(null);
     host.render();
   }
 
@@ -600,7 +621,7 @@ window.createViews = function createViews(host) {
       return;
     }
     if (fromPeek) {
-      peek = null;
+      setPeek(null);
     }
     if (fromSplit) {
       splits.delete(fromSplit);
@@ -672,7 +693,7 @@ window.createViews = function createViews(host) {
 
     if (mode === "tab") {
       if (source.role === "peek") {
-        peek = null;
+        setPeek(null);
       }
       if (target.id === active) {
         host.render();
@@ -689,11 +710,12 @@ window.createViews = function createViews(host) {
 
     if (mode === "peek") {
       if (visibleAsPrimary || visibleInSplit) {
-        peek = source.role === "peek" ? null : peek;
+        if (source.role === "peek") setPeek(null);
         host.render();
         flash(frameId);
         return { ok: true, mode, alreadyVisible: true, ...(target.kind === "page" ? { id: target.id } : { url: target.href }) };
       }
+      const peek = activePeek();
       if (source.role === "peek" && peek) {
         if (!sameTarget(peekTarget(), target)) {
           peek.stack.push(target);
@@ -702,7 +724,7 @@ window.createViews = function createViews(host) {
           }
         }
       } else {
-        peek = { stack: [target] };
+        setPeek({ stack: [target] });
       }
       host.render();
       focusPeek();
@@ -718,16 +740,16 @@ window.createViews = function createViews(host) {
         host.showNotice("Open another tab to split beside");
         return { ok: false, error: "no_neighbor" };
       }
-      closeSplit(active);
+      closeSplit();
       host.selectTab(neighbor);
-      setSplit(neighbor, target);
+      setSplit(target);
       host.render();
       return { ok: true, mode, id: target.id };
     }
     if (source.role === "peek" || sameTarget(peekTarget(), target)) {
-      peek = null;
+      setPeek(null);
     }
-    setSplit(active, target);
+    setSplit(target);
     host.render();
     return { ok: true, mode, ...(target.kind === "page" ? { id: target.id } : { url: target.href }) };
   }
@@ -755,15 +777,14 @@ window.createViews = function createViews(host) {
 
   /** The user picked a tab. Picking the page shown beside it in a split takes it out of the split. */
   function onSelect(nextId) {
-    const prev = host.activeId();
-    const split = prev ? splits.get(prev) : null;
+    const split = activeSplit();
     if (split?.target.kind === "page" && split.target.id === nextId) {
-      splits.delete(prev);
+      splits.delete(host.spaceId());
       saveSplits();
     }
     const top = peekTarget();
     if (top?.kind === "page" && top.id === nextId) {
-      peek = null;
+      setPeek(null);
     }
     for (const id of [...openedFrom.keys()]) {
       if (id !== nextId) {
@@ -781,17 +802,15 @@ window.createViews = function createViews(host) {
 
   function onDeleted(id) {
     let changed = false;
-    if (peek) {
-      const before = peek.stack.length;
+    for (const [key, peek] of peeks) {
       peek.stack = peek.stack.filter((target) => !(target.kind === "page" && target.id === id));
-      if (!peek.stack.length) {
-        peek = null;
+      if (JSON.parse(key)[1] === id || !peek.stack.length) {
+        peeks.delete(key);
       }
-      changed = changed || before !== (peek?.stack.length ?? 0);
     }
-    for (const [hostId, split] of [...splits]) {
-      if (hostId === id || (split.target.kind === "page" && split.target.id === id)) {
-        splits.delete(hostId);
+    for (const [spaceId, split] of [...splits]) {
+      if (split.target.kind === "page" && split.target.id === id) {
+        splits.delete(spaceId);
         changed = true;
       }
     }
@@ -804,16 +823,34 @@ window.createViews = function createViews(host) {
   /** After a snapshot: forget splits whose pages are gone. */
   function prune() {
     let changed = false;
-    for (const [hostId, split] of [...splits]) {
-      if (!host.findAnyTab(hostId) || (split.target.kind === "page" && !host.findAnyTab(split.target.id))) {
-        splits.delete(hostId);
+    const spaceIds = host.spaceIds();
+    // Spaces are created lazily. The first space inherits the original tab strip's views.
+    if (!spaceIds.includes("default") && spaceIds.length) {
+      const firstSpace = spaceIds[0];
+      if (splits.has("default")) {
+        if (!splits.has(firstSpace)) splits.set(firstSpace, splits.get("default"));
+        splits.delete("default");
+        changed = true;
+      }
+      for (const [key, peek] of peeks) {
+        const [spaceId, tabId] = JSON.parse(key);
+        if (spaceId === "default") {
+          peeks.set(JSON.stringify([firstSpace, tabId]), peek);
+          peeks.delete(key);
+        }
+      }
+    }
+    for (const [spaceId, split] of [...splits]) {
+      if (!spaceIds.includes(spaceId) || (split.target.kind === "page" && !host.findAnyTab(split.target.id))) {
+        splits.delete(spaceId);
         changed = true;
       }
     }
-    if (peek) {
+    for (const [key, peek] of peeks) {
+      const [spaceId, tabId] = JSON.parse(key);
       peek.stack = peek.stack.filter((target) => target.kind === "url" || host.findAnyTab(target.id));
-      if (!peek.stack.length) {
-        peek = null;
+      if (!spaceIds.includes(spaceId) || (tabId && !host.findAnyTab(tabId)) || !peek.stack.length) {
+        peeks.delete(key);
       }
     }
     if (changed) {
@@ -977,6 +1014,6 @@ window.createViews = function createViews(host) {
     prune,
     modeFromEvent,
     roleOf,
-    peekOpen: () => Boolean(peek),
+    peekOpen: () => Boolean(activePeek()),
   };
 };

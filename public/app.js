@@ -278,6 +278,8 @@
     closed: () => state.closed,
     findAnyTab,
     activeId: () => state.activeId,
+    spaceId: () => spaces.activeId() || "default",
+    spaceIds: () => spaces.ids().length ? spaces.ids() : ["default"],
     // A blank page has no frame: the New page screen stands in for it.
     activeTab: () => (isBlank(activeTab()) ? null : activeTab()),
     frame: (id) => frames.get(id) || null,
@@ -404,8 +406,8 @@
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       state.templates = Array.isArray(msg.templates) ? msg.templates : [];
       state.builtinTemplates = Array.isArray(msg.builtinTemplates) ? msg.builtinTemplates : [];
-      views.prune();
       spaces.apply(msg.spaces);
+      views.prune();
       // After a space switch the address still names the old space's tab: don't reopen it here.
       const hash = msg.reset ? "" : location.hash.replace(/^#/, "");
       const fromOpen = hash ? state.tabs.find((tab) => tab.id === hash || tab.key === hash) : null;
@@ -432,6 +434,8 @@
     }
     if (msg.type === "spaces") {
       spaces.apply(msg.spaces);
+      views.prune();
+      render();
       return;
     }
     if (msg.type === "folders") {
@@ -769,7 +773,6 @@
       return;
     }
     const from = draftActive() ? state.draftFrom : state.activeId;
-    views.closePeek();
     state.draft = data.tab;
     state.draftFrom = from;
     state.activeId = data.tab.id;
