@@ -546,7 +546,8 @@ button.ag-tip {
 }
 
 .ag-user-content.long:not(.expanded) .ag-user-text {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 4em), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 6em), transparent calc(100% - 2em));
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 6em), transparent calc(100% - 2em));
 }
 
 .ag-user-content {
