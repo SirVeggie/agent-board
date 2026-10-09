@@ -192,6 +192,8 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
 /**
  * Approvals the thread's settings answer without asking: Scribe's own board tools, Pages mode's
  * refusals, and the "full" and "edits" approval levels. Null when the user has to decide.
+ * Codex Auto-review runs in the native app-server, before this callback. Do not
+ * turn "auto" into an unconditional host grant; any fallback request still asks.
  */
 function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<ApprovalDecision> | null {
   const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");

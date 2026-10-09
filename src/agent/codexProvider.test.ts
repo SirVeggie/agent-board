@@ -63,6 +63,17 @@ test("mcpConfig registers the board server as scribe with the thread id", () => 
   assert.equal(env.SCRIBE_THREAD, "th_none");
 });
 
+test("Codex approval modes select the native reviewer without widening the mode sandbox", () => {
+  for (const mode of ["code", "ask", "plan", "board"] as const) {
+    for (const approval of ["ask", "edits", "auto", "full"] as const) {
+      const opts = threadOptions(thread({ mode, approval }), "/work");
+      assert.equal(opts.approvalsReviewer, approval === "auto" ? "auto_review" : "user");
+      assert.equal(opts.approvalPolicy, approval === "full" ? "never" : "on-request");
+      assert.equal(opts.sandbox, mode !== "code" ? "read-only" : approval === "full" ? "danger-full-access" : "workspace-write");
+    }
+  }
+});
+
 test("mapUsage copies Codex exec token fields", () => {
   assert.deepEqual(
     mapUsage({
@@ -181,18 +192,18 @@ test("Codex RPC rejects outstanding calls on process exit", async () => {
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-function sessionFixture(nativeId: string | null = null) {
+function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask") {
   let f: ReturnType<typeof rpcFixture>;
-  const session = new CodexSession({ ...thread(), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
+  const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
     { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [] } as SessionContext,
     () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {});
-  const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "" };
+  const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", notices: [] as Array<{ level: string; text: string }> };
   const sink: RunSink = {
     nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart() {},
     toolUpdate(_id, patch) { if (patch.output !== undefined) seen.output = patch.output; }, beforeWrite: async () => {},
     approval: async (req) => { seen.approvals.push(req.tool); return { optionId: "decline" }; },
     question: async () => ({ answers: { q: ["Yes"] } }), plan: async (req) => { seen.plans.push(req.text); return { accepted: false }; },
-    todos() {}, usage() {}, notice() {}, commands() {}, title() {}, steered(id) { seen.steered.push(id); },
+    todos() {}, usage() {}, notice(level, text) { seen.notices.push({ level, text }); }, commands() {}, title() {}, steered(id) { seen.steered.push(id); },
   };
   async function start() {
     const run = session.run({ text: "hello", images: [], documents: [], instructions: "Scribe instructions" }, sink);
@@ -202,8 +213,9 @@ function sessionFixture(nativeId: string | null = null) {
     await tick();
     assert.ok(f!.sent.some((message) => message.method === "initialized"));
     const start = f!.sent.find((message) => message.method === (nativeId ? "thread/resume" : "thread/start"))!;
-    assert.equal(start.params?.approvalPolicy, "on-request");
-    assert.equal(start.params?.sandbox, "workspace-write");
+    assert.equal(start.params?.approvalPolicy, approval === "full" ? "never" : "on-request");
+    assert.equal(start.params?.approvalsReviewer, approval === "auto" ? "auto_review" : "user");
+    assert.equal(start.params?.sandbox, approval === "full" ? "danger-full-access" : "workspace-write");
     f!.emit({ id: start.id, result: { thread: { id: "native-thread" } } });
     await tick();
     const turn = f!.sent.find((message) => message.method === "turn/start")!;
@@ -239,6 +251,49 @@ test("Codex app-server streams text once, forwards approval replies and marks st
   f.complete();
   assert.deepEqual(await run, { status: "done" });
   f.session.dispose();
+});
+
+test("Codex native Auto-review reports lifecycle, denials and failures without human approval or local grants", async () => {
+  const f = sessionFixture(null, "auto");
+  const { run } = await f.start();
+  const params = { threadId: "native-thread", turnId: "turn-1", reviewId: "r1", targetItemId: "shell",
+    action: { type: "command", command: "echo hello", cwd: "/work" } };
+  f.f.emit({ method: "item/autoApprovalReview/started", params: { ...params, review: { status: "inProgress" } } });
+  for (const status of ["approved", "denied", "timedOut", "aborted", "futureStatus"]) {
+    f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, review: { status, rationale: "Review reason" } } });
+  }
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, targetItemId: null,
+    action: { type: "networkAccess", target: "example.com:443" }, review: { status: "denied" } } });
+  f.f.emit({ method: "guardianWarning", params: { threadId: "native-thread", message: "Reviewer unavailable" } });
+  const count = f.seen.notices.length;
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, threadId: "other", review: { status: "denied" } } });
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, turnId: "old", review: { status: "denied" } } });
+  assert.equal(f.seen.notices.length, count);
+  assert.deepEqual(f.seen.notices.map((n) => n.level), ["info", "info", "warn", "error", "error", "error", "warn", "warn"]);
+  assert.match(f.seen.notices[0].text, /reviewing.*shell.*echo hello/);
+  assert.match(f.seen.notices[2].text, /denied.*\nReview reason/);
+  assert.match(f.seen.notices[3].text, /timed out/);
+  assert.match(f.seen.notices[4].text, /aborted/);
+  assert.match(f.seen.notices[5].text, /failed/);
+  assert.match(f.seen.notices[6].text, /denied: example.com:443/);
+  assert.match(f.seen.notices[7].text, /Reviewer unavailable/);
+  assert.deepEqual(f.seen.approvals, []);
+  assert.equal(f.f.sent.filter((message) => message.result && !message.method).length, 0);
+  f.complete();
+  assert.equal((await run).status, "done");
+  f.session.dispose();
+});
+
+test("Codex start and resume retain Auto-review and Full policies", async () => {
+  for (const nativeId of [null, "native-thread"]) {
+    for (const approval of ["auto", "full"] as const) {
+      const f = sessionFixture(nativeId, approval);
+      const { run } = await f.start();
+      f.complete();
+      assert.equal((await run).status, "done");
+      f.session.dispose();
+    }
+  }
 });
 
 test("Codex rejected steer remains unacknowledged for host requeue, and pending approval aborts on completion", async () => {

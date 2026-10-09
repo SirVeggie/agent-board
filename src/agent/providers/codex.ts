@@ -316,7 +316,8 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
     sandbox: sandboxFor(thread),
     cwd,
     approvalPolicy: thread.approval === "full" ? "never" : "on-request",
-    approvalsReviewer: "user",
+    // Native review only handles actions that need approval; keep the mode's sandbox.
+    approvalsReviewer: thread.approval === "auto" ? "auto_review" : "user",
     config: {
       ...(effort ? { model_reasoning_effort: effort } : {}),
       web_search: thread.web === "on" ? "live" : "disabled",
@@ -937,6 +938,31 @@ export class CodexSession implements ProviderSession {
         break;
       case "serverRequest/resolved":
         if (typeof p.requestId === "string" || typeof p.requestId === "number") this.requests.get(p.requestId)?.abort();
+        break;
+      case "item/autoApprovalReview/started":
+      case "item/autoApprovalReview/completed": {
+        // CLI 0.162.0's experimental review notifications. These report the native
+        // decision; they must never grant access through the host approval callback.
+        const review = isPlainRecord(p.review) ? p.review : {};
+        const action = isPlainRecord(p.action) ? p.action : {};
+        const status = message.method.endsWith("/started") ? "inProgress" : review.status;
+        const labels: Record<string, string> = {
+          inProgress: "reviewing", approved: "approved", denied: "denied",
+          timedOut: "timed out", aborted: "aborted",
+        };
+        const target = typeof p.targetItemId === "string" ? ` (item ${p.targetItemId})` : "";
+        const detail = typeof action.command === "string" ? action.command
+          : action.type === "applyPatch" && Array.isArray(action.files) ? action.files.join(", ")
+          : action.type === "networkAccess" ? String(action.target ?? action.host ?? "network access")
+          : action.type === "mcpToolCall" ? `${action.server ?? "MCP"}/${action.toolName ?? "tool"}`
+          : typeof action.type === "string" ? action.type : "action";
+        const rationale = typeof review.rationale === "string" && review.rationale ? `\n${review.rationale}` : "";
+        sink.notice(status === "inProgress" || status === "approved" ? "info" : status === "denied" ? "warn" : "error",
+          `Codex Auto-review ${labels[String(status)] ?? "failed (unknown review status)"}${target}: ${detail}${rationale}`);
+        break;
+      }
+      case "guardianWarning":
+        sink.notice("warn", `Codex Auto-review: ${typeof p.message === "string" ? p.message : "review warning"}`);
         break;
       case "turn/plan/updated":
         if (Array.isArray(p.plan)) sink.todos(p.plan.filter(isPlainRecord).map((step) => ({ content: String(step.step ?? ""), status: step.status === "completed" ? "completed" : step.status === "inProgress" ? "in_progress" : "pending" })));
