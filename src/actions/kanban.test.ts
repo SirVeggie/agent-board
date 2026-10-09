@@ -819,3 +819,52 @@ test("the sweep leaves a status the user set while the agent waited", () => {
   assert.deepEqual(card(state, 1).status, { kind: "info", text: "Answered in chat" });
   assert.equal((card(state, 1).claim as { waiting?: unknown }).waiting, undefined);
 });
+
+test("worker_step waits while Scribe sees a run through, and returns the run once it ended", () => {
+  const ended = { phase: "ended" as const, fixes: 0, after: 1, createdAt: 1, merge: true, outcome: { kind: "done" as const, merged: true } };
+  const threads: Record<string, ThreadRunInfo> = {
+    waiting: { exists: true, running: false, title: "W", lastTurn: { status: "error", endedAt: 900, limitResetsAt: 5000 }, run: { phase: "waiting", fixes: 0, after: 1, createdAt: 1, merge: true, wait: { until: 5000, count: 1 } } },
+    merging: { exists: true, running: false, title: "M", lastTurn: { status: "done", endedAt: 900 }, run: { phase: "running", fixes: 0, after: 1, createdAt: 1, merge: true } },
+    ended: { exists: true, running: false, title: "E", lastTurn: { status: "done", endedAt: 900 }, run: ended },
+  };
+  const page: ActionContext = { caller: { by: "user", label: "user" }, now: 1000, values: {}, thread: (id) => threads[id] ?? { exists: false } };
+  const withWorker = (threadId: string) => ({ ...board(), settings: { workers: { w_op: { name: "Opus", run: { since: 1 }, threadId } } } });
+  assert.throws(() => run(withWorker("waiting"), "worker_step", { worker: "w_op", from: "waiting", token: "a" }, page), /usage limit/);
+  assert.throws(() => run(withWorker("merging"), "worker_step", { worker: "w_op", from: "merging", token: "a" }, page), /seeing the agent through/);
+  const done = run(withWorker("ended"), "worker_step", { worker: "w_op", from: "ended", token: "a" }, page);
+  assert.deepEqual(done.result.run, ended);
+});
+
+test("runHold keeps a chat's branch unmerged while it still holds a card", () => {
+  const claimed = run(board(), "claim", { card: 1 }, agent({ thread: "th1" })).state;
+  assert.equal(kanbanActions.runHold!(claimed, "th1"), "it still holds #1");
+  assert.equal(kanbanActions.runHold!(claimed, "th2"), null);
+});
+
+test("runEvent logs Scribe's steps for a worker's chat in the worker log", () => {
+  const state = { ...board(), settings: { workers: { w_op: { name: "Opus" } } } };
+  const view = { phase: "waiting" as const, fixes: 0, after: 1, createdAt: 1, merge: true, data: { worker: "w_op", card: 2 }, wait: { until: 5000, count: 1 } };
+  const limit = kanbanActions.runEvent!(state, { kind: "limit", text: "x", resetsAt: 5000, thread: "th1", run: view }, 1000)!;
+  const after = applyStateOps(state, limit.ops) as { settings: { workerLog: Array<Record<string, unknown>> } };
+  const line = after.settings.workerLog[0];
+  assert.equal(line.kind, "limit");
+  assert.equal(line.worker, "Opus");
+  assert.equal(line.card, 2);
+  assert.match(String(line.text), /^Out of plan usage until .+ \(wait 1\)$/);
+  // Not a worker's chat, or its end (the board logs that with the chat's token totals): nothing.
+  assert.equal(kanbanActions.runEvent!(after, { kind: "end", text: "Done", thread: "th1", run: { ...view, phase: "ended", outcome: { kind: "done", merged: true } } }, 2000), null);
+  assert.equal(kanbanActions.runEvent!(state, { kind: "limit", text: "x", thread: "th1", run: { ...view, data: {} } }, 1000), null);
+  assert.equal(kanbanActions.runEvent!(state, { kind: "end", text: "x", thread: "th1", run: { ...view, phase: "ended", outcome: { kind: "failed" } } }, 1000), null);
+});
+
+test("sweep keeps a card claimed while Scribe waits out its chat's usage limit", () => {
+  const claimed = run(board(), "claim", { card: 1 }, agent({ thread: "th1" })).state;
+  const info: ThreadRunInfo = { exists: true, running: false, title: "T", lastTurn: { status: "error", endedAt: 900, limitResetsAt: 1000 }, run: { phase: "waiting", fixes: 0, after: 1, createdAt: 1, merge: true, wait: { until: 61000, count: 1 } } };
+  // Long after the reset (Codex hasn't confirmed it yet): still waiting, not stale or released.
+  const ctx: SweepContext = { now: 1000 + 2 * 60 * 60 * 1000, thread: () => info, sessionSeenAt: () => undefined };
+  const out = kanbanActions.sweep!(claimed, ctx);
+  const next = out ? applyStateOps(claimed, out.ops) : claimed;
+  const c = card(next, 1) as { claim?: { stale?: boolean }; status?: { kind: string; text: string } };
+  assert.ok(c.claim && !c.claim.stale);
+  assert.match(c.status!.text, /^Out of plan usage\. The worker goes on after the limit resets/);
+});

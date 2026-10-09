@@ -886,7 +886,7 @@ export const kanbanActions: ActionSet = {
   },
 
   runEvent(state: BoardState, event: RunEvent, now: number): ActionOutcome | null {
-    // The worker log keeps what Scribe did for a worker's chat; the page logs what the board did about it.
+    // The worker log keeps what Scribe did for a worker's chat (limit waits, resumes, merge fixes); the page logs how it ended.
     const data = event.run.data ?? {};
     const workerId = str(data.worker);
     const w = workerId ? workerMap(state)[workerId] : undefined;
@@ -894,16 +894,14 @@ export const kanbanActions: ActionSet = {
     const card = Number(data.card) || undefined;
     const solo = data.solo === true;
     const what = solo ? `One-card run${card ? ` #${card}` : ""}` : "";
-    let kind: string = event.kind;
+    const kind: string = event.kind;
     let text: string;
     if (event.kind === "limit") {
       const wait = event.run.wait;
       text = `${what ? `${what} out` : "Out"} of plan usage until ${resetTime(event.resetsAt ?? wait?.until ?? now)}${wait ? ` (wait ${wait.count})` : ""}`;
     } else if (event.kind === "end") {
-      const outcome = event.run.outcome;
-      if (outcome?.kind !== "done" || !outcome.merged) return null;
-      kind = "merge";
-      text = `Merged ${what ? `${what.charAt(0).toLowerCase()}${what.slice(1)}` : card ? `#${card}` : "the agent's branch"}`;
+      // The board logs how the chat ended when it wraps it up, with the chat's token totals.
+      return null;
     } else {
       text = what ? `${what}: ${event.text}` : event.text;
     }

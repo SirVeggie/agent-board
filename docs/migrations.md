@@ -1,5 +1,15 @@
 # Migrations
 
+## Kanban workers: chats handed to Scribe as runs (`agent.sqlite` setting, page state, no schema change)
+
+- **What changed:** The daemon now owns the lifecycle of worker chats (#285): plan-limit waits and resumes, worktree merges, and merge-fix requests (`src/agent/pageRuns.ts`). The Kanban template hands each chat over with `scribe.agent.start({ run })` / `scribe.agent.watch()` and only acts on the run's outcome. Runs are kept in the `pageRuns` setting of `agent.sqlite`.
+- **Affected data:** Worker fields the page used to keep: `settings.workers[id].wait` / `.fix`, and `solo[thread].wait` / `.fix` / `.after`. They are no longer read; the board clears `wait` / `fix` with its next patch to the worker.
+- **Transform:** A worker chat or one-card run that was in flight when the board updated has no run yet: the board hands it to Scribe as it is (`watch` with `after: 0`), so a chat that was waiting on a usage limit is picked up by the daemon's wait. Boards whose saved HTML predates runs (an edited copy) keep their own loop; the sweep and `worker_step` still serve them (`workerWaits` is only used when the thread has no run).
+- **Protocol:** additive routes `POST` / `DELETE /api/agent/threads/:id/run`, a `run` field on thread views, bridge calls `scribe.agent.watch` / `release` and `start({ run })`; `VERSION` stays `3.0.0`. The board needs the daemon restarted to use them.
+- **Where:** `src/agent/pageRuns.ts`, `src/agent/host.ts`, `src/actions/kanban.ts` (`runHold`, `runEvent`, sweep), `templates/builtin/kanban.html` (`handOver`, `wrapUp`, `wrapUpSolos`).
+- **How to verify:** `src/agent/pageRuns.test.ts`; the run tests at the end of `src/actions/kanban.test.ts`.
+- **When to remove:** The legacy `workerWaits` branch of the sweep, once no edited board copies predate runs.
+
 ## Agent chat: OpenAI-compatible provider replaced by Pi (`agent.sqlite`, no schema change)
 
 - **What changed:** The `openai` agent provider was removed (#192). Its model sources (Agent settings) now feed the Pi provider (`pi`), which also reaches local and other providers' models.

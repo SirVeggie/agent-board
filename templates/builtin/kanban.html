@@ -3942,11 +3942,14 @@
   // settings.workerLog (newest 200) and shown on the Workers panel, so they can be read even when
   // Keeper process logs are not available. When a chat ends, its token totals go on that log line
   // and as a small field on the card. A branch that won't merge first goes back to its agent
-  // to rebase and commit (MAX_MERGE_FIXES times); if it still won't, the cards that chat finished
+  // to rebase and commit (a couple of times, by Scribe); if it still won't, the cards that chat finished
   // come back to their ready column, blocked, and the worker goes on. "Stop when its card is done" sets stop on the worker
-  // (list shows it as stopRequested) and logs worker_stop. When a plan usage limit stops the agent's
-  // turn, the worker keeps its chat and card (wait.until) and sends it on once the limit has reset.
-  // A one-card run (right-click Run, or Continue) waits the same way on that chat's own wait.until.
+  // (list shows it as stopRequested) and logs worker_stop. Each chat is handed to Scribe as a run
+  // (scribe.agent.start's run option, or scribe.agent.watch), and Scribe sees it through even while
+  // no board window is open: when a plan usage limit stops the agent's turn, Scribe keeps the chat
+  // and its card waiting until the provider confirms the reset and sends it on; when it is done,
+  // Scribe merges its worktree branch, and asks the agent to fix a branch that won't merge. The board
+  // only acts on the run's outcome (thread.run.outcome) and then releases it.
   var FOLDER_MODES = { code: true, plan: true };
   /** Cards one agent chat may take before the board starts a fresh one. */
   var MAX_CARDS_PER_AGENT = 3;
@@ -3957,37 +3960,23 @@
   var OTHER_CARDS_IN_PROMPT = 10;
   /** Matches the worker_step action's lease. */
   var STEP_LEASE_MS = 15 * 60 * 1000;
-  /** How long after a plan limit resets the worker sends its agent on, so the new usage is in. */
-  var RESUME_DELAY_MS = 60 * 1000;
-  /** Limit waits in a row before the worker gives up on a card and pauses. */
-  var MAX_LIMIT_WAITS = 8;
-  /** Failed sends after a limit reset before the worker gives up and pauses; the first retry waits this long, doubling. */
-  var MAX_RESUME_TRIES = 5;
-  var RESUME_RETRY_MS = 60 * 1000;
-  /** Times the worker asks one agent to fix a branch that won't merge before it pauses. */
-  var MAX_MERGE_FIXES = 2;
   /** Newest lines kept in settings.workerLog (the logs action reads the same cap). */
   var MAX_WORKER_LOG = 200;
   /** Cards in a row whose chat fails before the worker pauses, since that points at the worker itself. */
   var MAX_CHAT_FAILS = 3;
   /** Ends the note on a card whose chat stopped before finishing it. */
   var KEPT_NOTE = "Its chat and branch are kept: Continue that chat, or comment here to let the worker take the card again.";
-  var MERGE_FIX_PROMPT ="Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes, run the checks, and commit, so the worktree is clean. Don't take another card. Then end your turn with a short summary; the board tries the merge again.";
-  var RESUME_PROMPT ="Your plan's usage limit has reset. Go on with your card where you left off: check the card and the work you have done so far, then finish it as before.";
   var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
   var WORKER_COLORS = ["#f59e0b", "#22d3ee", "#a78bfa", "#34d399", "#f472b6", "#f87171", "#6ea8ff", "#94a3b8"];
   var agentOptions = null;
-  /** Thread id -> { status, queued } as Scribe last reported it. */
+  /** Thread id -> { status, queued, run, gone? } as Scribe last reported it. */
   var threadStatus = {};
   var launching = {};
   var advancing = {};
-  /** How long a Continue's solo run waits for the turn it sent to end before it merges anyway. */
-  var CONTINUE_START_MS = 10 * 60 * 1000;
   var soloStarting = {};
   var soloMerging = {};
   var workerErrors = {};
   var workersTimer = 0;
-  var waitTimer = 0;
   /** The worker in the full settings dialog. */
   var workerEdit = null;
   var workerHintOpen = false;
@@ -4068,29 +4057,30 @@
   function workerReady(w) {
     return Boolean(w && workerName(w) && str(w.instructions).trim() && (!FOLDER_MODES[workerMode(w)] || str(w.cwd).trim()));
   }
+  /** Scribe's run of a chat (phase running | waiting | ended, wait, outcome), as last reported. */
+  function chatRun(threadId) {
+    var t = threadId ? threadStatus[threadId] : null;
+    return (t && t.run) || null;
+  }
   function workerRunning(w) {
     var t = w && w.threadId ? threadStatus[w.threadId] : null;
-    return Boolean(t && (t.status !== "idle" || t.queued > 0));
+    return Boolean(t && (t.status !== "idle" || t.queued > 0 || (t.run && t.run.phase === "running")));
   }
   /** Started and not stopped: working on a card, or waiting for one. */
   function workerOn(w) { return Boolean(w && w.run); }
-  /** Out of plan usage: when the worker sends its agent on, else 0. */
-  function workerWaitUntil(w) { return (w && w.wait && Number(w.wait.until)) || 0; }
-  function waitDue(until) { return until ? Number(until) + RESUME_DELAY_MS : 0; }
+  /** Out of plan usage: when Scribe sends the chat on, else 0. */
+  function chatWaitUntil(threadId) {
+    var run = chatRun(threadId);
+    return (run && run.phase === "waiting" && run.wait && Number(run.wait.until)) || 0;
+  }
+  function workerWaitUntil(w) { return w && w.threadId ? chatWaitUntil(w.threadId) : 0; }
   /** Soonest plan-limit wait among this worker's one-card runs. */
   function soloWaitUntil(w) {
     var soonest = 0;
     Object.keys(soloRuns(w)).forEach(function (tid) {
-      var until = Number(soloRuns(w)[tid] && soloRuns(w)[tid].wait && soloRuns(w)[tid].wait.until) || 0;
+      var until = chatWaitUntil(tid);
       if (until && (!soonest || until < soonest)) soonest = until;
     });
-    return soonest;
-  }
-  function workerSoonestDue(id) {
-    var w = worker(id);
-    var soonest = waitDue(workerWaitUntil(w));
-    var solo = waitDue(soloWaitUntil(w));
-    if (solo && (!soonest || solo < soonest)) soonest = solo;
     return soonest;
   }
   function limitTime(at) {
@@ -4350,8 +4340,8 @@
         if (!tid || threadStatus[tid]) return;
         threadStatus[tid] = { status: "idle", queued: 0, unknown: true };
         scribe.agent.get(tid).then(function (r) {
-          if (r && r.ok && r.thread) threadStatus[tid] = { status: r.thread.status, queued: r.thread.queued || 0 };
-          else if (r && r.error === "not_found") threadStatus[tid] = { status: "idle", queued: 0 };
+          if (r && r.ok && r.thread) threadStatus[tid] = threadState(r.thread);
+          else if (r && r.error === "not_found") threadStatus[tid] = { status: "idle", queued: 0, run: null, gone: true };
           render();
         });
       });
@@ -4359,10 +4349,13 @@
   }
   if (scribe.agent && scribe.agent.onChange) {
     scribe.agent.onChange(function (t) {
-      threadStatus[t.id] = { status: t.status, queued: t.queued || 0 };
+      threadStatus[t.id] = threadState(t);
       if (t.status === "idle") adoptUnmerged(t);
       render();
     });
+  }
+  function threadState(t) {
+    return { status: t.status, queued: t.queued || 0, run: t.run || null };
   }
 
   function boardTitle() {
@@ -4481,50 +4474,86 @@
     clearTimeout(workersTimer);
     workersTimer = setTimeout(advanceWorkers, 400);
   }
-  /** Move on any running worker whose agent is done, or that waits and has a card to take. */
+  /** Move on any running worker whose chat's run has ended, or that waits and has a card to take. */
   function advanceWorkers() {
     if (!AGENT_MODE || !hasWorkerApi()) return;
-    clearTimeout(waitTimer);
-    var soonest = 0;
     workerIds().forEach(wrapUpSolos);
     workerIds().forEach(function (id) {
       var w = worker(id);
       if (!workerOn(w) || advancing[id] || launching[id]) return;
       if (w.step && Number(w.step.at) > Date.now() - STEP_LEASE_MS) return;
-      if (waitDue(workerWaitUntil(w)) > Date.now()) return;
       if (w.threadId) {
         var t = threadStatus[w.threadId];
         if (!t || t.unknown || t.status !== "idle" || t.queued > 0) return;
+        // A chat started before Scribe had runs (or whose run was lost): Scribe takes it as it is.
+        if (!t.run && !t.gone) { handOver(id, w.threadId, workerRun(id, w.run && w.run.card, false, 0)); return; }
+        if (t.run && t.run.phase !== "ended") return;
       } else if (!w.stop && (!nextCard(id) || atLimit(id))) {
         return;
       }
       stepWorker(id, false);
     });
-    workerIds().forEach(function (id) {
-      var due = workerSoonestDue(id);
-      if (due > Date.now() && (!soonest || due < soonest)) soonest = due;
-    });
-    // Come back when a limit wait is over; at most an hour at a time, so a sleeping machine catches up.
-    if (soonest) waitTimer = setTimeout(scheduleWorkers, Math.min(Math.max(soonest - Date.now(), 1000), 60 * 60 * 1000));
   }
 
-  /** One step, held through worker_step: wrap up the last agent (check, merge), then start the next card, wait, or stop. */
+  /** What Scribe needs to see a worker's chat through: whose it is, and what to say after a usage limit. */
+  function workerRun(id, cardNum, solo, after) {
+    var w = worker(id);
+    var run = { tag: (solo ? "solo:" : "worker:") + id, data: { worker: id }, merge: Boolean(w && FOLDER_MODES[workerMode(w)]), resumePrompt: resumeText(cardNum) };
+    if (cardNum) run.data.card = Number(cardNum);
+    if (solo) run.data.solo = true;
+    if (after != null) run.after = after;
+    return run;
+  }
+  /**
+   * What Scribe tells a chat once its limit resets. While it waited, another chat (a Continue, the
+   * user) may have taken or finished its card, so a plain "go on" could redo or overwrite that work.
+   */
+  function resumeText(cardNum) {
+    var which = cardNum ? "card #" + cardNum : "your card";
+    return "Your plan's usage limit has reset. Before you go on, get " + which + " again, since it may have changed while you waited. If another chat took it over or finished it, don't redo or overwrite that work and don't claim it again: only commit your own changes that are still needed (or leave the worktree clean), rebase as before, and end your turn. If it was released back to an agent column, claim it again and go on only if the work is still needed. Otherwise go on where you left off and finish it as before.";
+  }
+  /**
+   * Hand a chat to Scribe to see through: a worker's chat from before Scribe had runs, a Continue,
+   * a branch left unmerged. Resolves whether Scribe took it.
+   */
+  var handing = {};
+  function handOver(id, threadId, run) {
+    if (handing[threadId]) return Promise.resolve(false);
+    handing[threadId] = true;
+    return scribe.agent.watch(threadId, run).then(function (r) {
+      delete handing[threadId];
+      if (r && r.ok) {
+        if (r.thread) threadStatus[threadId] = threadState(r.thread);
+        render();
+        return true;
+      }
+      if (r && r.error === "not_found") {
+        threadStatus[threadId] = { status: "idle", queued: 0, run: null, gone: true };
+        scheduleWorkers();
+      } else if (id) {
+        appendLog(id, "pause", "Could not hand the agent's chat to Scribe: " + launchError(r).replace(/^Could not launch: /, ""), { thread: threadId });
+      }
+      return false;
+    });
+  }
+
+  /** One step, held through worker_step: wrap up the last agent's run, then start the next card, wait, or stop. */
   function stepWorker(id, start) {
     var w = worker(id);
     var from = str(w && w.threadId) || null;
-    // A click goes on from a pause; it only wraps up a chat whose merge didn't go through.
-    var wrap = Boolean(from && (!start || w.merge === from));
-    var resume = Boolean(from && !start && workerWaitUntil(w));
+    // A click goes on from a pause; it only goes back to a chat whose merge didn't go through.
+    var retry = Boolean(start && from && w.merge === from);
+    var wrap = Boolean(from && !start);
     advancing[id] = true;
     var since = start ? Date.now() : Number(w.run.since) || Date.now();
     return scribe.action("worker_step", { worker: id, from: from, token: newId("st"), start: Boolean(start) }).then(
       function (r) {
-        if (resume && r && r.lastTurn && r.lastTurn.usageRecoveryAllowed === false) {
-          patchWorker(id, { step: null, wait: { until: Date.now() + 60000, count: Number(w.wait && w.wait.count) || 0 } });
-          return;
+        if (retry) {
+          // Scribe merges it again (asking the agent to fix it if it can); the run's end goes on from there.
+          patchWorker(id, { step: null, merge: null });
+          return handOver(id, from, workerRun(id, w.run && w.run.card, false, 0));
         }
-        if (resume) return resumeAgent(id, from);
-        return (wrap ? wrapUp(id, from, start ? null : r) : Promise.resolve(true)).then(function (ok) {
+        return (wrap ? wrapUp(id, from, r) : Promise.resolve(true)).then(function (ok) {
           if (ok) return nextStep(id, since, start);
         });
       },
@@ -4543,73 +4572,57 @@
   }
 
   /**
-   * The last agent's chat ended: pause on a failed turn or a card it didn't finish (r is null on
-   * a click, which goes on from such a pause), else merge its worktree. Resolves whether to go on.
+   * The last agent's run ended (r.run.outcome): pause on a run that kept hitting its usage limit or
+   * a merge no agent can fix; block the cards of a failed turn or a card it didn't finish; else go
+   * on. Scribe has merged the branch already when it could. Resolves whether to go on.
    */
   function wrapUp(id, threadId, r) {
     var w = worker(id), run = w.run || {};
+    var info = r && r.run;
+    var out = info && info.outcome;
     var usage = r && r.usage;
-    if (r) {
-      var turn = r.lastTurn;
-      if (turn && turn.status === "error" && turn.limitResetsAt) {
-        var waits = (Number(w.wait && w.wait.count) || 0) + 1;
-        if (waits > MAX_LIMIT_WAITS) {
-          endRun(id, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). Its chat is kept; press ▶ to go on with the next card.", true, usage);
-        } else {
-          patchWorker(id, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
-          appendLog(id, "limit", "Out of plan usage until " + limitTime(Number(turn.limitResetsAt)) + " (wait " + waits + " of " + MAX_LIMIT_WAITS + ")", { card: run.card, thread: threadId });
-        }
-        return Promise.resolve(false);
-      }
-      var fixing = Boolean(w.fix && w.fix.thread === threadId);
-      if (fixing && turn && (turn.status === "error" || turn.status === "cancelled")) {
+    // The chat is gone: nothing to wrap up.
+    if (!out) return Promise.resolve(true);
+    var go = true;
+    if (out.kind === "limit") {
+      endRun(id, str(out.error) + " Its chat is kept; press ▶ to go on with the next card.", true, usage);
+      go = false;
+    } else if (out.kind === "failed" || out.kind === "cancelled") {
+      var how = out.kind === "failed" ? "failed" + (out.error ? ": " + out.error : "") : "was stopped";
+      if (info.fixes > 0) {
         // Its card is finished; only the branch is left, and it stays unmerged in its chat.
-        mergeFailed(id, threadId, "the agent's turn to fix it " + (turn.status === "error" ? "failed" + (turn.error ? " (" + turn.error + ")" : "") : "was stopped") + ".", usage);
-        return Promise.resolve(true);
+        mergeFailed(id, threadId, "the agent's turn to fix it " + how + ".", usage);
+      } else {
+        blockChatCards(id, threadId, "The agent's turn " + how + " before it finished this card. " + KEPT_NOTE, out.kind === "failed" ? "Agent turn failed" : "Agent turn stopped", usage);
+        go = chatFailed(id, "the last agent's turn " + how, usage);
       }
-      // The rest are problems with this card's chat, not with the worker: block the card and go on
-      // with the next one. The branch isn't merged; the chat keeps it.
-      if (turn && (turn.status === "error" || turn.status === "cancelled")) {
-        var how = turn.status === "error" ? "failed" + (turn.error ? ": " + turn.error : "") : "was stopped";
-        blockChatCards(id, threadId, "The agent's turn " + how + " before it finished this card. " + KEPT_NOTE, turn.status === "error" ? "Agent turn failed" : "Agent turn stopped", usage);
-        return Promise.resolve(chatFailed(id, "the last agent's turn " + how, usage));
+    } else if (out.kind === "merge_failed") {
+      if (out.fixable) {
+        mergeFailed(id, threadId, str(out.message), usage);
+      } else {
+        // The main checkout's branch, a detached HEAD: the next merge would fail too.
+        pauseOnMerge(id, threadId, str(out.message), usage);
+        go = false;
       }
+    } else {
       var held = liveCards().filter(function (c) { return c.claim && !c.claim.stale && c.claim.thread === threadId; });
-      if (held.length) {
-        blockChatCards(id, threadId, "The agent ended its turn without finishing this card. " + KEPT_NOTE, "Agent didn't finish", usage);
-        return Promise.resolve(chatFailed(id, "the last agent ended without finishing #" + held[0].num, usage));
-      }
       var given = run.card ? byNum(run.card) : null;
-      if (given && isReadyCol(column(given.col)) && (Number(given.movedAt) || 0) <= (Number(run.startedAt) || 0)) {
+      if (held.length) {
+        // Scribe kept its branch unmerged; the chat keeps it.
+        blockChatCards(id, threadId, "The agent ended its turn without finishing this card. " + KEPT_NOTE, "Agent didn't finish", usage);
+        go = chatFailed(id, "the last agent ended without finishing #" + held[0].num, usage);
+      } else if (given && isReadyCol(column(given.col)) && (Number(given.movedAt) || 0) <= (Number(run.startedAt) || 0)) {
         blockCards(id, [given.id], "The agent's chat ended without taking this card. Comment here to let the worker try again.", "Agent didn't take it", threadId, false, usage);
-        return Promise.resolve(chatFailed(id, "the last agent didn't take #" + given.num, usage));
+        go = chatFailed(id, "the last agent didn't take #" + given.num, usage);
+      } else {
+        if (w.fails) patchWorker(id, { fails: null });
+        if (out.merged) restoreMergeCards(id);
+        // Scribe merged it; the line carries the chat's token totals.
+        appendLog(id, out.merged ? "merge" : "done", out.merged ? (run.card ? "Merged #" + run.card : "Merged the agent's branch") : (run.card ? "Finished #" + run.card : "Finished the agent's chat"), { card: run.card, thread: threadId, usage: usage });
       }
-      if (w.fails) patchWorker(id, { fails: null });
     }
-    if (!FOLDER_MODES[workerMode(w)]) {
-      if (r) appendLog(id, "done", run.card ? "Finished #" + run.card : "Finished the agent's chat", { card: run.card, thread: threadId, usage: usage });
-      return Promise.resolve(true);
-    }
-    return scribe.agent.merge(threadId).then(function (m) {
-      if (m && (m.ok || m.error === "not_found")) {
-        restoreMergeCards(id);
-        appendLog(id, "merge", m.ok
-          ? (run.card ? "Merged #" + run.card : "Merged the agent's branch")
-          : "No worktree to merge (chat gone)", { card: run.card, thread: threadId, usage: usage });
-        return true;
-      }
-      var why = m && m.error === "merge_failed" ? m.message : launchError(m);
-      var cur = worker(id) || {};
-      var asked = cur.fix && cur.fix.thread === threadId ? Number(cur.fix.count) || 0 : 0;
-      if (m && m.error === "merge_failed" && agentCanFixMerge(why)) {
-        if (asked < MAX_MERGE_FIXES) return askToFixMerge(id, threadId, why, asked + 1, usage);
-        mergeFailed(id, threadId, why, usage);
-        return true;
-      }
-      // The main checkout's branch, permissions, or Scribe itself: the next merge would fail too.
-      pauseOnMerge(id, threadId, why, usage);
-      return false;
-    });
+    scribe.agent.release(threadId);
+    return Promise.resolve(go);
   }
 
   /**
@@ -4625,27 +4638,6 @@
     endRun(id, MAX_CHAT_FAILS + " cards in a row didn't get done (" + why + "), so the worker paused: check its setup. Those cards are blocked with the reason; press ▶ to go on.", true, usage);
     patchWorker(id, { fails: null });
     return false;
-  }
-  /** Whether the agent can sort out a failed merge in its worktree (not the main checkout's branch or a detached HEAD). */
-  function agentCanFixMerge(why) {
-    return !/main checkout is on|detached HEAD/i.test(str(why));
-  }
-  /**
-   * The branch didn't merge: send the agent's chat on to rebase and commit; its next idle retries the
-   * merge. Resolves whether the worker goes on now (when the send fails, the cards are blocked instead).
-   */
-  function askToFixMerge(id, threadId, why, count, usage) {
-    var prompt = "The board could not merge your branch: " + why + "\n\n" + MERGE_FIX_PROMPT;
-    return scribe.agent.send(threadId, prompt).then(function (r) {
-      if (!r || !r.ok) {
-        mergeFailed(id, threadId, why, usage);
-        return true;
-      }
-      threadStatus[threadId] = { status: "running", queued: 0 };
-      patchWorker(id, { step: null, fix: { thread: threadId, count: count } });
-      appendLog(id, "merge_fix", "Asked the agent to fix the merge (" + count + " of " + MAX_MERGE_FIXES + "): " + why, { thread: threadId });
-      return false;
-    });
   }
   /**
    * Leave cards blocked with why in a comment by the worker: claims are dropped, and a card outside
@@ -4742,55 +4734,6 @@
     patchWorker(id, { mergeCards: null });
   }
 
-  /**
-   * A plan limit stopped the agent and has reset since: send its chat on, keeping its card. A send
-   * that fails (Scribe still coming up, a timeout) keeps the wait and tries again later: ending the
-   * run would let the sweep release the card as a failed turn.
-   */
-  function resumeAgent(id, threadId) {
-    var w = worker(id);
-    return scribe.agent.send(threadId, resumePrompt(threadId, w && w.run && w.run.card)).then(function (r) {
-      if (!r || !r.ok) {
-        var cur = worker(id) || {};
-        var wait = cur.wait || {};
-        var tries = (Number(wait.tries) || 0) + 1;
-        var why = launchError(r).replace(/^Could not launch: /, "");
-        if (cur.stop || (r && r.error === "denied") || tries > MAX_RESUME_TRIES) {
-          endRun(id, "Could not send the agent on after its usage limit reset: " + why, false);
-          return;
-        }
-        // until + RESUME_DELAY_MS is when advanceWorkers tries again.
-        var backoff = Math.min(RESUME_RETRY_MS * Math.pow(2, tries - 1), 8 * 60 * 1000);
-        patchWorker(id, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
-        appendLog(id, "resume", "Could not resume yet (" + why + "); try " + tries + " of " + MAX_RESUME_TRIES, { card: cur.run && cur.run.card, thread: threadId });
-        return;
-      }
-      threadStatus[threadId] = { status: "running", queued: 0 };
-      patchWorker(id, { step: null, wait: { count: Number(w && w.wait && w.wait.count) || 1 } });
-      appendLog(id, "resume", "Sent the agent on after its usage limit reset", { card: w && w.run && w.run.card, thread: threadId });
-    });
-  }
-
-  /**
-   * What to tell a chat once its limit resets. While it waited, another chat (a Continue, the
-   * user) may have taken or finished its card, so a plain "go on" could redo or overwrite that work.
-   */
-  function resumePrompt(threadId, cardNum) {
-    var held = liveCards().some(function (c) { return c.claim && !c.claim.stale && c.claim.thread === threadId; });
-    var c = cardNum ? byNum(cardNum) : null;
-    if (held || !c || c.archived) return RESUME_PROMPT;
-    var col = colOf(c);
-    var where = col ? " It is in " + col.title + " now." : "";
-    var leftovers = " Don't redo or overwrite that work and don't claim the card again. Only check your worktree for changes of yours that are still needed: commit those (or leave the worktree clean), rebase as before, and end your turn.";
-    if (c.claim && !c.claim.stale) {
-      return "Your plan's usage limit has reset, but while you waited another chat took over your card #" + c.num + " and is working on it." + where + leftovers;
-    }
-    if (col && (col.role === "review" || col.role === "done")) {
-      return "Your plan's usage limit has reset, but while you waited another chat finished your card #" + c.num + "." + where + leftovers;
-    }
-    return "Your plan's usage limit has reset. Your card #" + c.num + " was released while you waited." + where + " Get it and read it again before you do anything: claim it again and go on only if it is still in an agent column and the work is still needed; otherwise end your turn.";
-  }
-
   /** start: the step began with a click, which already cleared stop in the daemon (this window may not have that yet). */
   function nextStep(id, since, start) {
     var w = worker(id);
@@ -4809,13 +4752,13 @@
     var w = worker(id);
     var startedAt = Date.now();
     return loadAgentOptions().then(function () {
-      return scribe.agent.start(workerPrompt(w, c), workerOpts(w, c));
+      return scribe.agent.start(workerPrompt(w, c), Object.assign(workerOpts(w, c), { run: workerRun(id, c.num, false) }));
     }).then(function (r) {
       if (!r || !r.ok) {
         endRun(id, launchError(r), true);
         return;
       }
-      threadStatus[r.threadId] = { status: "running", queued: 0 };
+      threadStatus[r.threadId] = { status: "running", queued: 0, run: { phase: "running" } };
       patchWorker(id, { threadId: r.threadId, step: null, merge: null, wait: null, fix: null, error: null, run:{ since: since, card: c.num, startedAt: startedAt } });
       appendLog(id, "launch", "Started #" + c.num + " " + str(c.title).slice(0, 80), { card: c.num, thread: r.threadId });
       return claimForAgent(c, r.threadId, workerName(w));
@@ -4825,8 +4768,8 @@
   // ---------- one-card runs ----------
   // Started from a card's menu with a worker's settings, beside its own run: the worker's own
   // queue doesn't wait on them, and they don't take other cards. settings.workers[id].solo keeps
-  // the ones still going ({ [threadId]: { card, at, wait? } }) so any window can merge them once
-  // they end, or send them on after a plan usage limit resets (same as the worker's own chat).
+  // the ones still going ({ [threadId]: { card, at } }) so any window can wrap them up once their
+  // run ends. Scribe sees them through like the worker's own chat (limit waits, merges).
   function soloRuns(w) {
     return w && w.solo && typeof w.solo === "object" ? w.solo : {};
   }
@@ -4841,7 +4784,7 @@
     soloStarting[cardId] = true;
     setHint("Starting " + name + " on #" + c.num + "…");
     loadAgentOptions().then(function () {
-      return scribe.agent.start(workerPrompt(w, c, null, true), workerOpts(w, c));
+      return scribe.agent.start(workerPrompt(w, c, null, true), Object.assign(workerOpts(w, c), { run: workerRun(id, c.num, true) }));
     }).then(function (r) {
       delete soloStarting[cardId];
       if (!r || !r.ok) {
@@ -4850,7 +4793,7 @@
         render();
         return;
       }
-      threadStatus[r.threadId] = { status: "running", queued: 0 };
+      threadStatus[r.threadId] = { status: "running", queued: 0, run: { phase: "running" } };
       var now = Date.now();
       // Claim the card for the new chat at once, so a running worker doesn't take it and the agent needn't claim it.
       claimForAgent(c, r.threadId, name);
@@ -4884,18 +4827,19 @@
   }
   /**
    * Continue sent a card's earlier chat back to work: its branch was merged when it ended, and Scribe
-   * gives it a worktree again (#184). Keep it with the one-card runs of the card's worker (else the
-   * first worker with a folder), so any window merges it once it ends. A worker's own running chat
-   * it wraps up itself. after is when Continue sent it on: until a turn has ended since then, an idle
-   * status is the old turn's, and merging then would close the worktree before the new turn opens
-   * one, leaving its commits behind (#253).
+   * gives it a worktree again (#184). Hand it to Scribe to see through, and keep it with the one-card
+   * runs of the card's worker (else the first worker with a folder), so any window wraps it up once
+   * it ends. A worker's own running chat it wraps up itself. after is when Continue sent it on: only
+   * a turn started since counts, so the old turn's idle status doesn't close the worktree before the
+   * new turn opens one (#253).
    */
   function mergeWhenDone(c, threadId, after) {
     var id = mergeWorkerFor(c);
     var w = id && worker(id);
     if (!w || soloRuns(w)[threadId] || (workerOn(w) && w.threadId === threadId)) return;
-    if (!threadStatus[threadId] || threadStatus[threadId].status === "idle") threadStatus[threadId] = { status: "running", queued: 0 };
-    addSolo(id, threadId, { card: c.num, at: Date.now(), after: after || Date.now() });
+    handOver(null, threadId, workerRun(id, c.num, true, after || Date.now())).then(function (ok) {
+      if (ok) addSolo(id, threadId, { card: c.num, at: Date.now() });
+    });
   }
   /** The worker that merges a card's chat: the card's own worker when it works in a folder, else the first that does. */
   function mergeWorkerFor(c) {
@@ -4916,24 +4860,26 @@
    * A chat on a finished card (review or done) went idle with commits on its worktree branch, and
    * no worker step owns its wrap-up: a turn the user started in the chat itself, a run whose
    * bookkeeping was lost (a board update mid-run), or a Continue whose merge went early (#233,
-   * #234, #253). Keep it with the one-card runs so it merges like one, instead of leaving the
-   * commits on the branch where nobody sees them. t is the thread as scribe.agent reports it.
+   * #234, #253). Hand it to Scribe and keep it with the one-card runs so it merges like one, instead
+   * of leaving the commits on the branch where nobody sees them. t is the thread as scribe.agent reports it.
    */
   var adopting = {};
   function adoptUnmerged(t) {
     if (!AGENT_MODE || !hasWorkerApi() || !t || !t.id || adopting[t.id]) return;
     var wt = t.worktree;
     if (!wt || !(Number(wt.ahead) > 0) || wt.dirty || t.status !== "idle" || t.queued > 0 || chatOwned(t.id)) return;
+    if (t.run && t.run.phase !== "ended") return;
     var c = liveCards().filter(function (x) { return x.thread === t.id; })[0];
     var col = c && colOf(c);
     if (!col || (col.role !== "review" && col.role !== "done") || (c.claim && !c.claim.stale)) return;
     var id = mergeWorkerFor(c);
     if (!id) return;
     adopting[t.id] = true;
-    threadStatus[t.id] = { status: "idle", queued: 0 };
-    addSolo(id, t.id, { card: c.num, at: Date.now() });
-    appendLog(id, "solo", "#" + c.num + "'s chat ended with " + wt.ahead + " unmerged commit" + (wt.ahead === 1 ? "" : "s") + " on " + str(wt.branch) + "; merging it", { card: c.num, thread: t.id });
-    scheduleWorkers();
+    handOver(id, t.id, workerRun(id, c.num, true, 0)).then(function (ok) {
+      if (!ok) { delete adopting[t.id]; return; }
+      addSolo(id, t.id, { card: c.num, at: Date.now() });
+      appendLog(id, "solo", "#" + c.num + "'s chat ended with " + wt.ahead + " unmerged commit" + (wt.ahead === 1 ? "" : "s") + " on " + str(wt.branch) + "; merging it", { card: c.num, thread: t.id });
+    });
   }
   /** Once per page load: chats left unmerged while no board window was open, or before this check existed. */
   var adoptSwept = false;
@@ -4944,47 +4890,25 @@
       if (r && r.ok && Array.isArray(r.threads)) r.threads.forEach(adoptUnmerged);
     });
   }
-  /** Wrap up each idle one-card run: wait out a plan limit, send it on, or merge its branch. */
+  /** Wrap up each one-card run whose run has ended (Scribe waited out limits and merged it already). */
   function wrapUpSolos(id) {
     var w = worker(id), runs = soloRuns(w);
     Object.keys(runs).forEach(function (tid) {
       var t = threadStatus[tid];
-      var run = runs[tid];
-      if (!run || typeof run !== "object") return;
+      var entry = runs[tid];
+      if (!entry || typeof entry !== "object") return;
       if (soloMerging[tid] || !t || t.unknown) return;
       if (t.status !== "idle" || t.queued > 0) return;
-      var waitUntil = (run.wait && Number(run.wait.until)) || 0;
-      if (waitDue(waitUntil) > Date.now()) return;
-      if (run.step && Number(run.step.at) > Date.now() - STEP_LEASE_MS) return;
+      if (!t.run && !t.gone) {
+        // A one-card run from before Scribe had runs: Scribe takes it as it is.
+        handOver(id, tid, workerRun(id, entry.card, true, Number(entry.after) || 0));
+        return;
+      }
+      if (t.run && t.run.phase !== "ended") return;
+      if (entry.step && Number(entry.step.at) > Date.now() - STEP_LEASE_MS) return;
       soloMerging[tid] = true;
-      var resume = Boolean(waitUntil);
       scribe.action("worker_solo_step", { worker: id, thread: tid, token: newId("st") }).then(
-        function (r) {
-          if (resume && r && r.lastTurn && r.lastTurn.usageRecoveryAllowed === false) {
-            patchSolo(id, tid, { step: null, wait: { until: Date.now() + 60000, count: Number(run.wait && run.wait.count) || 0 } });
-            return;
-          }
-          if (resume) return resumeSolo(id, tid);
-          var turn = r && r.lastTurn;
-          var after = Number(run.after) || 0;
-          if (after && turn && !(Number(turn.endedAt) >= after) && Date.now() - after < CONTINUE_START_MS) {
-            // The idle status is from before Continue sent it on: wait for that turn to end.
-            patchSolo(id, tid, { step: null });
-            return;
-          }
-          if (turn && turn.status === "error" && turn.limitResetsAt) {
-            var waits = (Number(run.wait && run.wait.count) || 0) + 1;
-            if (waits > MAX_LIMIT_WAITS) {
-              blockChatCards(id, tid, "The agent kept running out of plan usage (" + MAX_LIMIT_WAITS + " waits in a row). " + KEPT_NOTE, "Out of plan usage", r && r.usage);
-              forgetSolo(id, tid);
-              return;
-            }
-            patchSolo(id, tid, { step: null, wait: { until: Number(turn.limitResetsAt), count: waits } });
-            appendLog(id, "limit", "One-card run #" + run.card + " out of plan usage until " + limitTime(Number(turn.limitResetsAt)) + " (wait " + waits + " of " + MAX_LIMIT_WAITS + ")", { card: run.card, thread: tid });
-            return;
-          }
-          return mergeSolo(id, tid, r && r.usage);
-        },
+        function (r) { finishSolo(id, tid, entry, r && r.run, r && r.usage); },
         function () { /* another window, or the agent isn't done */ }
       ).then(function () {
         delete soloMerging[tid];
@@ -4992,11 +4916,27 @@
       });
     });
   }
-  function patchSolo(id, threadId, patch) {
-    if (!worker(id) || !soloRuns(worker(id))[threadId]) return;
-    scribe.update([{ op: "merge", path: "settings/workers/" + id + "/solo/" + threadId, value: patch }]);
+  /** A one-card run ended: a problem with it is its card's, not the worker's, so the card is blocked and the worker goes on. */
+  function finishSolo(id, threadId, entry, info, usage) {
+    var out = info && info.outcome;
+    var what = "One-card run" + (entry.card ? " #" + entry.card : "");
+    if (out && out.kind === "limit") {
+      blockChatCards(id, threadId, str(out.error) + " " + KEPT_NOTE, "Out of plan usage", usage);
+    } else if (out && (out.kind === "failed" || out.kind === "cancelled")) {
+      var how = out.kind === "failed" ? "failed" + (out.error ? ": " + out.error : "") : "was stopped";
+      if (info.fixes > 0) mergeFailed(id, threadId, "the agent's turn to fix it " + how + ".", usage);
+      else appendLog(id, "solo", what + ": the agent's turn " + how + ". Its chat keeps its branch.", { card: entry.card, thread: threadId, usage: usage });
+    } else if (out && out.kind === "merge_failed") {
+      mergeFailed(id, threadId, str(out.message), usage);
+    } else if (out && out.held) {
+      appendLog(id, "solo", what + " ended without finishing its card (" + out.held + "). Its chat keeps its branch.", { card: entry.card, thread: threadId, usage: usage });
+    } else if (out) {
+      appendLog(id, out.merged ? "merge" : "done", (out.merged ? "Merged " : "Finished ") + what.charAt(0).toLowerCase() + what.slice(1), { card: entry.card, thread: threadId, usage: usage });
+    }
+    if (out) scribe.agent.release(threadId);
+    forgetSolo(id, threadId);
   }
-  /** Drop a one-card run. A problem with it is its card's, not the worker's: the caller blocks the card, which logs it. */
+  /** Drop a one-card run. */
   function forgetSolo(id, threadId) {
     delete adopting[threadId];
     var left = Object.keys(soloRuns(worker(id))).filter(function (k) { return k !== threadId; });
@@ -5006,71 +4946,6 @@
       gone[threadId] = null;
       scribe.update([{ op: "merge", path: "settings/workers/" + id + "/solo", value: gone }]);
     }
-  }
-  function resumeSolo(id, threadId) {
-    var run = soloRuns(worker(id))[threadId] || {};
-    return scribe.agent.send(threadId, resumePrompt(threadId, run.card)).then(function (r) {
-      if (!r || !r.ok) {
-        var cur = soloRuns(worker(id))[threadId] || {};
-        var wait = cur.wait || {};
-        var tries = (Number(wait.tries) || 0) + 1;
-        var why = launchError(r).replace(/^Could not launch: /, "");
-        if ((r && r.error === "denied") || tries > MAX_RESUME_TRIES) {
-          blockChatCards(id, threadId, "Could not send the agent on after its usage limit reset: " + why + " " + KEPT_NOTE, "Couldn't resume agent");
-          forgetSolo(id, threadId);
-          return;
-        }
-        var backoff = Math.min(RESUME_RETRY_MS * Math.pow(2, tries - 1), 8 * 60 * 1000);
-        patchSolo(id, threadId, { step: null, wait: { until: Date.now() + backoff - RESUME_DELAY_MS, count: Number(wait.count) || 1, tries: tries } });
-        appendLog(id, "resume", "Could not resume one-card run yet (" + why + "); try " + tries + " of " + MAX_RESUME_TRIES, { card: cur.card, thread: threadId });
-        return;
-      }
-      threadStatus[threadId] = { status: "running", queued: 0 };
-      patchSolo(id, threadId, { step: null, wait: { count: Number(run.wait && run.wait.count) || 1 } });
-      appendLog(id, "resume", "Sent the one-card run on after its usage limit reset", { card: run.card, thread: threadId });
-    });
-  }
-  function mergeSolo(id, threadId, usage) {
-    var w = worker(id), runs = soloRuns(w);
-    var cardNum = runs[threadId] && runs[threadId].card;
-    if (!FOLDER_MODES[workerMode(w)]) {
-      appendLog(id, "done", cardNum ? "Finished #" + cardNum : "Finished the one-card run", { card: cardNum, thread: threadId, usage: usage });
-      forgetSolo(id, threadId);
-      return Promise.resolve();
-    }
-    return scribe.agent.merge(threadId).then(function (m) {
-      if (m && (m.ok || m.error === "not_found")) {
-        appendLog(id, "merge", !m.ok
-          ? "No worktree to merge for the one-card run (chat gone)"
-          : m.merged === false
-            ? "One-card run" + (cardNum ? " #" + cardNum : "") + " had no worktree open to merge"
-            : "Merged one-card run" + (cardNum ? " #" + cardNum : ""), { card: cardNum, thread: threadId, usage: usage });
-        forgetSolo(id, threadId);
-        return;
-      }
-      if (m && m.error === "busy") {
-        patchSolo(id, threadId, { step: null });
-        return;
-      }
-      var why = m && m.error === "merge_failed" ? m.message : launchError(m);
-      var run = runs[threadId] || {};
-      var asked = Number(run.fix) || 0;
-      if (m && m.error === "merge_failed" && agentCanFixMerge(why) && asked < MAX_MERGE_FIXES) {
-        // Same as the worker's own chat: the agent rebases and commits, and its next idle merges again.
-        return scribe.agent.send(threadId, "The board could not merge your branch: " + why + "\n\n" + MERGE_FIX_PROMPT).then(function (r) {
-          if (!r || !r.ok) {
-            mergeFailed(id, threadId, why, usage);
-            forgetSolo(id, threadId);
-            return;
-          }
-          threadStatus[threadId] = { status: "running", queued: 0 };
-          patchSolo(id, threadId, { step: null, fix: asked + 1, after: Date.now() });
-          appendLog(id, "merge_fix", "Asked the one-card run" + (run.card ? " on #" + run.card : "") + " to fix the merge (" + (asked + 1) + " of " + MAX_MERGE_FIXES + "): " + why, { card: run.card, thread: threadId });
-        });
-      }
-      mergeFailed(id, threadId, why, usage);
-      forgetSolo(id, threadId);
-    });
   }
 
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
@@ -5140,6 +5015,8 @@
     closeStop();
     if (!w) return;
     var threadId = workerRunning(w) ? w.threadId : null;
+    // Scribe stops seeing the chat through too: no resume after a usage limit, no merge. The chat keeps its worktree.
+    if (w.threadId) scribe.agent.release(w.threadId);
     endRun(id, null, true);
     render();
     if (!threadId) return;

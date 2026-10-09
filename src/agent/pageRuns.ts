@@ -144,7 +144,7 @@ function turnText(turn: Turn): string {
 
 export class PageRuns {
   private runs = new Map<string, PageRun>();
-  private busy = new Set<string>();
+  private busy = new Map<string, Promise<void>>();
 
   constructor(private deps: RunDeps, saved: PageRun[] = []) {
     for (const run of saved) {
@@ -213,19 +213,17 @@ export class PageRuns {
     }
   }
 
-  /** Move a run on once its thread is idle. Safe to call any time; one check at a time per thread. */
-  async check(threadId: string): Promise<void> {
-    if (this.busy.has(threadId)) return;
+  /** Move a run on once its thread is idle. Safe to call any time; one check at a time per thread, then another for what changed meanwhile. */
+  check(threadId: string): Promise<void> {
+    const running = this.busy.get(threadId);
+    if (running) return running.then(() => this.check(threadId));
     const run = this.runs.get(threadId);
-    if (!run || run.phase === "ended") return;
-    this.busy.add(threadId);
-    try {
-      await this.step(run);
-    } catch (err) {
-      this.end(run, { kind: "failed", error: (err as Error).message || String(err) });
-    } finally {
-      this.busy.delete(threadId);
-    }
+    if (!run || run.phase === "ended") return Promise.resolve();
+    const done = this.step(run)
+      .catch((err) => this.end(run, { kind: "failed", error: (err as Error).message || String(err) }))
+      .finally(() => this.busy.delete(threadId));
+    this.busy.set(threadId, done);
+    return done;
   }
 
   private async step(run: PageRun): Promise<void> {

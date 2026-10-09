@@ -463,6 +463,27 @@ await scribe.agent.runAction("triage-card", { context: { card: "#12 Fix login" }
 await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
 ```
 
+#### Agent runs: let Scribe see a chat through
+
+For pages that hand work to agents and act on the result (a board's workers, a queue of jobs, a batch of reviews), don't write your own wait/retry/merge loop. Hand the thread to Scribe as a **run**, and Scribe sees it through in the daemon, even while no window shows the page: when a plan usage limit stops the agent's turn, it waits until the provider confirms the reset and sends the chat on (`resumePrompt`); when the turn is done, it merges the worktree branch (Code threads with `worktree: true`), and asks the agent to rebase and fix a branch that won't merge (twice) before giving up. Fixes to that lifecycle ship with Scribe, so they reach every page that uses it, customized templates included. The page only decides what to start and what an outcome means for its own data.
+
+```js
+const { threadId } = await scribe.agent.start(prompt, { mode: "code", cwd, worktree: true,
+  run: { tag: "job", data: { job: 7 }, resumePrompt: "Your usage limit reset: check job #7 and go on." } });
+scribe.agent.onChange((t) => {                           // t.run: { phase: "running" | "waiting" | "ended", wait?: { until, count }, fixes, tag, data, outcome? }
+  if (t.run?.phase !== "ended") return;
+  const { kind, merged, held, message, error } = t.run.outcome; // kind: done | failed | cancelled | limit | merge_failed
+  // …update the page's state from the outcome (claim it with a `test` op first: every open window sees this)…
+  scribe.agent.release(t.id);                            // Scribe forgets the ended run (or stops seeing a live one through)
+});
+await scribe.agent.watch(threadId, { data: { job: 7 }, after: 0 }); // hand over a thread already running or done (after: 0 takes its last turn as it is)
+```
+
+- `run` options (on `start`, or `watch`): `tag` and `data` (small JSON, at most 4000 characters) come back as given; `merge: false` skips the merge; `resumePrompt` is what the chat gets after a limit; `after` (`watch` only, default now) is when the turns that count start, so hand a thread over before sending it the message that starts its work.
+- Outcomes: `done` (`merged: true` when a branch was merged, `held` when the template's actions kept it unmerged), `failed` / `cancelled` (the turn failed or was stopped; `fixes > 0` means it was the agent's merge fix), `limit` (it kept running out of usage), `merge_failed` (`fixable: false` for problems no agent can fix, like the main checkout being on another branch).
+- Each step also logs an `agent_run` event on the page (`{ thread, kind: "limit" | "resume" | "merge_fix" | "end", text, tag, data, phase, outcome }`), so `page_wait` can wait on it. Ended runs stay on the thread until the page releases them (a week at most), so a page that was closed still sees how they ended.
+- Kanban boards run their workers this way.
+
 - Threads default to Pages mode (`mode: "ask"` for read-only Q&A): page tools and the web, no files or shell. Unset `provider` / `model` / `effort` / `approval` / `web` / `fast` follow the user's defaults; take ids from `options()`. Cursor models expose a `fast` param; pass `fast: true` (or `modelParams: { fast: "true" }`) to turn it on.
 - A page only sees and drives **its own** threads (scoped to that page). It cannot reach other threads, except to `show` one by id, which tells the page nothing about it.
 - `show: "dock"` or `"sidebar"` opens the thread in that chat; omit it to run quietly. The tab still shows its working dot.
