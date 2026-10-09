@@ -1811,6 +1811,11 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
   window.addEventListener("keydown", function (event) {
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     var key = event.key.toLowerCase();
+    if ((key === "t" || key === "n") && !event.shiftKey) {
+      event.preventDefault();
+      parent.postMessage({ type: "scribe-shortcut", action: "new-page" }, "*");
+      return;
+    }
     if (key === "s" && !event.shiftKey) {
       event.preventDefault();
       parent.postMessage({ type: "scribe-download" }, "*");

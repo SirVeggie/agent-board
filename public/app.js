@@ -3818,7 +3818,7 @@
     } else if (event.data?.type === "scribe-palette") {
       togglePalette();
     } else if (event.data?.type === "scribe-shortcut") {
-      if (["spaces", "next-space", "prev-space", "library"].includes(event.data.action)) {
+      if (["spaces", "next-space", "prev-space", "library", "new-page"].includes(event.data.action)) {
         runShortcut(event.data.action);
       }
     } else if (event.data?.type === "scribe-activity") {
