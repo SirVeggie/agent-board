@@ -6217,7 +6217,7 @@
   }
 
   function quotaPercent(provider, utilization) {
-    return provider === "codex" ? `${percent(Math.max(0, 1 - utilization))} left` : percent(utilization);
+    return percent(utilization);
   }
 
   function quotaReset(provider, at) {
@@ -6343,11 +6343,11 @@
     if (!limits) return null;
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
-    for (const w of limits.windows) {
-      const row = el("div", `ag-usage-tip-row${provider === "codex" ? " ag-quota-remaining" : ""} lvl-${usageLevel(w.utilization)}`);
+    for (const w of detailWindows(limits)) {
+      const row = el("div", `ag-usage-tip-row lvl-${usageLevel(w.utilization)}`);
       const bar = el("div", "ag-meter-bar");
       const fill = el("div", "ag-meter-fill");
-      fill.style.width = `${Math.min(100, Math.round((provider === "codex" ? Math.max(0, 1 - w.utilization) : w.utilization) * 100))}%`;
+      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
       bar.append(fill);
       row.append(el("span", "ag-usage-tip-label", w.label), bar, el("span", "ag-usage-tip-pct", quotaPercent(provider, w.utilization)));
       if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaReset(provider, w.resetsAt)));
@@ -6450,9 +6450,14 @@
     return tip;
   }
 
-  /** Windows the full chip lists: Cursor's Included is Auto + API, on-demand only once used. */
+  /** Detailed usage excludes Cursor's estimated combined value. */
+  function detailWindows(limits) {
+    return limits.windows.filter((w) => w.id !== "cursor_included");
+  }
+
+  /** Windows the full chip lists: on-demand only once used. */
   function chipWindows(limits) {
-    return limits.windows.filter((w) => w.id !== "cursor_included" && (w.id !== "cursor_on_demand" || w.utilization > 0));
+    return detailWindows(limits).filter((w) => w.id !== "cursor_on_demand" || w.utilization > 0);
   }
 
   /** Compact chip: Claude's 5-hour, Cursor's Included, else the fullest listed window. */
@@ -6474,7 +6479,7 @@
     const listed = chipWindows(limits);
     const one = compact ? compactWindow(limits) : null;
     if (!(compact ? one : listed.length)) return null;
-    const top = one ? one.utilization : Math.max(...limits.windows.map((w) => w.utilization));
+    const top = one ? one.utilization : Math.max(...listed.map((w) => w.utilization));
     const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => {
       hideUsageTip();
       agentSettings.open();
@@ -6508,11 +6513,11 @@
       );
       return box;
     }
-    for (const w of limits.windows) {
-      const row = el("div", `ag-meter${provider === "codex" ? " ag-quota-remaining" : ""} lvl-${usageLevel(w.utilization)}`);
+    for (const w of detailWindows(limits)) {
+      const row = el("div", `ag-meter lvl-${usageLevel(w.utilization)}`);
       const bar = el("div", "ag-meter-bar");
       const fill = el("div", "ag-meter-fill");
-      fill.style.width = `${Math.min(100, Math.round((provider === "codex" ? Math.max(0, 1 - w.utilization) : w.utilization) * 100))}%`;
+      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
       bar.append(fill);
       row.append(el("span", "ag-meter-label", w.label), bar, el("span", "ag-meter-pct", quotaPercent(provider, w.utilization)), el("span", "ag-meter-reset", quotaReset(provider, w.resetsAt)));
       box.append(row);

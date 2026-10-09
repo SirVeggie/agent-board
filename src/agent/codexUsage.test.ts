@@ -85,3 +85,35 @@ test("disposing during a quota read prevents writes and rescheduling", async () 
   resolve(quota(true));
   await pending;
 });
+
+test("live Codex quota clears probe errors without granting recovery permission", async () => {
+  const host = new AgentHost(() => {}, async () => { throw new Error("401 expired refresh token"); });
+  const internal = host as unknown as Internals;
+  try {
+    await internal.refreshCodexUsage();
+    assert.equal(host.limits().codex?.availability, "authentication_required");
+    internal.recordLimits("codex", { rateLimits: { primary: { usedPercent: 25, windowDurationMins: 300 } } });
+    const limits = host.limits().codex!;
+    assert.equal(limits.availability, "available");
+    assert.equal(limits.detail, undefined);
+    assert.equal(limits.windows[0].utilization, 0.25);
+    assert.equal(limits.ordinaryUsageAllowed, null);
+    assert.equal(limits.permissionAt, undefined);
+  } finally { host.dispose(); }
+});
+
+test("a failed background probe cannot overwrite quota reported while it was running", async () => {
+  let reject!: (error: Error) => void;
+  const host = new AgentHost(() => {}, () => new Promise((_resolve, r) => { reject = r; }));
+  const internal = host as unknown as Internals;
+  try {
+    const pending = internal.refreshCodexUsage();
+    internal.recordLimits("codex", { rateLimits: { primary: { usedPercent: 40 } } });
+    reject(new Error("401 expired refresh token"));
+    await pending;
+    assert.equal(host.limits().codex?.availability, "available");
+    assert.equal(host.limits().codex?.detail, undefined);
+    assert.equal(host.limits().codex?.windows[0].utilization, 0.4);
+    assert.equal(host.limits().codex?.ordinaryUsageAllowed, null);
+  } finally { host.dispose(); }
+});

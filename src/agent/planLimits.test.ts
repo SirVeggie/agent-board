@@ -20,8 +20,9 @@ test("Codex maps all buckets, credits, percent units and Unix resets without dup
   const next = planLimitsFromCodexRateLimits({ ordinaryUsageAllowed: false, rateLimits: codex,
     rateLimitsByLimitId: { codex, other: { limitName: "Other model", primary: { usedPercent: 150, windowDurationMins: 60, resetsAt: null } } } }, 123)!;
   assert.equal(next.windows.length, 3);
-  assert.deepEqual(next.windows[0], { id: "codex:codex:primary", label: "Codex · 5-hour", utilization: 0.25, resetsAt: 1_900_000_000_000 });
-  assert.equal(next.windows[1].label, "Codex · Weekly");
+  assert.deepEqual(next.windows[0], { id: "codex:codex:primary", label: "5-hour", utilization: 0.25, resetsAt: 1_900_000_000_000 });
+  assert.equal(next.windows[1].label, "Weekly");
+  assert.equal(next.windows[2].label, "Other model · 60-minute");
   assert.equal(next.windows[2].utilization, 1);
   assert.equal(next.buckets?.[0].credits?.balance, "12.5");
   assert.equal(next.ordinaryUsageAllowed, false);

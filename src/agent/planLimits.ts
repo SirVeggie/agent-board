@@ -92,13 +92,14 @@ export function planLimitsFromCodexRateLimits(report: unknown, now: number, prev
       const oldWindow = windows.find((x) => x.id === `codex:${id}:${slot}`);
       const duration = mins === 300 ? "5-hour" : mins === 10080 ? "Weekly" : mins ? `${mins}-minute` : slot === "primary" ? "Primary" : "Secondary";
       const resetsAt = parseResetsAt(w.resetsAt) ?? (rolling ? oldWindow?.resetsAt : undefined);
-      const window = { id: `codex:${id}:${slot}`, label: rolling && mins == null && oldWindow ? oldWindow.label : `${label} · ${duration}`, utilization: usageUtilization(w.usedPercent), ...(resetsAt ? { resetsAt } : {}) };
+      const window = { id: `codex:${id}:${slot}`, label: rolling && mins == null && oldWindow ? oldWindow.label : id === "codex" && label === "Codex" ? duration : `${label} · ${duration}`, utilization: usageUtilization(w.usedPercent), ...(resetsAt ? { resetsAt } : {}) };
       const wi = windows.findIndex((x) => x.id === window.id);
       if (wi < 0) windows.push(window); else windows[wi] = window;
     }
   }
-  return { at: now, source: "codex", availability: rolling ? prev?.availability ?? "available" : "available", windows, buckets,
-    ...(rolling && prev?.detail ? { detail: prev.detail } : {}),
+  // A live quota notification supersedes a failed background probe. It still
+  // cannot grant recovery permission, which requires a fresh full read.
+  return { at: now, source: "codex", availability: "available", windows, buckets,
     ordinaryUsageAllowed: rolling ? prev?.ordinaryUsageAllowed ?? null : typeof report.ordinaryUsageAllowed === "boolean" ? report.ordinaryUsageAllowed : null,
     ...(rolling ? prev?.permissionAt ? { permissionAt: prev.permissionAt } : {} : { permissionAt: now }),
   };

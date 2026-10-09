@@ -304,7 +304,8 @@ export async function fetchCodexModels(): Promise<ModelOption[]> {
 
 /** Account quota only: no thread or model turn is created. Use the same auth as sessions. */
 export async function readCodexPlanUsage(call: AppServerCall): Promise<unknown> {
-  const account = await call("account/read", { refreshToken: true });
+  // Let managed auth refresh when needed; polling must not force token rotation.
+  const account = await call("account/read", { refreshToken: false });
   if (!isPlainRecord(account) || !isPlainRecord(account.account)) throw new Error("Codex authentication required");
   if (account.account.type === "apiKey") throw new Error("Codex subscription quota requires a ChatGPT login; API-key quota is unavailable");
   return call("account/rateLimits/read");

@@ -427,6 +427,7 @@ export class AgentHost {
     if (Date.now() - this.codexUsageFetchAt < 60_000) return Promise.resolve();
     this.codexUsageFetchAt = Date.now();
     if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
+    const beforeRead = this.planLimits.codex;
     this.codexUsageFetch = (async () => {
       try {
         const report = await this.readCodexUsage();
@@ -436,6 +437,9 @@ export class AgentHost {
         this.commitLimits("codex", parsed, false);
       } catch (error) {
         if (this.closed) return;
+        // A session reported quota while the background read was in flight.
+        // Keep that newer evidence rather than replacing it with a probe error.
+        if (this.planLimits.codex !== beforeRead && this.planLimits.codex?.availability === "available") return;
         const auth = /authentication required|unauthorized|401|expired|refresh.token|not logged|sign.in/i.test((error as Error).message);
         this.commitLimits("codex", { at: Date.now(), source: "codex", windows: [], ordinaryUsageAllowed: null,
           availability: auth ? "authentication_required" : "unavailable",

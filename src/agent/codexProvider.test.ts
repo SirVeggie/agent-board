@@ -229,14 +229,14 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
   } };
 }
 
-test("Codex quota reader refreshes auth and reads only account quota, without creating a turn", async () => {
+test("Codex quota reader checks auth without forcing refresh and reads only account quota", async () => {
   const calls: Array<[string, unknown]> = [];
   const report = { ordinaryUsageAllowed: true, rateLimits: { primary: { usedPercent: 25 } } };
   assert.equal(await readCodexPlanUsage(async (method, params) => {
     calls.push([method, params]);
     return method === "account/read" ? { account: { type: "chatgpt" } } : report;
   }), report);
-  assert.deepEqual(calls, [["account/read", { refreshToken: true }], ["account/rateLimits/read", undefined]]);
+  assert.deepEqual(calls, [["account/read", { refreshToken: false }], ["account/rateLimits/read", undefined]]);
   await assert.rejects(readCodexPlanUsage(async () => ({ account: null })), /authentication required/);
   await assert.rejects(readCodexPlanUsage(async () => ({ account: { type: "apiKey" } })), /ChatGPT login/);
   await assert.rejects(readCodexPlanUsage(async () => { throw new Error("401 expired"); }), /401 expired/);
