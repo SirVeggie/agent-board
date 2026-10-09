@@ -11,6 +11,20 @@ import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYT
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
+import { applyImport, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, writeMcpFile, type McpFile } from "./mcpConfig.js";
+import { workspaceKey } from "./prefs.js";
+
+function mcpView() {
+  const { error, ...file } = readMcpFile();
+  return { path: mcpFilePath(), file, defaultModes: DEFAULT_MODES, ...(error ? { error } : {}) };
+}
+
+/** The saved file, to change; refused while it does not parse, so a hand edit with a typo is not overwritten. */
+function writableMcpFile(): McpFile {
+  const { error, ...file } = readMcpFile();
+  if (error) throw new Error(`${mcpFilePath()} does not parse, so it is left alone: ${error}`);
+  return { mcpServers: { ...file.mcpServers }, workspaces: { ...file.workspaces } };
+}
 
 /** /api/agent/* for the board shell. The content origin gate keeps tab pages out of these. */
 export function agentRouter(host: AgentHost): express.Router {
@@ -61,6 +75,43 @@ export function agentRouter(host: AgentHost): express.Router {
       const scope = body.scope === "project" || body.scope === "local" ? body.scope : "user";
       const kind = body.kind === "deny" || body.kind === "ask" ? body.kind : "allow";
       return { set: setRules({ provider, scope, kind, cwd: typeof body.cwd === "string" ? body.cwd : null, rules: body.rules }) };
+    })
+  );
+
+  // Scribe's MCP servers (data/agent/mcp.json): the global list and one per workspace.
+  router.get("/mcp", wrap(() => mcpView()));
+
+  router.put(
+    "/mcp/layer",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const scope = typeof body.scope === "string" && body.scope ? body.scope : "global";
+      const servers = cleanLayer({ mcpServers: body.servers }).mcpServers;
+      const file = writableMcpFile();
+      if (scope === "global") file.mcpServers = servers;
+      else if (Object.keys(servers).length) file.workspaces[workspaceKey(scope)] = { path: scope, mcpServers: servers };
+      else delete file.workspaces[workspaceKey(scope)];
+      writeMcpFile(file);
+      return mcpView();
+    })
+  );
+
+  router.get(
+    "/mcp/import",
+    wrap((req) => {
+      const dirs = ([] as unknown[]).concat(req.query.cwd ?? []).filter((d): d is string => typeof d === "string" && d.length > 0);
+      return { candidates: importCandidates(dirs) };
+    })
+  );
+
+  router.post(
+    "/mcp/import",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const items = Array.isArray(body.items) ? body.items.filter(isPlainRecord) : [];
+      const picked = items.flatMap((item) => (typeof item.scope === "string" && typeof item.name === "string" ? [{ scope: item.scope, name: item.name, server: item.server }] : []));
+      writeMcpFile(applyImport(writableMcpFile(), picked));
+      return mcpView();
     })
   );
 

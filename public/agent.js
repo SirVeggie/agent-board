@@ -6787,6 +6787,431 @@
     },
   };
 
+  /* ---------- MCP servers: Scribe's one list for every provider (data/agent/mcp.json) ---------- */
+
+  const MCP_SOURCE_LABEL = { claude: "Claude Code", cursor: "Cursor", pi: "Pi" };
+
+  /** One line about where a server runs: its command line or URL. */
+  function mcpTarget(server) {
+    if (server.url) return server.url;
+    return [server.command, ...(server.args || [])].filter(Boolean).join(" ");
+  }
+
+  function mcpModes(server, defaults) {
+    const ids = server.modes || defaults;
+    return MODES.filter((m) => ids.includes(m.id)).map((m) => m.label).join(", ") || "no modes";
+  }
+
+  const mcpServers = {
+    view: null,
+    scope: "global",
+    panel: null,
+    close: () => {},
+    async open() {
+      const { panel, close } = modal("ag-mcp");
+      this.panel = panel;
+      this.close = close;
+      this.current = targetView().settings().cwd || null;
+      this.scope = "global";
+      panel.append(el("h2", "ag-modal-title", "MCP servers"), el("div", "ag-muted", "Loading…"));
+      try {
+        this.view = await api("GET", "/mcp");
+      } catch (err) {
+        panel.replaceChildren(el("h2", "ag-modal-title", "MCP servers"), el("p", "ag-source-error", err.message));
+        return;
+      }
+      this.render();
+    },
+    /** Workspaces to choose from: the current one, recent ones, and any with servers of their own. */
+    workspaces() {
+      const layers = Object.values(this.view.file.workspaces).map((w) => w.path);
+      const dirs = [this.current, ...(prefs().recentWorkspaces || []), ...layers].filter(Boolean);
+      const seen = new Set();
+      return dirs.filter((dir) => {
+        const key = dirKey(dir);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    },
+    layer() {
+      if (this.scope === "global") return this.view.file.mcpServers;
+      const key = dirKey(this.scope);
+      return Object.values(this.view.file.workspaces).find((w) => dirKey(w.path) === key)?.mcpServers || {};
+    },
+    async save(servers) {
+      try {
+        this.view = await api("PUT", "/mcp/layer", { scope: this.scope, servers });
+        this.render();
+        return true;
+      } catch (err) {
+        notice(err.message);
+        return false;
+      }
+    },
+    render() {
+      if (!this.panel?.isConnected) return;
+      const view = this.view;
+      const picker = el("select");
+      picker.setAttribute("aria-label", "Where the servers apply");
+      const dirs = this.workspaces();
+      picker.append(el("option", null, "Everywhere"), ...dirs.map((dir) => el("option", null, dir)));
+      [...picker.options].forEach((option, i) => (option.value = i ? dirs[i - 1] : "global"));
+      picker.value = this.scope;
+      picker.addEventListener("change", () => {
+        this.scope = picker.value;
+        this.render();
+      });
+      const pick = el("div", "setting-row");
+      pick.append(el("span", null, "Applies"), picker);
+
+      const own = this.layer();
+      const ownNames = Object.keys(own).filter((name) => own[name].command || own[name].url);
+      const list = el("div", "ag-mcp-list");
+      if (view.error) list.append(el("p", "ag-source-error", `${view.path} does not parse, so Scribe won't change it: ${view.error}`));
+      if (!ownNames.length) list.append(el("div", "ag-muted", this.scope === "global" ? "No servers yet." : "No servers of this workspace's own."));
+      for (const name of ownNames) list.append(this.row(name, own[name], own));
+
+      const body = [
+        helpHeading(
+          "Servers",
+          "One list for Claude, Cursor and Native threads, in place of each app's own MCP config. Claude threads get only these; Cursor threads still load ~/.cursor/mcp.json as well. A workspace's servers apply in that folder and its subfolders, and replace a server of the same name from Everywhere. Changes apply from a thread's next session."
+        ),
+        pick,
+        list,
+      ];
+
+      if (this.scope !== "global") {
+        const box = el("div", "ag-mcp-list");
+        for (const [name, server] of Object.entries(view.file.mcpServers)) {
+          if (ownNames.includes(name)) continue;
+          const off = own[name]?.enabled === false;
+          const row = el("div", "setting-row ag-mcp-row");
+          const label = el("span", "ag-mcp-label");
+          label.append(el("strong", null, name), el("span", "ag-muted", ` · ${server.enabled === false ? "off everywhere" : mcpModes(server, view.defaultModes)}`));
+          const toggle = switchControl(
+            () => !off,
+            () => {
+              const next = { ...own };
+              if (off) delete next[name];
+              else next[name] = { enabled: false };
+              void this.save(next);
+            }
+          );
+          toggle.setAttribute("aria-label", `Use ${name} in this workspace`);
+          row.append(label, toggle);
+          box.append(row);
+        }
+        if (box.children.length) body.push(helpHeading("From Everywhere", "Turn a server off for this workspace only. It stays on everywhere else."), box);
+      }
+
+      const actions = el("div", "ag-modal-actions");
+      actions.append(
+        button("Add server…", "ag-btn", () => this.edit(null)),
+        button("Import…", "ag-btn", () => void this.importDialog()),
+        button("Edit JSON…", "ag-btn ghost", () => this.editJson()),
+        el("span", "ag-grow"),
+        button("Done", "ag-btn primary", () => this.close())
+      );
+      this.panel.replaceChildren(el("h2", "ag-modal-title", "MCP servers"), ...body, el("p", "ag-modal-hint ag-mcp-path", view.path), actions);
+      window.createSelect?.(picker);
+    },
+    row(name, server, layer) {
+      const row = el("div", "setting-row ag-mcp-row");
+      const label = el("span", "ag-mcp-label");
+      const meta = [mcpModes(server, this.view.defaultModes), server.approve === "auto" ? "runs without asking" : null].filter(Boolean).join(" · ");
+      label.append(el("strong", null, name), el("span", "ag-muted", ` · ${meta}`), el("code", "ag-mcp-target", mcpTarget(server)));
+      const toggle = switchControl(
+        () => server.enabled !== false,
+        () => void this.save({ ...layer, [name]: { ...server, enabled: server.enabled === false } })
+      );
+      toggle.setAttribute("aria-label", `Use ${name}`);
+      const controls = el("span", "ag-mcp-controls");
+      controls.append(toggle, button("Edit", "ag-btn small", () => this.edit(name)));
+      row.append(label, controls);
+      return row;
+    },
+    /** Add or change one server in the chosen layer. */
+    edit(name) {
+      const layer = this.layer();
+      const server = name ? layer[name] : { modes: this.view.defaultModes };
+      const { panel, close } = modal("ag-source ag-mcp-edit");
+      const field = (label, input, hint) => {
+        const wrap = el("label", "ag-field");
+        wrap.append(el("span", "ag-field-label", label), input);
+        if (hint) wrap.append(el("span", "ag-muted ag-field-hint", hint));
+        return wrap;
+      };
+      const input = (value, placeholder) => {
+        const node = el("input", "ag-input");
+        node.value = value || "";
+        node.placeholder = placeholder;
+        node.spellcheck = false;
+        return node;
+      };
+      const area = (value, placeholder) => {
+        const node = el("textarea", "ag-input ag-source-models");
+        node.value = value;
+        node.placeholder = placeholder;
+        node.spellcheck = false;
+        return node;
+      };
+      const pairs = (map, sep) =>
+        Object.entries(map || {})
+          .map(([k, v]) => `${k}${sep}${v}`)
+          .join("\n");
+      const parsePairs = (text, sep) => {
+        const out = {};
+        for (const line of text.split("\n")) {
+          const at = line.indexOf(sep);
+          if (at > 0) out[line.slice(0, at).trim()] = line.slice(at + sep.length).trim();
+        }
+        return out;
+      };
+      const nameInput = input(name, "e.g. github");
+      let kind = server.url ? "url" : "command";
+      const command = input(server.command, "e.g. npx");
+      const args = area((server.args || []).join("\n"), "One argument per line");
+      const env = area(pairs(server.env, "="), "KEY=value, one per line");
+      const url = input(server.url, "https://example.com/mcp");
+      const sse = el("input");
+      sse.type = "checkbox";
+      sse.checked = server.type === "sse";
+      const sseLabel = el("label", "ag-check");
+      sseLabel.append(sse, el("span", null, "Server-sent events (older servers)"));
+      const headers = area(pairs(server.headers, ": "), "Header: value, one per line");
+      const commandFields = el("div", "ag-mcp-fields");
+      commandFields.append(field("Command", command), field("Arguments", args), field("Environment", env, "${VAR} takes a variable from Scribe's environment."));
+      const urlFields = el("div", "ag-mcp-fields");
+      urlFields.append(field("URL", url), sseLabel, field("Headers", headers, "${VAR} takes a variable from Scribe's environment."));
+      const syncKind = () => {
+        commandFields.hidden = kind !== "command";
+        urlFields.hidden = kind !== "url";
+      };
+      const kindTrack = choiceTrack(
+        [
+          { id: "command", label: "Command" },
+          { id: "url", label: "URL" },
+        ],
+        () => kind,
+        (id) => {
+          kind = id;
+          syncKind();
+        }
+      );
+      syncKind();
+      const modes = el("div", "ag-mcp-modes");
+      const modeBoxes = MODES.map((mode) => {
+        const box = el("input");
+        box.type = "checkbox";
+        box.value = mode.id;
+        box.checked = (server.modes || this.view.defaultModes).includes(mode.id);
+        const label = el("label", "ag-check");
+        label.append(box, el("span", null, mode.label));
+        modes.append(label);
+        return box;
+      });
+      const autoBox = el("input");
+      autoBox.type = "checkbox";
+      autoBox.checked = server.approve === "auto";
+      const auto = el("label", "ag-check");
+      auto.append(autoBox, el("span", null, "Run its tools without asking"));
+      const error = el("p", "ag-source-error");
+      error.hidden = true;
+      const save = async () => {
+        const id = nameInput.value.trim();
+        const fail = (text) => {
+          error.textContent = text;
+          error.hidden = false;
+        };
+        if (!/^[A-Za-z0-9_.-]{1,48}$/.test(id)) return fail("Use letters, digits, dot, dash or underscore for the name.");
+        if (id !== name && layer[id]) return fail(`There is already a server named ${id} here.`);
+        const next = { ...server };
+        for (const key of ["command", "args", "env", "url", "headers", "type"]) delete next[key];
+        if (kind === "command") {
+          if (!command.value.trim()) return fail("Enter the command that starts the server.");
+          next.command = command.value.trim();
+          const list = args.value
+            .split("\n")
+            .map((a) => a.trim())
+            .filter(Boolean);
+          if (list.length) next.args = list;
+          const vars = parsePairs(env.value, "=");
+          if (Object.keys(vars).length) next.env = vars;
+        } else {
+          if (!/^https?:\/\//i.test(url.value.trim())) return fail("Enter the server's http(s) URL.");
+          next.url = url.value.trim();
+          if (sse.checked) next.type = "sse";
+          const map = parsePairs(headers.value, ":");
+          if (Object.keys(map).length) next.headers = map;
+        }
+        next.modes = modeBoxes.filter((b) => b.checked).map((b) => b.value);
+        if (autoBox.checked) next.approve = "auto";
+        else delete next.approve;
+        const servers = { ...layer };
+        if (name && name !== id) delete servers[name];
+        servers[id] = next;
+        if (await this.save(servers)) close();
+      };
+      const actions = el("div", "ag-modal-actions");
+      if (name) {
+        actions.append(
+          button("Remove", "ag-btn ghost danger", async () => {
+            if (!(await app()?.confirm?.(`Remove ${name}? Threads lose its tools from their next session.`, "Remove"))) return;
+            const servers = { ...layer };
+            delete servers[name];
+            if (await this.save(servers)) close();
+          })
+        );
+      }
+      actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), button(name ? "Save" : "Add", "ag-btn primary", save));
+      panel.append(
+        el("h2", "ag-modal-title", name ? `Edit ${name}` : "Add an MCP server"),
+        el("p", "ag-modal-hint", this.scope === "global" ? "Applies everywhere." : `Applies in ${this.scope}.`),
+        field("Name", nameInput),
+        kindTrack,
+        commandFields,
+        urlFields,
+        field("Modes", modes, "Threads in these modes get its tools. Pages covers board workers and page chats."),
+        auto,
+        error,
+        actions
+      );
+      setTimeout(() => (name ? command : nameInput).focus(), 0);
+    },
+    /** The chosen layer as JSON, for pasting servers from another app's mcp.json. */
+    editJson() {
+      const { panel, close } = modal("ag-source ag-mcp-json");
+      const text = el("textarea", "ag-input ag-source-models ag-mcp-json-text");
+      text.spellcheck = false;
+      text.value = JSON.stringify({ mcpServers: this.layer() }, null, 2);
+      const error = el("p", "ag-source-error");
+      error.hidden = true;
+      const save = async () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(text.value);
+        } catch (err) {
+          error.textContent = err.message;
+          error.hidden = false;
+          return;
+        }
+        const servers = parsed && typeof parsed === "object" && parsed.mcpServers && typeof parsed.mcpServers === "object" ? parsed.mcpServers : parsed;
+        if (await this.save(servers || {})) close();
+      };
+      const actions = el("div", "ag-modal-actions");
+      actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), button("Save", "ag-btn primary", save));
+      panel.append(
+        el("h2", "ag-modal-title", this.scope === "global" ? "Servers everywhere" : `Servers in ${this.scope}`),
+        el("p", "ag-modal-hint", 'The usual mcpServers shape, so you can paste from another app\'s mcp.json. Scribe\'s own fields: enabled, modes (code, plan, ask, board) and approve ("ask" or "auto"). Unknown fields are dropped.'),
+        text,
+        error,
+        actions
+      );
+      setTimeout(() => text.focus(), 0);
+    },
+    /** Pick servers from Claude Code, Cursor and Pi to copy into Scribe's list. */
+    async importDialog() {
+      const { panel, close } = modal("ag-source ag-mcp-import");
+      const title = () => el("h2", "ag-modal-title", "Import MCP servers");
+      panel.append(title(), el("div", "ag-muted", "Looking…"));
+      let candidates = [];
+      try {
+        const query = this.workspaces()
+          .map((d) => `cwd=${encodeURIComponent(d)}`)
+          .join("&");
+        candidates = (await api("GET", `/mcp/import${query ? `?${query}` : ""}`)).candidates || [];
+      } catch (err) {
+        panel.replaceChildren(title(), el("p", "ag-source-error", err.message));
+        return;
+      }
+      const picked = new Set();
+      const sources = new Set(Object.keys(MCP_SOURCE_LABEL));
+      const filter = el("input", "ag-input small ag-grow");
+      filter.placeholder = "Filter by name, app, folder or command";
+      filter.spellcheck = false;
+      const sourceBar = el("div", "ag-mcp-modes");
+      const list = el("div", "ag-mcp-list ag-mcp-candidates");
+      const count = el("span", "ag-muted");
+      const visible = () => {
+        const q = filter.value.trim().toLowerCase();
+        return candidates.filter((c) => sources.has(c.source) && (!q || [c.name, MCP_SOURCE_LABEL[c.source], c.scope, mcpTarget(c.server)].join(" ").toLowerCase().includes(q)));
+      };
+      const syncCount = () => (count.textContent = `${picked.size} selected`);
+      const renderList = () => {
+        list.replaceChildren();
+        const shown = visible();
+        if (!shown.length) list.append(el("div", "ag-muted", candidates.length ? "Nothing matches." : "No servers found in Claude Code, Cursor or Pi."));
+        for (const c of shown) {
+          const box = el("input");
+          box.type = "checkbox";
+          box.checked = picked.has(c);
+          box.addEventListener("change", () => {
+            if (box.checked) picked.add(c);
+            else picked.delete(c);
+            syncCount();
+          });
+          const row = el("label", "ag-check ag-mcp-candidate");
+          const text = el("span", "ag-mcp-label");
+          text.append(
+            el("strong", null, c.name),
+            el("span", "ag-muted", ` · ${MCP_SOURCE_LABEL[c.source]} · ${c.scope === "global" ? "everywhere" : c.scope}${c.exists ? " · replaces Scribe's" : ""}`),
+            el("code", "ag-mcp-target", mcpTarget(c.server))
+          );
+          row.append(box, text);
+          list.append(row);
+        }
+      };
+      for (const [id, label] of Object.entries(MCP_SOURCE_LABEL)) {
+        if (!candidates.some((c) => c.source === id)) continue;
+        const box = el("input");
+        box.type = "checkbox";
+        box.checked = true;
+        box.addEventListener("change", () => {
+          if (box.checked) sources.add(id);
+          else sources.delete(id);
+          renderList();
+        });
+        const l = el("label", "ag-check");
+        l.append(box, el("span", null, label));
+        sourceBar.append(l);
+      }
+      filter.addEventListener("input", renderList);
+      const all = (on) => {
+        for (const c of visible()) on ? picked.add(c) : picked.delete(c);
+        renderList();
+        syncCount();
+      };
+      const run = async () => {
+        if (!picked.size) return;
+        try {
+          this.view = await api("POST", "/mcp/import", { items: [...picked].map((c) => ({ scope: c.scope, name: c.name, server: c.server })) });
+        } catch (err) {
+          notice(err.message);
+          return;
+        }
+        close();
+        this.render();
+        notice(`Imported ${picked.size} server${picked.size === 1 ? "" : "s"}.`);
+      };
+      const tools = el("div", "ag-modal-actions");
+      tools.append(filter, button("All", "ag-btn small", () => all(true)), button("None", "ag-btn small", () => all(false)));
+      const actions = el("div", "ag-modal-actions");
+      actions.append(count, el("span", "ag-grow"), button("Cancel", "ag-btn", close), button("Import", "ag-btn primary", run));
+      panel.replaceChildren(
+        title(),
+        el("p", "ag-modal-hint", "From Claude Code (~/.claude.json, .mcp.json), Cursor (~/.cursor/mcp.json, .cursor/mcp.json) and Pi (~/.pi). Workspace servers keep their folder; the other apps' files are left as they are."),
+        sourceBar,
+        tools,
+        list,
+        actions
+      );
+      renderList();
+      syncCount();
+      setTimeout(() => filter.focus(), 0);
+    },
+  };
+
   const agentSettings = {
     root: null,
     status: null,
@@ -6823,6 +7248,12 @@
         button("Allowlists…", null, () => {
           this.close();
           allowlists.open();
+        })
+      );
+      actions.append(
+        button("MCP servers…", null, () => {
+          this.close();
+          void mcpServers.open();
         })
       );
       providers.append(
