@@ -18,6 +18,8 @@ import type { ChatImage, ModelOption, ProviderStatus, SlashCommand, Thread, Tool
 import { isPlainRecord, noPages } from "../types.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
+import { McpBridge, type BridgeAsk, type BridgedTool } from "../mcpBridge.js";
+import { serversKey } from "../mcpConfig.js";
 
 /**
  * Codex interactive sessions use app-server; the SDK spawns `codex exec` for summaries. Sessions resume by
@@ -26,7 +28,10 @@ import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
  * picker is the live ChatGPT catalog from `codex app-server` `model/list` (same list as Codex web
  * work mode), with FALLBACK_MODELS only when that call fails. Interactive sessions use a persistent
  * app-server connection for approvals and steering; SDK exec is retained for tool-free summaries.
- * The board's tools reach the agent as a Codex MCP server named `scribe`.
+ * The board's tools reach the agent as a Codex MCP server named `scribe`. The user's MCP servers (Agent
+ * settings) are bridged as dynamic tools named "<server>__<tool>", so Scribe asks before each call by the
+ * server's setting rather than Codex's own MCP approvals. Codex stores a thread's dynamic tools with the
+ * thread, so a resumed thread keeps the list it started with.
  */
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -429,6 +434,22 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
   };
 }
 
+/** A bridged tool as a Codex dynamic tool for `thread/start`. */
+export function dynamicToolSpec(tool: Pick<BridgedTool, "name" | "server" | "tool" | "description" | "inputSchema">): RpcRecord {
+  return { type: "function", name: tool.name, description: tool.description || `${tool.server}: ${tool.tool}`, inputSchema: tool.inputSchema };
+}
+
+/** MCP tool result content as Codex dynamic tool output items. */
+export function dynamicToolContent(content: unknown[]): RpcRecord[] {
+  return content.filter(isPlainRecord).map((block) => {
+    if (block.type === "text" && typeof block.text === "string") return { type: "inputText", text: block.text };
+    if (block.type === "image" && typeof block.data === "string") {
+      return { type: "inputImage", imageUrl: `data:${typeof block.mimeType === "string" ? block.mimeType : "image/png"};base64,${block.data}` };
+    }
+    return { type: "inputText", text: JSON.stringify(block) };
+  });
+}
+
 export function mapUsage(usage: CodexUsage): Usage {
   return {
     inputTokens: usage.input_tokens,
@@ -683,6 +704,15 @@ export function appServerItem(item: RpcRecord): ThreadItem | null {
       ...(isPlainRecord(item.error) ? { error: { message: String(item.error.message) } } : {}),
       status: item.status === "completed" ? "completed" : item.status === "failed" ? "failed" : "in_progress" };
     case "webSearch": return { type: "web_search", id, query: String(item.query ?? "") };
+    // A bridged MCP tool (Codex dynamic tool): no server here; the session titles it from its bridge.
+    case "dynamicToolCall": {
+      const content = (Array.isArray(item.contentItems) ? item.contentItems.filter(isPlainRecord) : [])
+        .flatMap((c) => (c.type === "inputText" && typeof c.text === "string" ? [{ type: "text", text: c.text }] : []));
+      const status = item.status === "failed" || item.success === false ? "failed" : item.status === "completed" ? "completed" : "in_progress";
+      return { type: "mcp_tool_call", id, server: "", tool: String(item.tool ?? ""), arguments: item.arguments,
+        ...(status !== "in_progress" ? { result: { content, structured_content: null } as unknown as McpToolCallItem["result"] } : {}),
+        status };
+    }
     default: return null;
   }
 }
@@ -733,6 +763,9 @@ export class CodexSession implements ProviderSession {
   private tools = new Set<string>();
   private plan: string | null = null;
   private reviewNotices = new Set<string>();
+  private bridge: Pick<McpBridge, "servers" | "cwd" | "tools" | "close"> | null = null;
+  /** Bridged user tools by dynamic tool name. */
+  private bridged = new Map<string, BridgedTool>();
 
   constructor(
     private thread: Thread,
@@ -747,6 +780,8 @@ export class CodexSession implements ProviderSession {
       },
     private prepare: () => void = syncCodexAuth,
     private reviewLog: typeof log = log,
+    private makeBridge: (...args: ConstructorParameters<typeof McpBridge>) => Pick<McpBridge, "servers" | "cwd" | "tools" | "close"> =
+      (...args) => new McpBridge(...args),
   ) {
     this.nativeId = thread.nativeId;
   }
@@ -789,7 +824,30 @@ export class CodexSession implements ProviderSession {
   /** Reconnect identity. Model and effort stay off this key so a picker change reuses the thread. */
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions]);
+    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+  }
+
+  private asker(): BridgeAsk | undefined {
+    const sink = this.sink;
+    if (sink) return (req, signal) => sink.approval(req, signal);
+    const approval = this.ctx.approval;
+    return approval ? (req) => approval(this.thread.id, req) : undefined;
+  }
+
+  /** The user's MCP servers (Agent settings), connected by Scribe and offered to Codex as dynamic tools. */
+  private async userTools(): Promise<BridgedTool[]> {
+    const servers = this.ctx.mcpServers?.(this.thread) ?? [];
+    if (this.bridge && (serversKey(this.bridge.servers) !== serversKey(servers) || this.bridge.cwd !== this.cwd())) {
+      this.bridge.close();
+      this.bridge = null;
+    }
+    this.bridged.clear();
+    if (!servers.length) return [];
+    this.bridge ??= this.makeBridge(servers, this.cwd(), () => this.thread, () => this.asker(),
+      (name, message) => this.sink?.notice("warn", `MCP server ${name} did not start: ${message}`));
+    const tools = await this.bridge.tools();
+    for (const tool of tools) this.bridged.set(tool.name, tool);
+    return tools;
   }
 
   private async ensureHandle(): Promise<void> {
@@ -813,6 +871,9 @@ export class CodexSession implements ProviderSession {
     try {
       await rpc.call("initialize", { clientInfo: { name: "scribe", title: "Scribe", version: "1.0.0" }, capabilities: { experimentalApi: true } });
       rpc.notify("initialized");
+      const tools = await this.userTools();
+      // thread/resume takes no tool list: a resumed thread keeps the dynamic tools it started with.
+      const dynamicTools = tools.length ? { dynamicTools: tools.map(dynamicToolSpec) } : {};
       const options = {
         ...threadOptions(this.thread, this.cwd()),
         developerInstructions: this.instructions,
@@ -828,9 +889,9 @@ export class CodexSession implements ProviderSession {
           if (!/not found|unknown thread|no rollout/i.test((error as Error).message)) throw error;
           this.sink?.notice("warn", "Could not resume the Codex thread; this turn starts a new one without the earlier conversation.");
           this.nativeId = null;
-          result = await rpc.call("thread/start", options);
+          result = await rpc.call("thread/start", { ...options, ...dynamicTools });
         }
-      } else result = await rpc.call("thread/start", options);
+      } else result = await rpc.call("thread/start", { ...options, ...dynamicTools });
       if (!isPlainRecord(result) || !isPlainRecord(result.thread) || typeof result.thread.id !== "string") throw new Error("Invalid Codex thread response");
       this.nativeId = result.thread.id;
       this.sessionKey = key;
@@ -1124,6 +1185,23 @@ export class CodexSession implements ProviderSession {
       rpc.reply(id, { answers });
       return;
     }
+    if (message.method === "item/tool/call") {
+      const fail = (text: string) => rpc.reply(id, { success: false, contentItems: [{ type: "inputText", text }] });
+      const tool = this.bridged.get(String(p.tool));
+      if (!tool) {
+        fail(`The tool ${String(p.tool)} is not available: its MCP server was removed or did not start. A new chat picks up changed MCP servers.`);
+        return;
+      }
+      const callId = String(p.callId ?? "");
+      try {
+        // The approval sits on the call's row when the stream already showed it.
+        const result = await tool.call(isPlainRecord(p.arguments) ? p.arguments : {}, { ...(this.tools.has(callId) ? { toolCallId: callId } : {}), signal });
+        rpc.reply(id, { success: !result.isError, contentItems: dynamicToolContent(result.content) });
+      } catch (error) {
+        fail((error as Error).message || "The tool failed.");
+      }
+      return;
+    }
     // Unsupported permission grants and MCP elicitations fail closed, never silently grant access.
     if (message.method === "item/permissions/requestApproval") { rpc.reply(id, { permissions: {}, scope: "turn" }); return; }
     if (message.method === "mcpServer/elicitation/request") { rpc.reply(id, { action: "decline", content: null, _meta: null }); return; }
@@ -1227,6 +1305,10 @@ export class CodexSession implements ProviderSession {
       case "file_change":
         return item.changes.length === 1 ? `Edit ${item.changes[0]?.path ?? "file"}` : `Edit ${item.changes.length} files`;
       case "mcp_tool_call":
+        if (!item.server) {
+          const tool = this.bridged.get(item.tool);
+          return tool ? `${tool.server}: ${tool.tool}` : item.tool;
+        }
         return item.server === "scribe" ? `Scribe: ${item.tool}` : `${item.server}: ${item.tool}`;
       case "web_search":
         return `Search ${item.query}`.trim();
@@ -1255,6 +1337,8 @@ export class CodexSession implements ProviderSession {
     this.rpc?.close();
     this.rpc = null;
     this.sessionKey = null;
+    this.bridge?.close();
+    this.bridge = null;
   }
 
   dispose(): void {

@@ -11,6 +11,8 @@ import { CodexSession, readCodexPlanUsage, syncAuthFiles } from "./providers/cod
 import type { RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides } from "./providers/codex.js";
 import type { Thread } from "./types.js";
+import { McpBridge } from "./mcpBridge.js";
+import type { ResolvedMcpServer } from "./mcpConfig.js";
 
 const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "mode" | "approval" | "web"> => ({
   model: "gpt-5-codex",
@@ -202,12 +204,14 @@ test("Codex RPC rejects outstanding calls on process exit", async () => {
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask", limits?: SessionContext["limits"]) {
+function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask", limits?: SessionContext["limits"],
+  mcp?: { servers: ResolvedMcpServer[]; bridge: ConstructorParameters<typeof CodexSession>[6] }) {
   let f: ReturnType<typeof rpcFixture>;
   const reviews: unknown[] = [];
   const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
-    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits } as SessionContext,
-    () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); });
+    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits,
+      ...(mcp ? { mcpServers: () => mcp.servers } : {}) } as SessionContext,
+    () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); }, mcp?.bridge);
   const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
   const sink: RunSink = {
     nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart(tool) { seen.tools.push(tool.toolId); },
@@ -475,6 +479,73 @@ test("Codex user input answers include freeform notes; unsupported permission gr
   await tick();
   assert.deepEqual(f.f.sent.find((message) => message.id === "q")?.result, { answers: { q: { answers: ["Yes", "Use the small scope"] } } });
   assert.deepEqual(f.f.sent.find((message) => message.id === "permissions")?.result, { permissions: {}, scope: "turn" });
+  f.complete();
+  await run;
+  f.session.dispose();
+});
+
+function bridgeFixture(approve: ResolvedMcpServer["approve"]) {
+  const server: ResolvedMcpServer = { name: "files", layer: "global", transport: "stdio", command: "files-mcp", args: [], env: {}, headers: {}, approve };
+  const calls: unknown[] = [];
+  const client = { callTool: async (req: { arguments: unknown }) => {
+    calls.push(req.arguments);
+    return { content: [{ type: "text", text: "hello" }, { type: "image", data: "AAAA", mimeType: "image/png" }] };
+  } };
+  let closed = 0;
+  class FakeBridge extends McpBridge {
+    override tools() {
+      return Promise.resolve([{ name: "files__read", server: "files", tool: "read", description: "Read a file", inputSchema: { type: "object", properties: { path: { type: "string" } } },
+        call: (args: Record<string, unknown>, opts: { toolCallId?: string; signal?: AbortSignal }) =>
+          (this as unknown as { call: (...a: unknown[]) => Promise<{ content: unknown[]; isError: boolean }> }).call(client, server, "read", args, opts) }]);
+    }
+    override close() { closed++; }
+  }
+  return { servers: [server], calls, get closed() { return closed; }, bridge: (...args: ConstructorParameters<typeof McpBridge>) => new FakeBridge(...args) };
+}
+
+test("Codex offers the user's MCP servers as dynamic tools and asks before a call", async () => {
+  const mcp = bridgeFixture("ask");
+  const f = sessionFixture(null, "ask", undefined, mcp);
+  const { run } = await f.start();
+  const start = f.f.sent.find((message) => message.method === "thread/start")!;
+  assert.deepEqual(start.params?.dynamicTools, [{ type: "function", name: "files__read", description: "Read a file", inputSchema: { type: "object", properties: { path: { type: "string" } } } }]);
+  f.f.emit({ method: "item/started", params: { threadId: "native-thread", turnId: "turn-1",
+    item: { id: "call-1", type: "dynamicToolCall", namespace: null, tool: "files__read", arguments: { path: "a.txt" }, status: "inProgress", contentItems: null, success: null } } });
+  assert.deepEqual(f.seen.tools, ["call-1"]);
+  // The fixture's sink declines approvals.
+  f.f.emit({ id: "call", method: "item/tool/call", params: { threadId: "native-thread", turnId: "turn-1", callId: "call-1", namespace: null, tool: "files__read", arguments: { path: "a.txt" } } });
+  await tick();
+  await tick();
+  assert.deepEqual(f.seen.approvals, ["other"]);
+  assert.deepEqual(mcp.calls, []);
+  assert.equal((f.f.sent.find((message) => message.id === "call")?.result as { success: boolean }).success, false);
+  f.sink.approval = async () => ({ optionId: "allow" });
+  f.f.emit({ id: "call2", method: "item/tool/call", params: { threadId: "native-thread", turnId: "turn-1", callId: "call-2", namespace: null, tool: "files__read", arguments: { path: "b.txt" } } });
+  f.f.emit({ id: "gone", method: "item/tool/call", params: { threadId: "native-thread", turnId: "turn-1", callId: "call-3", namespace: null, tool: "old__tool", arguments: {} } });
+  await tick();
+  await tick();
+  assert.deepEqual(mcp.calls, [{ path: "b.txt" }]);
+  assert.deepEqual(f.f.sent.find((message) => message.id === "call2")?.result,
+    { success: true, contentItems: [{ type: "inputText", text: "hello" }, { type: "inputImage", imageUrl: "data:image/png;base64,AAAA" }] });
+  const gone = f.f.sent.find((message) => message.id === "gone")?.result as { success: boolean; contentItems: Array<{ text: string }> };
+  assert.equal(gone.success, false);
+  assert.match(gone.contentItems[0]!.text, /not available/);
+  f.complete();
+  await run;
+  f.session.dispose();
+  assert.equal(mcp.closed, 1);
+});
+
+test("Codex bridged calls skip the prompt for auto servers; a resumed thread gets no new tool list", async () => {
+  const mcp = bridgeFixture("auto");
+  const f = sessionFixture("native-thread", "ask", undefined, mcp);
+  const { run } = await f.start();
+  assert.equal(f.f.sent.find((message) => message.method === "thread/resume")?.params?.dynamicTools, undefined);
+  f.f.emit({ id: "call", method: "item/tool/call", params: { threadId: "native-thread", turnId: "turn-1", callId: "c", namespace: null, tool: "files__read", arguments: { path: "a.txt" } } });
+  await tick();
+  await tick();
+  assert.deepEqual(f.seen.approvals, []);
+  assert.deepEqual(mcp.calls, [{ path: "a.txt" }]);
   f.complete();
   await run;
   f.session.dispose();
