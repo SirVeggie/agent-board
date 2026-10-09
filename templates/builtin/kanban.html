@@ -1497,7 +1497,6 @@
         out.push(name);
       }
     });
-    if (AGENT_MODE && !seen.agent) out.push("agent");
     return out.sort(function (a, b) { return a.localeCompare(b); });
   }
   // ---------- themed dropdowns ----------
