@@ -881,7 +881,7 @@ export const BOARD_BRIDGE_JS = `
     } else if (data.type === "scribe-agent-steps") {
       agentStepListeners.slice().forEach(function (fn) {
         try {
-          fn({ id: data.id, steps: Array.isArray(data.steps) ? data.steps : [] });
+          fn({ id: data.threadId, steps: Array.isArray(data.steps) ? data.steps : [] });
         } catch (err) {
           console.error(err);
         }

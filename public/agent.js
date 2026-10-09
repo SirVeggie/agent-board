@@ -7724,7 +7724,7 @@
         if (!pageStepWatch.has(id)) return;
         pageStepWatch.set(id, null);
         const t = S.threads.get(id);
-        if (t?.scope.kind === "page") app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-steps", id, steps: pageSteps(id) });
+        if (t?.scope.kind === "page") app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-steps", threadId: id, steps: pageSteps(id) });
       }, 250)
     );
   }
