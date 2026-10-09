@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcess } from "node:child_process";
+import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
+import { CodexSession } from "./providers/codex.js";
+import type { RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions } from "./providers/codex.js";
 import type { Thread } from "./types.js";
 
@@ -22,23 +28,24 @@ test("sandboxFor: Ask, Plan and Pages are read-only; Full access drops the sandb
   assert.equal(sandboxFor(thread({ mode: "code", approval: "full" })), "danger-full-access");
 });
 
-test("threadOptions maps model, effort, sandbox, web search and never-ask", () => {
+test("threadOptions maps app-server model, sandbox, web and interactive approvals", () => {
   const code = threadOptions(thread(), "/work");
   assert.equal(code.model, "gpt-5-codex");
-  assert.equal(code.sandboxMode, "workspace-write");
-  assert.equal(code.workingDirectory, "/work");
-  assert.equal(code.skipGitRepoCheck, true);
-  assert.equal(code.modelReasoningEffort, "medium");
-  assert.equal(code.approvalPolicy, "never");
-  assert.equal(code.webSearchEnabled, true);
-  assert.equal(code.networkAccessEnabled, true);
+  assert.equal(code.sandbox, "workspace-write");
+  assert.equal(code.cwd, "/work");
+  assert.equal((code.config as Record<string, unknown>).model_reasoning_effort, "medium");
+  assert.equal(code.approvalPolicy, "on-request");
+  assert.equal((code.config as Record<string, unknown>).web_search, "live");
+  assert.equal((code.config as Record<string, unknown>)["sandbox_workspace_write.network_access"], true);
 
   const pages = threadOptions(thread({ model: "default", effort: null, mode: "board", web: "off" }), "/scratch");
   assert.equal(pages.model, undefined);
-  assert.equal(pages.sandboxMode, "read-only");
-  assert.equal(pages.webSearchEnabled, false);
-  assert.equal(pages.networkAccessEnabled, false);
-  assert.equal(pages.modelReasoningEffort, undefined);
+  assert.equal(pages.sandbox, "read-only");
+  assert.equal((pages.config as Record<string, unknown>).web_search, "disabled");
+  assert.equal((pages.config as Record<string, unknown>)["sandbox_workspace_write.network_access"], false);
+  assert.equal((pages.config as Record<string, unknown>).model_reasoning_effort, undefined);
+  assert.equal(threadOptions(thread({ approval: "full" }), "/work").approvalPolicy, "never");
+  assert.equal((threadOptions(thread({ web: "limited" }), "/work").config as Record<string, unknown>).web_search, "disabled");
 });
 
 test("mcpConfig registers the board server as scribe with the thread id", () => {
@@ -118,7 +125,7 @@ test("mapCodexModels keeps the live Plus catalog and drops hidden rows", () => {
 test("threadOptions passes a live catalog id such as gpt-6.1-sol", () => {
   const opts = threadOptions(thread({ model: "gpt-6.1-sol", effort: "ultra" }), "/work");
   assert.equal(opts.model, "gpt-6.1-sol");
-  assert.equal(opts.modelReasoningEffort, "ultra");
+  assert.equal((opts.config as Record<string, unknown>).model_reasoning_effort, "ultra");
 });
 
 test("loginUrlFromOutput picks the ChatGPT HTTPS URL and skips localhost", () => {
@@ -136,4 +143,165 @@ test("loginEnv drops CODEX_HOME so ChatGPT auth lands in ~/.codex", () => {
   const env = loginEnv({ PATH: "/bin", CODEX_HOME: "/tmp/scribe" });
   assert.equal(env.CODEX_HOME, undefined);
   assert.equal(env.PATH, "/bin");
+});
+
+function rpcFixture(onMessage: (message: RpcMessage) => void, onClose: (error: Error) => void) {
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stdin: new PassThrough(), stderr: new PassThrough(), kill() {} });
+  const sent: RpcMessage[] = [];
+  child.stdin.on("data", (data: Buffer) => { sent.push(JSON.parse(data.toString())); });
+  const rpc = new CodexRpc(child as unknown as ChildProcess, onMessage, onClose);
+  return { rpc, child, sent, emit(message: unknown) { child.stdout.write(JSON.stringify(message) + "\n"); } };
+}
+
+test("Codex RPC separates server requests from responses with the same id and decodes split UTF-8", async () => {
+  const incoming: RpcMessage[] = [];
+  const f = rpcFixture((message) => incoming.push(message), () => {});
+  const result = f.rpc.call("initialize");
+  f.emit({ id: 1, method: "item/fileChange/requestApproval", params: {} });
+  assert.equal(incoming.length, 1);
+  f.rpc.reply(1, { decision: "decline" });
+  f.emit({ id: 1, result: { ready: true } });
+  assert.deepEqual(await result, { ready: true });
+  const data = Buffer.from(JSON.stringify({ method: "warning", params: { text: "🙂" } }) + "\n");
+  const split = data.indexOf(Buffer.from("🙂")) + 1;
+  f.child.stdout.write(data.subarray(0, split));
+  f.child.stdout.write(data.subarray(split));
+  assert.equal(incoming[1].params?.text, "🙂");
+  f.rpc.close();
+});
+
+test("Codex RPC rejects outstanding calls on process exit", async () => {
+  let closed = "";
+  const f = rpcFixture(() => {}, (error) => { closed = error.message; });
+  const result = f.rpc.call("thread/start");
+  f.child.emit("exit", 1);
+  await assert.rejects(result, /exited/);
+  assert.match(closed, /exited/);
+});
+
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+function sessionFixture(nativeId: string | null = null) {
+  let f: ReturnType<typeof rpcFixture>;
+  const session = new CodexSession({ ...thread(), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
+    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [] } as SessionContext,
+    () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {});
+  const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "" };
+  const sink: RunSink = {
+    nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart() {},
+    toolUpdate(_id, patch) { if (patch.output !== undefined) seen.output = patch.output; }, beforeWrite: async () => {},
+    approval: async (req) => { seen.approvals.push(req.tool); return { optionId: "decline" }; },
+    question: async () => ({ answers: { q: ["Yes"] } }), plan: async (req) => { seen.plans.push(req.text); return { accepted: false }; },
+    todos() {}, usage() {}, notice() {}, commands() {}, title() {}, steered(id) { seen.steered.push(id); },
+  };
+  async function start() {
+    const run = session.run({ text: "hello", images: [], documents: [], instructions: "Scribe instructions" }, sink);
+    await tick();
+    const init = f!.sent.find((message) => message.method === "initialize")!;
+    f!.emit({ id: init.id, result: {} });
+    await tick();
+    assert.ok(f!.sent.some((message) => message.method === "initialized"));
+    const start = f!.sent.find((message) => message.method === (nativeId ? "thread/resume" : "thread/start"))!;
+    assert.equal(start.params?.approvalPolicy, "on-request");
+    assert.equal(start.params?.sandbox, "workspace-write");
+    f!.emit({ id: start.id, result: { thread: { id: "native-thread" } } });
+    await tick();
+    const turn = f!.sent.find((message) => message.method === "turn/start")!;
+    f!.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-1" } } });
+    f!.emit({ id: turn.id, result: { turn: { id: "turn-1" } } });
+    await tick();
+    return { run };
+  }
+  return { session, seen, sink, start, get f() { return f!; }, complete(status = "completed") {
+    f!.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-1", status } } });
+  } };
+}
+
+test("Codex app-server streams text once, forwards approval replies and marks steering only on user item", async () => {
+  const f = sessionFixture();
+  const { run } = await f.start();
+  f.f.emit({ method: "item/agentMessage/delta", params: { threadId: "native-thread", turnId: "turn-1", itemId: "a", delta: "Hello" } });
+  f.f.emit({ method: "item/completed", params: { threadId: "native-thread", turnId: "turn-1", item: { id: "a", type: "agentMessage", text: "Hello world" } } });
+  assert.equal(f.seen.text, "Hello world");
+  f.f.emit({ id: "approval", method: "item/commandExecution/requestApproval", params: { threadId: "native-thread", turnId: "turn-1", itemId: "shell", command: "echo hello" } });
+  await tick();
+  assert.deepEqual(f.seen.approvals, ["execute"]);
+  assert.deepEqual(f.f.sent.find((message) => message.id === "approval")?.result, { decision: "decline" });
+  const id = f.session.steer({ text: "focus on tests", images: [], documents: [] });
+  await tick();
+  const steer = f.f.sent.find((message) => message.method === "turn/steer")!;
+  assert.equal(steer.params?.expectedTurnId, "turn-1");
+  f.f.emit({ id: steer.id, result: { turnId: "turn-1" } });
+  await tick();
+  assert.deepEqual(f.seen.steered, []);
+  f.f.emit({ method: "item/started", params: { threadId: "native-thread", turnId: "turn-1", item: { id: "u", type: "userMessage", clientId: id } } });
+  assert.deepEqual(f.seen.steered, [id]);
+  f.complete();
+  assert.deepEqual(await run, { status: "done" });
+  f.session.dispose();
+});
+
+test("Codex rejected steer remains unacknowledged for host requeue, and pending approval aborts on completion", async () => {
+  const f = sessionFixture();
+  let aborted = false;
+  f.sink.approval = (_req, signal) => new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }, { once: true });
+  });
+  const { run } = await f.start();
+  f.f.emit({ id: "approval", method: "item/fileChange/requestApproval", params: { threadId: "native-thread", turnId: "turn-1", itemId: "edit" } });
+  const id = f.session.steer({ text: "new input", images: [], documents: [] });
+  await tick();
+  const steer = f.f.sent.find((message) => message.method === "turn/steer")!;
+  f.f.emit({ id: steer.id, error: { message: "No active turn" } });
+  f.complete();
+  assert.equal((await run).status, "done");
+  assert.deepEqual(f.seen.steered, []);
+  assert.equal(aborted, true);
+  assert.equal(await f.session.withdrawSteer(id), false);
+  f.session.dispose();
+});
+
+test("Codex interruption sends the active turn id and returns cancelled", async () => {
+  const f = sessionFixture();
+  const { run } = await f.start();
+  const cancel = f.session.cancel();
+  const interrupt = f.f.sent.find((message) => message.method === "turn/interrupt")!;
+  assert.equal(interrupt.params?.turnId, "turn-1");
+  f.f.emit({ id: interrupt.id, result: {} });
+  f.complete("interrupted");
+  await cancel;
+  assert.equal((await run).status, "cancelled");
+  f.session.dispose();
+});
+
+test("Codex resumes an existing SDK thread and reuses the connection for subsequent turns", async () => {
+  const f = sessionFixture("native-thread");
+  const first = await f.start();
+  assert.equal(f.f.sent.find((message) => message.method === "thread/resume")?.params?.threadId, "native-thread");
+  f.complete();
+  await first.run;
+  const next = f.session.run({ text: "continue", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
+  await tick();
+  assert.equal(f.f.sent.filter((message) => message.method === "initialize").length, 1);
+  const turn = f.f.sent.filter((message) => message.method === "turn/start").at(-1)!;
+  // Completion can precede the turn/start response on the same transport.
+  f.f.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-2" } } });
+  f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
+  f.f.emit({ id: turn.id, result: { turn: { id: "turn-2" } } });
+  assert.equal((await next).status, "done");
+  f.session.dispose();
+});
+
+test("Codex user input answers include freeform notes; unsupported permission grants fail closed", async () => {
+  const f = sessionFixture();
+  f.sink.question = async () => ({ answers: { q: ["Yes"] }, notes: { q: "Use the small scope" } });
+  const { run } = await f.start();
+  f.f.emit({ id: "q", method: "item/tool/requestUserInput", params: { threadId: "native-thread", turnId: "turn-1", questions: [{ id: "q", question: "Proceed?", options: [{ label: "Yes" }] }] } });
+  f.f.emit({ id: "permissions", method: "item/permissions/requestApproval", params: { threadId: "native-thread", turnId: "turn-1", permissions: { network: { enabled: true } } } });
+  await tick();
+  assert.deepEqual(f.f.sent.find((message) => message.id === "q")?.result, { answers: { q: { answers: ["Yes", "Use the small scope"] } } });
+  assert.deepEqual(f.f.sent.find((message) => message.id === "permissions")?.result, { permissions: {}, scope: "turn" });
+  f.complete();
+  await run;
+  f.session.dispose();
 });

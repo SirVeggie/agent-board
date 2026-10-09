@@ -3,34 +3,30 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type {
-  Codex as CodexClient,
   CodexOptions,
-  Input,
   McpToolCallItem,
   ModelReasoningEffort,
   SandboxMode,
-  Thread as CodexThread,
-  ThreadEvent,
   ThreadItem,
-  ThreadOptions,
   Usage as CodexUsage,
 } from "@openai/codex-sdk";
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ChatImage, ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
 import { isPlainRecord, noPages } from "../types.js";
-import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type TurnInput, type TurnResult } from "./provider.js";
+import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
+import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
 
 /**
- * Codex through @openai/codex-sdk, which spawns `codex exec` for each turn. Sessions resume by
+ * Codex interactive sessions use app-server; the SDK spawns `codex exec` for summaries. Sessions resume by
  * thread id under Scribe's own CODEX_HOME (data/agent/codex), using the user's ChatGPT login by
  * copying ~/.codex/auth.json (Agent settings Log in runs the bundled `codex login`). The model
  * picker is the live ChatGPT catalog from `codex app-server` `model/list` (same list as Codex web
- * work mode), with FALLBACK_MODELS only when that call fails. The SDK has no approval callback or
- * steer, so Ask / Auto-edit / Auto review all run with approval_policy=never and a sandbox from the
- * thread's mode; Full access is danger-full-access. The board's tools reach the agent as a Codex MCP
- * server named `scribe`.
+ * work mode), with FALLBACK_MODELS only when that call fails. Interactive sessions use a persistent
+ * app-server connection for approvals and steering; SDK exec is retained for tool-free summaries.
+ * The board's tools reach the agent as a Codex MCP server named `scribe`.
  */
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -193,8 +189,8 @@ function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall
       if (!settled) finish(new Error("Codex app-server exited"));
     });
 
-    const call: AppServerCall = (method, params) =>
-      new Promise((res, rej) => {
+    const call: AppServerCall = async (method, params) => {
+      const result = await new Promise((res, rej) => {
         if (settled) {
           rej(new Error("Codex app-server closed"));
           return;
@@ -203,6 +199,9 @@ function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall
         pending.set(id, { resolve: res, reject: rej });
         child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} })}\n`);
       });
+      if (method === "initialize") child.stdin?.write(`${JSON.stringify({ method: "initialized" })}\n`);
+      return result;
+    };
 
     run(call)
       .then((value) => finish(undefined, value))
@@ -310,17 +309,19 @@ export function sandboxFor(thread: Pick<Thread, "mode" | "approval">): SandboxMo
   return "workspace-write";
 }
 
-export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web">, cwd: string): ThreadOptions {
+export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web">, cwd: string): RpcRecord {
   const effort = thread.effort && thread.effort in EFFORT_LABELS ? (thread.effort as ModelReasoningEffort) : undefined;
   return {
     ...(thread.model && thread.model !== "default" ? { model: thread.model } : {}),
-    sandboxMode: sandboxFor(thread),
-    workingDirectory: cwd,
-    skipGitRepoCheck: true,
-    ...(effort ? { modelReasoningEffort: effort } : {}),
-    approvalPolicy: "never",
-    webSearchEnabled: thread.web === "on",
-    networkAccessEnabled: thread.web === "on" && thread.mode === "code",
+    sandbox: sandboxFor(thread),
+    cwd,
+    approvalPolicy: thread.approval === "full" ? "never" : "on-request",
+    approvalsReviewer: "user",
+    config: {
+      ...(effort ? { model_reasoning_effort: effort } : {}),
+      web_search: thread.web === "on" ? "live" : "disabled",
+      "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code",
+    },
   };
 }
 
@@ -574,6 +575,25 @@ function mcpText(item: McpToolCallItem): string {
     .join("\n");
 }
 
+/** Normalize app-server v2 items into the existing Scribe tool renderer. */
+export function appServerItem(item: RpcRecord): ThreadItem | null {
+  const id = String(item.id ?? "");
+  switch (item.type) {
+    case "agentMessage": return { type: "agent_message", id, text: String(item.text ?? "") };
+    case "plan": return { type: "agent_message", id, text: String(item.text ?? "") };
+    case "reasoning": return { type: "reasoning", id, text: [...(Array.isArray(item.summary) ? item.summary : []), ...(Array.isArray(item.content) ? item.content : [])].join("\n") };
+    case "commandExecution": return { type: "command_execution", id, command: String(item.command ?? ""), aggregated_output: String(item.aggregatedOutput ?? ""),
+      ...(typeof item.exitCode === "number" ? { exit_code: item.exitCode } : {}), status: item.status === "completed" ? "completed" : item.status === "failed" || item.status === "declined" ? "failed" : "in_progress" };
+    case "fileChange": return { type: "file_change", id, changes: (Array.isArray(item.changes) ? item.changes.filter(isPlainRecord) : []).map((change) => ({ path: String(change.path), kind: isPlainRecord(change.kind) ? change.kind.type === "add" ? "add" : change.kind.type === "delete" ? "delete" : "update" : "update" })), status: item.status === "failed" || item.status === "declined" ? "failed" : "completed" };
+    case "mcpToolCall": return { type: "mcp_tool_call", id, server: String(item.server), tool: String(item.tool), arguments: item.arguments,
+      ...(isPlainRecord(item.result) ? { result: item.result as McpToolCallItem["result"] } : {}),
+      ...(isPlainRecord(item.error) ? { error: { message: String(item.error.message) } } : {}),
+      status: item.status === "completed" ? "completed" : item.status === "failed" ? "failed" : "in_progress" };
+    case "webSearch": return { type: "web_search", id, query: String(item.query ?? "") };
+    default: return null;
+  }
+}
+
 function writeImages(images: ChatImage[]): { paths: string[]; cleanup: () => void } {
   if (!images.length) return { paths: [], cleanup: () => undefined };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-codex-"));
@@ -596,9 +616,16 @@ function writeImages(images: ChatImage[]): { paths: string[]; cleanup: () => voi
   };
 }
 
-class CodexSession implements ProviderSession {
-  private client: CodexClient | null = null;
-  private handle: CodexThread | null = null;
+export class CodexSession implements ProviderSession {
+  private rpc: CodexRpc | null = null;
+  private opening: Promise<void> | null = null;
+  private activeTurn: string | null = null;
+  private finishTurn: ((result: TurnResult) => void) | null = null;
+  private steers = new Map<string, { input: SteerInput; state: "queued" | "sending" | "accepted"; cleanup?: () => void }>();
+  private turnUsage: RpcRecord | null = null;
+  private steerCleanups: Array<() => void> = [];
+  private requests = new Map<string | number, AbortController>();
+  private outputs = new Map<string, string>();
   private sessionKey: string | null = null;
   private nativeId: string | null;
   private reported: string | null = null;
@@ -616,7 +643,15 @@ class CodexSession implements ProviderSession {
   constructor(
     private thread: Thread,
     private ctx: SessionContext,
-    private onDispose: () => void
+    private onDispose: () => void,
+    private launch: (onMessage: (message: RpcMessage) => void, onClose: (error: Error) => void) => CodexRpc =
+      (onMessage, onClose) => {
+        const env = cliEnv();
+        const apiKey = apiKeyOption().apiKey;
+        if (apiKey) env.CODEX_API_KEY = apiKey;
+        return CodexRpc.launch(codexCliJs(), env, onMessage, onClose);
+      },
+    private prepare: () => void = syncCodexAuth,
   ) {
     this.nativeId = thread.nativeId;
   }
@@ -631,15 +666,18 @@ class CodexSession implements ProviderSession {
     if (this.reported && thread.nativeId !== this.reported && !this.running) {
       this.reported = null;
       this.nativeId = thread.nativeId;
-      this.handle = null;
+      this.rpc?.close();
+      this.rpc = null;
       this.sessionKey = null;
     }
     if (this.sessionKey !== null && this.sessionKey !== this.key() && !this.running) {
-      this.handle = null;
+      this.rpc?.close();
+      this.rpc = null;
       this.sessionKey = null;
     }
     if (was.id !== thread.id) {
-      this.handle = null;
+      this.rpc?.close();
+      this.rpc = null;
       this.sessionKey = null;
     }
   }
@@ -658,32 +696,59 @@ class CodexSession implements ProviderSession {
     return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions]);
   }
 
-  private async ensureHandle(): Promise<CodexThread> {
+  private async ensureHandle(): Promise<void> {
+    if (this.opening) return this.opening;
+    this.opening = this.openHandle().finally(() => { this.opening = null; });
+    return this.opening;
+  }
+
+  private async openHandle(): Promise<void> {
     const key = this.key();
-    if (this.handle && this.sessionKey === key) return this.handle;
-    syncCodexAuth();
-    const { Codex } = await sdk();
-    this.client = new Codex({
-      env: cliEnv(),
-      config: mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope)),
-      ...apiKeyOption(),
+    if (this.rpc?.alive && this.sessionKey === key) return;
+    this.rpc?.close();
+    this.prepare();
+    const rpc = this.launch((message) => this.onRpc(message, rpc), (error) => {
+      if (this.rpc !== rpc) return;
+      this.sessionKey = null;
+      this.abort?.abort();
+      this.finishTurn?.({ status: this.cancelled ? "cancelled" : "error", error: error.message });
     });
-    const options = threadOptions(this.thread, this.cwd());
-    if (this.nativeId) {
-      this.handle = this.client.resumeThread(this.nativeId, options);
-    } else {
-      this.handle = this.client.startThread(options);
+    this.rpc = rpc;
+    try {
+      await rpc.call("initialize", { clientInfo: { name: "scribe", title: "Scribe", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+      rpc.notify("initialized");
+      const options = {
+        ...threadOptions(this.thread, this.cwd()),
+        developerInstructions: this.instructions,
+        config: {
+          ...mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope)),
+          ...threadOptions(this.thread, this.cwd()).config as RpcRecord,
+        },
+      };
+      let result: unknown;
+      if (this.nativeId) {
+        try { result = await rpc.call("thread/resume", { ...options, threadId: this.nativeId }); }
+        catch (error) {
+          if (!/not found|unknown thread|no rollout/i.test((error as Error).message)) throw error;
+          this.sink?.notice("warn", "Could not resume the Codex thread; this turn starts a new one without the earlier conversation.");
+          this.nativeId = null;
+          result = await rpc.call("thread/start", options);
+        }
+      } else result = await rpc.call("thread/start", options);
+      if (!isPlainRecord(result) || !isPlainRecord(result.thread) || typeof result.thread.id !== "string") throw new Error("Invalid Codex thread response");
+      this.nativeId = result.thread.id;
+      this.sessionKey = key;
+    } catch (error) {
+      rpc.close();
+      throw error;
     }
-    this.sessionKey = key;
-    return this.handle;
   }
 
   async warm(instructions: string): Promise<void> {
     if (this.sink) return;
     this.instructions = instructions;
     try {
-      syncCodexAuth();
-      await sdk();
+      await this.ensureHandle();
     } catch (err) {
       log(`Codex warm-up failed: ${(err as Error).message}`);
     }
@@ -701,98 +766,233 @@ class CodexSession implements ProviderSession {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
-    if (opts?.adopt) {
-      // Codex exec cannot steer; a leftover adopt is a host bug.
-      return { status: "error", error: "Codex cannot take a steered message into a running turn." };
-    }
+    if (opts?.adopt) this.steers.delete(opts.adopt);
     this.sink = sink;
     this.cancelled = false;
     this.streamed.clear();
     this.tools.clear();
+    this.outputs.clear();
     this.plan = null;
+    this.turnUsage = null;
     this.instructions = input.instructions;
     const images = writeImages(input.images);
     this.abort = new AbortController();
     const payload = this.turnInput(input.text, images.paths);
     try {
-      try {
-        return await this.streamTurn(payload, sink);
-      } catch (err) {
-        if (this.cancelled || (err as Error)?.name === "AbortError") return { status: "cancelled" };
-        const message = (err as Error).message || String(err);
-        if (!this.nativeId || !/resume|not found|unknown thread/i.test(message)) {
-          return { status: "error", error: message };
-        }
-        log(`Codex resume failed, starting a new thread: ${message}`);
-        sink.notice("warn", "Could not resume the Codex thread; this turn starts a new one without the earlier conversation.");
-        this.nativeId = null;
-        this.handle = null;
-        this.sessionKey = null;
-        this.reported = null;
-        return await this.streamTurn(payload, sink);
-      }
+      return await this.streamTurn(payload, sink);
     } catch (err) {
       if (this.cancelled || (err as Error)?.name === "AbortError") return { status: "cancelled" };
       return { status: "error", error: (err as Error).message || String(err) };
     } finally {
       this.running = false;
+      this.activeTurn = null;
+      this.finishTurn = null;
+      this.abort?.abort();
       this.abort = null;
       this.sink = null;
+      for (const steer of this.steers.values()) steer.cleanup?.();
+      for (const cleanup of this.steerCleanups) cleanup();
+      this.steerCleanups = [];
+      // The host requeues any steer not acknowledged through sink.steered.
+      this.steers.clear();
       images.cleanup();
       this.armIdle();
     }
   }
 
-  private turnInput(text: string, imagePaths: string[]): Input {
-    const prompt = this.instructions ? `<instructions>\n${this.instructions}\n</instructions>\n\n${text}` : text;
-    if (!imagePaths.length) return prompt;
-    return [{ type: "text", text: prompt }, ...imagePaths.map((file) => ({ type: "local_image" as const, path: file }))];
+  private turnInput(text: string, imagePaths: string[]): RpcRecord[] {
+    return [{ type: "text", text, text_elements: [] }, ...imagePaths.map((file) => ({ type: "localImage", path: file }))];
   }
 
-  private async streamTurn(payload: Input, sink: RunSink): Promise<TurnResult> {
-    const handle = await this.ensureHandle();
+  private async streamTurn(payload: RpcRecord[], sink: RunSink): Promise<TurnResult> {
+    await this.ensureHandle();
     if (this.nativeId) {
       sink.nativeId(this.nativeId);
       this.reported = this.nativeId;
     }
     if (this.cancelled) return { status: "cancelled" };
     this.running = true;
-    const { events } = await handle.runStreamed(payload, { signal: this.abort?.signal });
-    let failed: string | null = null;
-    for await (const event of events) {
-      if (this.cancelled) break;
-      this.onEvent(event, sink);
-      if (event.type === "turn.failed") failed = event.error.message;
-    }
-    if (this.cancelled) return { status: "cancelled" };
-    if (failed) return { status: "error", error: failed };
-    if (this.plan && this.thread.mode === "plan") {
+    const done = new Promise<TurnResult>((resolve) => { this.finishTurn = resolve; });
+    const result = await this.rpc!.call("turn/start", {
+      threadId: this.nativeId, input: payload,
+      ...(this.thread.effort ? { effort: this.thread.effort } : {}),
+    });
+    if (!isPlainRecord(result) || !isPlainRecord(result.turn) || typeof result.turn.id !== "string") throw new Error("Invalid Codex turn response");
+    // turn/started may already have arrived; turn/completed may arrive before the response.
+    if (this.finishTurn) this.activeTurn = result.turn.id;
+    for (const id of this.steers.keys()) this.sendSteer(id);
+    if (this.cancelled && this.activeTurn) await this.interrupt();
+    const outcome = await done;
+    if (outcome.status === "done" && this.plan && this.thread.mode === "plan") {
       await sink.plan({ title: "Plan", text: this.plan }).catch(() => undefined);
     }
-    return { status: "done" };
+    return outcome;
   }
 
-  private onEvent(event: ThreadEvent, sink: RunSink): void {
-    switch (event.type) {
-      case "thread.started":
-        this.nativeId = event.thread_id;
-        this.reported = event.thread_id;
-        sink.nativeId(event.thread_id);
-        return;
-      case "item.started":
-      case "item.updated":
-      case "item.completed":
-        this.onItem(event.item, event.type === "item.completed", sink);
-        return;
-      case "turn.completed":
-        sink.usage(mapUsage(event.usage));
-        return;
-      case "error":
-        sink.notice("error", event.message);
-        return;
-      default:
-        return;
+  steer(input: SteerInput): string {
+    const id = randomUUID();
+    this.steers.set(id, { input, state: "queued" });
+    // The host records the returned id before delivery can be acknowledged.
+    queueMicrotask(() => this.sendSteer(id));
+    return id;
+  }
+
+  private sendSteer(id: string): void {
+    const steer = this.steers.get(id);
+    const rpc = this.rpc;
+    if (!steer || steer.state !== "queued" || !this.activeTurn || !rpc?.alive || this.cancelled) return;
+    const images = writeImages(steer.input.images);
+    this.steerCleanups.push(images.cleanup);
+    steer.cleanup = images.cleanup;
+    steer.state = "sending";
+    void rpc.call("turn/steer", {
+      threadId: this.nativeId, expectedTurnId: this.activeTurn,
+      clientUserMessageId: id, input: this.turnInput(steer.input.text, images.paths),
+    }).then(() => {
+      if (this.steers.get(id) === steer) steer.state = "accepted";
+    }).catch((error) => {
+      if (this.steers.get(id) === steer) steer.state = "queued";
+      log(`Codex steer failed: ${(error as Error).message}`);
+    });
+  }
+
+  dropSteer(id: string): void {
+    const steer = this.steers.get(id);
+    // Once sent, the server owns the input; it cannot safely be withdrawn locally.
+    if (steer?.state === "queued") { steer.cleanup?.(); this.steers.delete(id); }
+  }
+
+  async withdrawSteer(id: string): Promise<boolean> {
+    if (this.steers.get(id)?.state !== "queued") return false;
+    this.dropSteer(id);
+    return true;
+  }
+
+  private onRpc(message: RpcMessage, rpc: CodexRpc): void {
+    if (this.rpc !== rpc) return;
+    if (message.id !== undefined && message.method) {
+      void this.onRequest(message, rpc).catch((error) => {
+        rpc.reject(message.id!, (error as Error).message);
+      });
+      return;
     }
+    const p = message.params ?? {};
+    const sink = this.sink;
+    if (!sink || (p.threadId && p.threadId !== this.nativeId)) return;
+    if (p.turnId && this.activeTurn && p.turnId !== this.activeTurn) return;
+    switch (message.method) {
+      case "turn/started":
+        if (isPlainRecord(p.turn) && typeof p.turn.id === "string") {
+          this.activeTurn = p.turn.id;
+          for (const id of this.steers.keys()) this.sendSteer(id);
+        }
+        break;
+      case "turn/completed": {
+        const turn = isPlainRecord(p.turn) ? p.turn : {};
+        if (this.activeTurn && turn.id !== this.activeTurn) return;
+        this.activeTurn = null;
+        if (this.turnUsage) {
+          const u = this.turnUsage;
+          sink.usage({ inputTokens: Number(u.inputTokens) || 0, outputTokens: Number(u.outputTokens) || 0,
+            cacheReadTokens: Number(u.cachedInputTokens) || 0, cacheWriteTokens: Number(u.cacheWriteInputTokens) || 0,
+            reasoningTokens: Number(u.reasoningOutputTokens) || 0 });
+        }
+        const error = isPlainRecord(turn.error) ? String(turn.error.message || "Codex turn failed") : undefined;
+        this.finishTurn?.(this.cancelled || turn.status === "interrupted" ? { status: "cancelled" }
+          : turn.status === "failed" ? { status: "error", error: error || "Codex turn failed" } : { status: "done" });
+        this.finishTurn = null;
+        this.abort?.abort();
+        break;
+      }
+      case "thread/tokenUsage/updated":
+        if (isPlainRecord(p.tokenUsage) && isPlainRecord(p.tokenUsage.last)) this.turnUsage = p.tokenUsage.last;
+        break;
+      case "item/started":
+      case "item/completed": {
+        if (!isPlainRecord(p.item)) return;
+        const item = p.item;
+        if (item.type === "userMessage" && typeof item.clientId === "string" && this.steers.has(item.clientId)) {
+          this.steers.delete(item.clientId);
+          sink.steered?.(item.clientId);
+        }
+        const converted = appServerItem(item);
+        if (converted) this.onItem(converted, message.method === "item/completed", sink);
+        break;
+      }
+      case "item/agentMessage/delta":
+      case "item/plan/delta":
+      case "item/reasoning/summaryTextDelta":
+      case "item/reasoning/textDelta": {
+        const id = String(p.itemId);
+        const delta = String(p.delta ?? "");
+        if (!this.streamed.has(id)) sink.breakBlock();
+        if (message.method.includes("reasoning")) sink.reasoning(delta);
+        else sink.text(delta);
+        this.streamed.set(id, (this.streamed.get(id) ?? 0) + delta.length);
+        break;
+      }
+      case "item/commandExecution/outputDelta":
+        this.outputs.set(String(p.itemId), (this.outputs.get(String(p.itemId)) ?? "") + String(p.delta ?? ""));
+        sink.toolUpdate(String(p.itemId), { output: this.outputs.get(String(p.itemId)) });
+        break;
+      case "serverRequest/resolved":
+        if (typeof p.requestId === "string" || typeof p.requestId === "number") this.requests.get(p.requestId)?.abort();
+        break;
+      case "turn/plan/updated":
+        if (Array.isArray(p.plan)) sink.todos(p.plan.filter(isPlainRecord).map((step) => ({ content: String(step.step ?? ""), status: step.status === "completed" ? "completed" : step.status === "inProgress" ? "in_progress" : "pending" })));
+        break;
+      case "error":
+        sink.notice("error", isPlainRecord(p.error) ? String(p.error.message) : "Codex error");
+        break;
+    }
+  }
+
+  private async onRequest(message: RpcMessage, rpc: CodexRpc): Promise<void> {
+    const controller = new AbortController();
+    this.requests.set(message.id!, controller);
+    const signal = this.abort ? AbortSignal.any([controller.signal, this.abort.signal]) : controller.signal;
+    try { await this.handleRequest(message, rpc, signal); }
+    finally { this.requests.delete(message.id!); }
+  }
+
+  private async handleRequest(message: RpcMessage, rpc: CodexRpc, signal: AbortSignal): Promise<void> {
+    const p = message.params ?? {};
+    const id = message.id!;
+    const sink = this.sink;
+    if (!sink || (p.threadId && p.threadId !== this.nativeId) || (p.turnId && p.turnId !== this.activeTurn)) {
+      rpc.reject(id, "No matching active Scribe turn");
+      return;
+    }
+    if (message.method === "item/commandExecution/requestApproval" || message.method === "item/fileChange/requestApproval") {
+      const file = message.method.includes("fileChange");
+      const decision = await sink.approval({
+        toolId: String(p.itemId), tool: file ? "edit" : "execute",
+        title: file ? "Edit files" : "Run command",
+        detail: [p.command, p.reason, p.cwd].filter((value) => typeof value === "string").join("\n"),
+        options: [{ id: "accept", label: "Allow once", kind: "allow_once" },
+          { id: "acceptForSession", label: "Allow for this session", kind: "allow_always" },
+          { id: "decline", label: "Decline", kind: "reject_once" }],
+      }, signal).catch(() => ({ optionId: "cancel" }));
+      rpc.reply(id, { decision: ["accept", "acceptForSession", "decline"].includes(decision.optionId) ? decision.optionId : "cancel" });
+      return;
+    }
+    if (message.method === "item/tool/requestUserInput") {
+      const questions = Array.isArray(p.questions) ? p.questions.filter(isPlainRecord) : [];
+      const answer = await sink.question({ questions: questions.map((q) => ({ id: String(q.id), header: String(q.header ?? ""), prompt: String(q.question), multi: false,
+        options: Array.isArray(q.options) ? q.options.filter(isPlainRecord).map((o) => ({ id: String(o.label), label: String(o.label), description: String(o.description ?? "") })) : [],
+      })) }, signal).catch(() => ({ skipped: true as const }));
+      const answers: Record<string, { answers: string[] }> = {};
+      if (!("skipped" in answer)) for (const q of questions) {
+        const qid = String(q.id);
+        answers[qid] = { answers: [...(answer.answers[qid] ?? []), ...(answer.notes?.[qid] ? [answer.notes[qid]] : [])] };
+      }
+      rpc.reply(id, { answers });
+      return;
+    }
+    // Unsupported permission grants and MCP elicitations fail closed, never silently grant access.
+    if (message.method === "item/permissions/requestApproval") { rpc.reply(id, { permissions: {}, scope: "turn" }); return; }
+    if (message.method === "mcpServer/elicitation/request") { rpc.reply(id, { action: "decline", content: null, _meta: null }); return; }
+    rpc.reject(id, `Unsupported Codex request: ${message.method}`);
   }
 
   private stream(id: string, text: string, kind: "text" | "reasoning", sink: RunSink): void {
@@ -903,6 +1103,12 @@ class CodexSession implements ProviderSession {
   async cancel(): Promise<void> {
     this.cancelled = true;
     this.abort?.abort();
+    if (this.activeTurn) await this.interrupt();
+  }
+
+  private async interrupt(): Promise<void> {
+    try { await this.rpc?.call("turn/interrupt", { threadId: this.nativeId, turnId: this.activeTurn }, 5000); }
+    catch { this.rpc?.close(); }
   }
 
   private stop(): void {
@@ -911,8 +1117,8 @@ class CodexSession implements ProviderSession {
       this.idleTimer = null;
     }
     if (this.running) return;
-    this.handle = null;
-    this.client = null;
+    this.rpc?.close();
+    this.rpc = null;
     this.sessionKey = null;
   }
 
