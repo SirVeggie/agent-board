@@ -674,6 +674,11 @@ export class AgentHost {
     return (this.providers.codex as CodexProvider).startLogin();
   }
 
+  /** Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. */
+  claudeLogin(): Promise<{ url: string | null }> {
+    return (this.providers.claude as ClaudeProvider).startLogin();
+  }
+
   async providerStatus(): Promise<ProviderStatus[]> {
     return Promise.all(Object.values(this.fakes ?? this.providers).map((provider) => provider.status()));
   }

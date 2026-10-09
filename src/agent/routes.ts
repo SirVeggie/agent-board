@@ -62,6 +62,7 @@ export function agentRouter(host: AgentHost): express.Router {
   router.post("/cursor/login", wrap(() => host.cursorLogin()));
   // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
   router.post("/codex/login", wrap(() => host.codexLogin()));
+  router.post("/claude/login", wrap(() => host.claudeLogin()));
 
   // The providers' own allow / deny / ask lists (Claude Code settings, Cursor CLI config).
   router.get("/permissions", wrap((req) => ({ sets: listPermissions(typeof req.query.cwd === "string" ? req.query.cwd : null) })));

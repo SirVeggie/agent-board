@@ -7375,7 +7375,7 @@
       providers.append(
         helpHeading(
           "Providers",
-          "Cursor runs through the Cursor SDK (log in below, or set CURSOR_API_KEY); Claude through the Claude Agent SDK with your Claude Code login; Codex through the Codex SDK (log in below, or set CODEX_API_KEY). Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
+          "Cursor runs through the Cursor SDK (log in below, or set CURSOR_API_KEY); Claude through the Claude Agent SDK (log in below, or set ANTHROPIC_API_KEY); Codex through the Codex SDK (log in below, or set CODEX_API_KEY). Native is Scribe's own harness: OpenAI-compatible endpoints you add as model sources, plus providers whose API key is set in the environment."
         ),
         this.status,
         actions

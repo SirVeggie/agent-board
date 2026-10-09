@@ -1,4 +1,6 @@
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
@@ -32,6 +34,9 @@ function loadSdk(): Promise<Sdk> {
 
 const IDLE_CLOSE_MS = 15 * 60 * 1000;
 const MODELS_TTL_MS = 6 * 60 * 60 * 1000;
+/** How long a signed-in answer from `claude auth status` is trusted; a signed-out one is asked again each time. */
+const AUTH_TTL_MS = 60_000;
+const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const BOARD_SERVER = "scribe";
 
@@ -79,6 +84,68 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** The Claude Code binary the SDK runs: its platform package, the same lookup the SDK makes. */
+function claudeBinary(): string | null {
+  const require = createRequire(import.meta.url);
+  const base = "@anthropic-ai/claude-agent-sdk";
+  const exe = process.platform === "win32" ? ".exe" : "";
+  const arch = process.arch;
+  const names = process.platform === "linux" ? [`${base}-linux-${arch}`, `${base}-linux-${arch}-musl`] : [`${base}-${process.platform}-${arch}`];
+  for (const name of names) {
+    try {
+      return require.resolve(`${name}/claude${exe}`);
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+type ClaudeAuth = { loggedIn: boolean; authMethod?: string; email?: string; apiProvider?: string; apiKeySource?: string };
+
+/** `claude auth status --json`: the login the SDK will use (claude.ai, API key, or a cloud provider). */
+function claudeAuthStatus(binary: string): Promise<ClaudeAuth | null> {
+  return new Promise((resolve) => {
+    const child = spawn(binary, ["auth", "status", "--json"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    let out = "";
+    const timer = setTimeout(() => stopChild(child), 15_000);
+    child.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      try {
+        const parsed: unknown = JSON.parse(out);
+        resolve(isPlainRecord(parsed) && typeof parsed.loggedIn === "boolean" ? (parsed as ClaudeAuth) : null);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+function authDetail(auth: ClaudeAuth): string {
+  if (auth.email) return `Claude Agent SDK · ${auth.email}`;
+  if (auth.apiKeySource && auth.apiKeySource !== "none") return `Claude Agent SDK · ${auth.apiKeySource}`;
+  if (auth.apiProvider && auth.apiProvider !== "firstParty") return `Claude Agent SDK · ${auth.apiProvider}`;
+  return "Claude Agent SDK";
+}
+
+function stopChild(child: ChildProcess): void {
+  if (!child.pid || child.exitCode != null) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } else {
+      child.kill("SIGTERM");
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Claude Code's /usage control request. The method name is still experimental in the SDK. */
 async function queryPlanUsage(q: Query): Promise<unknown | null> {
   const rec = q as unknown as Record<string, unknown>;
@@ -100,14 +167,77 @@ export class ClaudeProvider implements AgentProvider {
   private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<ClaudeSession>();
   private spares = new SparePool<ClaudeSession>();
+  private auth: { at: number; value: ClaudeAuth } | null = null;
+  private login: Promise<void> | null = null;
 
   async status(): Promise<ProviderStatus> {
     try {
       await loadSdk();
-      return { id: this.id, label: this.label, available: true, detail: "Claude Agent SDK" };
     } catch (err) {
       return { id: this.id, label: this.label, available: false, detail: `Claude Agent SDK is not installed: ${(err as Error).message}` };
     }
+    const auth = await this.authStatus();
+    // No answer (an older binary, a spawn error): leave it to the SDK, as before.
+    if (!auth) return { id: this.id, label: this.label, available: true, detail: "Claude Agent SDK" };
+    if (auth.loggedIn) return { id: this.id, label: this.label, available: true, detail: authDetail(auth) };
+    return {
+      id: this.id,
+      label: this.label,
+      available: false,
+      detail: this.login ? "Finish the login in your browser" : "Not logged in (log in, or set ANTHROPIC_API_KEY)",
+      login: true,
+    };
+  }
+
+  private async authStatus(): Promise<ClaudeAuth | null> {
+    if (this.auth?.value.loggedIn && Date.now() - this.auth.at < AUTH_TTL_MS) return this.auth.value;
+    const binary = claudeBinary();
+    const value = binary ? await claudeAuthStatus(binary) : null;
+    if (!value) return null;
+    // Models listed while signed out have generic names ("Opus"); list them again once signed in.
+    if (value.loggedIn && this.auth && !this.auth.value.loggedIn) this.modelCache = null;
+    this.auth = { at: Date.now(), value };
+    return value;
+  }
+
+  /**
+   * `claude auth login`: Claude Code opens the browser itself and takes the sign-in on its own
+   * localhost callback, so there is no URL to hand back (the one it prints wants a code pasted).
+   */
+  async startLogin(): Promise<{ url: string | null }> {
+    if (this.login) return { url: null };
+    const binary = claudeBinary();
+    if (!binary) throw new Error("The Claude Code binary for this platform is not installed.");
+    const child = spawn(binary, ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let output = "";
+    const take = (chunk: Buffer) => {
+      output = (output + chunk.toString("utf8")).slice(-4000);
+    };
+    child.stdout?.on("data", take);
+    child.stderr?.on("data", take);
+    const timer = setTimeout(() => stopChild(child), LOGIN_TIMEOUT_MS);
+    timer.unref?.();
+    this.login = new Promise<void>((resolve) => {
+      child.once("error", (err) => {
+        log(`Claude login failed: ${err.message}`);
+        resolve();
+      });
+      child.once("exit", (code) => {
+        if (code === 0) {
+          log("Claude login done");
+        } else {
+          const tail = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" ");
+          log(`Claude login failed (exit ${code ?? "null"})${tail ? `: ${tail}` : ""}`);
+        }
+        resolve();
+      });
+    }).finally(() => {
+      clearTimeout(timer);
+      this.auth = null;
+      this.modelCache = null;
+      this.login = null;
+    });
+    return { url: null };
   }
 
   models(refresh = false): Promise<ModelOption[]> {
