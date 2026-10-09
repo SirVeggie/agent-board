@@ -3339,6 +3339,32 @@ button.dock-orb {
   animation: ag-pulse 1.6s ease-in-out infinite;
 }
 
+/* The shader orb (createOrbFx): the canvas replaces the gradient, and its own motion the pulse. */
+button.dock-orb.gl {
+  position: relative;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(10, 10, 40, 0.6);
+  background: transparent;
+  box-shadow: 0 0 12px rgba(120, 110, 255, 0.3);
+}
+
+.agent-dock.busy button.dock-orb.gl.fx-live {
+  animation: none;
+}
+
+.dock-orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.dock-orb-glyph {
+  position: relative;
+}
+
 .agent-dock .ag-send-slot button.ag-send {
   width: 30px;
   height: 30px;

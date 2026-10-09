@@ -57,6 +57,7 @@
   const smoothScrollToggle = document.getElementById("smooth-scroll");
   const showClearToggle = document.getElementById("show-clear");
   const tightSmallToggle = document.getElementById("tight-small");
+  const uiFxToggle = document.getElementById("ui-fx");
   const agentSideTrack = document.getElementById("agent-side");
   const librarySideTrack = document.getElementById("library-side");
   const agentSideLabel = document.getElementById("agent-side-label");
@@ -106,6 +107,7 @@
   const PREFIX_MAX = 8;
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "scribe.tightSmall";
+  const UI_FX_KEY = "scribe.uiEffects";
   /** Also read by the inline script in index.html so the first paint already places the panes. */
   const AGENT_SIDE_KEY = "scribe.agentSide";
   const LIBRARY_SIDE_KEY = "scribe.librarySide";
@@ -328,6 +330,8 @@
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
   document.documentElement.classList.toggle("hide-clear", !flagOn(showClearToggle));
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
+  applyFlag(uiFxToggle, UI_FX_KEY, true);
+  document.documentElement.classList.toggle("no-ui-fx", !flagOn(uiFxToggle));
   applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
   applyPaneSideAttr("librarySide", paneSide(LIBRARY_SIDE_KEY));
   renderThemeList();
@@ -335,6 +339,10 @@
   renderPaneSides();
   renderPalettePrefixSettings();
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
+  bindSettingHint(
+    document.getElementById("ui-fx-label"),
+    "Shader motion on controls that stay on screen, like the chat orb while the agent works. Off, they hold a still frame. The New page background still moves."
+  );
   bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
   function connect() {
@@ -1011,6 +1019,10 @@
     }
     if (el === tightSmallToggle) {
       document.documentElement.classList.toggle("tight-small", on);
+    }
+    if (el === uiFxToggle) {
+      document.documentElement.classList.toggle("no-ui-fx", !on);
+      window.dispatchEvent(new Event("scribe:ui-fx"));
     }
   }
 
@@ -3902,6 +3914,7 @@
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
   showClearToggle.addEventListener("click", () => toggleFlag(showClearToggle, SHOW_CLEAR_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
+  uiFxToggle.addEventListener("click", () => toggleFlag(uiFxToggle, UI_FX_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });

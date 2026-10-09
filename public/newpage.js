@@ -11,7 +11,6 @@
   const SPARK_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.2l1.5 3.9 3.9 1.5-3.9 1.5L8 12l-1.5-3.9L2.6 6.6l3.9-1.5z" fill="currentColor"/><circle cx="12.8" cy="12.6" r="1.5" fill="currentColor"/></svg>';
 
-  const VERT = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
   /**
    * A slow nebula: fractal noise warped through itself twice (domain warping), coloured from deep
    * navy through indigo and violet to a cool blue rim, laid over the theme's panel colour and faded
@@ -46,95 +45,41 @@ gl_FragColor=vec4(outc,1.);}`;
 
   /** The shader behind the New page screen; null when WebGL isn't there (the CSS blobs show then). */
   function createNebula(canvas) {
-    const gl = canvas.getContext("webgl", { alpha: false, antialias: false, depth: false, powerPreference: "low-power" });
-    if (!gl) return null;
-    const shader = (type, src) => {
-      const s = gl.createShader(type);
-      gl.shaderSource(s, src);
-      gl.compileShader(s);
-      return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
-    };
-    const vs = shader(gl.VERTEX_SHADER, VERT);
-    const fs = shader(gl.FRAGMENT_SHADER, FRAG);
-    if (!vs || !fs) return null;
-    const prog = gl.createProgram();
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
-    gl.useProgram(prog);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, "p");
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const u = (name) => gl.getUniformLocation(prog, name);
-    const uRes = u("u_res");
-    const uTime = u("u_time");
-    const uBg = u("u_bg");
-    const uLight = u("u_light");
-    const uEnergy = u("u_energy");
-
+    // Half resolution: the nebula is all soft gradients, and this keeps it cheap on big screens.
+    const fx = window.scribeGL?.create(canvas, FRAG, { scale: 0.5 });
+    if (!fx) return null;
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     // Starts somewhere along the drift, so each new page doesn't open on the same frame.
     let time = Math.random() * 400;
     let energy = 0;
     let target = 0;
     let running = false;
-    let frame = 0;
-    let last = 0;
 
     function theme() {
       const m = getComputedStyle(canvas.parentElement).backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
       const [r, g, b] = m.slice(0, 3).map((v) => v / 255);
-      gl.uniform3f(uBg, r, g, b);
-      gl.uniform1f(uLight, 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0);
+      fx.set({ u_bg: [r, g, b], u_light: 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0 });
     }
 
-    function draw() {
-      // Half resolution: the nebula is all soft gradients, and this keeps it cheap on big screens.
-      const w = Math.max(1, Math.round(canvas.clientWidth / 2));
-      const h = Math.max(1, Math.round(canvas.clientHeight / 2));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-        gl.viewport(0, 0, w, h);
-      }
-      gl.uniform2f(uRes, w, h);
-      gl.uniform1f(uTime, time);
-      gl.uniform1f(uEnergy, energy);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-    }
-
-    function tick(now) {
-      frame = 0;
-      if (!running) return;
-      // About 30 fps is plenty for motion this slow.
-      if (now - last >= 32) {
-        const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
-        last = now;
-        energy += (target - energy) * Math.min(1, dt * 1.5);
-        time += dt * (1 + energy * 2.5);
-        draw();
-      }
-      frame = requestAnimationFrame(tick);
-    }
+    const draw = () => fx.draw({ u_time: time, u_energy: energy });
+    const loop = window.scribeGL.loop((dt) => {
+      energy += (target - energy) * Math.min(1, dt * 1.5);
+      time += dt * (1 + energy * 2.5);
+      draw();
+    });
 
     function start() {
       theme();
       if (still.matches) {
+        loop.stop();
         energy = target;
         draw();
         return;
       }
-      if (!frame) {
-        last = 0;
-        frame = requestAnimationFrame(tick);
-      }
+      loop.start();
     }
 
     new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    document.addEventListener("visibilitychange", () => running && !document.hidden && start());
     new ResizeObserver(() => running && draw()).observe(canvas);
 
     return {
@@ -143,10 +88,7 @@ gl_FragColor=vec4(outc,1.);}`;
         target = working ? 1 : 0;
         running = on;
         if (on) start();
-        else if (frame) {
-          cancelAnimationFrame(frame);
-          frame = 0;
-        }
+        else loop.stop();
       },
     };
   }

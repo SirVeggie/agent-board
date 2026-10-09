@@ -5099,6 +5099,99 @@
 
   /* ---------- floating dock ---------- */
 
+  /**
+   * The dock orb's liquid: noise warped through itself and swirled around the centre, in the New
+   * page's blues and violets, shaded as a sphere lit from the top left with a soft blue rim.
+   * Premultiplied alpha, so the corners stay clear.
+   */
+  const ORB_FRAG = `precision mediump float;
+uniform vec2 u_res;uniform float u_time;uniform float u_energy;
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
+return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y);}
+float fbm(vec2 p){float v=0.,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);
+for(int i=0;i<4;i++){v+=a*noise(p);p=m*p;a*=.5;}return v;}
+void main(){
+float s=.5*min(u_res.x,u_res.y);
+vec2 uv=(gl_FragCoord.xy-.5*u_res)/s;
+float r=length(uv);
+float alpha=1.-smoothstep(1.-1.5/s,1.,r);
+if(alpha<=0.){gl_FragColor=vec4(0.);return;}
+float z=sqrt(max(0.,1.-r*r));
+vec3 n=vec3(uv,z);
+float t=u_time*.4;
+float a=t*.5+(1.-r)*1.8;
+vec2 p=mat2(cos(a),sin(a),-sin(a),cos(a))*uv*(1.1+.4*(1.-z));
+vec2 q=vec2(fbm(p*1.7+vec2(t*.6,0.)),fbm(p*1.7+vec2(3.1,-t*.5)));
+float f=fbm(p*1.9+2.6*q+vec2(-t*.3,t*.25));
+vec3 deep=vec3(.08,.08,.32),indigo=vec3(.24,.22,.82),violet=vec3(.60,.32,1.),blue=vec3(.34,.66,1.);
+vec3 col=mix(indigo,violet,smoothstep(.3,.75,f));
+col=mix(col,blue,smoothstep(.45,.85,q.x)*.8);
+col=mix(deep,col,.45+.55*z);
+vec3 L=normalize(vec3(-.5,.6,.8));
+col*=.5+.65*max(dot(n,L),0.)+.2*u_energy*smoothstep(.5,.9,f);
+col+=vec3(.9,.9,1.)*pow(max(dot(reflect(-L,n),vec3(0.,0.,1.)),0.),20.)*.55;
+col+=vec3(.55,.7,1.)*pow(1.-z,2.6)*(.75+.35*u_energy);
+gl_FragColor=vec4(min(col,1.)*alpha,alpha);}`;
+
+  /**
+   * The orb's shader, drawn on a canvas behind its glyph. It moves only while the chat works or
+   * the pointer is on it; otherwise it holds one still frame, so the button costs nothing at rest.
+   * With Settings' animated effects off, or reduced motion, it stays still and the CSS pulse marks
+   * a busy chat. Null without WebGL (the CSS gradient shows then).
+   */
+  function createOrbFx(btn) {
+    const canvas = el("canvas", "dock-orb-canvas");
+    canvas.setAttribute("aria-hidden", "true");
+    btn.prepend(canvas);
+    const fx = window.scribeGL?.create(canvas, ORB_FRAG, { alpha: true, scale: () => window.devicePixelRatio || 1 });
+    if (!fx) {
+      canvas.remove();
+      return null;
+    }
+    btn.classList.add("gl");
+    const still = matchMedia("(prefers-reduced-motion: reduce)");
+    let time = Math.random() * 100;
+    let energy = 0;
+    let busy = false;
+    let hover = false;
+    const draw = () => fx.draw({ u_time: time, u_energy: energy });
+    const loop = window.scribeGL.loop((dt) => {
+      energy += ((busy ? 1 : 0) - energy) * Math.min(1, dt * 2);
+      time += dt * (0.6 + energy * 1.4);
+      if (!draw()) loop.stop();
+    });
+    const allowed = () => !still.matches && !document.documentElement.classList.contains("no-ui-fx");
+    function update() {
+      const moving = (busy || hover) && allowed();
+      btn.classList.toggle("fx-live", moving);
+      if (moving) loop.start();
+      else {
+        loop.stop();
+        draw();
+      }
+    }
+    btn.addEventListener("pointerenter", () => {
+      hover = true;
+      update();
+    });
+    btn.addEventListener("pointerleave", () => {
+      hover = false;
+      update();
+    });
+    // Shown again after the dock was hidden, or moved to a screen with another pixel ratio.
+    new ResizeObserver(update).observe(canvas);
+    window.addEventListener("scribe:ui-fx", update);
+    still.addEventListener("change", update);
+    return {
+      setBusy(on) {
+        if (busy === on) return;
+        busy = on;
+        update();
+      },
+    };
+  }
+
   const dock = {
     root: null,
     view: new ChatView("dock"),
@@ -5120,6 +5213,9 @@
       out.append(history, this.feed, el("span", "dock-sweep"));
       this.orb = button("", "dock-orb", (event) => view.modelMenu(event.currentTarget));
       const input = el("div", "dock-input");
+      this.orbGlyph = el("span", "dock-orb-glyph");
+      this.orb.append(this.orbGlyph);
+      this.orbFx = createOrbFx(this.orb);
       flyout.bind(this.orb, "orb");
       input.append(this.orb, view.composer, view.sendSlot);
       this.status = el("span", "dock-status");
@@ -5245,7 +5341,7 @@
       fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
       this.scopeBtn.dataset.tooltip = SCOPE_CHIP_TITLE;
       this.fitScope();
-      this.orb.textContent = PROVIDER_GLYPH[s.provider] || "?";
+      this.orbGlyph.textContent = PROVIDER_GLYPH[s.provider] || "?";
       // Hovering the orb opens the threads flyout, so it has no plain tooltip.
       this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
@@ -5276,6 +5372,7 @@
         node?.classList.toggle("busy", status === "running");
         node?.classList.toggle("waiting", status === "waiting");
       }
+      this.orbFx?.setBusy(status === "running");
       setClock(this.handleClock, status === "running" ? start : null);
       // Status dot and run time at the start of the bar.
       this.status.className = `dock-status s-${status}`;
