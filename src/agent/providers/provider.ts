@@ -1,3 +1,4 @@
+import type { EffectivePermissions } from "../effectivePermissions.js";
 import type {
   ApprovalOption,
   ChatImage,
@@ -143,6 +144,10 @@ export interface ProviderSession {
 }
 
 export type SessionContext = {
+  /** Whether this is an unattended page worker, checked at the start of every turn. */
+  isWorker?(threadId: string): boolean;
+  /** Observed provider policy, including warmed sessions before their first turn. */
+  permissions?(threadId: string, policy: EffectivePermissions): void;
   /** The daemon's own board MCP command, so the agent's board tools reach this board. */
   boardMcp: { command: string; args: string[]; env: Record<string, string> };
   /** Scratch working directory for threads without a workspace. */

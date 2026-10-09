@@ -1,3 +1,4 @@
+import { codexPermissions, permissionBoundaryProblem, permissionSummary, scribeToolAvailability, workerPermissionProblem, type EffectivePermissions } from "../effectivePermissions.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -778,6 +779,8 @@ export class CodexSession implements ProviderSession {
   private requests = new Map<string | number, AbortController>();
   private outputs = new Map<string, string>();
   private sessionKey: string | null = null;
+  private effectivePermissions: EffectivePermissions | null = null;
+  private permissionNotice: string | null = null;
   private nativeId: string | null;
   private reported: string | null = null;
   private sink: RunSink | null = null;
@@ -929,6 +932,8 @@ export class CodexSession implements ProviderSession {
       } else result = await rpc.call("thread/start", { ...options, ...dynamicTools });
       if (!isPlainRecord(result) || !isPlainRecord(result.thread) || typeof result.thread.id !== "string") throw new Error("Invalid Codex thread response");
       this.nativeId = result.thread.id;
+      this.effectivePermissions = codexPermissions(result, options);
+      this.ctx.permissions?.(this.thread.id, this.effectivePermissions);
       this.sessionKey = key;
     } catch (error) {
       rpc.close();
@@ -1014,6 +1019,43 @@ export class CodexSession implements ProviderSession {
     if (this.nativeId) {
       sink.nativeId(this.nativeId);
       this.reported = this.nativeId;
+    }
+    const policy = this.effectivePermissions!;
+    const worker = this.ctx.isWorker?.(this.thread.id) === true;
+    if (worker && !noPages(this.thread.scope)) {
+      // This inventories tools; it never creates a page or mutates a card to test permission.
+      try {
+        let cursor: string | null = null;
+        let tools: RpcRecord = {};
+        const cursors = new Set<string>();
+        do {
+          const status = await this.rpc!.call("mcpServerStatus/list", { cursor, limit: 100, threadId: this.nativeId, serverName: "scribe", detail: "toolsAndAuthOnly" });
+          if (!isPlainRecord(status) || !Array.isArray(status.data)) throw new Error("Invalid MCP status response");
+          const server = status.data.find((entry) => isPlainRecord(entry) && entry.name === "scribe");
+          if (isPlainRecord(server) && isPlainRecord(server.tools)) tools = { ...tools, ...server.tools };
+          cursor = typeof status.nextCursor === "string" ? status.nextCursor : null;
+          if (cursor && cursors.has(cursor)) throw new Error("Repeated MCP status cursor");
+          if (cursor) cursors.add(cursor);
+        } while (cursor);
+        Object.assign(policy, scribeToolAvailability(tools));
+      } catch (error) {
+        sink.notice("warn", `Could not verify Scribe worker tools: ${(error as Error).message}`);
+        policy.boardActions = "unchecked";
+        policy.reports = "unchecked";
+      }
+    }
+    this.ctx.permissions?.(this.thread.id, { ...policy });
+    const mismatch = policy.sandbox !== policy.requestedSandbox || policy.approval !== policy.requestedApproval;
+    const summary = permissionSummary(policy);
+    if (this.permissionNotice !== summary) {
+      sink.notice(mismatch ? "warn" : "info", summary);
+      this.permissionNotice = summary;
+    }
+    const boundaryProblem = permissionBoundaryProblem(policy);
+    if (boundaryProblem) return { status: "error", error: boundaryProblem };
+    if (worker) {
+      const problem = workerPermissionProblem(this.thread, policy);
+      if (problem) return { status: "error", error: problem };
     }
     if (this.cancelled) return { status: "cancelled" };
     this.running = true;

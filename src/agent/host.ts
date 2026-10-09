@@ -1,3 +1,4 @@
+import type { EffectivePermissions } from "./effectivePermissions.js";
 import type { ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -275,6 +276,7 @@ export class AgentHost {
   private fakes: Record<ProviderId, AgentProvider> | null = null;
   private threads = new Map<string, Thread>();
   private sessions = new Map<string, ProviderSession>();
+  private effectivePermissions = new Map<string, EffectivePermissions>();
   private runs = new Map<string, RunState>();
   private status = new Map<string, RunStatus>();
   private unread = new Set<string>();
@@ -344,6 +346,13 @@ export class AgentHost {
     this.ctx = {
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
+      isWorker: (id) => pageOwned(this.loadItems(id)),
+      permissions: (id, policy) => {
+        const thread = this.threads.get(id);
+        if (!thread) return;
+        this.effectivePermissions.set(id, { ...policy });
+        this.emit({ type: "agent_thread", thread: this.view(thread) });
+      },
       webAllowlist: () => this.prefs().webAllowlist,
       claudeHooks: () => this.prefs().claudeHooks,
       mcpServers: (thread) => serversForThread(thread),
@@ -953,6 +962,7 @@ export class AgentHost {
     if (patch.draft !== undefined) next.draft = patch.draft;
     // An archived thread is done with its agent browser.
     if (next.archived && !thread.archived) void closeThreadBrowser(id);
+    if (next.provider !== thread.provider || next.mode !== thread.mode || next.approval !== thread.approval || next.cwd !== thread.cwd || next.web !== thread.web || JSON.stringify(next.scope) !== JSON.stringify(thread.scope)) this.effectivePermissions.delete(id);
     next.updatedAt = Date.now();
     this.threads.set(id, next);
     this.db.saveThread(next);
@@ -1017,6 +1027,7 @@ export class AgentHost {
       }
     }
     this.threads.delete(id);
+    this.effectivePermissions.delete(id);
     this.pageRuns.release(id);
     this.items.delete(id);
     this.turns.delete(id);
@@ -1105,6 +1116,7 @@ export class AgentHost {
     const pageRun = this.pageRuns.get(thread.id);
     return {
       ...thread,
+      ...(this.effectivePermissions.has(thread.id) ? { effectivePermissions: this.effectivePermissions.get(thread.id) } : {}),
       status,
       unread,
       queued: this.queues.get(thread.id)?.length ?? 0,

@@ -11,6 +11,7 @@ import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
 import { CodexSession, readCodexPlanUsage, syncAuthFiles, guardianDenialEvent } from "./providers/codex.js";
 import type { ApprovalDecision, ApprovalRequest, RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides } from "./providers/codex.js";
+import { codexPermissions, permissionBoundaryProblem, scribeToolAvailability, workerPermissionProblem } from "./effectivePermissions.js";
 import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
@@ -206,11 +207,12 @@ test("Codex RPC rejects outstanding calls on process exit", async () => {
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask", limits?: SessionContext["limits"],
-  mcp?: { servers: ResolvedMcpServer[]; bridge: ConstructorParameters<typeof CodexSession>[6] }) {
+  mcp?: { servers: ResolvedMcpServer[]; bridge: ConstructorParameters<typeof CodexSession>[6] },
+  worker = false, scope: Thread["scope"] = { kind: "page", ref: "board" }) {
   let f: ReturnType<typeof rpcFixture>;
   const reviews: unknown[] = [];
-  const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
-    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits,
+  const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope } as Thread,
+    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits, isWorker: () => worker,
       ...(mcp ? { mcpServers: () => mcp.servers } : {}) } as SessionContext,
     () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); }, mcp?.bridge);
   const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
@@ -221,7 +223,7 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     question: async () => ({ answers: { q: ["Yes"] } }), plan: async (req) => { seen.plans.push(req.text); return { accepted: false }; },
     todos() {}, usage() {}, notice(level, text) { seen.notices.push({ level, text }); }, commands() {}, title() {}, steered(id) { seen.steered.push(id); },
   };
-  async function start() {
+  async function start(policy: Record<string, unknown> = {}, tools: Record<string, unknown> = { page_action: {}, page_show: {} }) {
     const run = session.run({ text: "hello", images: [], documents: [], instructions: "Scribe instructions" }, sink);
     await tick();
     const init = f!.sent.find((message) => message.method === "initialize")!;
@@ -232,9 +234,18 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     assert.equal(start.params?.approvalPolicy, approval === "full" ? "never" : "on-request");
     assert.equal(start.params?.approvalsReviewer, approval === "auto" ? "auto_review" : "user");
     assert.equal(start.params?.sandbox, approval === "full" ? "danger-full-access" : "workspace-write");
-    f!.emit({ id: start.id, result: { thread: { id: "native-thread" } } });
+    f!.emit({ id: start.id, result: { thread: { id: "native-thread" }, ...policy } });
     await tick();
-    const turn = f!.sent.find((message) => message.method === "turn/start")!;
+    if (worker && scope.kind !== "workspace") {
+      const inventory = f!.sent.find((message) => message.method === "mcpServerStatus/list")!;
+      assert.ok(inventory);
+      assert.equal(inventory.params?.threadId, "native-thread");
+      assert.equal(inventory.params?.serverName, "scribe");
+      f!.emit({ id: inventory.id, result: { data: [{ name: "scribe", tools }], nextCursor: null } });
+      await tick();
+    }
+    const turn = f!.sent.find((message) => message.method === "turn/start");
+    if (!turn) return { run };
     f!.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-1" } } });
     f!.emit({ id: turn.id, result: { turn: { id: "turn-1" } } });
     await tick();
@@ -309,7 +320,7 @@ test("Codex allowed reviews stay out of chat while normal tool activity and full
   f.f.emit({ method: "item/autoApprovalReview/started", params: started });
   f.f.emit({ method: "guardianWarning", params: warning });
   f.f.emit({ method: "item/autoApprovalReview/completed", params: approved });
-  assert.deepEqual(f.seen.notices, []);
+  assert.deepEqual(f.seen.notices.filter((n) => !n.text.startsWith("Codex permissions:")), []);
   assert.deepEqual(f.seen.tools, ["mcp"]);
   assert.deepEqual(f.seen.reviews, [
     { scribeThreadId: "scribe-thread", method: "item/autoApprovalReview/started", ...started },
@@ -347,15 +358,16 @@ test("Codex denials and review failures show one compact notice per review witho
   f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...denied, turnId: "old" } });
   assert.equal(f.seen.notices.length, count);
   assert.equal(f.seen.reviews.length, logCount);
-  assert.deepEqual(f.seen.notices.map((n) => n.level), ["warn", "error", "error", "error", "warn"]);
-  assert.match(f.seen.notices[0].text, /denied: echo hello: Explicit permission required/);
-  assert.ok(f.seen.notices[0].text.length < 350);
-  assert.ok(!f.seen.notices[0].text.includes("\n"));
+  assert.deepEqual(f.seen.notices.filter((n) => !n.text.startsWith("Codex permissions:")).map((n) => n.level), ["warn", "error", "error", "error", "warn"]);
+  const reviewNotices = f.seen.notices.filter((n) => !n.text.startsWith("Codex permissions:"));
+  assert.match(reviewNotices[0].text, /denied: echo hello: Explicit permission required/);
+  assert.ok(reviewNotices[0].text.length < 350);
+  assert.ok(!reviewNotices[0].text.includes("\n"));
   assert.deepEqual(f.seen.reviews[2], { scribeThreadId: "scribe-thread", method: "item/autoApprovalReview/completed", ...denied });
-  assert.match(f.seen.notices[1].text, /timed out.*Retry/);
-  assert.match(f.seen.notices[2].text, /aborted/);
-  assert.match(f.seen.notices[3].text, /failed.*diagnostic log/);
-  assert.match(f.seen.notices[4].text, /denied: example.com:443/);
+  assert.match(reviewNotices[1].text, /timed out.*Retry/);
+  assert.match(reviewNotices[2].text, /aborted/);
+  assert.match(reviewNotices[3].text, /failed.*diagnostic log/);
+  assert.match(reviewNotices[4].text, /denied: example.com:443/);
   assert.deepEqual(f.seen.approvals, ["execute", "fetch"]);
   assert.equal(f.f.sent.filter((message) => message.result && !message.method).length, 0);
   f.complete();
@@ -607,7 +619,7 @@ test("Codex applies a same-session model change on the next turn/start without r
   f.complete();
   await first.run;
 
-  f.session.update({ ...thread({ model: "gpt-5.2-codex", effort: "high" }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: {} } as Thread);
+  f.session.update({ ...thread({ model: "gpt-5.2-codex", effort: "high" }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread);
   const next = f.session.run({ text: "continue", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
   await tick();
   const changed = f.f.sent.filter((message) => message.method === "turn/start").at(-1)!;
@@ -619,7 +631,7 @@ test("Codex applies a same-session model change on the next turn/start without r
   f.f.emit({ id: changed.id, result: { turn: { id: "turn-2" } } });
   assert.equal((await next).status, "done");
 
-  f.session.update({ ...thread({ model: "default", effort: null }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: {} } as Thread);
+  f.session.update({ ...thread({ model: "default", effort: null }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread);
   const reset = f.session.run({ text: "reset", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
   await tick();
   const cleared = f.f.sent.filter((message) => message.method === "turn/start").at(-1)!;
@@ -746,4 +758,63 @@ test("syncAuthFiles keeps the newer Codex login in both places", () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test("effective policy parsing never substitutes requested permissions for missing observations", () => {
+  const requested = { sandbox: "workspace-write", approvalPolicy: "on-request" };
+  const missing = codexPermissions({}, requested);
+  assert.equal(missing.sandbox, "unknown");
+  assert.equal(missing.approval, "unknown");
+  const policy = codexPermissions({ sandbox: { type: "readOnly" }, approvalPolicy: "never", approvalsReviewer: "auto_review" }, requested);
+  assert.equal(policy.sandbox, "read-only");
+  assert.equal(policy.approval, "never");
+  assert.equal(permissionBoundaryProblem(policy), null);
+  assert.match(permissionBoundaryProblem({ ...policy, sandbox: "danger-full-access" })!, /broader/);
+  assert.deepEqual(scribeToolAvailability({ mcp__scribe__page_action: {}, page_patch: {} }), { boardActions: "available", reports: "missing" });
+  const board = { mode: "board", scope: { kind: "page", ref: "board" } } as Thread;
+  assert.equal(workerPermissionProblem(board, { ...policy, requestedSandbox: "read-only", approval: "on-request", boardActions: "available", reports: "available" }), null);
+});
+
+for (const nativeId of [null, "saved-thread"]) {
+  test(`Codex ${nativeId ? "resume" : "start"} stops incompatible workers before any model turn`, async () => {
+    for (const [policy, tools, error] of [
+      [{ sandbox: { type: "readOnly" }, approvalPolicy: "never" }, { page_action: {}, page_show: {} }, /read-only/],
+      [{ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request" }, { page_show: {} }, /page_action/],
+      [{ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request" }, { page_action: {} }, /page_show/],
+      [{}, { page_action: {}, page_show: {} }, /did not report/],
+      [{ sandbox: { type: "workspaceWrite" }, approvalPolicy: "never" }, { page_action: {}, page_show: {} }, /approval policy different/],
+      [{ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "on-request" }, { page_action: {}, page_show: {} }, /broader/],
+    ] as Array<[Record<string, unknown>, Record<string, unknown>, RegExp]>) {
+      const f = sessionFixture(nativeId, "auto", undefined, undefined, true);
+      try {
+        const { run } = await f.start(policy, tools);
+        const outcome = await run;
+        assert.equal(outcome.status, "error");
+        assert.match(outcome.error!, error);
+        assert.equal(f.f.sent.some((m) => m.method === "turn/start"), false);
+        assert.ok(f.seen.notices.some((n) => /requested/.test(n.text)));
+      } finally { f.session.dispose(); }
+    }
+  });
+}
+
+test("Codex compatible worker inventories board actions and reports without mutating pages", async () => {
+  const f = sessionFixture(null, "ask", undefined, undefined, true);
+  try {
+    const { run } = await f.start({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request", approvalsReviewer: "user" });
+    assert.ok(f.f.sent.some((m) => m.method === "turn/start"));
+    assert.equal(f.f.sent.some((m) => /tools\/call/.test(m.method ?? "")), false);
+    f.complete();
+    assert.equal((await run).status, "done");
+  } finally { f.session.dispose(); }
+});
+
+test("Codex worker with App scope None stops before a turn or MCP inventory", async () => {
+  const f = sessionFixture(null, "ask", undefined, undefined, true, { kind: "workspace", ref: "/work" });
+  try {
+    const { run } = await f.start({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request" });
+    assert.match((await run).error!, /App scope None/);
+    assert.equal(f.f.sent.some((m) => m.method === "turn/start" || m.method === "mcpServerStatus/list"), false);
+  } finally { f.session.dispose(); }
 });

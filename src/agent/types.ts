@@ -1,3 +1,4 @@
+import type { EffectivePermissions } from "./effectivePermissions.js";
 import type { PageRunView } from "./pageRuns.js";
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
@@ -149,6 +150,7 @@ export type PlanLimits = {
 
 /** Thread plus runtime fields the UI needs in lists. */
 export type ThreadView = Thread & {
+  effectivePermissions?: EffectivePermissions;
   status: RunStatus;
   /** True when the last turn finished and the user has not opened the thread. Never set on page-owned threads. */
   unread: boolean;

@@ -3125,7 +3125,7 @@
 
     onThread(thread, prev) {
       if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added) this.renderHeader();
-      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns) {
+      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns || JSON.stringify(prev.effectivePermissions) !== JSON.stringify(thread.effectivePermissions)) {
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
@@ -3635,6 +3635,16 @@
         const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.approvalMenu(event.currentTarget), approvalDetail(ap, s.provider));
         apBtn.append(icon("shield"), el("span", null, ap.label));
         bar.append(apBtn);
+      }
+      if (t?.effectivePermissions?.provider === s.provider) {
+        const p = t.effectivePermissions;
+        const mismatch = p.sandbox !== p.requestedSandbox || p.approval !== p.requestedApproval;
+        const detail = `Filesystem: ${p.sandbox} (requested ${p.requestedSandbox}). Approvals: ${p.approval} (requested ${p.requestedApproval}). Reviewer: ${p.reviewer}. Board actions: ${p.boardActions}. Report pages: ${p.reports}. Tool availability is separate from filesystem access; provider approval still applies to page mutations.`;
+        const policy = button(`${mismatch ? "! " : ""}${p.sandbox}`, "ag-pill", (event) => placeHoverTip(event.currentTarget, noteTip(detail), 280));
+        policy.setAttribute("aria-label", `Effective permissions: ${p.sandbox}`);
+        policy.setAttribute("aria-description", detail);
+        bindHoverTip(policy, () => noteTip(detail));
+        bar.append(policy);
       }
       const wt = openWorktree(t);
       if (wt) {
