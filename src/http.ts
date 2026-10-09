@@ -42,6 +42,7 @@ import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
 import { agentRouter } from "./agent/routes.js";
+import { readScopedFile } from "./agent/readFile.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
@@ -698,6 +699,17 @@ export async function startHttp(): Promise<http.Server> {
           res.status(browserHttpStatus(err.message)).json({ error: err.message.split("\n")[0] });
         }
       });
+  });
+
+  app.post("/api/read-file", async (req, res) => {
+    const id = req.get(THREAD_HEADER);
+    const thread = id && agentHost ? agentHost.getThread(id) : null;
+    if (!thread) { res.status(403).json({ error: "read_file requires a current Scribe chat thread." }); return; }
+    try {
+      res.json(await readScopedFile(thread, isPlainObject(req.body) ? req.body : {}));
+    } catch (err) {
+      res.status(403).json({ error: (err as Error).message });
+    }
   });
 
   /** page_ask from a Scribe chat's MCP: the thread's turn shows the page as a question and waits on its submit event. */

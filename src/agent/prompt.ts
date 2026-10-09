@@ -51,7 +51,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   ];
   if (noPages(thread.scope)) {
     lines.push(
-      `Pages: this thread has no access to Scribe pages (the user set its Scribe scope to None). The MCP server named \`${server}\` only has its web, thread and browser tools here. Do not try to read or show pages.`
+      `Pages: this thread has no access to Scribe pages (the user set its Scribe scope to None). The MCP server named \`${server}\` has its web, thread and browser tools here, plus file tools where the mode permits them. Do not try to read or show pages.`
     );
   } else {
     lines.push(
@@ -87,6 +87,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     case "code":
       lines.push("", "Mode: Code. You can read and edit files and run commands in the workspace, subject to the user's approval settings.");
       break;
+  }
+  if (thread.provider === "codex" && thread.mode !== "board") {
+    lines.push("Files: prefer the scribe MCP read_file tool for routine local text reads instead of shell commands. It accepts path, a 1-based offset and limit, and returns numbered lines and nextOffset for continuation. Reads cover the workspace, Scribe-recorded worktree links and this thread's attachments, with resolved link targets checked. Code mode with Full access permits outside reads. A denied read does not authorize bypassing the scope through a shell.");
   }
   if (thread.web === "on" && thread.provider === "pi") lines.push("Web: web_fetch fetches pages; there is no web search.");
   if (thread.web !== "on") {

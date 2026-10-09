@@ -65,6 +65,11 @@ function threadDir(threadId: string): string {
   return path.join(dataDir(), "attachments", threadId.replace(/[^\w-]/g, "_"));
 }
 
+/** Read scope for files explicitly attached to this thread. Does not create a directory. */
+export function threadFilesDir(threadId: string): string {
+  return threadDir(threadId);
+}
+
 /** Save one message's files. Each gets an id and a folder of its own, so names never collide. */
 export function saveFiles(threadId: string, files: ChatFile[]): FileRef[] {
   return files.map((file) => {

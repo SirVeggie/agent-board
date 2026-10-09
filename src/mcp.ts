@@ -110,7 +110,7 @@ const INSTRUCTIONS = [
 ].join(" ");
 
 const NO_PAGES_INSTRUCTIONS =
-  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread tools to read other threads in its workspace, and the agent browser.";
+  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread tools to read other threads in its workspace, the agent browser, and read_file for scoped text reads where the mode permits them.";
 
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
@@ -119,6 +119,24 @@ export async function startMcp(): Promise<void> {
   const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
   const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
   const revisions = new SeenRevisions();
+  if (process.env.SCRIBE_THREAD) {
+    server.tool(
+      "read_file",
+      "Read a local UTF-8 text file without a shell. Prefer this for routine file reads. Paths are absolute or relative to the current Scribe workspace. The host checks the current mode and read roots: workspace, Scribe-recorded worktree links and this thread's attachments, including resolved link targets. Only Code mode with Full access permits outside paths. Returns numbered lines, totalLines, truncated and nextOffset. Defaults to 200 lines; maximum 1000 lines, 32000 output characters and an 8 MiB file. Use nextOffset to continue. A single line over the output cap is refused. Pages/Chat mode has no file access.",
+      {
+        path: z.string().min(1).describe("Local text file path, absolute or workspace-relative."),
+        offset: z.number().int().min(1).optional().describe("First line, numbered from 1. Default 1."),
+        limit: z.number().int().min(1).max(1000).optional().describe("Maximum lines to return. Default 200."),
+      },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      async (input) => {
+        try {
+          const { status, data } = await api("POST", "/api/read-file", input);
+          return status >= 400 ? errorResult((data as ApiError).error ?? "File read denied") : jsonResult(data);
+        } catch (err) { return errorResult((err as Error).message); }
+      }
+    );
+  }
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {
     const client = server.server.getClientVersion();
