@@ -47,6 +47,8 @@ export type ThreadRunInfo =
       exists: true;
       running: boolean;
       title: string;
+      /** Latest text, reasoning, or tool call received in the current or most recent turn. */
+      outputAt?: number;
       lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number; usageRecoveryAllowed?: boolean };
       /** While the turn waits on the user: the question (a page_ask page too), approval or plan. */
       asking?: { kind: "approval" | "question" | "plan"; title: string; page?: { key: string; title: string } };

@@ -742,8 +742,10 @@ export const kanbanActions: ActionSet = {
       let release: string | null = null;
       let stale: string | null = null;
       let waiting: string | null = null;
+      let working = false;
       if (claim.thread) {
         const info = ctx.thread(claim.thread);
+        working = info.exists && (info.running || info.lastTurn?.status === "done") && info.outputAt !== undefined && info.outputAt >= claim.at;
         if (info.exists && info.running && info.asking) {
           // A worker's turn asking the user (page_ask, a question, an approval) holds its column up: say so on the card.
           waiting = waitingText(info.asking);
@@ -795,9 +797,18 @@ export const kanbanActions: ActionSet = {
         // Answered: put back the status the card had, unless someone changed it meanwhile.
         const { waiting: was, ...rest } = claim;
         const ours = card.status?.kind === "blocked" && /^Waiting for (your|you to)/.test(card.status.text);
-        ops.push({ op: "merge", path: cardPath(card), value: { claim: rest, ...(ours ? { status: was.status } : {}) } });
+        const status = working && launchStatus(was.status) ? { kind: "working", text: "Agent working" } : was.status;
+        ops.push({ op: "merge", path: cardPath(card), value: { claim: rest, ...(ours ? { status } : {}) } });
+      } else if (working && launchStatus(card.status)) {
+        ops.push({ op: "merge", path: cardPath(card), value: { status: { kind: "working", text: "Agent working" } } });
       }
     }
     return ops.length ? { ops, result: null, events } : null;
   },
 };
+
+/** Only replace statuses the board set for launch or a plan-limit wait. */
+function launchStatus(status: Status | null | undefined): boolean {
+  return status?.kind === "working" && status.text === "Agent starting"
+    || status?.kind === "info" && /^Out of plan usage\. The worker goes on after the limit resets \(.+\)\.$/.test(status.text);
+}

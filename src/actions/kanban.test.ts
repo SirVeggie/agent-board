@@ -666,6 +666,53 @@ test("worker_solo_step lets one window wrap up a one-card run and passes on a pl
   assert.deepEqual(gone.result, { ok: true, lastTurn: null });
 });
 
+test("worker launch status changes only after fresh output, preserving custom statuses", () => {
+  const page: ActionContext = { caller: { by: "user" }, now: 1000, values: {} };
+  let state = run(board(), "worker_claim", { card: 1, thread: "th_w", assignee: "Sol" }, page).state;
+  let info: ThreadRunInfo = { exists: true, running: true, title: "W" };
+  const ctx: SweepContext = { now: 3000, thread: () => info, sessionSeenAt: () => undefined };
+  assert.equal(kanbanActions.sweep!(state, ctx), null);
+  info = { ...info, outputAt: 999 };
+  assert.equal(kanbanActions.sweep!(state, ctx), null);
+  info = { ...info, outputAt: 1001 };
+  const shortTurn: ThreadRunInfo = { exists: true, running: false, title: "W", outputAt: 1001, lastTurn: { status: "done", endedAt: 2000 } };
+  const completed = applyStateOps(state, kanbanActions.sweep!(state, { ...ctx, thread: () => shortTurn })!.ops);
+  assert.deepEqual(card(completed, 1).status, { kind: "working", text: "Agent working" });
+  state = applyStateOps(state, kanbanActions.sweep!(state, ctx)!.ops);
+  assert.deepEqual(card(state, 1).status, { kind: "working", text: "Agent working" });
+  assert.equal(kanbanActions.sweep!(state, ctx), null);
+  for (const status of [{ kind: "working", text: "Testing it" }, { kind: "blocked", text: "Need input" }, null]) {
+    const custom = run(state, "update", { card: 1, status }).state;
+    assert.equal(kanbanActions.sweep!(custom, ctx), null);
+  }
+});
+
+test("fresh resumed output clears the board's usage-limit status", () => {
+  const claimed = run(board(), "claim", { card: 1 }, agent({ thread: "th_w" })).state;
+  let state = { ...claimed, settings: { workers: { w_1: { threadId: "th_w", run: { since: 1 } } } } };
+  let info: ThreadRunInfo = { exists: true, running: false, title: "W", lastTurn: { status: "error", endedAt: 2000, limitResetsAt: 5000 } };
+  const ctx: SweepContext = { now: 3000, thread: () => info, sessionSeenAt: () => undefined };
+  state = applyStateOps(state, kanbanActions.sweep!(state, ctx)!.ops) as typeof state;
+  assert.match((card(state, 1).status as { text: string }).text, /Out of plan usage/);
+  info = { exists: true, running: true, title: "W" };
+  assert.equal(kanbanActions.sweep!(state, ctx), null);
+  info = { ...info, outputAt: 6000 };
+  state = applyStateOps(state, kanbanActions.sweep!(state, ctx)!.ops) as typeof state;
+  assert.deepEqual(card(state, 1).status, { kind: "working", text: "Agent working" });
+});
+
+test("output while asking preserves the question and restores working after the answer", () => {
+  const page: ActionContext = { caller: { by: "user" }, now: 1000, values: {} };
+  let state = run(board(), "worker_claim", { card: 1, thread: "th_w", assignee: "Sol" }, page).state;
+  let info: ThreadRunInfo = { exists: true, running: true, title: "W", outputAt: 2000, asking: { kind: "approval", title: "Run tests" } };
+  const ctx: SweepContext = { now: 3000, thread: () => info, sessionSeenAt: () => undefined };
+  state = applyStateOps(state, kanbanActions.sweep!(state, ctx)!.ops);
+  assert.deepEqual(card(state, 1).status, { kind: "blocked", text: "Waiting for your approval: Run tests" });
+  info = { exists: true, running: true, title: "W", outputAt: 2000 };
+  state = applyStateOps(state, kanbanActions.sweep!(state, ctx)!.ops);
+  assert.deepEqual(card(state, 1).status, { kind: "working", text: "Agent working" });
+});
+
 test("the sweep marks a card blocked while its thread waits on the user, and puts its status back after", () => {
   let state: Record<string, unknown> = board();
   state = run(state, "claim", { card: 1, text: "Building it" }, agent({ session: undefined, thread: "th_ask" })).state;

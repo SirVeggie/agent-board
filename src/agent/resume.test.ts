@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import type { TurnInput } from "./providers/provider.js";
+import type { RunSink, TurnInput } from "./providers/provider.js";
 import type { Item, Turn } from "./types.js";
 
 // The host keeps its data under SCRIBE_HOME; point it at a scratch folder first.
@@ -24,23 +24,55 @@ after(() => {
 });
 
 /** A host whose sessions record their turns and never finish them, as if the agent were still at work. */
-function startHost(): { host: Host; ran: Map<string, TurnInput[]> } {
+function startHost(): { host: Host; ran: Map<string, TurnInput[]>; sinks: Map<string, RunSink> } {
   const host = new AgentHost(() => {});
   hosts.push(host);
   const ran = new Map<string, TurnInput[]>();
+  const sinks = new Map<string, RunSink>();
   const internals = host as unknown as { providers: Record<string, { createSession: (thread: { id: string }) => unknown }> };
   internals.providers.pi.createSession = (thread) => ({
     update: () => {},
     warm: async () => {},
-    run: (input: TurnInput) => {
+    run: (input: TurnInput, sink: RunSink) => {
       ran.set(thread.id, [...(ran.get(thread.id) ?? []), input]);
+      sinks.set(thread.id, sink);
       return new Promise(() => {});
     },
     cancel: async () => {},
     dispose: () => {},
   });
-  return { host, ran };
+  return { host, ran, sinks };
 }
+
+test("run info records model output and resets it when a cut-off turn resumes", async () => {
+  const first = startHost();
+  const id = first.host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } }).id;
+  first.host.send(id, { text: "Work on this" });
+  for (let i = 0; i < 50 && !first.sinks.has(id); i++) await new Promise((r) => setTimeout(r, 10));
+  const sink = first.sinks.get(id)!;
+  assert.ok(sink);
+  const outputAt = (host: Host) => { const info = host.runInfo(id); return info.exists ? info.outputAt : undefined; };
+  assert.equal(outputAt(first.host), undefined);
+  sink.notice("info", "Connecting");
+  sink.text("");
+  sink.reasoning("");
+  assert.equal(outputAt(first.host), undefined);
+  sink.reasoning("Thinking");
+  assert.ok(outputAt(first.host));
+  sink.text("Working");
+  assert.ok(outputAt(first.host));
+  first.host.dispose();
+  hosts.splice(hosts.indexOf(first.host), 1);
+
+  const resumed = startHost();
+  resumed.host.resumeInterrupted();
+  for (let i = 0; i < 50 && !resumed.sinks.has(id); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(resumed.sinks.has(id));
+  assert.equal(outputAt(resumed.host), undefined);
+  resumed.sinks.get(id)!.toolStart({ toolId: "read", name: "Read", tool: "read", title: "Read a file" });
+  assert.ok(outputAt(resumed.host));
+  await resumed.host.deleteThread(id);
+});
 
 /** Leave a thread as a restart finds it: its last turn still running, and maybe messages queued behind it. */
 function cutOff(host: Host, opts: { queued?: Array<Partial<Item>>; earlierInterrupted?: number } = {}): string {

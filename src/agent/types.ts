@@ -212,6 +212,8 @@ export type Turn = {
   mode: ThreadMode;
   startedAt: number;
   endedAt?: number;
+  /** Latest model output in this turn; lets boards recognize even a short completed turn. */
+  outputAt?: number;
   /** Git tree of the working copy before and after the turn (temp index, untracked included). */
   repo?: string;
   beforeTree?: string;

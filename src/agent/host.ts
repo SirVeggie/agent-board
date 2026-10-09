@@ -650,6 +650,7 @@ export class AgentHost {
     if (!thread) return { exists: false };
     const status = this.status.get(id) ?? "idle";
     const last = this.db.listTurns(id).at(-1);
+    const outputAt = this.runs.get(id)?.turn.outputAt ?? last?.outputAt;
     const recovery = thread.provider === "codex" && last?.limitResetsAt
       ? codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt) : undefined;
     if (recovery === false) void this.refreshCodexUsage();
@@ -658,6 +659,7 @@ export class AgentHost {
       exists: true,
       running: status !== "idle" || this.resuming.has(id),
       title: thread.title,
+      ...(outputAt !== undefined ? { outputAt } : {}),
       ...(asking ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
       ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}), ...(recovery !== undefined ? { usageRecoveryAllowed: recovery } : {}) } } : {}),
     };
@@ -2258,6 +2260,7 @@ export class AgentHost {
       },
       text(delta, parentToolId) {
         if (!delta) return;
+        run.turn.outputAt = Date.now();
         if (parentToolId) {
           // A subagent's message, whole: one nested item each, shown under the tool call that started it.
           if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "text", text: delta, parentToolId });
@@ -2275,6 +2278,7 @@ export class AgentHost {
       },
       reasoning(delta, parentToolId) {
         if (!delta) return;
+        run.turn.outputAt = Date.now();
         if (parentToolId) {
           const now = Date.now();
           if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "reasoning", text: delta, startedAt: now, endedAt: now, parentToolId });
@@ -2297,6 +2301,7 @@ export class AgentHost {
       },
       toolStart(tool: ToolStart) {
         if (run.tools.has(tool.toolId)) return;
+        run.turn.outputAt = Date.now();
         host.closeBlocks(run);
         const item = host.addItem(threadId, turnId, {
           kind: "tool",

@@ -107,6 +107,10 @@ export async function startHttp(): Promise<http.Server> {
   app.use(noStoreShell);
   agentHost = new AgentHost((event) => {
     broadcast(event);
+    // Fresh model output replaces a claimed card's launch status promptly.
+    if (event.type === "agent_delta" || (event.type === "agent_item" && event.item.kind === "tool")) {
+      scheduleSweep(1000);
+    }
     // A turn that ends may leave a claimed card behind; check soon rather than at the next tick.
     if (event.type === "agent_turn" && event.turn.status !== "running") {
       scheduleSweep(2000);
