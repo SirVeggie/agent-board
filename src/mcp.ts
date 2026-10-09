@@ -122,9 +122,9 @@ export async function startMcp(): Promise<void> {
   if (process.env.SCRIBE_THREAD) {
     server.tool(
       "read_file",
-      "Read a local UTF-8 text file without a shell. Prefer this for routine file reads. Paths are absolute or relative to the current Scribe workspace. The host checks the current mode and read roots: workspace, Scribe-recorded worktree links and this thread's attachments, including resolved link targets. Only Code mode with Full access permits outside paths. Returns numbered lines, totalLines, truncated and nextOffset. Defaults to 200 lines; maximum 1000 lines, 32000 output characters and an 8 MiB file. Use nextOffset to continue. A single line over the output cap is refused. Pages/Chat mode has no file access.",
+      "Read a local UTF-8 text file, or list a folder, without a shell. Prefer this for routine file reads. Paths are absolute or relative to the current Scribe workspace. The host checks the current mode and read roots: workspace, Scribe-recorded worktree links and this thread's attachments, including resolved link targets. Only Code mode with Full access permits outside paths. Returns numbered lines (a folder: one entry per line, folders ending in /), totalLines, truncated and nextOffset. Defaults to 200 lines; maximum 1000 lines, 32000 output characters and a 64 MiB file. Use nextOffset to continue. Lines over 2000 characters are cut, and the note says how many. Pages/Chat mode has no file access.",
       {
-        path: z.string().min(1).describe("Local text file path, absolute or workspace-relative."),
+        path: z.string().min(1).describe("Local text file or folder path, absolute or workspace-relative."),
         offset: z.number().int().min(1).optional().describe("First line, numbered from 1. Default 1."),
         limit: z.number().int().min(1).max(1000).optional().describe("Maximum lines to return. Default 200."),
       },

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { readScopedFile, READ_FILE_MAX_BYTES } from "./readFile.js";
+import { readScopedFile, READ_FILE_MAX_BYTES, READ_FILE_MAX_LINE_CHARS } from "./readFile.js";
 import { threadFilesDir } from "./attachments.js";
 import type { ThreadWorktree } from "./types.js";
 
@@ -42,18 +42,37 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     await assert.rejects(readScopedFile(scope, { path: "binary" }), /Binary/);
     await fs.writeFile(path.join(cwd, "invalid"), Buffer.from([255]));
     await assert.rejects(readScopedFile(scope, { path: "invalid" }), /UTF-8/);
-    await assert.rejects(readScopedFile(scope, { path: "." }), /regular text file|EISDIR/);
+    const listing = await readScopedFile(scope, { path: "." });
+    assert.equal(listing.kind, "directory");
+    assert.match(listing.content, /\ttext\.txt$/m);
+    await fs.mkdir(path.join(cwd, "sub"));
+    assert.match((await readScopedFile(scope, { path: "." })).content, /\tsub\/$/m);
     for (const input of [{ offset: 0 }, { offset: 1.5 }, { limit: 0 }, { limit: 1001 }]) {
       await assert.rejects(readScopedFile(scope, { path: "text.txt", ...input }), /offset|limit/);
     }
-    await fs.writeFile(path.join(cwd, "long"), `${"a".repeat(20_000)}\n${"b".repeat(20_000)}`);
+    await fs.writeFile(path.join(cwd, "long"), Array.from({ length: 20 }, () => "a".repeat(1_990)).join("\n"));
     const bounded = await readScopedFile(scope, { path: "long" });
-    assert.equal(bounded.nextOffset, 2);
+    assert.equal(bounded.nextOffset, 17);
     assert.ok(bounded.content.length <= 32_000);
-    await fs.writeFile(path.join(cwd, "huge"), Buffer.alloc(READ_FILE_MAX_BYTES + 1, 97));
-    await assert.rejects(readScopedFile(scope, { path: "huge" }), /8 MiB/);
-    await fs.writeFile(path.join(cwd, "longline"), "x".repeat(32_001));
-    await assert.rejects(readScopedFile(scope, { path: "longline" }), /Line 1 exceeds/);
+    // Sparse: the size check comes before any byte is read.
+    await fs.writeFile(path.join(cwd, "huge"), "");
+    await fs.truncate(path.join(cwd, "huge"), READ_FILE_MAX_BYTES + 1);
+    await assert.rejects(readScopedFile(scope, { path: "huge" }), /64 MiB/);
+    await fs.writeFile(path.join(cwd, "longline"), `${"x".repeat(32_001)}\nshort`);
+    const cut = await readScopedFile(scope, { path: "longline" });
+    assert.equal(cut.content, `1\t${"x".repeat(READ_FILE_MAX_LINE_CHARS)}… [${32_001 - READ_FILE_MAX_LINE_CHARS} more characters]\n2\tshort`);
+    assert.match(cut.note, /1 line\(s\) were cut/);
+    // Pages past the first stream chunk count lines across chunk edges, including a CRLF split between chunks.
+    const many = Array.from({ length: 30_000 }, (_, i) => `line ${i + 1}`).join("\r\n");
+    await fs.writeFile(path.join(cwd, "many"), `﻿${many}\r\n`);
+    const tail = await readScopedFile(scope, { path: "many", offset: 29_999 });
+    assert.equal(tail.totalLines, 30_000);
+    assert.equal(tail.content, "29999\tline 29999\n30000\tline 30000");
+    assert.equal((await readScopedFile(scope, { path: "many", limit: 1 })).content, "1\tline 1");
+    await fs.writeFile(path.join(cwd, "split"), Buffer.concat([Buffer.alloc(64 * 1024 - 1, 97), Buffer.from("\r\nb")]));
+    assert.equal((await readScopedFile(scope, { path: "split" })).totalLines, 2);
+    await fs.writeFile(path.join(cwd, "blank"), "a\n\n");
+    assert.equal((await readScopedFile(scope, { path: "blank" })).totalLines, 2);
   } finally {
     // Remove the junction itself first: never recurse through its target on Windows.
     await fs.unlink(path.join(cwd, "escape")).catch(() => {});
