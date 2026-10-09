@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   applyExpiredWindows,
+  codexUsageRecoveryAllowed,
+  planLimitsFromCodexRateLimits,
   nextRefreshAt,
   nextResetAfter,
   parseResetsAt,
@@ -11,6 +13,54 @@ import {
   UNKNOWN_RESET_RETRY_MS,
   usageLimitResetsAt,
 } from "./planLimits.js";
+
+test("Codex maps all buckets, credits, percent units and Unix resets without duplicating the legacy view", () => {
+  const codex = { limitId: "codex", primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+    secondary: { usedPercent: 90, windowDurationMins: 10080, resetsAt: 1_900_500_000 }, credits: { hasCredits: true, unlimited: false, balance: "12.5" }, planType: "plus" };
+  const next = planLimitsFromCodexRateLimits({ ordinaryUsageAllowed: false, rateLimits: codex,
+    rateLimitsByLimitId: { codex, other: { limitName: "Other model", primary: { usedPercent: 150, windowDurationMins: 60, resetsAt: null } } } }, 123)!;
+  assert.equal(next.windows.length, 3);
+  assert.deepEqual(next.windows[0], { id: "codex:codex:primary", label: "Codex · 5-hour", utilization: 0.25, resetsAt: 1_900_000_000_000 });
+  assert.equal(next.windows[1].label, "Codex · Weekly");
+  assert.equal(next.windows[2].utilization, 1);
+  assert.equal(next.buckets?.[0].credits?.balance, "12.5");
+  assert.equal(next.ordinaryUsageAllowed, false);
+  assert.equal(next.permissionAt, 123);
+  assert.equal(planLimitsFromCodexRateLimits({}, 1), null);
+});
+
+test("Codex rolling updates retain other buckets and nullable metadata, never authorize recovery", () => {
+  const prev = planLimitsFromCodexRateLimits({ ordinaryUsageAllowed: false, rateLimitsByLimitId: {
+    codex: { limitName: "Main", primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 100 }, secondary: { usedPercent: 60 }, credits: { unlimited: true, hasCredits: true } },
+    other: { primary: { usedPercent: 80 } },
+  } }, 100)!;
+  const next = planLimitsFromCodexRateLimits({ rateLimits: { limitId: "codex", limitName: null, secondary: null, credits: null, primary: { usedPercent: 0 } } }, 200, prev, true)!;
+  assert.equal(next.windows.length, 3);
+  assert.equal(next.windows[0].utilization, 0);
+  assert.equal(next.windows[0].label, "Main · 5-hour");
+  assert.equal(next.windows[0].resetsAt, 100000);
+  assert.equal(next.windows[1].utilization, 0.6);
+  assert.equal(next.buckets?.[0].label, "Main");
+  assert.equal(next.buckets?.[0].credits?.unlimited, true);
+  assert.equal(next.ordinaryUsageAllowed, false);
+  assert.equal(next.permissionAt, 100);
+  const read = planLimitsFromCodexRateLimits({ ordinaryUsageAllowed: null, rateLimits: { primary: { usedPercent: 0 } } }, 300, next)!;
+  assert.equal(read.windows.length, 1);
+  assert.equal(read.ordinaryUsageAllowed, null);
+});
+
+test("Codex reset times and percentages cannot substitute for fresh backend permission", () => {
+  const next = planLimitsFromCodexRateLimits({ ordinaryUsageAllowed: false, rateLimits: { primary: { usedPercent: 100, resetsAt: 1 } } }, 2000)!;
+  assert.equal(applyExpiredWindows(next, 3000), next);
+  assert.equal(codexUsageRecoveryAllowed(next, 2000, 3000), false);
+  assert.equal(codexUsageRecoveryAllowed({ ...next, ordinaryUsageAllowed: null }, 2000, 3000), false);
+  const allowed = { ...next, ordinaryUsageAllowed: true };
+  assert.equal(codexUsageRecoveryAllowed(allowed, 2000, 3000), true); // Even 100% is not the permission signal.
+  assert.equal(codexUsageRecoveryAllowed(allowed, 2500, 3000), false);
+  assert.equal(codexUsageRecoveryAllowed(allowed, 2000, 302000), false);
+  assert.equal(codexUsageRecoveryAllowed({ ...allowed, availability: "authentication_required" }, 2000, 3000), false);
+  assert.equal(usageLimitResetsAt("Codex could not complete the turn", next, 1500, 2500), 2500 + UNKNOWN_RESET_RETRY_MS);
+});
 
 test("rate_limit_event unifiedWindows keeps utilization 0–1 and resetsAt in ms", () => {
   const now = 1_700_000_000_000;

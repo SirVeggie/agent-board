@@ -137,6 +137,13 @@ export type PlanLimits = {
   windows: Array<{ id: string; label: string; utilization: number; resetsAt?: number }>;
   /** Requests are being billed as extra usage beyond the plan. */
   overage?: boolean;
+  /** Codex snapshots remain authoritative past a reset; never synthesize recovery. */
+  source?: "codex";
+  availability?: "available" | "unavailable" | "authentication_required";
+  detail?: string;
+  ordinaryUsageAllowed?: boolean | null;
+  permissionAt?: number;
+  buckets?: Array<{ id: string; label: string; planType?: string; credits?: { hasCredits: boolean; unlimited: boolean; balance?: string } }>;
 };
 
 /** Thread plus runtime fields the UI needs in lists. */

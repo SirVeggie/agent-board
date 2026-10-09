@@ -160,7 +160,7 @@ function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall
       else resolve(value as T);
     };
 
-    const timeout = setTimeout(() => finish(new Error("Codex model list timed out")), timeoutMs);
+    const timeout = setTimeout(() => finish(new Error("Codex app-server timed out")), timeoutMs);
     timeout.unref?.();
 
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -299,6 +299,25 @@ export async function fetchCodexModels(): Promise<ModelOption[]> {
       cursor = next;
     }
     return mapCodexModels(rows);
+  });
+}
+
+/** Account quota only: no thread or model turn is created. Use the same auth as sessions. */
+export async function readCodexPlanUsage(call: AppServerCall): Promise<unknown> {
+  const account = await call("account/read", { refreshToken: true });
+  if (!isPlainRecord(account) || !isPlainRecord(account.account)) throw new Error("Codex authentication required");
+  if (account.account.type === "apiKey") throw new Error("Codex subscription quota requires a ChatGPT login; API-key quota is unavailable");
+  return call("account/rateLimits/read");
+}
+
+export async function fetchCodexPlanUsage(): Promise<unknown> {
+  syncCodexAuth();
+  const env = cliEnv();
+  const apiKey = apiKeyOption().apiKey;
+  if (apiKey) env.CODEX_API_KEY = apiKey;
+  return withAppServer(env, async (call) => {
+    await call("initialize", { clientInfo: { name: "scribe", title: "Scribe", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+    return readCodexPlanUsage(call);
   });
 }
 
@@ -878,6 +897,10 @@ export class CodexSession implements ProviderSession {
       return;
     }
     const p = message.params ?? {};
+    if (message.method === "account/rateLimits/updated") {
+      this.ctx.limits?.("codex", p);
+      return;
+    }
     const sink = this.sink;
     if (!sink || (p.threadId && p.threadId !== this.nativeId)) return;
     if (p.turnId && this.activeTurn && p.turnId !== this.activeTurn) return;

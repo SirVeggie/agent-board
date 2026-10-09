@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
-import { CodexSession } from "./providers/codex.js";
+import { CodexSession, readCodexPlanUsage } from "./providers/codex.js";
 import type { RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions } from "./providers/codex.js";
 import type { Thread } from "./types.js";
@@ -192,10 +192,10 @@ test("Codex RPC rejects outstanding calls on process exit", async () => {
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask") {
+function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask", limits?: SessionContext["limits"]) {
   let f: ReturnType<typeof rpcFixture>;
   const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
-    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [] } as SessionContext,
+    { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits } as SessionContext,
     () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {});
   const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", notices: [] as Array<{ level: string; text: string }> };
   const sink: RunSink = {
@@ -228,6 +228,33 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     f!.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-1", status } } });
   } };
 }
+
+test("Codex quota reader refreshes auth and reads only account quota, without creating a turn", async () => {
+  const calls: Array<[string, unknown]> = [];
+  const report = { ordinaryUsageAllowed: true, rateLimits: { primary: { usedPercent: 25 } } };
+  assert.equal(await readCodexPlanUsage(async (method, params) => {
+    calls.push([method, params]);
+    return method === "account/read" ? { account: { type: "chatgpt" } } : report;
+  }), report);
+  assert.deepEqual(calls, [["account/read", { refreshToken: true }], ["account/rateLimits/read", undefined]]);
+  await assert.rejects(readCodexPlanUsage(async () => ({ account: null })), /authentication required/);
+  await assert.rejects(readCodexPlanUsage(async () => ({ account: { type: "apiKey" } })), /ChatGPT login/);
+  await assert.rejects(readCodexPlanUsage(async () => { throw new Error("401 expired"); }), /401 expired/);
+});
+
+test("Codex account quota notifications are forwarded even between turns", async () => {
+  const reports: unknown[] = [];
+  const f = sessionFixture(null, "ask", (provider, info) => { assert.equal(provider, "codex"); reports.push(info); });
+  const { run } = await f.start();
+  const first = { rateLimits: { limitId: "codex", primary: { usedPercent: 30 } } };
+  f.f.emit({ method: "account/rateLimits/updated", params: first });
+  f.complete();
+  await run;
+  const second = { rateLimits: { limitId: "other", primary: { usedPercent: 40 } } };
+  f.f.emit({ method: "account/rateLimits/updated", params: second });
+  assert.deepEqual(reports, [first, second]);
+  f.session.dispose();
+});
 
 test("Codex app-server streams text once, forwards approval replies and marks steering only on user item", async () => {
   const f = sessionFixture();

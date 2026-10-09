@@ -64,6 +64,52 @@ function usageUtilization(raw: number): number {
   return Math.max(0, Math.min(1, raw / 100));
 }
 
+/** Codex quota reads replace the snapshot; rolling notifications merge only supplied values. */
+export function planLimitsFromCodexRateLimits(report: unknown, now: number, prev?: PlanLimits, rolling = false): PlanLimits | null {
+  if (!isPlainRecord(report)) return null;
+  const multi = isPlainRecord(report.rateLimitsByLimitId) ? report.rateLimitsByLimitId : null;
+  const single = isPlainRecord(report.rateLimits) ? report.rateLimits : null;
+  if (!multi && !single) return null;
+  const windows = rolling ? [...(prev?.windows ?? [])] : [];
+  const buckets = rolling ? [...(prev?.buckets ?? [])] : [];
+  const rows = multi ? Object.entries(multi) : [[typeof single?.limitId === "string" ? single.limitId : "codex", single]] as const;
+  for (const [key, raw] of rows) {
+    if (!isPlainRecord(raw)) continue;
+    const id = typeof raw.limitId === "string" ? raw.limitId : key;
+    const old = buckets.find((b) => b.id === id);
+    const label = typeof raw.limitName === "string" && raw.limitName ? raw.limitName : old?.label ?? (id === "codex" ? "Codex" : id);
+    const bucket = { ...old, id, label,
+      ...(typeof raw.planType === "string" ? { planType: raw.planType } : {}),
+      ...(isPlainRecord(raw.credits) ? { credits: { hasCredits: raw.credits.hasCredits === true, unlimited: raw.credits.unlimited === true,
+        ...(typeof raw.credits.balance === "string" ? { balance: raw.credits.balance } : {}) } } : {}),
+    };
+    const index = buckets.findIndex((b) => b.id === id);
+    if (index < 0) buckets.push(bucket); else buckets[index] = bucket;
+    for (const slot of ["primary", "secondary"] as const) {
+      const w = raw[slot];
+      if (!isPlainRecord(w) || typeof w.usedPercent !== "number" || !Number.isFinite(w.usedPercent)) continue;
+      const mins = typeof w.windowDurationMins === "number" ? w.windowDurationMins : null;
+      const oldWindow = windows.find((x) => x.id === `codex:${id}:${slot}`);
+      const duration = mins === 300 ? "5-hour" : mins === 10080 ? "Weekly" : mins ? `${mins}-minute` : slot === "primary" ? "Primary" : "Secondary";
+      const resetsAt = parseResetsAt(w.resetsAt) ?? (rolling ? oldWindow?.resetsAt : undefined);
+      const window = { id: `codex:${id}:${slot}`, label: rolling && mins == null && oldWindow ? oldWindow.label : `${label} · ${duration}`, utilization: usageUtilization(w.usedPercent), ...(resetsAt ? { resetsAt } : {}) };
+      const wi = windows.findIndex((x) => x.id === window.id);
+      if (wi < 0) windows.push(window); else windows[wi] = window;
+    }
+  }
+  return { at: now, source: "codex", availability: rolling ? prev?.availability ?? "available" : "available", windows, buckets,
+    ...(rolling && prev?.detail ? { detail: prev.detail } : {}),
+    ordinaryUsageAllowed: rolling ? prev?.ordinaryUsageAllowed ?? null : typeof report.ordinaryUsageAllowed === "boolean" ? report.ordinaryUsageAllowed : null,
+    ...(rolling ? prev?.permissionAt ? { permissionAt: prev.permissionAt } : {} : { permissionAt: now }),
+  };
+}
+
+/** Only a fresh, full read after the failed turn can authorize automatic Codex recovery. */
+export function codexUsageRecoveryAllowed(limits: PlanLimits | undefined, endedAt: number, now = Date.now()): boolean {
+  return limits?.availability === "available" && limits.ordinaryUsageAllowed === true &&
+    typeof limits.permissionAt === "number" && limits.permissionAt >= endedAt && now - limits.permissionAt < 5 * 60 * 1000;
+}
+
 function windowFromUsage(id: string, raw: unknown): PlanLimits["windows"][number] | null {
   if (!isPlainRecord(raw) || typeof raw.utilization !== "number") return null;
   const resetsAt = parseResetsAt(raw.resets_at ?? raw.resetsAt);
@@ -116,6 +162,7 @@ export function nextResetAfter(id: string, resetsAt: number, now: number): numbe
 
 /** Zero windows whose reset has passed, and roll their next reset forward. */
 export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanLimits {
+  if (limits.source === "codex") return limits;
   let changed = false;
   const windows = limits.windows.map((w) => {
     if (!w.resetsAt || w.resetsAt > now) return w;
@@ -150,7 +197,7 @@ export function usageLimitResetsAt(error: string | undefined, limits: PlanLimits
   const text = error ?? "";
   const stamp = /limit reached\|(\d{9,13})/i.exec(text);
   if (stamp) return parseResetsAt(Number(stamp[1]));
-  const rejected = limits?.status === "rejected" && limits.at >= turnStartedAt;
+  const rejected = (limits?.status === "rejected" || limits?.ordinaryUsageAllowed === false) && limits.at >= turnStartedAt;
   if (!rejected && !LIMIT_ERROR.test(text)) return undefined;
   const ahead = (limits?.windows ?? []).filter((w) => typeof w.resetsAt === "number" && w.resetsAt > endedAt);
   const full = ahead.filter((w) => w.utilization >= 1);
