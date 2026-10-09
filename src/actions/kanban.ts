@@ -459,7 +459,7 @@ export const kanbanActions: ActionSet = {
     },
     logs: {
       description:
-        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, limit, resume, wait, or solo; q matches text, worker, kind, or #card.",
+        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, blocked, limit, resume, wait, or solo; q matches text, worker, kind, or #card.",
       args: "{ worker?, kind?, q?, limit? }",
       run(state, args) {
         let list = workerLogEntries(state);
