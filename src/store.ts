@@ -3139,6 +3139,47 @@ export class BoardStore extends EventEmitter {
   }
 
   /**
+   * Read templates/builtin again (the dev watcher calls this when a file changes), then update
+   * unedited copies the same way a version upgrade does and flag edited ones with builtinUpdate.
+   * Returns the keys of the built-ins that changed. A built-in that fails to load keeps the old set.
+   */
+  reloadBuiltins(dir?: string): string[] {
+    let next: Template[];
+    try {
+      next = loadBuiltinTemplates(dir);
+    } catch (err) {
+      log("Built-in templates not reloaded", (err as Error).message);
+      return [];
+    }
+    // The fingerprint leaves out the guide and actions, which also come from the built-in.
+    const version = (builtin: Template) =>
+      templateFingerprint(builtin) + JSON.stringify([builtin.guide ?? "", builtin.agentActions ?? []]);
+    const before = new Map(this.builtins.map((builtin) => [builtin.key, version(builtin)]));
+    const changed = next
+      .filter((builtin) => before.get(builtin.key) !== version(builtin))
+      .map((builtin) => builtin.key);
+    const removed = [...before.keys()].some((key) => !next.some((builtin) => builtin.key === key));
+    if (!changed.length && !removed) {
+      return [];
+    }
+    this.builtins = next;
+    this.adoptBuiltinCopies();
+    this.syncBuiltinCopies();
+    // Edited copies are not synced; refresh their meta so builtinUpdate shows.
+    for (const key of changed) {
+      const copy = this.localCopyOf(key);
+      if (copy) {
+        this.emit("template_upserted", this.templateMeta(copy, this.instanceCount(copy.id)));
+      }
+    }
+    this.emit("builtin_templates", this.listBuiltinTemplates());
+    if (this.templatesDirty) {
+      this.persistSoon();
+    }
+    return changed;
+  }
+
+  /**
    * Bring unedited local copies up to date with a changed built-in, and re-render their pages.
    * A copy the user edited, or a built-in whose stateVersion changed, is left for an agent to update.
    */

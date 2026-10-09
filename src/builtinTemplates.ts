@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { log } from "./log.js";
 import { normalizeTemplateInput } from "./templates.js";
 import type { Template } from "./types.js";
 
@@ -57,4 +58,41 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
     }
   }
   return templates.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * Whether to watch templates/builtin and reload a built-in when its files change. On for test
+ * daemons (SCRIBE_HOME set) so template edits show without a restart; SCRIBE_WATCH_BUILTINS=1 or 0 forces it.
+ */
+export function builtinWatchEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const flag = env.SCRIBE_WATCH_BUILTINS;
+  if (flag !== undefined && flag !== "") {
+    return flag !== "0" && flag.toLowerCase() !== "false";
+  }
+  return Boolean(env.SCRIBE_HOME);
+}
+
+/** Call onChange (debounced) when a file in templates/builtin changes. Returns a function that stops watching. */
+export function watchBuiltinTemplates(onChange: () => void, dir = builtinDir, delayMs = 200): () => void {
+  if (!fs.existsSync(dir)) {
+    return () => {};
+  }
+  let timer: NodeJS.Timeout | null = null;
+  const watcher = fs.watch(dir, () => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      onChange();
+    }, delayMs);
+  });
+  watcher.on("error", (err) => log("Stopped watching built-in templates", err.message));
+  watcher.unref?.();
+  return () => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    watcher.close();
+  };
 }

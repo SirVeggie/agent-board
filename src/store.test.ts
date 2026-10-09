@@ -1576,6 +1576,54 @@ test("editing a built-in copy to match its built-in clears the update flag", () 
   again.closeDb();
 });
 
+/** A copy of templates/builtin to change on disk, as the dev watcher sees it. */
+function builtinDirCopy(): string {
+  const target = path.join(dir, "builtin");
+  fs.cpSync(path.join(import.meta.dirname, "..", "templates", "builtin"), target, { recursive: true });
+  return target;
+}
+
+test("reloading a changed built-in updates its unedited copy and pages", () => {
+  const store = loaded();
+  const { template } = store.copyBuiltinTemplate("markdown-note");
+  const { tab } = store.openFromTemplate(template.id, {});
+  const builtins = builtinDirCopy();
+  assert.deepEqual(store.reloadBuiltins(builtins), []);
+  const htmlPath = path.join(builtins, "markdown-note.html");
+  fs.writeFileSync(htmlPath, fs.readFileSync(htmlPath, "utf8").replace("</body>", "<p>reloaded-marker</p></body>"));
+  assert.deepEqual(store.reloadBuiltins(builtins), ["markdown-note"]);
+  assert.match(store.getTemplate(template.id)!.html, /reloaded-marker/);
+  assert.match(store.get(tab.id)!.html, /reloaded-marker/);
+  assert.equal(store.listTemplates()[0].builtinUpdate, undefined);
+  store.closeDb();
+});
+
+test("reloading a changed built-in flags an edited copy", () => {
+  const store = loaded();
+  const { template } = store.copyBuiltinTemplate("markdown-note");
+  store.upsertTemplate({ id: template.id, title: template.title, html: "<p>mine</p>", fields: template.fields });
+  const builtins = builtinDirCopy();
+  const guidePath = path.join(builtins, "markdown-note.guide.md");
+  fs.writeFileSync(guidePath, "A new guide.");
+  assert.deepEqual(store.reloadBuiltins(builtins), ["markdown-note"]);
+  assert.equal(store.templateGuide(template.id)?.text, "A new guide.");
+  const htmlPath = path.join(builtins, "markdown-note.html");
+  fs.writeFileSync(htmlPath, "<p>changed</p>");
+  assert.deepEqual(store.reloadBuiltins(builtins), ["markdown-note"]);
+  assert.equal(store.getTemplate(template.id)!.html, "<p>mine</p>");
+  assert.equal(store.listTemplates()[0].builtinUpdate, true);
+  store.closeDb();
+});
+
+test("a built-in that fails to load keeps the old built-ins", () => {
+  const store = loaded();
+  const builtins = builtinDirCopy();
+  fs.writeFileSync(path.join(builtins, "markdown-note.json"), "{ broken");
+  assert.deepEqual(store.reloadBuiltins(builtins), []);
+  assert.ok(store.findTemplate("builtin:markdown-note"));
+  store.closeDb();
+});
+
 test("built-ins cannot be updated or deleted", () => {
   const store = loaded();
   assert.throws(() => store.upsertTemplate({ id: "builtin:embed", title: "X", html: "<p>x</p>" }), /read-only/);

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
+import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
 import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
@@ -80,6 +81,14 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
+  if (builtinWatchEnabled()) {
+    watchBuiltinTemplates(() => {
+      const changed = store.reloadBuiltins();
+      if (changed.length) {
+        log(`reloaded built-in templates: ${changed.join(", ")}`);
+      }
+    });
+  }
   const flush = () => {
     try {
       agentHost?.dispose();
