@@ -14,7 +14,9 @@ import type { AgentProvider, ProviderSession, RunSink, TurnInput, TurnResult } f
  * Directives in the message (a card title works, since the worker prompt quotes it) change a turn:
  * [fake:delay=5000] waits that long, [fake:error] ends the turn with an error, [fake:hang] runs
  * until cancelled, [fake:nofinish] leaves the card claimed, [fake:commit] commits a file in the
- * thread's worktree (never outside one), so the board has a branch to merge. [fake:stream] (or
+ * thread's worktree (never outside one), so the board has a branch to merge. [fake:limit=30] ends
+ * the session's first turn on a plan usage limit that resets in 30 seconds; the next turn (Scribe's
+ * resume) goes on with that card. [fake:stream] (or
  * stream=N steps, default 12) streams thinking, tool calls and text first, to try the transcript's motion.
  */
 
@@ -28,6 +30,8 @@ export type FakePlan = {
   hang: boolean;
   finish: boolean;
   commit: boolean;
+  /** Seconds until a plan usage limit, hit by the session's first turn, resets; 0 for none. */
+  limitSec: number;
   /** Steps of streamed thinking, tools and text before the wait; 0 for none. */
   stream: number;
   /** The board page and card, when the message is a board worker's prompt. */
@@ -39,10 +43,12 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
   const flags = new Set<string>();
   let delayMs = defaultDelayMs;
   let stream = 0;
+  let limitSec = 0;
   for (const match of text.matchAll(/\[fake:([^\]]*)\]/gi)) {
     for (const part of match[1].split(/[\s,]+/)) {
       const [name, value] = part.toLowerCase().split("=");
       if (name === "delay" && value && Number.isFinite(Number(value))) delayMs = Math.max(0, Number(value));
+      else if (name === "limit") limitSec = value && Number.isFinite(Number(value)) ? Math.max(1, Number(value)) : 30;
       else if (name === "stream") stream = value && Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 12;
       else if (name) flags.add(name);
     }
@@ -55,6 +61,7 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
     hang: flags.has("hang"),
     finish: !flags.has("nofinish"),
     commit: flags.has("commit"),
+    limitSec,
     stream,
     board: page && card ? { page, card: Number(card) } : null,
   };
@@ -103,6 +110,8 @@ export class FakeProvider implements AgentProvider {
 class FakeSession implements ProviderSession {
   private abort: AbortController | null = null;
   private turns = 0;
+  /** The plan a usage limit cut short, for the turn that resumes it. */
+  private cut: FakePlan | null = null;
 
   constructor(
     private thread: Thread,
@@ -115,7 +124,9 @@ class FakeSession implements ProviderSession {
     const abort = new AbortController();
     this.abort = abort;
     this.turns += 1;
-    const plan = fakePlan(input.text, this.deps.delayMs);
+    let plan = fakePlan(input.text, this.deps.delayMs);
+    if (this.cut && !plan.board) plan = { ...this.cut, limitSec: 0, delayMs: plan.delayMs };
+    this.cut = null;
     sink.nativeId(`fake-${this.thread.id}`);
     try {
       sink.text(`Fake agent, turn ${this.turns}.`);
@@ -124,6 +135,10 @@ class FakeSession implements ProviderSession {
       if (plan.hang) await wait(abort.signal);
       else await wait(abort.signal, plan.delayMs);
       if (plan.error) return { status: "error", error: "Fake agent error ([fake:error])" };
+      if (plan.limitSec && this.turns === 1) {
+        this.cut = plan;
+        return { status: "error", error: `Claude AI usage limit reached|${Math.floor(Date.now() / 1000 + plan.limitSec)}` };
+      }
       if (plan.commit) await this.commit(sink);
       if (plan.board && plan.finish) this.act(sink, "finish", { card: plan.board.card, summary: "Fake agent: done." }, plan.board.page);
       sink.breakBlock();
