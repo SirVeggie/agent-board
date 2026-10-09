@@ -711,7 +711,11 @@
   .comments { display: flex; flex-direction: column; gap: 8px; }
   .comment { padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, .04); }
   .comment.agent { background: rgba(224, 179, 74, .07); box-shadow: inset 2px 0 0 var(--agent); }
-  .comment .who { font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+  .comment .who { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+  .comment .who span { flex: 1; min-width: 0; }
+  .comment .x { visibility: hidden; color: var(--muted); padding: 0 6px; flex: 0 0 auto; }
+  .comment:hover .x, .comment:focus-within .x { visibility: visible; }
+  .comment .x:hover { color: var(--danger); }
   .comment .body { word-break: break-word; }
   .comment .body.md-preview { min-height: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; cursor: auto; }
   .comment.folded { position: relative; cursor: pointer; }
@@ -2659,7 +2663,22 @@
     commentsEl.replaceChildren();
     c.comments.forEach(function (cm, i) {
       var box = el("div", "comment" + (isUserComment(cm.by) ? "" : " agent"));
-      box.appendChild(el("div", "who", commentWho(cm.by) + " · " + ago(cm.at) + commentFate(cm)));
+      var who = el("div", "who");
+      who.appendChild(el("span", null, commentWho(cm.by) + " · " + ago(cm.at) + commentFate(cm)));
+      var rm = el("button", "x", "×");
+      rm.type = "button";
+      rm.title = "Delete comment";
+      rm.setAttribute("aria-label", "Delete comment");
+      rm.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        updateCard(c.id, function (x) {
+          x.comments = x.comments.filter(function (y) { return y.id !== cm.id; });
+          return x;
+        });
+      });
+      who.appendChild(rm);
+      box.appendChild(who);
       // Markdown, like the description: #12 card links, [[page]] links and the card's images work too.
       var body = el("div", "body md-preview");
       body.innerHTML = renderMarkdown(cm.text, c.images);
@@ -3714,6 +3733,7 @@
     if (body.scrollHeight > COMMENT_FOLD_PX) box.classList.add("folded");
   }
   commentsEl.addEventListener("click", function (e) {
+    if (e.target.closest && e.target.closest("button.x")) return;
     var folded = e.target.closest && e.target.closest(".comment.folded");
     if (folded) {
       e.preventDefault();
