@@ -5,10 +5,11 @@ import path from "node:path";
 import test from "node:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
-import { CodexSession, readCodexPlanUsage, syncAuthFiles } from "./providers/codex.js";
-import type { RunSink, SessionContext } from "./providers/provider.js";
+import { CodexSession, readCodexPlanUsage, syncAuthFiles, guardianDenialEvent } from "./providers/codex.js";
+import type { ApprovalDecision, ApprovalRequest, RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides } from "./providers/codex.js";
 import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
@@ -355,7 +356,7 @@ test("Codex denials and review failures show one compact notice per review witho
   assert.match(f.seen.notices[2].text, /aborted/);
   assert.match(f.seen.notices[3].text, /failed.*diagnostic log/);
   assert.match(f.seen.notices[4].text, /denied: example.com:443/);
-  assert.deepEqual(f.seen.approvals, []);
+  assert.deepEqual(f.seen.approvals, ["execute", "fetch"]);
   assert.equal(f.f.sent.filter((message) => message.result && !message.method).length, 0);
   f.complete();
   assert.equal((await run).status, "done");
@@ -369,6 +370,168 @@ test("Codex denials and review failures show one compact notice per review witho
   assert.equal(f.seen.notices.length, count + 1);
   f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
   assert.equal((await next).status, "done");
+  f.session.dispose();
+});
+
+const denial = (over: Record<string, unknown> = {}) => ({ threadId: "native-thread", turnId: "turn-1",
+  reviewId: "review-1", targetItemId: "shell", decisionSource: "agent",
+  action: { type: "command", source: "unifiedExec", command: "echo hello", cwd: "/work" },
+  review: { status: "denied", riskLevel: "high", userAuthorization: "low", rationale: "This needs explicit authorization." }, ...over });
+
+function pendingDenial(f: ReturnType<typeof sessionFixture>) {
+  let resolve!: (decision: ApprovalDecision) => void;
+  let request!: ApprovalRequest;
+  let signal: AbortSignal | undefined;
+  f.sink.approval = (req, abort) => {
+    request = req;
+    signal = abort;
+    return new Promise((res, reject) => {
+      resolve = res;
+      abort?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+    });
+  };
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: denial() });
+  return { resolve: (optionId: string) => resolve({ optionId }), get request() { return request; }, get signal() { return signal; } };
+}
+
+test("Codex denial approval survives native completion, records one exact retry, and retries through Auto-review", async () => {
+  const f = sessionFixture(null, "auto");
+  const { run } = await f.start();
+  const pending = pendingDenial(f);
+  const usages: unknown[] = [];
+  f.sink.usage = (usage) => usages.push({ ...usage });
+  f.f.emit({ method: "thread/tokenUsage/updated", params: { threadId: "native-thread", tokenUsage: { last: { inputTokens: 10, outputTokens: 3 } } } });
+  assert.equal(pending.request.humanOnly, true);
+  assert.match(pending.request.detail!, /echo hello[\s\S]*Risk: high[\s\S]*explicit authorization/);
+  assert.deepEqual(pending.request.options.map((o) => o.id), ["approveRetry", "keepDenied"]);
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: denial() });
+  let finished = false;
+  void run.then(() => { finished = true; });
+  f.complete();
+  await tick();
+  assert.equal(finished, false);
+  assert.equal(pending.signal?.aborted, false);
+  assert.equal(f.f.sent.some((m) => m.method === "thread/approveGuardianDeniedAction"), false);
+  pending.resolve("approveRetry");
+  await tick();
+  const approval = f.f.sent.find((m) => m.method === "thread/approveGuardianDeniedAction")!;
+  assert.deepEqual(approval.params, { threadId: "native-thread", event: {
+    id: "review-1", target_item_id: "shell", status: "denied", decision_source: "agent",
+    action: { type: "command", source: "unified_exec", command: "echo hello", cwd: "/work" },
+    risk_level: "high", user_authorization: "low", rationale: "This needs explicit authorization.",
+  } });
+  assert.equal(f.f.sent.filter((m) => m.method === "turn/start").length, 1);
+  f.f.emit({ id: approval.id, result: {} });
+  await tick();
+  const retry = f.f.sent.filter((m) => m.method === "turn/start").at(-1)!;
+  assert.equal(f.f.sent.filter((m) => m.method === "turn/start").length, 2);
+  assert.match(JSON.stringify(retry.params?.input), /review-1.*Native Auto-review still applies/);
+  assert.equal(f.f.sent.filter((m) => m.method === "thread/start").length, 1);
+  f.f.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-2" } } });
+  f.f.emit({ id: retry.id, result: { turn: { id: "turn-2" } } });
+  f.f.emit({ method: "thread/tokenUsage/updated", params: { threadId: "native-thread", tokenUsage: { last: { inputTokens: 20, outputTokens: 4 } } } });
+  f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
+  assert.deepEqual(await run, { status: "done" });
+  assert.deepEqual(usages.at(-1), { inputTokens: 30, outputTokens: 7, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
+  f.session.dispose();
+});
+
+test("Codex Keep denied, cancellation, and override errors never retry", async () => {
+  for (const decision of ["keepDenied", "cancel", "error"]) {
+    const f = sessionFixture(null, "auto");
+    const { run } = await f.start();
+    const pending = pendingDenial(f);
+    f.complete();
+    await tick();
+    if (decision === "cancel") await f.session.cancel();
+    else pending.resolve(decision === "error" ? "approveRetry" : "keepDenied");
+    await tick();
+    const approval = f.f.sent.find((m) => m.method === "thread/approveGuardianDeniedAction");
+    if (decision === "error") {
+      assert.ok(approval);
+      f.f.emit({ id: approval.id, error: { message: "Denial expired" } });
+    } else assert.equal(approval, undefined);
+    assert.equal((await run).status, decision === "cancel" ? "cancelled" : "done");
+    assert.equal(f.f.sent.filter((m) => m.method === "turn/start").length, 1);
+    if (decision === "error") assert.ok(f.seen.notices.some((n) => n.level === "error" && /Denial expired/.test(n.text)));
+    f.session.dispose();
+  }
+});
+
+test("Codex denial event serialization preserves scoped native actions", () => {
+  for (const [action, expected] of [
+    [{ type: "applyPatch", cwd: "/work", files: ["a.ts"] }, { type: "apply_patch", cwd: "/work", files: ["a.ts"] }],
+    [{ type: "networkAccess", target: "example.com:443", host: "example.com", protocol: "socks5Tcp", port: 443 },
+      { type: "network_access", target: "example.com:443", host: "example.com", protocol: "socks5_tcp", port: 443 }],
+    [{ type: "mcpToolCall", server: "scribe", toolName: "page_read", connectorId: null, connectorName: null, toolTitle: null },
+      { type: "mcp_tool_call", server: "scribe", tool_name: "page_read", connector_id: null, connector_name: null, tool_title: null }],
+    [{ type: "requestPermissions", reason: "test", permissions: { fileSystem: { read: ["/work"] }, network: null } },
+      { type: "request_permissions", reason: "test", permissions: { file_system: { read: ["/work"] }, network: null } }],
+  ]) assert.deepEqual(guardianDenialEvent(denial({ action })).action, expected);
+  assert.throws(() => guardianDenialEvent(denial({ action: { type: "futureAction" } })), /Unsupported/);
+  assert.throws(() => guardianDenialEvent(denial({ review: { status: "approved" } })), /Invalid/);
+  const cwd = path.resolve(".");
+  assert.deepEqual(guardianDenialEvent(denial({ action: { type: "writeStdin", approvalId: "a", processId: "p", stdin: "hello", cwd } })).action,
+    { type: "write_stdin", approval_id: "a", process_id: "p", stdin: "hello", cwd: pathToFileURL(cwd).href });
+});
+
+test("Codex a kept denial after native failure and a disconnect never retry", async () => {
+  for (const reason of ["failed", "disconnected"]) {
+    const f = sessionFixture(null, "auto");
+    const { run } = await f.start();
+    const pending = pendingDenial(f);
+    if (reason === "failed") {
+      f.complete("failed");
+      await tick();
+      assert.equal(pending.signal?.aborted, false);
+      pending.resolve("keepDenied");
+    }
+    else {
+      f.complete();
+      await tick();
+      f.f.child.emit("exit", 1);
+    }
+    assert.equal((await run).status, "error");
+    assert.equal(pending.signal?.aborted, true);
+    assert.equal(f.f.sent.some((m) => m.method === "thread/approveGuardianDeniedAction"), false);
+    f.session.dispose();
+  }
+});
+
+test("Codex can approve a denial retry even when the native turn failed", async () => {
+  const f = sessionFixture(null, "auto");
+  const { run } = await f.start();
+  const pending = pendingDenial(f);
+  f.complete("failed");
+  await tick();
+  pending.resolve("approveRetry");
+  await tick();
+  const approval = f.f.sent.find((m) => m.method === "thread/approveGuardianDeniedAction")!;
+  f.f.emit({ id: approval.id, result: {} });
+  await tick();
+  const retry = f.f.sent.filter((m) => m.method === "turn/start").at(-1)!;
+  assert.equal(f.f.sent.filter((m) => m.method === "turn/start").length, 2);
+  f.f.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-2" } } });
+  f.f.emit({ id: retry.id, result: { turn: { id: "turn-2" } } });
+  f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
+  assert.equal((await run).status, "done");
+  f.session.dispose();
+});
+
+test("Codex cancellation while native override acknowledgement is pending cannot start a retry", async () => {
+  const f = sessionFixture(null, "auto");
+  const { run } = await f.start();
+  const pending = pendingDenial(f);
+  f.complete();
+  pending.resolve("approveRetry");
+  await tick();
+  const approval = f.f.sent.find((m) => m.method === "thread/approveGuardianDeniedAction")!;
+  assert.ok(approval);
+  await f.session.cancel();
+  assert.equal((await run).status, "cancelled");
+  f.f.emit({ id: approval.id, result: {} });
+  await tick();
+  assert.equal(f.f.sent.filter((m) => m.method === "turn/start").length, 1);
   f.session.dispose();
 });
 

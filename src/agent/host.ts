@@ -211,6 +211,7 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
     if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
     return Promise.reject(new Error("Pages mode has no file or shell access."));
   }
+  if (req.humanOnly) return null;
   if (t?.approval === "full" && allow) {
     return Promise.resolve({ optionId: allow.id });
   }

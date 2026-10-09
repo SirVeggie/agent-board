@@ -51,6 +51,8 @@ export type ToolPatch = {
 };
 
 export type ApprovalRequest = {
+  /** A native review denial needs an explicit human decision, even under Full or Edits. */
+  humanOnly?: boolean;
   /** A call to this daemon's own board MCP server, identified by the provider (never by display title). */
   boardTool?: boolean;
   toolId?: string;

@@ -109,7 +109,7 @@
   const CURSOR_REVIEW = "Auto-review approves safe calls and denies the rest; Cursor can't ask you yet";
   const CODEX_ASK = "Ask you when an action requires approval; actions allowed by the sandbox run normally";
   const CODEX_EDITS = "Approve file edits automatically; ask you for other actions that require approval";
-  const CODEX_REVIEW = "Codex reviews eligible actions that require approval and can deny them. Actions allowed by the sandbox run normally; the mode's sandbox stays in place.";
+  const CODEX_REVIEW = "Codex reviews actions that require approval; if denied, you can approve one retry through Auto-review. Actions allowed by the sandbox run normally; the mode's sandbox stays in place.";
   const CODEX_LIMITED = "Web search is off; Codex has no gated fetch for the allowlist";
   /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */
   const CURSOR_HOST_ASK = "Would ask first; Cursor asks before each shell command, Auto-reviews other tools";

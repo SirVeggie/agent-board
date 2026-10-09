@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import type {
   CodexOptions,
   McpToolCallItem,
@@ -739,6 +740,33 @@ function writeImages(images: ChatImage[]): { paths: string[]; cleanup: () => voi
   };
 }
 
+/** Reconstruct the core assessment consumed by approveGuardianDeniedAction (CLI 0.162.0). */
+export function guardianDenialEvent(p: RpcRecord): RpcRecord {
+  if (typeof p.reviewId !== "string" || !isPlainRecord(p.review) || p.review.status !== "denied" || !isPlainRecord(p.action)) {
+    throw new Error("Invalid Codex Auto-review denial");
+  }
+  const types: Record<string, string> = { command: "command", execve: "execve", writeStdin: "write_stdin",
+    applyPatch: "apply_patch", networkAccess: "network_access", mcpToolCall: "mcp_tool_call", requestPermissions: "request_permissions" };
+  const type = types[String(p.action.type)];
+  if (!type) throw new Error(`Unsupported Codex Auto-review action: ${p.action.type}`);
+  const snake = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(snake);
+    if (!isPlainRecord(value)) return value;
+    return Object.fromEntries(Object.entries(value).map(([key, v]) => [key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), snake(v)]));
+  };
+  const action = snake(p.action) as RpcRecord;
+  action.type = type;
+  // Core write_stdin uses PathUri, while app-server exposes the legacy path string.
+  if (type === "write_stdin" && typeof action.cwd === "string" &&
+      (path.isAbsolute(action.cwd) || path.win32.isAbsolute(action.cwd))) action.cwd = pathToFileURL(action.cwd).href;
+  if (action.source === "unifiedExec") action.source = "unified_exec";
+  if (action.protocol === "socks5Tcp") action.protocol = "socks5_tcp";
+  if (action.protocol === "socks5Udp") action.protocol = "socks5_udp";
+  return { id: p.reviewId, status: "denied", action, target_item_id: p.targetItemId ?? null,
+    risk_level: p.review.riskLevel ?? null, user_authorization: p.review.userAuthorization ?? null,
+    rationale: p.review.rationale ?? null, decision_source: p.decisionSource ?? "agent" };
+}
+
 export class CodexSession implements ProviderSession {
   private rpc: CodexRpc | null = null;
   private opening: Promise<void> | null = null;
@@ -766,6 +794,11 @@ export class CodexSession implements ProviderSession {
   private bridge: Pick<McpBridge, "servers" | "cwd" | "tools" | "close"> | null = null;
   /** Bridged user tools by dynamic tool name. */
   private bridged = new Map<string, BridgedTool>();
+  private reviewedDenials = new Set<string>();
+  private reviewApprovals = new Set<Promise<void>>();
+  private approvedRetries: string[] = [];
+  private nativeTurnCompleted = false;
+  private runUsage: Usage = {};
 
   constructor(
     private thread: Thread,
@@ -864,8 +897,10 @@ export class CodexSession implements ProviderSession {
     const rpc = this.launch((message) => this.onRpc(message, rpc), (error) => {
       if (this.rpc !== rpc) return;
       this.sessionKey = null;
+      const finish = this.finishTurn;
+      this.finishTurn = null;
       this.abort?.abort();
-      this.finishTurn?.({ status: this.cancelled ? "cancelled" : "error", error: error.message });
+      finish?.({ status: this.cancelled ? "cancelled" : "error", error: error.message });
     });
     this.rpc = rpc;
     try {
@@ -932,12 +967,23 @@ export class CodexSession implements ProviderSession {
     this.reviewNotices.clear();
     this.plan = null;
     this.turnUsage = null;
+    this.runUsage = {};
+    this.reviewedDenials.clear();
+    this.approvedRetries = [];
     this.instructions = input.instructions;
     const images = writeImages(input.images);
     this.abort = new AbortController();
     const payload = this.turnInput(input.text, images.paths);
     try {
-      return await this.streamTurn(payload, sink);
+      let outcome = await this.streamTurn(payload, sink);
+      while (outcome.status !== "cancelled" && this.approvedRetries.length && this.rpc?.alive && !this.cancelled) {
+        const retries = this.approvedRetries.splice(0);
+        this.turnUsage = null;
+        outcome = await this.streamTurn(this.turnInput(
+          `The user approved one retry of these exact Auto-review denials through Scribe: ${retries.join(", ")}. ` +
+          "Retry only the approved actions. Native Auto-review still applies; do not broaden the actions or bypass the reviewer.", []), sink);
+      }
+      return this.cancelled ? { status: "cancelled" } : outcome;
     } catch (err) {
       if (this.cancelled || (err as Error)?.name === "AbortError") return { status: "cancelled" };
       return { status: "error", error: (err as Error).message || String(err) };
@@ -948,6 +994,7 @@ export class CodexSession implements ProviderSession {
       this.abort?.abort();
       this.abort = null;
       this.sink = null;
+      this.reviewApprovals.clear();
       for (const steer of this.steers.values()) steer.cleanup?.();
       for (const cleanup of this.steerCleanups) cleanup();
       this.steerCleanups = [];
@@ -970,13 +1017,14 @@ export class CodexSession implements ProviderSession {
     }
     if (this.cancelled) return { status: "cancelled" };
     this.running = true;
+    this.nativeTurnCompleted = false;
     const done = new Promise<TurnResult>((resolve) => { this.finishTurn = resolve; });
     const result = await this.rpc!.call("turn/start", {
       threadId: this.nativeId, input: payload, ...turnStartOverrides(this.thread),
     });
     if (!isPlainRecord(result) || !isPlainRecord(result.turn) || typeof result.turn.id !== "string") throw new Error("Invalid Codex turn response");
-    // turn/started may already have arrived; turn/completed may arrive before the response.
-    if (this.finishTurn) this.activeTurn = result.turn.id;
+    // A completion notification can arrive before the turn/start response.
+    if (this.finishTurn && !this.nativeTurnCompleted) this.activeTurn = result.turn.id;
     for (const id of this.steers.keys()) this.sendSteer(id);
     if (this.cancelled && this.activeTurn) await this.interrupt();
     const outcome = await done;
@@ -1050,19 +1098,37 @@ export class CodexSession implements ProviderSession {
         break;
       case "turn/completed": {
         const turn = isPlainRecord(p.turn) ? p.turn : {};
-        if (this.activeTurn && turn.id !== this.activeTurn) return;
+        if (this.nativeTurnCompleted || (this.activeTurn && turn.id !== this.activeTurn)) return;
+        this.nativeTurnCompleted = true;
         this.activeTurn = null;
         if (this.turnUsage) {
           const u = this.turnUsage;
-          sink.usage({ inputTokens: Number(u.inputTokens) || 0, outputTokens: Number(u.outputTokens) || 0,
+          const usage = { inputTokens: Number(u.inputTokens) || 0, outputTokens: Number(u.outputTokens) || 0,
             cacheReadTokens: Number(u.cachedInputTokens) || 0, cacheWriteTokens: Number(u.cacheWriteInputTokens) || 0,
-            reasoningTokens: Number(u.reasoningOutputTokens) || 0 });
+            reasoningTokens: Number(u.reasoningOutputTokens) || 0 };
+          for (const key of Object.keys(usage) as Array<keyof typeof usage>) this.runUsage[key] = (this.runUsage[key] ?? 0) + usage[key];
+          sink.usage(this.runUsage);
         }
         const error = isPlainRecord(turn.error) ? String(turn.error.message || "Codex turn failed") : undefined;
-        this.finishTurn?.(this.cancelled || turn.status === "interrupted" ? { status: "cancelled" }
-          : turn.status === "failed" ? { status: "error", error: error || "Codex turn failed" } : { status: "done" });
-        this.finishTurn = null;
-        this.abort?.abort();
+        const outcome: TurnResult = this.cancelled || turn.status === "interrupted" ? { status: "cancelled" }
+          : turn.status === "failed" ? { status: "error", error: error || "Codex turn failed" } : { status: "done" };
+        for (const request of this.requests.values()) request.abort();
+        if (outcome.status === "cancelled") this.abort?.abort();
+        // Native denial review is an explicit Scribe interaction. Keep it alive
+        // after native completion, then retry approved actions in a new native turn.
+        const finish = this.finishTurn;
+        const signal = this.abort?.signal;
+        const finishReview = () => {
+          if (this.finishTurn !== finish) return;
+          signal?.removeEventListener("abort", finishReview);
+          finish?.(this.cancelled ? { status: "cancelled" } : outcome);
+          this.finishTurn = null;
+        };
+        if (signal?.aborted) finishReview();
+        else {
+          signal?.addEventListener("abort", finishReview, { once: true });
+          void Promise.all([...this.reviewApprovals]).then(finishReview);
+        }
         break;
       }
       case "thread/tokenUsage/updated":
@@ -1101,7 +1167,7 @@ export class CodexSession implements ProviderSession {
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed": {
-        // Presentation only: native decisions never go through the host approval callback.
+        // Log every native review; only denials offer a human-approved retry.
         this.reviewLog("Codex Auto-review", { scribeThreadId: this.thread.id, method: message.method, ...p });
         const review = isPlainRecord(p.review) ? p.review : {};
         const action = isPlainRecord(p.action) ? p.action : {};
@@ -1127,6 +1193,13 @@ export class CodexSession implements ProviderSession {
           : "The reviewer returned an unknown status. Check the diagnostic log.";
         sink.notice(status === "denied" ? "warn" : "error",
           `Auto-review ${labels[String(status)] ?? "failed"}: ${compactReviewText(detail, 160)}: ${compactReviewText(reason, 300)}`);
+        if (status === "denied" && message.method.endsWith("/completed") &&
+            !this.nativeTurnCompleted && typeof p.reviewId === "string" && !this.reviewedDenials.has(p.reviewId)) {
+          this.reviewedDenials.add(p.reviewId);
+          const approval = this.approveReviewDenial(p, detail, rpc, sink);
+          this.reviewApprovals.add(approval);
+          void approval.finally(() => this.reviewApprovals.delete(approval));
+        }
         break;
       }
       case "guardianWarning":
@@ -1140,6 +1213,42 @@ export class CodexSession implements ProviderSession {
       case "error":
         sink.notice("error", isPlainRecord(p.error) ? String(p.error.message) : "Codex error");
         break;
+    }
+  }
+
+  private async approveReviewDenial(p: RpcRecord, detail: string, rpc: CodexRpc, sink: RunSink): Promise<void> {
+    const action = isPlainRecord(p.action) ? p.action : {};
+    const review = isPlainRecord(p.review) ? p.review : {};
+    const signal = this.abort!.signal;
+    const threadId = this.nativeId;
+    const tool: ToolKind = action.type === "applyPatch" ? "edit"
+      : action.type === "networkAccess" ? "fetch" : action.type === "mcpToolCall" ? "mcp" : "execute";
+    try {
+      const event = guardianDenialEvent(p);
+      const decision = await sink.approval({
+        humanOnly: true, tool,
+        ...(typeof p.targetItemId === "string" ? { toolId: p.targetItemId } : {}),
+        title: "Codex Auto-review denied this action",
+        detail: [detail, typeof action.cwd === "string" ? `Directory: ${action.cwd}` : "",
+          ["execve", "writeStdin", "requestPermissions"].includes(String(action.type)) ? JSON.stringify(action, null, 2) : "",
+          typeof review.riskLevel === "string" ? `Risk: ${review.riskLevel}` : "",
+          typeof review.rationale === "string" ? review.rationale : "",
+          "Approve one retry? Codex will review it again and may still deny it."].filter(Boolean).join("\n"),
+        options: [{ id: "approveRetry", label: "Approve one retry", kind: "allow_once" },
+          { id: "keepDenied", label: "Keep denied", kind: "reject_once" }],
+      }, signal);
+      if (signal.aborted || this.cancelled || this.rpc !== rpc || this.nativeId !== threadId) return;
+      if (decision.optionId !== "approveRetry") {
+        return;
+      }
+      // The endpoint expects the core protocol's snake_case assessment event,
+      // rather than the app-server's camelCase notification payload.
+      await rpc.call("thread/approveGuardianDeniedAction", { threadId, event });
+      if (signal.aborted || this.cancelled || this.rpc !== rpc) return;
+      this.approvedRetries.push(String(p.reviewId));
+      sink.notice("info", `Approved one retry of Codex Auto-review denial ${p.reviewId}; the retry still goes through Auto-review.`);
+    } catch (error) {
+      if (!signal.aborted && !this.cancelled) sink.notice("error", `Could not approve the Codex Auto-review retry: ${(error as Error).message}`);
     }
   }
 
