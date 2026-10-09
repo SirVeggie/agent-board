@@ -23,6 +23,7 @@ import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage
 import { isPlainRecord, noPages } from "../types.js";
 import { gatedFetchText, webCallAllowed } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
+import { cursorAccessToken } from "./cursorAuth.js";
 import { SqliteCursorStore } from "./cursorStore.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
@@ -218,12 +219,14 @@ export class CursorProvider implements AgentProvider {
 
   /**
    * The plan's usage this billing period, from the private dashboard API the CLI's /usage calls
-   * (the SDK's getUsage reports tokens and cost per agent, not the plan's windows). Null without a
-   * token or when the call fails. Brittle by nature: a CLI update can move it.
+   * (the SDK's getUsage reports tokens and cost per agent, not the plan's windows). The token is the
+   * Cursor app's own login (see cursorAuth). Null without a token or when the call fails. Brittle by
+   * nature: a Cursor update can move it.
    */
   async fetchPlanUsage(): Promise<unknown | null> {
-    const token = process.env.CURSOR_ACCESS_TOKEN?.trim();
-    if (!token) return null;
+    const auth = cursorAccessToken();
+    if (!auth) return null;
+    const { token } = auth;
     try {
       const res = await fetch(`${CURSOR_API}/aiserver.v1.DashboardService/GetCurrentPeriodUsage`, {
         method: "POST",
@@ -232,7 +235,7 @@ export class CursorProvider implements AgentProvider {
         signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) {
-        log(`Cursor usage fetch failed: HTTP ${res.status}`);
+        log(`Cursor usage fetch failed: HTTP ${res.status} (token from ${auth.source === "env" ? "CURSOR_ACCESS_TOKEN" : "the Cursor app's login"})`);
         return null;
       }
       return await res.json();
