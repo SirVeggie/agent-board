@@ -4001,10 +4001,20 @@
     return busy >= max;
   }
   function workerMode(w) { return str(w && w.mode) || "code"; }
+  /** Fixed board defaults: never inherit the last settings used in a chat. */
+  function workerDefaults(opts, provider) {
+    var available = ((opts && opts.providers) || []).filter(function (p) { return p.available; });
+    if (!provider) {
+      provider = ["cursor", "codex", "claude", "pi"].filter(function (id) {
+        return available.some(function (p) { return p.id === id; });
+      })[0] || (available[0] && available[0].id) || "cursor";
+    }
+    return { provider: provider, model: provider === "cursor" ? "composer-2.5" : "default", approval: "auto", web: "off", fast: false };
+  }
   function modelParamsOf(opts, provider, modelId) {
     var models = (opts && opts.models && opts.models[provider]) || [];
     var model = models.filter(function (m) { return m.id === modelId; })[0];
-    if (!model) model = models.filter(function (m) { return m.id === str(opts && opts.defaults && opts.defaults.model); })[0] || models[0];
+    if (!model) model = models.filter(function (m) { return m.id === workerDefaults(opts, provider).model; })[0] || models[0];
     return (model && model.params) || [];
   }
   function fastParamOf(opts, provider, modelId) {
@@ -4183,7 +4193,7 @@
     return labelOf(list, id);
   }
   function modelLabel(w) {
-    var provider = str(w.provider) || str(agentOptions && agentOptions.defaults && agentOptions.defaults.provider);
+    var provider = str(w.provider) || workerDefaults(agentOptions).provider;
     var models = (agentOptions && agentOptions.models && agentOptions.models[provider]) || [];
     var model = models.filter(function (m) { return m.id === str(w.model); })[0];
     if (model) return model.label;
@@ -4339,11 +4349,11 @@
   }
   function workerOpts(w, c) {
     var mode = workerMode(w);
-    var opts = { title: ((workerName(w) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode };
-    ["provider", "model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    var opts = Object.assign(workerDefaults(agentOptions, str(w.provider)), { title: ((workerName(w) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode });
+    ["model", "effort", "show", "web", "approval"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
     if (w.fast === "true") opts.fast = true;
     else if (w.fast === "false") opts.fast = false;
-    else if (str(w.fast)) opts.modelParams = { fast: str(w.fast) };
+    else if (str(w.fast)) { delete opts.fast; opts.modelParams = { fast: str(w.fast) }; }
     if (FOLDER_MODES[mode]) {
       opts.cwd = w.cwd;
       if (w.approval) opts.approval = w.approval;
@@ -4612,7 +4622,9 @@
   function startCard(id, c, since) {
     var w = worker(id);
     var startedAt = Date.now();
-    return scribe.agent.start(workerPrompt(w, c), workerOpts(w, c)).then(function (r) {
+    return loadAgentOptions().then(function () {
+      return scribe.agent.start(workerPrompt(w, c), workerOpts(w, c));
+    }).then(function (r) {
       if (!r || !r.ok) {
         endRun(id, launchError(r), true);
         return;
@@ -4642,7 +4654,9 @@
     var name = workerName(w);
     soloStarting[cardId] = true;
     setHint("Starting " + name + " on #" + c.num + "…");
-    scribe.agent.start(workerPrompt(w, c, null, true), workerOpts(w, c)).then(function (r) {
+    loadAgentOptions().then(function () {
+      return scribe.agent.start(workerPrompt(w, c, null, true), workerOpts(w, c));
+    }).then(function (r) {
       delete soloStarting[cardId];
       if (!r || !r.ok) {
         setHint(launchError(r));
@@ -5292,7 +5306,7 @@
     var w = worker(id);
     if (!w) return;
     var opts = agentOptions;
-    var defaults = opts.defaults || {};
+    var defaults = workerDefaults(opts, str(w.provider));
     var rebuild = function () { buildWorkerForm(id, box, compact); };
     var set = function (patch) {
       if (workerPending && workerPending.id === id) patch = Object.assign(workerPending.patch, patch);
@@ -5372,12 +5386,12 @@
     var providers = (opts.providers || []).filter(function (p) { return p.available; });
     var provider = str(w.provider);
     var effectiveProvider = provider || str(defaults.provider);
-    row("Provider", enhanced(workerSelect([["", "Default" + (defaults.provider ? " (" + labelOf(providers, defaults.provider) + ")" : "")]].concat(providers.map(function (p) { return [p.id, p.label]; })), provider, "Provider", function (v) {
+    row("Provider", enhanced(workerSelect([["", "Default (" + labelOf(providers, workerDefaults(opts).provider) + ")"]].concat(providers.map(function (p) { return [p.id, p.label]; })), provider, "Provider", function (v) {
       set({ provider: v, model: null, effort: null, fast: null });
       rebuild();
     })));
     var models = (opts.models && opts.models[effectiveProvider]) || [];
-    row("Model", enhanced(workerSelect([["", "Default"]].concat(models.map(function (m) { return [m.id, m.label]; })), str(w.model), "Model", function (v) {
+    row("Model", enhanced(workerSelect([["", "Default (" + labelOf(models, defaults.model) + ")"]].concat(models.map(function (m) { return [m.id, m.label]; })), str(w.model), "Model", function (v) {
       set({ model: v, effort: null });
       rebuild();
     })));
@@ -5391,8 +5405,8 @@
       fast = { id: "fast", label: "Fast", description: "", options: [{ id: "true", label: "On" }, { id: "false", label: "Off" }] };
     }
     if (fast) {
-      row("Fast", enhanced(workerSelect([["", "Default"]].concat((fast.options || []).map(function (o) { return [o.id, o.label]; })), str(w.fast), "Fast", function (v) { set({ fast: v }); })),
-        fast.description || "Cursor's faster, cheaper mode. Default follows your chat settings when this worker uses the default model.");
+      row("Fast", enhanced(workerSelect([["", "Default (Off)"]].concat((fast.options || []).map(function (o) { return [o.id, o.label]; })), str(w.fast), "Fast", function (v) { set({ fast: v }); })),
+        fast.description);
     }
     var mode = workerMode(w);
     row("Mode", enhanced(workerSelect((opts.modes || []).map(function (m) { return [m.id, m.label]; }), mode, "Mode", function (v) {
@@ -5433,8 +5447,7 @@
     }
     var webModes = { on: "Full", limited: "Limited", off: "Off" };
     var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (k) { return [k, webModes[k]]; }));
-    row("Web", enhanced(workerSelect(webOptions, str(w.web), "Web", function (v) { set({ web: v }); })),
-      "Web search and fetch. Limited keeps Claude agents to the web allowlist in Agent settings. Default follows your chat settings.");
+    row("Web", enhanced(workerSelect(webOptions, str(w.web), "Web", function (v) { set({ web: v }); })));
     if (!compact) {
       row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
     }
