@@ -174,3 +174,22 @@ test("the resumed turn reaches the agent worded as Scribe's", async () => {
   assert.match(input.text, /<context>\nSent by Scribe itself, not typed by the user\.\n<\/context>/);
   assert.match(input.text, /Scribe restarted while you were working/);
 });
+
+test("run info and thread views total token usage across turns", () => {
+  const { host } = startHost();
+  const id = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } }).id;
+  const base = { threadId: id, model: "m" as const, effort: null, mode: "board" as const, startedAt: 1 };
+  const turns: Turn[] = [
+    { ...base, id: "tu_a", seq: 1, status: "done", endedAt: 2, usage: { inputTokens: 100, outputTokens: 20 } },
+    { ...base, id: "tu_b", seq: 2, status: "done", endedAt: 4, usage: { inputTokens: 50, outputTokens: 10, cacheReadTokens: 5 } },
+    { ...base, id: "tu_c", seq: 3, status: "done", endedAt: 6, reverted: true, usage: { inputTokens: 999, outputTokens: 999 } },
+  ];
+  for (const turn of turns) host.db.saveTurn(turn);
+  (host as unknown as { turns: Map<string, Turn[]> }).turns.set(id, turns);
+  const info = host.runInfo(id);
+  assert.equal(info.exists, true);
+  if (!info.exists) return;
+  assert.deepEqual(info.usage, { turns: 2, inputTokens: 150, outputTokens: 30, cacheReadTokens: 5 });
+  const view = host.listThreads().find((t) => t.id === id);
+  assert.deepEqual(view?.usage, info.usage);
+});

@@ -48,6 +48,7 @@ import { serversForThread } from "./mcpConfig.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
+import { sumThreadUsage } from "./usage.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
@@ -659,7 +660,9 @@ export class AgentHost {
     const thread = this.threads.get(id);
     if (!thread) return { exists: false };
     const status = this.status.get(id) ?? "idle";
-    const last = this.db.listTurns(id).at(-1);
+    const turns = this.db.listTurns(id);
+    const last = turns.at(-1);
+    const usage = sumThreadUsage(turns);
     const outputAt = this.runs.get(id)?.turn.outputAt ?? last?.outputAt;
     const recovery = thread.provider === "codex" && last?.limitResetsAt
       ? codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt) : undefined;
@@ -672,6 +675,7 @@ export class AgentHost {
       ...(outputAt !== undefined ? { outputAt } : {}),
       ...(asking ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
       ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}), ...(recovery !== undefined ? { usageRecoveryAllowed: recovery } : {}) } } : {}),
+      ...(usage ? { usage } : {}),
     };
   }
 
@@ -1045,6 +1049,7 @@ export class AgentHost {
     if (activity) this.activitySent.set(thread.id, activityKey(activity));
     else this.activitySent.delete(thread.id);
     const grants = grantRows(thread, this.scopeLookup());
+    const usage = sumThreadUsage(turns);
     return {
       ...thread,
       status,
@@ -1053,6 +1058,7 @@ export class AgentHost {
       background: this.backgroundTasks(thread.id),
       stats: { turns: turns.length, files: files.size, added, removed },
       fromPage,
+      ...(usage ? { usage } : {}),
       ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
       ...(asking ? { asking } : {}),

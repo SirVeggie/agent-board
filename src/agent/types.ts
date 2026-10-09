@@ -155,6 +155,8 @@ export type ThreadView = Thread & {
   /** Subagents and commands still working in the background, after or beside the current turn. */
   background: number;
   stats: { turns: number; files: number; added: number; removed: number };
+  /** Token totals across non-reverted turns. Missing until a turn has been recorded. */
+  usage?: ThreadUsage;
   /** When the last finished turn ended. Missing until a turn has completed. */
   finishedAt?: number;
   /** A fork that has not run yet: how its first turn gets the earlier conversation, and which model summarizes it. */
@@ -198,6 +200,17 @@ export type Usage = {
   contextWindow?: number;
   /** How much of each subscription window this turn used (0–1 of that window). Claude only. */
   plan?: Array<{ id: string; label: string; used: number }>;
+};
+
+/** Totals across a thread's turns (reverted turns omitted). Boards read this when a worker chat ends. */
+export type ThreadUsage = {
+  turns: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  costUsd?: number;
 };
 
 export type TurnStatus = "running" | "done" | "error" | "cancelled";

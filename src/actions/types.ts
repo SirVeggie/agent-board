@@ -50,6 +50,16 @@ export type ThreadRunInfo =
       /** Latest text, reasoning, or tool call received in the current or most recent turn. */
       outputAt?: number;
       lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number; usageRecoveryAllowed?: boolean };
+      /** Token totals across the thread's non-reverted turns, so a board can log them when the chat ends. */
+      usage?: {
+        turns: number;
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        reasoningTokens?: number;
+        costUsd?: number;
+      };
       /** While the turn waits on the user: the question (a page_ask page too), approval or plan. */
       asking?: { kind: "approval" | "question" | "plan"; title: string; page?: { key: string; title: string } };
     };
