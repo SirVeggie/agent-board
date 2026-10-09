@@ -596,6 +596,12 @@ function mcpText(item: McpToolCallItem): string {
     .join("\n");
 }
 
+/** Keep normal chat compact; the diagnostic log retains the unabridged payload. */
+function compactReviewText(text: string, limit: number): string {
+  const plain = text.replace(/\s+/g, " ").trim();
+  return plain.length > limit ? `${plain.slice(0, limit - 3)}...` : plain;
+}
+
 /** Normalize app-server v2 items into the existing Scribe tool renderer. */
 export function appServerItem(item: RpcRecord): ThreadItem | null {
   const id = String(item.id ?? "");
@@ -660,6 +666,7 @@ export class CodexSession implements ProviderSession {
   private streamed = new Map<string, number>();
   private tools = new Set<string>();
   private plan: string | null = null;
+  private reviewNotices = new Set<string>();
 
   constructor(
     private thread: Thread,
@@ -673,6 +680,7 @@ export class CodexSession implements ProviderSession {
         return CodexRpc.launch(codexCliJs(), env, onMessage, onClose);
       },
     private prepare: () => void = syncCodexAuth,
+    private reviewLog: typeof log = log,
   ) {
     this.nativeId = thread.nativeId;
   }
@@ -793,6 +801,7 @@ export class CodexSession implements ProviderSession {
     this.streamed.clear();
     this.tools.clear();
     this.outputs.clear();
+    this.reviewNotices.clear();
     this.plan = null;
     this.turnUsage = null;
     this.instructions = input.instructions;
@@ -965,28 +974,38 @@ export class CodexSession implements ProviderSession {
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed": {
-        // CLI 0.162.0's experimental review notifications. These report the native
-        // decision; they must never grant access through the host approval callback.
+        // Presentation only: native decisions never go through the host approval callback.
+        this.reviewLog("Codex Auto-review", { scribeThreadId: this.thread.id, method: message.method, ...p });
         const review = isPlainRecord(p.review) ? p.review : {};
         const action = isPlainRecord(p.action) ? p.action : {};
         const status = message.method.endsWith("/started") ? "inProgress" : review.status;
-        const labels: Record<string, string> = {
-          inProgress: "reviewing", approved: "approved", denied: "denied",
-          timedOut: "timed out", aborted: "aborted",
-        };
-        const target = typeof p.targetItemId === "string" ? ` (item ${p.targetItemId})` : "";
+        if (status === "inProgress" || status === "approved") break;
+        const key = typeof p.reviewId === "string" ? p.reviewId
+          : JSON.stringify([p.turnId, p.targetItemId, action]);
+        if (this.reviewNotices.has(key)) break;
+        this.reviewNotices.add(key);
         const detail = typeof action.command === "string" ? action.command
-          : action.type === "applyPatch" && Array.isArray(action.files) ? action.files.join(", ")
+          : action.type === "execve" ? [action.program, ...(Array.isArray(action.argv) ? action.argv : [])].join(" ")
+          : action.type === "writeStdin" ? `stdin for process ${action.processId ?? "unknown"}`
+          : action.type === "applyPatch" && Array.isArray(action.files) ? `edit ${action.files.join(", ")}`
           : action.type === "networkAccess" ? String(action.target ?? action.host ?? "network access")
           : action.type === "mcpToolCall" ? `${action.server ?? "MCP"}/${action.toolName ?? "tool"}`
+          : action.type === "requestPermissions" ? "additional permissions"
           : typeof action.type === "string" ? action.type : "action";
-        const rationale = typeof review.rationale === "string" && review.rationale ? `\n${review.rationale}` : "";
-        sink.notice(status === "inProgress" || status === "approved" ? "info" : status === "denied" ? "warn" : "error",
-          `Codex Auto-review ${labels[String(status)] ?? "failed (unknown review status)"}${target}: ${detail}${rationale}`);
+        const labels: Record<string, string> = { denied: "denied", timedOut: "timed out", aborted: "aborted" };
+        const reason = typeof review.rationale === "string" && review.rationale.trim() ? review.rationale
+          : status === "denied" ? "The reviewer did not authorize this action. Revise it or request explicit permission."
+          : status === "timedOut" ? "The reviewer did not respond in time. Retry the action."
+          : status === "aborted" ? "The review was cancelled."
+          : "The reviewer returned an unknown status. Check the diagnostic log.";
+        sink.notice(status === "denied" ? "warn" : "error",
+          `Auto-review ${labels[String(status)] ?? "failed"}: ${compactReviewText(detail, 160)}: ${compactReviewText(reason, 300)}`);
         break;
       }
       case "guardianWarning":
-        sink.notice("warn", `Codex Auto-review: ${typeof p.message === "string" ? p.message : "review warning"}`);
+        // This unstructured explanation also repeats allowed and denied review details.
+        // Keep it for diagnostics; structured completion above is the chat's only review notice.
+        this.reviewLog("Codex Auto-review", { scribeThreadId: this.thread.id, method: message.method, ...p });
         break;
       case "turn/plan/updated":
         if (Array.isArray(p.plan)) sink.todos(p.plan.filter(isPlainRecord).map((step) => ({ content: String(step.step ?? ""), status: step.status === "completed" ? "completed" : step.status === "inProgress" ? "in_progress" : "pending" })));

@@ -194,12 +194,13 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask", limits?: SessionContext["limits"]) {
   let f: ReturnType<typeof rpcFixture>;
+  const reviews: unknown[] = [];
   const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope: {} } as Thread,
     { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits } as SessionContext,
-    () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {});
-  const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", notices: [] as Array<{ level: string; text: string }> };
+    () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); });
+  const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
   const sink: RunSink = {
-    nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart() {},
+    nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart(tool) { seen.tools.push(tool.toolId); },
     toolUpdate(_id, patch) { if (patch.output !== undefined) seen.output = patch.output; }, beforeWrite: async () => {},
     approval: async (req) => { seen.approvals.push(req.tool); return { optionId: "decline" }; },
     question: async () => ({ answers: { q: ["Yes"] } }), plan: async (req) => { seen.plans.push(req.text); return { accepted: false }; },
@@ -280,34 +281,80 @@ test("Codex app-server streams text once, forwards approval replies and marks st
   f.session.dispose();
 });
 
-test("Codex native Auto-review reports lifecycle, denials and failures without human approval or local grants", async () => {
+test("Codex allowed reviews stay out of chat while normal tool activity and full diagnostics remain", async () => {
   const f = sessionFixture(null, "auto");
   const { run } = await f.start();
-  const params = { threadId: "native-thread", turnId: "turn-1", reviewId: "r1", targetItemId: "shell",
-    action: { type: "command", command: "echo hello", cwd: "/work" } };
-  f.f.emit({ method: "item/autoApprovalReview/started", params: { ...params, review: { status: "inProgress" } } });
-  for (const status of ["approved", "denied", "timedOut", "aborted", "futureStatus"]) {
-    f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, review: { status, rationale: "Review reason" } } });
-  }
-  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, targetItemId: null,
-    action: { type: "networkAccess", target: "example.com:443" }, review: { status: "denied" } } });
-  f.f.emit({ method: "guardianWarning", params: { threadId: "native-thread", message: "Reviewer unavailable" } });
-  const count = f.seen.notices.length;
-  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, threadId: "other", review: { status: "denied" } } });
-  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, turnId: "old", review: { status: "denied" } } });
-  assert.equal(f.seen.notices.length, count);
-  assert.deepEqual(f.seen.notices.map((n) => n.level), ["info", "info", "warn", "error", "error", "error", "warn", "warn"]);
-  assert.match(f.seen.notices[0].text, /reviewing.*shell.*echo hello/);
-  assert.match(f.seen.notices[2].text, /denied.*\nReview reason/);
-  assert.match(f.seen.notices[3].text, /timed out/);
-  assert.match(f.seen.notices[4].text, /aborted/);
-  assert.match(f.seen.notices[5].text, /failed/);
-  assert.match(f.seen.notices[6].text, /denied: example.com:443/);
-  assert.match(f.seen.notices[7].text, /Reviewer unavailable/);
+  const params = { threadId: "native-thread", turnId: "turn-1", reviewId: "r1", targetItemId: "mcp",
+    action: { type: "mcpToolCall", server: "scribe", toolName: "page_action" } };
+  f.f.emit({ method: "item/started", params: { threadId: "native-thread", turnId: "turn-1",
+    item: { id: "mcp", type: "mcpToolCall", server: "scribe", tool: "page_action", arguments: {}, status: "inProgress" } } });
+  const started = { ...params, review: { status: "inProgress" } };
+  const approved = { ...params, review: { status: "approved", rationale: "Routine page update", riskLevel: "low", userAuthorization: "high" } };
+  const warning = { threadId: "native-thread", message: "Approved: Routine page update. Risk: low; authorization: high." };
+  f.f.emit({ method: "item/autoApprovalReview/started", params: started });
+  f.f.emit({ method: "guardianWarning", params: warning });
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: approved });
+  assert.deepEqual(f.seen.notices, []);
+  assert.deepEqual(f.seen.tools, ["mcp"]);
+  assert.deepEqual(f.seen.reviews, [
+    { scribeThreadId: "scribe-thread", method: "item/autoApprovalReview/started", ...started },
+    { scribeThreadId: "scribe-thread", method: "guardianWarning", ...warning },
+    { scribeThreadId: "scribe-thread", method: "item/autoApprovalReview/completed", ...approved },
+  ]);
   assert.deepEqual(f.seen.approvals, []);
   assert.equal(f.f.sent.filter((message) => message.result && !message.method).length, 0);
   f.complete();
   assert.equal((await run).status, "done");
+  f.session.dispose();
+});
+
+test("Codex denials and review failures show one compact notice per review without granting access", async () => {
+  const f = sessionFixture(null, "auto");
+  const { run } = await f.start();
+  const params = { threadId: "native-thread", turnId: "turn-1", targetItemId: "shell",
+    action: { type: "command", command: "echo hello", cwd: "/work" } };
+  const reason = "Explicit permission required.\n" + "Risk and authorization detail. ".repeat(40);
+  const denied = { ...params, reviewId: "denied", review: { status: "denied", rationale: reason } };
+  f.f.emit({ method: "item/autoApprovalReview/started", params: denied });
+  f.f.emit({ method: "guardianWarning", params: { threadId: "native-thread", message: reason } });
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: denied });
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: denied });
+  for (const status of ["timedOut", "aborted", "futureStatus"]) {
+    const payload = { ...params, reviewId: status, review: { status } };
+    f.f.emit({ method: "item/autoApprovalReview/completed", params: payload });
+    f.f.emit({ method: "item/autoApprovalReview/completed", params: payload });
+  }
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...params, reviewId: "network", targetItemId: null,
+    action: { type: "networkAccess", target: "example.com:443" }, review: { status: "denied" } } });
+  const count = f.seen.notices.length;
+  const logCount = f.seen.reviews.length;
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...denied, threadId: "other" } });
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...denied, turnId: "old" } });
+  assert.equal(f.seen.notices.length, count);
+  assert.equal(f.seen.reviews.length, logCount);
+  assert.deepEqual(f.seen.notices.map((n) => n.level), ["warn", "error", "error", "error", "warn"]);
+  assert.match(f.seen.notices[0].text, /denied: echo hello: Explicit permission required/);
+  assert.ok(f.seen.notices[0].text.length < 350);
+  assert.ok(!f.seen.notices[0].text.includes("\n"));
+  assert.deepEqual(f.seen.reviews[2], { scribeThreadId: "scribe-thread", method: "item/autoApprovalReview/completed", ...denied });
+  assert.match(f.seen.notices[1].text, /timed out.*Retry/);
+  assert.match(f.seen.notices[2].text, /aborted/);
+  assert.match(f.seen.notices[3].text, /failed.*diagnostic log/);
+  assert.match(f.seen.notices[4].text, /denied: example.com:443/);
+  assert.deepEqual(f.seen.approvals, []);
+  assert.equal(f.f.sent.filter((message) => message.result && !message.method).length, 0);
+  f.complete();
+  assert.equal((await run).status, "done");
+  // Deduplication is scoped to one run, even if the server reuses a review id.
+  const next = f.session.run({ text: "again", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
+  await tick();
+  const turn = f.f.sent.filter((m) => m.method === "turn/start").at(-1)!;
+  f.f.emit({ id: turn.id, result: { turn: { id: "turn-2" } } });
+  await tick();
+  f.f.emit({ method: "item/autoApprovalReview/completed", params: { ...denied, turnId: "turn-2" } });
+  assert.equal(f.seen.notices.length, count + 1);
+  f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
+  assert.equal((await next).status, "done");
   f.session.dispose();
 });
 
