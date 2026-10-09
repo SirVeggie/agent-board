@@ -6148,8 +6148,28 @@
 
   function planLimits(provider) {
     const limits = S.config.limits?.[provider];
-    if (!limits?.windows?.length) return null;
-    return { ...limits, windows: liveWindows(limits.windows) };
+    if (!limits) return null;
+    return { ...limits, windows: provider === "codex" ? limits.windows || [] : liveWindows(limits.windows) };
+  }
+
+  function quotaPercent(provider, utilization) {
+    return provider === "codex" ? `${percent(Math.max(0, 1 - utilization))} left` : percent(utilization);
+  }
+
+  function quotaReset(provider, at) {
+    return provider === "codex" && at && at <= Date.now() ? "Reset passed · awaiting update" : resetText(at);
+  }
+
+  function codexQuotaNotes(limits) {
+    if (limits.detail) return [limits.detail];
+    const notes = [];
+    if (limits.ordinaryUsageAllowed === false) notes.push("Included usage is blocked. Workers wait for Codex to confirm recovery.");
+    else if (limits.ordinaryUsageAllowed == null) notes.push("Included usage permission is unavailable. Worker recovery needs confirmation from Codex.");
+    for (const bucket of limits.buckets || []) {
+      const c = bucket.credits;
+      if (c) notes.push(`${bucket.label}: ${c.unlimited ? "unlimited credits" : c.balance != null ? `${c.balance} credits` : c.hasCredits ? "credits available" : "no credits"}`);
+    }
+    return notes;
   }
 
   let usageTick = 0;
@@ -6260,16 +6280,17 @@
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
     for (const w of limits.windows) {
-      const row = el("div", `ag-usage-tip-row lvl-${usageLevel(w.utilization)}`);
+      const row = el("div", `ag-usage-tip-row${provider === "codex" ? " ag-quota-remaining" : ""} lvl-${usageLevel(w.utilization)}`);
       const bar = el("div", "ag-meter-bar");
       const fill = el("div", "ag-meter-fill");
-      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
+      fill.style.width = `${Math.min(100, Math.round((provider === "codex" ? Math.max(0, 1 - w.utilization) : w.utilization) * 100))}%`;
       bar.append(fill);
-      row.append(el("span", "ag-usage-tip-label", w.label), bar, el("span", "ag-usage-tip-pct", percent(w.utilization)));
-      if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", resetText(w.resetsAt)));
+      row.append(el("span", "ag-usage-tip-label", w.label), bar, el("span", "ag-usage-tip-pct", quotaPercent(provider, w.utilization)));
+      if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaReset(provider, w.resetsAt)));
       tip.append(row);
     }
     if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
+    if (provider === "codex") for (const note of codexQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
     return tip;
   }
 
@@ -6380,6 +6401,12 @@
   function usageChip(provider, compact = false) {
     const limits = planLimits(provider);
     if (!limits) return null;
+    if (provider === "codex" && limits.availability !== "available") {
+      const chip = button("Quota unavailable", "ag-usage", () => agentSettings.open(), "");
+      chip.setAttribute("aria-label", limits.detail || "Codex quota unavailable");
+      bindHoverTip(chip, () => usageTip(provider));
+      return chip;
+    }
     const listed = chipWindows(limits);
     const one = compact ? compactWindow(limits) : null;
     if (!(compact ? one : listed.length)) return null;
@@ -6389,11 +6416,11 @@
       agentSettings.open();
     }, "");
     if (compact) {
-      chip.append(el("span", `ag-usage-w lvl-${usageLevel(one.utilization)}`, percent(one.utilization)));
-      chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage ${percent(one.utilization)} of ${one.label}`);
+      chip.append(el("span", `ag-usage-w lvl-${usageLevel(one.utilization)}`, quotaPercent(provider, one.utilization)));
+      chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage ${quotaPercent(provider, one.utilization)} of ${one.label}`);
     } else {
       chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
-      for (const w of listed) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${percent(w.utilization)}`));
+      for (const w of listed) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${quotaPercent(provider, w.utilization)}`));
     }
     bindHoverTip(chip, () => usageTip(provider));
     return chip;
@@ -6412,20 +6439,21 @@
         el(
           "p",
           "ag-muted ag-meter-none",
-          provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Shows after the next Cursor turn, then refreshes after turns at most every 30 minutes. Needs CURSOR_ACCESS_TOKEN in the daemon's environment."
+          provider === "codex" ? "Checking Codex subscription quota…" : provider === "claude" ? "Shows after the next Claude turn. After that, Scribe checks again when a usage window resets." : "Shows after the next Cursor turn, then refreshes after turns at most every 30 minutes. Needs CURSOR_ACCESS_TOKEN in the daemon's environment."
         )
       );
       return box;
     }
     for (const w of limits.windows) {
-      const row = el("div", `ag-meter lvl-${usageLevel(w.utilization)}`);
+      const row = el("div", `ag-meter${provider === "codex" ? " ag-quota-remaining" : ""} lvl-${usageLevel(w.utilization)}`);
       const bar = el("div", "ag-meter-bar");
       const fill = el("div", "ag-meter-fill");
-      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
+      fill.style.width = `${Math.min(100, Math.round((provider === "codex" ? Math.max(0, 1 - w.utilization) : w.utilization) * 100))}%`;
       bar.append(fill);
-      row.append(el("span", "ag-meter-label", w.label), bar, el("span", "ag-meter-pct", percent(w.utilization)), el("span", "ag-meter-reset", resetText(w.resetsAt)));
+      row.append(el("span", "ag-meter-label", w.label), bar, el("span", "ag-meter-pct", quotaPercent(provider, w.utilization)), el("span", "ag-meter-reset", quotaReset(provider, w.resetsAt)));
       box.append(row);
     }
+    if (provider === "codex") for (const note of codexQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
     return box;
   }
 
@@ -6991,7 +7019,7 @@
     },
     renderUsage() {
       if (!this.usage || !this.isOpen()) return;
-      this.usage.replaceChildren(...["claude", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
+      this.usage.replaceChildren(...["claude", "codex", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
     },
     /** The model that writes a fork's summary; picks from every available provider's models. */
     summarizerButton() {

@@ -19,7 +19,7 @@ import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider } from "./providers/claude.js";
-import { CodexProvider } from "./providers/codex.js";
+import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
 import { PiProvider } from "./providers/pi.js";
@@ -42,7 +42,7 @@ import type {
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
-import { applyExpiredWindows, livePlanLimits, nextRefreshAt, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
+import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
@@ -293,7 +293,7 @@ export class AgentHost {
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
 
-  constructor(private emit: (event: AgentEvent) => void) {
+  constructor(private emit: (event: AgentEvent) => void, private readCodexUsage: () => Promise<unknown> = fetchCodexPlanUsage) {
     this.db = new AgentDb();
     this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), codex: new CodexProvider(), pi: new PiProvider(() => this.modelSources()) };
     if (FAKE_AGENTS) {
@@ -347,6 +347,10 @@ export class AgentHost {
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
     this.scheduleClaudeUsageRefresh();
+    if (!this.fakes) {
+      this.codexUsageTimer = setTimeout(() => void this.refreshCodexUsage(), 1000);
+      this.codexUsageTimer.unref?.();
+    }
     this.pruneTimer = setTimeout(() => this.pruneSessions(), PRUNE_FIRST_MS);
     this.pruneTimer.unref?.();
   }
@@ -376,6 +380,9 @@ export class AgentHost {
   private usageFetch: Promise<void> | null = null;
   private lastUsageFetchAt = 0;
   private cursorUsageFetchAt = 0;
+  private codexUsageTimer: NodeJS.Timeout | null = null;
+  private codexUsageFetch: Promise<void> | null = null;
+  private codexUsageFetchAt = 0;
   private closed = false;
 
   /** Last reported plan usage per provider. Expired windows read as 0% until a fetch or turn updates them. */
@@ -404,9 +411,44 @@ export class AgentHost {
   }
 
   private recordLimits(provider: ProviderId, info: unknown): void {
-    const next = planLimitsFromRateLimitInfo(info, Date.now(), this.planLimits[provider]);
+    const next = provider === "codex" ? planLimitsFromCodexRateLimits(info, Date.now(), this.planLimits.codex, true)
+      : planLimitsFromRateLimitInfo(info, Date.now(), this.planLimits[provider]);
     if (!next) return;
     this.commitLimits(provider, next, true);
+    if (provider === "codex") void this.refreshCodexUsage();
+  }
+
+  /** Poll without a model turn, including after a reset or a rolling notification. */
+  private refreshCodexUsage(): Promise<void> {
+    if (this.closed || this.fakes) return Promise.resolve();
+    if (this.codexUsageFetch) return this.codexUsageFetch;
+    if (Date.now() - this.codexUsageFetchAt < 60_000) return Promise.resolve();
+    this.codexUsageFetchAt = Date.now();
+    if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
+    this.codexUsageFetch = (async () => {
+      try {
+        const report = await this.readCodexUsage();
+        if (this.closed) return;
+        const parsed = planLimitsFromCodexRateLimits(report, Date.now());
+        if (!parsed) throw new Error("Invalid Codex quota response");
+        this.commitLimits("codex", parsed, false);
+      } catch (error) {
+        if (this.closed) return;
+        const auth = /authentication required|unauthorized|401|expired|refresh.token|not logged|sign.in/i.test((error as Error).message);
+        this.commitLimits("codex", { at: Date.now(), source: "codex", windows: [], ordinaryUsageAllowed: null,
+          availability: auth ? "authentication_required" : "unavailable",
+          detail: auth ? "Codex login is missing or expired. Log in again in Agent settings." : "Codex subscription quota is unavailable. It requires a ChatGPT login and a reachable app-server.",
+        }, false);
+      }
+    })().finally(() => {
+      this.codexUsageFetch = null;
+      if (this.closed) return;
+      const reset = nextRefreshAt(this.planLimits.codex);
+      const delay = reset == null ? 5 * 60_000 : Math.min(5 * 60_000, Math.max(60_000, reset - Date.now() + 2000));
+      this.codexUsageTimer = setTimeout(() => void this.refreshCodexUsage(), delay);
+      this.codexUsageTimer.unref?.();
+    });
+    return this.codexUsageFetch;
   }
 
   private commitLimits(provider: ProviderId, next: PlanLimits, fromTurn: boolean): void {
@@ -494,6 +536,7 @@ export class AgentHost {
 
   dispose(): void {
     this.closed = true;
+    if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
     if (this.usageTimer) {
       clearTimeout(this.usageTimer);
@@ -607,13 +650,16 @@ export class AgentHost {
     if (!thread) return { exists: false };
     const status = this.status.get(id) ?? "idle";
     const last = this.db.listTurns(id).at(-1);
+    const recovery = thread.provider === "codex" && last?.limitResetsAt
+      ? codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt) : undefined;
+    if (recovery === false) void this.refreshCodexUsage();
     const asking = status === "waiting" ? this.asking(id) : undefined;
     return {
       exists: true,
       running: status !== "idle" || this.resuming.has(id),
       title: thread.title,
       ...(asking ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
-      ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}) } } : {}),
+      ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}), ...(recovery !== undefined ? { usageRecoveryAllowed: recovery } : {}) } } : {}),
     };
   }
 
@@ -1260,6 +1306,14 @@ export class AgentHost {
 
   send(threadId: string, input: SendInput): { queued: boolean; item: Item } {
     const thread = this.requireThread(threadId);
+    // Also protects existing boards whose saved HTML predates the worker recovery check.
+    if (input.from === "page" && !input.card?.resume && thread.provider === "codex" && !this.runs.has(threadId)) {
+      const last = this.db.listTurns(threadId).at(-1);
+      if (last?.limitResetsAt && !codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt)) {
+        void this.refreshCodexUsage();
+        throw new Error("Codex has not confirmed that included usage is available again. Waiting for a fresh quota read.");
+      }
+    }
     const text = input.text.trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
     const context = freshContext(input.context, this.knownContext(threadId, thread));
@@ -2038,6 +2092,7 @@ export class AgentHost {
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
     if (thread.provider === "cursor") this.refreshCursorUsage();
+    if (thread.provider === "codex") void this.refreshCodexUsage();
     if (result.status === "error") {
       const resetsAt = usageLimitResetsAt(result.error, this.planLimits[thread.provider], turn.startedAt, turn.endedAt);
       if (resetsAt) turn.limitResetsAt = resetsAt;

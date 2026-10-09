@@ -3842,6 +3842,18 @@ button.ag-help:focus-visible {
   text-align: right;
 }
 
+.ag-meter.ag-quota-remaining {
+  grid-template-columns: minmax(110px, 160px) 1fr 70px;
+}
+
+.ag-usage-tip-row.ag-quota-remaining {
+  grid-template-columns: minmax(88px, 140px) 1fr 70px;
+}
+
+.ag-usage-tip-row.ag-quota-remaining .ag-usage-tip-pct {
+  white-space: nowrap;
+}
+
 .ag-meter-reset {
   grid-column: 2 / 4;
   font-size: 11px;

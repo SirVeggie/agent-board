@@ -47,7 +47,7 @@ export type ThreadRunInfo =
       exists: true;
       running: boolean;
       title: string;
-      lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number };
+      lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number; usageRecoveryAllowed?: boolean };
       /** While the turn waits on the user: the question (a page_ask page too), approval or plan. */
       asking?: { kind: "approval" | "question" | "plan"; title: string; page?: { key: string; title: string } };
     };

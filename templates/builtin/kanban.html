@@ -4394,6 +4394,10 @@
     var since = start ? Date.now() : Number(w.run.since) || Date.now();
     return scribe.action("worker_step", { worker: id, from: from, token: newId("st"), start: Boolean(start) }).then(
       function (r) {
+        if (resume && r && r.lastTurn && r.lastTurn.usageRecoveryAllowed === false) {
+          patchWorker(id, { step: null, wait: { until: Date.now() + 60000, count: Number(w.wait && w.wait.count) || 0 } });
+          return;
+        }
         if (resume) return resumeAgent(id, from);
         return (wrap ? wrapUp(id, from, start ? null : r) : Promise.resolve(true)).then(function (ok) {
           if (ok) return nextStep(id, since, start);
@@ -4756,6 +4760,10 @@
       var resume = Boolean(waitUntil);
       scribe.action("worker_solo_step", { worker: id, thread: tid, token: newId("st") }).then(
         function (r) {
+          if (resume && r && r.lastTurn && r.lastTurn.usageRecoveryAllowed === false) {
+            patchSolo(id, tid, { step: null, wait: { until: Date.now() + 60000, count: Number(run.wait && run.wait.count) || 0 } });
+            return;
+          }
           if (resume) return resumeSolo(id, tid);
           var turn = r && r.lastTurn;
           var after = Number(run.after) || 0;

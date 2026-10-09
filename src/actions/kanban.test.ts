@@ -620,6 +620,17 @@ test("worker_step passes on when a plan limit resets", () => {
   assert.deepEqual(r.result, { ok: true, lastTurn: { status: "error", endedAt: 900, error: "limit", limitResetsAt: 5000 } });
 });
 
+test("worker and one-card steps retain the host's authoritative Codex recovery flag", () => {
+  for (const usageRecoveryAllowed of [false, true]) {
+    const lastTurn = { status: "error", endedAt: 900, limitResetsAt: 500, usageRecoveryAllowed };
+    const page: ActionContext = { caller: { by: "user", label: "user" }, now: 1000, values: {},
+      thread: () => ({ exists: true, running: false, title: "Codex", lastTurn }) };
+    const state = { ...board(), settings: { workers: { w_1: { threadId: "limited", run: { since: 1 }, solo: { limited: { card: 1, at: 1 } } } } } };
+    assert.deepEqual(run(state, "worker_step", { worker: "w_1", from: "limited", token: "a" }, page).result, { ok: true, lastTurn });
+    assert.deepEqual(run(state, "worker_solo_step", { worker: "w_1", thread: "limited", token: "a" }, page).result, { ok: true, lastTurn });
+  }
+});
+
 test("worker_solo_step lets one window wrap up a one-card run and passes on a plan limit", () => {
   const threads: Record<string, ThreadRunInfo> = {
     busy: { exists: true, running: true, title: "Busy" },
