@@ -452,6 +452,8 @@ const { reply } = await scribe.agent.wait(threadId);       // resolves when the 
 const { threads } = await scribe.agent.threads();          // this page's threads, newest first
 const { thread, reply: last } = await scribe.agent.get(threadId);
 scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
+const { steps } = await scribe.agent.steps(threadId);      // running turn's last 4 steps [{ key, kind, text }], as the collapsed chat shows them
+scribe.agent.onSteps(({ id, steps }) => paint(id, steps)); // then each change to them (empty once the thread stops)
 await scribe.agent.stop(threadId);                         // stop the turn and drop queued messages
 await scribe.agent.merge(threadId);                        // idle Code thread: merge its worktree branch back, close the worktree
 await scribe.agent.card(threadId, { card: 12, title, text }); // Kanban: a card comment into the running turn (steered, else queued); { delivered: null } when idle

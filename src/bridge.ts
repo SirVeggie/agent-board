@@ -878,6 +878,14 @@ export const BOARD_BRIDGE_JS = `
           console.error(err);
         }
       });
+    } else if (data.type === "scribe-agent-steps") {
+      agentStepListeners.slice().forEach(function (fn) {
+        try {
+          fn({ id: data.id, steps: Array.isArray(data.steps) ? data.steps : [] });
+        } catch (err) {
+          console.error(err);
+        }
+      });
     }
   });
 
@@ -1023,6 +1031,7 @@ export const BOARD_BRIDGE_JS = `
   // user's approval for their folder. Scribe checks both on its side and asks the user when needed,
   // so those calls may take as long as the user does.
   var agentListeners = [];
+  var agentStepListeners = [];
   var AGENT_ASK_MS = 10 * 60 * 1000;
 
   function agentText(value) {
@@ -1162,6 +1171,22 @@ export const BOARD_BRIDGE_JS = `
     /** One thread and its latest reply: { ok, thread, reply }. */
     get: function (threadId) {
       return agentCall({ op: "get", threadId: agentText(threadId) });
+    },
+    /**
+     * The running turn's last few steps, as Scribe's collapsed chat shows them: { ok, steps: [{ key,
+     * kind, text }] } (empty while the thread is idle). From then on onSteps reports that thread's changes.
+     */
+    steps: function (threadId) {
+      return agentCall({ op: "steps", threadId: agentText(threadId) });
+    },
+    /** fn({ id, steps }) whenever the steps of a thread this page asked steps() for change. */
+    onSteps: function (fn) {
+      agentStepListeners.push(fn);
+      return function () {
+        agentStepListeners = agentStepListeners.filter(function (item) {
+          return item !== fn;
+        });
+      };
     },
     /** Resolves once the thread is idle (queue included): { ok, thread, reply }, or { ok: false, error: "timeout" }. */
     wait: function (threadId, opts) {

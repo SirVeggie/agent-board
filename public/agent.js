@@ -353,7 +353,7 @@
       if (!S.threads.has(id)) S.details.delete(id);
     }
     // A reconnect may have missed events: refresh the details we show.
-    const shown = new Set(views().map((view) => view.threadId).filter(Boolean));
+    const shown = new Set([...views().map((view) => view.threadId).filter(Boolean), ...pageStepWatch.keys()]);
     for (const id of shown) S.details.delete(id);
     renderAll();
     for (const id of shown) {
@@ -361,6 +361,7 @@
       ensureDetail(id).then(() => {
         for (const view of views()) if (view.threadId === id) view.renderAll();
         if (dock.view.threadId === id) dock.bindFeed(true);
+        pageStepsChanged(id);
       });
     }
   }
@@ -414,6 +415,7 @@
         renderLists();
         renderBadge();
         pageThreadChanged(msg.thread, prev);
+        if (prev?.status !== msg.thread.status) pageStepsChanged(msg.thread.id);
         return;
       }
       case "agent_thread_deleted": {
@@ -425,6 +427,8 @@
         }
         if (S.current === msg.id) setCurrent(null);
         forgetDockThread(msg.id);
+        clearTimeout(pageStepWatch.get(msg.id));
+        pageStepWatch.delete(msg.id);
         renderLists();
         renderBadge();
         return;
@@ -450,6 +454,7 @@
           if (view.threadId === msg.item.threadId) view.onItem(detail.byId.get(msg.item.id), !prev);
         }
         dock.onItem(msg.item);
+        pageStepsChanged(msg.item.threadId);
         return;
       }
       case "agent_limits": {
@@ -479,6 +484,7 @@
           if (view.threadId === msg.threadId) view.onDelta(item);
         }
         dock.onDelta(item);
+        pageStepsChanged(msg.threadId);
         return;
       }
       case "agent_browser": {
@@ -506,6 +512,7 @@
           if (view.threadId === msg.turn.threadId) view.onTurn(msg.turn);
         }
         dock.onTurn(msg.turn);
+        pageStepsChanged(msg.turn.threadId);
         return;
       }
       default:
@@ -4342,6 +4349,18 @@
     return plain(lines[lines.length - 1] || "").slice(0, 160);
   }
 
+  /** One live step as the collapsed dock and pages' step feeds show it: { kind, text }, or null. */
+  function liveStep(item) {
+    if (item.kind === "tool") {
+      const text = item.tool === "edit" && item.files?.length ? `Edited ${item.files.map((f) => `${R.basename(f.path)} +${f.added} −${f.removed}`).join(", ")}` : item.detail && item.tool === "execute" ? `$ ${item.detail}` : item.title;
+      return { kind: `k-${item.tool}`, text };
+    }
+    if (item.kind === "notice") return { kind: item.level, text: item.text };
+    if (item.kind === "reasoning") return { kind: "reason", text: lastLine(item.text) || "Thinking…" };
+    if (item.kind === "text") return { kind: "text", text: lastLine(item.text) };
+    return null;
+  }
+
   const PAGE_WRITE_TOOLS = new Set(["page_show", "page_patch", "page_update", "page_action"]);
 
   function isRecord(value) {
@@ -5411,16 +5430,10 @@
       }
     },
     paintLiveItem(item) {
-      if (item.kind === "tool") {
-        const label = item.tool === "edit" && item.files?.length ? `Edited ${item.files.map((f) => `${R.basename(f.path)} +${f.added} −${f.removed}`).join(", ")}` : item.detail && item.tool === "execute" ? `$ ${item.detail}` : item.title;
-        this.line(item.id, item.tool, label, { cls: `k-${item.tool}` });
-      } else if (item.kind === "notice") {
-        this.line(item.id, "other", item.text, { cls: item.level });
-      } else if (item.kind === "reasoning") {
-        this.line(item.id, "think", lastLine(item.text) || "Thinking…", { cls: "reason", pill: plain(item.text) });
-      } else if (item.kind === "text") {
-        this.line(item.id, "sparkle", lastLine(item.text), { cls: "text", pill: plain(item.text) });
-      }
+      const step = liveStep(item);
+      if (!step) return;
+      const pill = item.kind === "reasoning" || item.kind === "text" ? plain(item.text) : undefined;
+      this.line(item.id, item.tool || item.kind, step.text, { cls: step.kind, pill });
     },
     line(key, _icon, text, { cls = "", keep = false, pill } = {}) {
       if (!this.root) return;
@@ -7682,6 +7695,40 @@
     return Boolean(t && t.scope.kind === "page" && t.scope.ref === tab.id);
   }
 
+  /** Page threads whose live steps a page asked for (board.agent.steps), with a pending push timer. */
+  const pageStepWatch = new Map();
+  const PAGE_STEPS = 4;
+
+  /** The running turn's last few steps, as the collapsed dock shows them: [{ key, kind, text }]. Empty once it stops. */
+  function pageSteps(id) {
+    const t = S.threads.get(id);
+    const detail = S.details.get(id);
+    if (!t || t.status !== "running" || !detail) return [];
+    const turn = [...detail.turns.values()].find((x) => x.status === "running");
+    if (!turn) return [];
+    const steps = [];
+    for (const item of detail.items) {
+      if (item.turnId !== turn.id || item.parentToolId) continue;
+      const step = liveStep(item);
+      if (step?.text) steps.push({ key: item.id, kind: step.kind, text: String(step.text).slice(0, 220) });
+    }
+    return steps.slice(-PAGE_STEPS);
+  }
+
+  /** Push a watched thread's steps to its page, at most a few times a second while text streams in. */
+  function pageStepsChanged(id) {
+    if (!pageStepWatch.has(id) || pageStepWatch.get(id)) return;
+    pageStepWatch.set(
+      id,
+      setTimeout(() => {
+        if (!pageStepWatch.has(id)) return;
+        pageStepWatch.set(id, null);
+        const t = S.threads.get(id);
+        if (t?.scope.kind === "page") app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-steps", id, steps: pageSteps(id) });
+      }, 250)
+    );
+  }
+
   function pageBrief(t) {
     return {
       id: t.id,
@@ -7993,6 +8040,12 @@
       case "get":
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
         return { ok: true, thread: pageBrief(thread), reply: await lastReply(thread.id) };
+      case "steps":
+        // From now on the page also gets the thread's steps as they change (scribe-agent-steps).
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        await ensureDetail(thread.id);
+        if (!pageStepWatch.has(thread.id)) pageStepWatch.set(thread.id, null);
+        return { ok: true, steps: pageSteps(thread.id) };
       case "wait": {
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
         await ensureDetail(thread.id);

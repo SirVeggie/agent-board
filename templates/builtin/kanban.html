@@ -413,6 +413,25 @@
     align-items: center;
   }
   .status.working { color: var(--agent); }
+  /* The working chat's latest step, one line at a time, like Scribe's hidden chat pill: a new step
+     slides the old line up and out while it blurs, and the new one up and in while it sharpens. */
+  .step-text { display: grid; flex: 1 1 auto; min-width: 0; height: 16px; overflow: hidden; align-items: center; color: var(--muted); }
+  .step-line {
+    grid-area: 1 / 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 16px;
+    filter: blur(0px);
+    transition: transform 520ms cubic-bezier(.22, 1, .36, 1), filter 520ms cubic-bezier(.22, 1, .36, 1), opacity 520ms cubic-bezier(0, 0, .35, 1);
+  }
+  .step-line.in { transform: translateY(12px); filter: blur(4px); }
+  .step-line.out { transform: translateY(-12px); filter: blur(4px); opacity: 0; }
+  .step-line.reason { font-style: italic; }
+  .step-line.error { color: var(--danger); }
+  @media (prefers-reduced-motion: reduce) {
+    .step-line { transition: none; }
+  }
   .status.blocked { color: var(--danger); }
   .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--agent); animation: pulse 1.4s ease-in-out infinite; flex: 0 0 auto; }
   @keyframes pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }
@@ -740,6 +759,21 @@
   .m-status { padding: 8px 10px; border-radius: 10px; background: rgba(224, 179, 74, .08); color: var(--agent); display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .m-status.blocked { background: rgba(255, 107, 122, .1); color: var(--danger); }
   .m-status .clear { margin-left: auto; color: var(--muted); font-size: 12px; padding: 2px 6px; }
+  /* The working chat's last few steps, where the description would start; new ones come in at the bottom. */
+  .m-feed { display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
+  .m-feed.deep { -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .35) 0, #000 60%); mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .35) 0, #000 60%); }
+  .m-feed-line { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 18px; }
+  .m-feed-line.new { animation: feed-in 520ms cubic-bezier(.22, 1, .36, 1); }
+  .m-feed-line .dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: rgba(255, 255, 255, .18); }
+  .m-feed-line .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .m-feed-line:last-child { color: var(--text); }
+  .m-feed-line:last-child .dot { background: var(--agent); animation: pulse 1.4s ease-in-out infinite; }
+  .m-feed-line.reason .t { font-style: italic; }
+  .m-feed-line.error { color: var(--danger); }
+  @keyframes feed-in { from { opacity: 0; transform: translateY(10px); filter: blur(4px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .m-feed-line.new { animation: none; }
+  }
   .times { color: var(--muted); font-size: 12px; line-height: 1.6; }
   .actions { display: flex; flex-wrap: wrap; gap: 4px; }
   .actions button { background: rgba(255, 255, 255, .05); padding: 6px 10px; }
@@ -1025,6 +1059,7 @@
         <input class="m-title-input hidden" id="mTitleInput" type="text" autocomplete="off">
       </div>
       <div class="m-status hidden" id="mStatus"></div>
+      <div class="m-feed hidden" id="mFeed" aria-live="polite"></div>
       <div class="m-grid">
         <div>
           <div class="section-label">Description</div>
@@ -1179,7 +1214,7 @@
   var searchEl = $("search"), fLabel = $("fLabel"), fPriority = $("fPriority"), fAssignee = $("fAssignee"), fDue = $("fDue");
   var clearFilterBtn = $("clearFilter"), labelsBtn = $("labelsBtn"), archiveBtn = $("archiveBtn");
   var overlay = $("overlay"), modal = $("modal");
-  var mNum = $("mNum"), mTitle = $("mTitle"), mTitleInput = $("mTitleInput"), mStatus = $("mStatus");
+  var mNum = $("mNum"), mTitle = $("mTitle"), mTitleInput = $("mTitleInput"), mStatus = $("mStatus"), mFeed = $("mFeed");
   var mdPreview = $("mdPreview"), mdEditor = $("mdEditor");
   var checklistEl = $("checklist"), clInput = $("clInput"), clProgress = $("clProgress"), clCount = $("clCount");
   var galleryEl = $("gallery"), coverToggle = $("coverToggle"), coverSwitch = $("coverSwitch");
@@ -1194,6 +1229,10 @@
   // Comments opened from their folded preview, for the card that is open (reset when it closes).
   var expandedFor = null, expandedComments = {};
   var coverEls = {};
+  /** Thread id -> its running turn's last steps ([{ key, kind, text }], from scribe.agent.steps). */
+  var threadSteps = {};
+  /** Card id -> its live step line; kept across renders so a new step can slide the old one out. */
+  var stepLines = {};
   var COMMENT_FOLD_PX = 220;
   var composerCol = null;
   var composerText = "";
@@ -1987,8 +2026,14 @@
     if (AGENT_MODE && c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind === "working" ? "working" : "info";
       var st = el("div", "status " + kind);
-      if (kind === "working") st.appendChild(el("span", "pulse"));
-      st.appendChild(document.createTextNode((kind === "blocked" ? "Blocked: " : "") + str(c.status.text || (kind === "working" ? "Working…" : ""))));
+      if (kind === "working") {
+        st.appendChild(el("span", "pulse"));
+        var line = stepLines[c.id] || (stepLines[c.id] = el("span", "step-text"));
+        st.appendChild(line);
+        setStepLine(line, cardStep(c));
+      } else {
+        st.appendChild(document.createTextNode((kind === "blocked" ? "Blocked: " : "") + str(c.status.text)));
+      }
       li.appendChild(st);
     }
     if (AGENT_MODE && col && col.role === "review") {
@@ -2579,7 +2624,11 @@
       mTitleInput.classList.add("hidden");
     }
 
-    if (AGENT_MODE && c.status && str(c.status.text || c.status.kind).trim()) {
+    var feed = AGENT_MODE && c.status && c.status.kind === "working" ? cardSteps(c) : [];
+    renderFeed(c, feed);
+    if (feed.length) {
+      mStatus.className = "m-status hidden";
+    } else if (AGENT_MODE && c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind;
       mStatus.className = "m-status" + (kind === "blocked" ? " blocked" : "");
       mStatus.replaceChildren();
@@ -4374,6 +4423,97 @@
   }
   function threadState(t) {
     return { status: t.status, queued: t.queued || 0, run: t.run || null };
+  }
+
+  /* ---------- live steps of the chat working on a card ---------- */
+
+  /** The steps of the chat that claimed the card, asking Scribe for them (and their changes) the first time. */
+  function cardSteps(c) {
+    var tid = c.thread;
+    if (!tid || !scribe.agent || typeof scribe.agent.steps !== "function") return [];
+    if (!threadSteps[tid]) {
+      threadSteps[tid] = [];
+      scribe.agent.steps(tid).then(function (r) {
+        if (r && r.ok) paintSteps(tid, r.steps || []);
+      });
+    }
+    return threadSteps[tid];
+  }
+  /** The card's one line: the chat's latest step, or its status text while there is none. */
+  function cardStep(c) {
+    var steps = cardSteps(c);
+    var last = steps[steps.length - 1];
+    return last ? last : { key: "status", kind: "", text: str(c.status && c.status.text) || "Working…" };
+  }
+  /** Show `step` in a card's line. A new step slides in; the same step streaming more text just updates. */
+  function setStepLine(box, step) {
+    var cur = box.querySelector(".step-line:not(.out)");
+    var cls = "step-line" + (step.kind ? " " + step.kind : "");
+    if (cur && box.dataset.key === step.key) {
+      if (cur.textContent !== step.text) cur.textContent = step.text;
+      cur.className = cls;
+      return;
+    }
+    box.dataset.key = step.key;
+    var next = el("span", cls, step.text);
+    if (!cur || !box.isConnected) {
+      box.replaceChildren(next);
+      return;
+    }
+    // Start below and blurred, then let the transition carry it in. A timer, not transitionend: transitions stall in a hidden frame.
+    next.classList.add("in");
+    box.appendChild(next);
+    void next.offsetWidth;
+    next.classList.remove("in");
+    cur.classList.add("out");
+    setTimeout(function () { cur.remove(); }, 560);
+    var outs = box.querySelectorAll(".step-line.out");
+    for (var i = 0; i < outs.length - 2; i++) outs[i].remove();
+  }
+  /** The dialog's feed: up to four steps between the title and the description. Lines that stay are kept, so only new ones slide in. */
+  function renderFeed(c, steps) {
+    mFeed.classList.toggle("hidden", !steps.length);
+    var fresh = mFeed.dataset.card !== c.id;
+    mFeed.dataset.card = c.id;
+    var keys = {};
+    steps.forEach(function (s) { keys[s.key] = true; });
+    Array.prototype.slice.call(mFeed.children).forEach(function (n) {
+      if (fresh || !keys[n.dataset.key]) n.remove();
+    });
+    var have = {};
+    Array.prototype.forEach.call(mFeed.children, function (n) { have[n.dataset.key] = n; });
+    steps.forEach(function (s) {
+      var n = have[s.key];
+      if (!n) {
+        n = el("div", "m-feed-line");
+        n.dataset.key = s.key;
+        n.appendChild(el("span", "dot"));
+        n.appendChild(el("span", "t"));
+        if (!fresh) n.classList.add("new");
+        mFeed.appendChild(n);
+      }
+      n.className = "m-feed-line" + (s.kind ? " " + s.kind : "") + (n.classList.contains("new") ? " new" : "");
+      n.lastChild.textContent = s.text;
+    });
+    mFeed.classList.toggle("deep", steps.length > 3);
+  }
+  /** New steps from Scribe: update the lines of the cards that thread holds, and the open dialog's feed. */
+  function paintSteps(tid, steps) {
+    var had = (threadSteps[tid] || []).length;
+    threadSteps[tid] = steps;
+    // Starting or ending a feed swaps the dialog's status box and feed: a full render.
+    if (!had !== !steps.length) {
+      render();
+      return;
+    }
+    allCards().forEach(function (c) {
+      if (c.thread !== tid || !c.status || c.status.kind !== "working") return;
+      if (stepLines[c.id] && stepLines[c.id].isConnected) setStepLine(stepLines[c.id], cardStep(c));
+      if (c.id === openId) renderFeed(c, steps);
+    });
+  }
+  if (scribe.agent && typeof scribe.agent.onSteps === "function") {
+    scribe.agent.onSteps(function (e) { paintSteps(e.id, e.steps); });
   }
 
   function boardTitle() {
