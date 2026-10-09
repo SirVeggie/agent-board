@@ -1,5 +1,14 @@
 # Migrations
 
+## Kanban: clear legacy `assignee: "agent"` on cards (page state, no schema change)
+
+- **What changed:** Before named agent workers, claims could leave the generic assignee `"agent"` on a card. Assignees are now worker names or people; `"agent"` is not a valid assignee (comments may still use `by: "agent"` on older rows).
+- **Affected data:** Kanban page state: any card with `assignee` exactly `"agent"` (case-insensitive).
+- **Transform:** On page load, `ensureShape` / `normalizeCard` in `templates/builtin/kanban.html` deletes that field. The daemon sweep in `src/actions/kanban.ts` merges `assignee: null` on the same condition so boards pick it up without opening the tab.
+- **Where:** `templates/builtin/kanban.html` (`normalizeCard`, assignee filter list), `src/actions/kanban.ts` (`isLegacyAssignee`, `sweep`).
+- **How to verify:** `the sweep clears a legacy agent assignee` in `src/actions/kanban.test.ts`. Open a board that still has `assignee: "agent"` on a card; after load or sweep the field is gone.
+- **When to remove:** Once no boards retain that assignee (optional: drop the sweep pass after a few releases; keep `normalizeCard` for old exports).
+
 ## Agent chat: OpenAI-compatible provider replaced by Pi (`agent.sqlite`, no schema change)
 
 - **What changed:** The `openai` agent provider was removed (#192). Its model sources (Agent settings) now feed the Pi provider (`pi`), which also reaches local and other providers' models.

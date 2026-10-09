@@ -1334,6 +1334,7 @@
     if (!out.movedAt) out.movedAt = out.createdAt;
     if (doneIds.indexOf(out.col) !== -1) { if (!out.doneAt) out.doneAt = out.movedAt; }
     else delete out.doneAt;
+    if (isAgent(out.assignee)) delete out.assignee;
     return out;
   }
 
@@ -1485,7 +1486,6 @@
         out.push(name);
       }
     });
-    if (AGENT_MODE && !seen.agent) out.push("agent");
     return out.sort(function (a, b) { return a.localeCompare(b); });
   }
   // ---------- themed dropdowns ----------
