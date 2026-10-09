@@ -3,7 +3,7 @@ import path from "node:path";
 import express from "express";
 import { listPermissions, setRules } from "./permissions.js";
 import type { AgentHost } from "./host.js";
-import { baseUrl } from "../config.js";
+import { shellOrigins } from "../config.js";
 import { browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
@@ -529,8 +529,8 @@ export function agentRouter(host: AgentHost): express.Router {
 
 /**
  * Writes must come from the board shell: JSON (a cross-origin form cannot send it without a
- * preflight) and, when the browser says where it came from, the shell's own origin. Tab pages
- * live on another origin, so this also keeps a page from starting or answering agent runs.
+ * preflight) and, when the browser says where it came from, one of the shell's origins (127.0.0.1
+ * or localhost). Tab pages live on another origin, so this also keeps a page from starting or answering agent runs.
  */
 function shellOnly(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (req.method === "GET" || req.method === "HEAD") {
@@ -538,7 +538,7 @@ function shellOnly(req: express.Request, res: express.Response, next: express.Ne
     return;
   }
   const origin = req.get("origin");
-  if (origin && origin !== baseUrl()) {
+  if (origin && !shellOrigins().includes(origin)) {
     res.status(403).json({ error: "Agent requests must come from the board" });
     return;
   }

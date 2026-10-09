@@ -52,6 +52,11 @@ export function baseUrl(): string {
   return `http://${HOST}:${PORT}`;
 }
 
+/** Origins the board shell may be opened from: the desktop app uses baseUrl(), a browser may use localhost. */
+export function shellOrigins(): string[] {
+  return [baseUrl(), `http://localhost:${PORT}`];
+}
+
 export function contentBaseUrl(): string {
   return `http://${CONTENT_HOST}:${PORT}`;
 }
