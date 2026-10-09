@@ -360,7 +360,7 @@
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
   bindSettingHint(
     document.getElementById("ui-fx-label"),
-    "Shader motion on controls that stay on screen, like the chat orb while the agent works. Off, they hold a still frame. The New page background still moves."
+    "Shader motion on controls like the floating chat orb whenever it is visible. Off, they hold a still frame. The New page background still moves."
   );
   bindSettingHint(
     document.getElementById("aurora-edge-label"),

@@ -150,7 +150,7 @@ gl_FragColor=c;
     btn.classList.add("gl");
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
-    let time = 12, busy = false, hover = false, disposed = false, broken = false;
+    let time = 12, busy = false, disposed = false, broken = false;
     const values = () => ({
       u_time: time, u_energy: busy ? 1 : 0,
       u_prov: Math.max(0, Object.keys(PROVIDERS).indexOf(provider)),
@@ -171,16 +171,12 @@ gl_FragColor=c;
     });
     function update() {
       if (disposed || broken) return;
-      const moving = (busy || hover) && !still.matches && !document.documentElement.classList.contains("no-ui-fx") && btn.getClientRects().length > 0;
+      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx") && btn.getClientRects().length > 0;
       btn.classList.toggle("fx-live", moving);
       if (moving) loop.start();
       else { loop.stop(); draw(); }
     }
-    const enter = () => { hover = true; update(); };
-    const leave = () => { hover = false; update(); };
     const refresh = () => { if (!config) current = settings[provider] || defaults(provider); update(); };
-    btn.addEventListener("pointerenter", enter);
-    btn.addEventListener("pointerleave", leave);
     window.addEventListener("scribe:ui-fx", update);
     window.addEventListener("scribe:orb-appearance", refresh);
     still.addEventListener("change", update);
@@ -199,7 +195,6 @@ gl_FragColor=c;
         window.removeEventListener("scribe:ui-fx", update);
         window.removeEventListener("scribe:orb-appearance", refresh);
         still.removeEventListener("change", update);
-        btn.removeEventListener("pointerenter", enter); btn.removeEventListener("pointerleave", leave);
         canvas.removeEventListener("webglcontextlost", lost);
         fx.destroy(); spill?.destroy(); canvas.remove(); surface.remove(); btn.classList.remove("gl", "fx-live");
       },
@@ -217,7 +212,7 @@ gl_FragColor=c;
     title.id = "orb-settings-title";
     const help = node("button", "?", "orb-settings-help");
     help.type = "button";
-    help.dataset.tooltip = "Choose a shape, colours, provider symbol and matching effect in the left side of the chat. Changes are saved on this device. Motion runs only while busy or hovered.";
+    help.dataset.tooltip = "Choose a shape, colours, provider symbol and matching effect in the left side of the chat. Changes are saved on this device. Motion runs while the chat is visible, unless animated effects are off or reduced motion is enabled.";
     help.setAttribute("aria-label", "About floating chat appearance");
     help.setAttribute("aria-description", help.dataset.tooltip);
     const heading = node("div", null, "orb-settings-heading");
@@ -244,7 +239,7 @@ gl_FragColor=c;
     });
     row("Colours", colorWrap);
     const preview = node("div", null, "dock-input orb-settings-preview");
-    const orb = node("button", null, "dock-orb"); orb.type = "button"; orb.setAttribute("aria-label", "Appearance preview; hover to animate");
+    const orb = node("button", null, "dock-orb"); orb.type = "button"; orb.setAttribute("aria-label", "Appearance preview");
     preview.append(orb, node("span", "Message your agent…", "orb-preview-text"));
     dialog.append(preview);
     const busy = node("input"); busy.type = "checkbox";

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
-test("dock shaders render, stay still at rest, and save provider appearance", async (t) => {
+test("dock shaders animate while visible, pause when hidden, and save provider appearance", async (t) => {
   let browser;
   try {
     browser = process.env.SCRIBE_TEST_CHROMIUM
@@ -47,16 +47,20 @@ test("dock shaders render, stay still at rest, and save provider appearance", as
     for (const effect of ["none", "dye", "flares", "galaxy", "circuit"]) await selects.nth(3).selectOption(effect);
     assert.deepEqual(await page.evaluate(() => (window as any).shaderErrors), []);
     assert.ok(await page.evaluate(() => (window as any).pixelChecks.every(Boolean)));
-    // Actual draw calls, rather than CSS animation flags, prove the idle/busy contract.
+    // Idle motion continues with the pointer away; hiding the chat stops all drawing.
     await page.mouse.move(900, 600);
     await page.waitForTimeout(120);
     const idle = await page.evaluate(() => (window as any).draws);
     await page.waitForTimeout(150);
-    assert.equal(await page.evaluate(() => (window as any).draws), idle);
-    await page.locator(".dock-orb").hover();
-    await page.waitForTimeout(150);
     assert.ok(await page.evaluate(() => (window as any).draws) > idle);
-    await page.mouse.move(900, 600);
+    await page.locator(".orb-settings-preview").evaluate(n => { (n as HTMLElement).style.display = "none"; });
+    await page.waitForTimeout(80);
+    const hidden = await page.evaluate(() => (window as any).draws);
+    await page.waitForTimeout(150);
+    assert.equal(await page.evaluate(() => (window as any).draws), hidden);
+    await page.locator(".orb-settings-preview").evaluate(n => { (n as HTMLElement).style.display = ""; });
+    await page.waitForTimeout(150);
+    assert.ok(await page.evaluate(() => (window as any).draws) > hidden);
     const beforeBusy = await page.evaluate(() => (window as any).draws);
     await page.getByRole("checkbox", { name: "Preview busy" }).check();
     await page.waitForTimeout(180);
