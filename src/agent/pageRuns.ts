@@ -298,6 +298,9 @@ export class PageRuns {
       const why = (err as Error).message || String(err);
       const fixable = agentCanFixMerge(why);
       if (fixable && run.fixes < MAX_MERGE_FIXES) {
+        // Taken before sending: the fix turn starts inside send, and a later time would make it
+        // look older than the run, so it never counted and the run ended "never started a turn" (#319).
+        const sentAt = deps.now();
         try {
           deps.send(run.threadId, `Scribe could not merge your branch: ${why}\n\n${MERGE_FIX_PROMPT}`);
         } catch (sendErr) {
@@ -305,7 +308,7 @@ export class PageRuns {
           return;
         }
         const fixes = run.fixes + 1;
-        this.update(run, { fixes, after: deps.now() }, { kind: "merge_fix", text: `Asked the agent to fix the merge (${fixes} of ${MAX_MERGE_FIXES}): ${why}` });
+        this.update(run, { fixes, after: sentAt }, { kind: "merge_fix", text: `Asked the agent to fix the merge (${fixes} of ${MAX_MERGE_FIXES}): ${why}` });
         return;
       }
       this.end(run, { kind: "merge_failed", message: why, fixable });

@@ -243,6 +243,25 @@ test("a merge fixed by the agent ends done", async () => {
   assert.equal(run.fixes, 1);
 });
 
+test("a fix turn that starts inside send counts, even when the clock moved on while sending (#319)", async () => {
+  const { state, deps, runs, turn } = harness();
+  state.mergeFails = ["CONFLICT"];
+  const send = deps.send;
+  deps.send = (id, text) => {
+    send(id, text);
+    turn({ status: "running", endedAt: undefined });
+    state.now += 5;
+  };
+  runs.register("th", "page1", {});
+  turn({});
+  await runs.check("th");
+  state.turns.at(-1)!.status = "done";
+  state.now += NO_TURN_MS + 1;
+  await runs.check("th");
+  assert.equal(runs.get("th")!.outcome?.kind, "done");
+  assert.equal(state.merges, 1);
+});
+
 test("release forgets the run; a deleted chat ends it", async () => {
   const { state, runs } = harness();
   runs.register("th", "page1", {});
