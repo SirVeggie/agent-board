@@ -126,3 +126,36 @@ test("shared instructions enable workers and precede their own instructions in e
   assert.equal(run("workerReady(w)"), false);
   assert.match(run("workerPrompt(w, c, 'Preview placeholder')"), /The user's instructions:\nPreview placeholder/);
 });
+
+test("template agent actions ignore last-used chat model through thread creation", () => {
+  const chat = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
+  const context = vm.createContext({
+    S: { config: { providers: ["cursor", "codex", "claude", "pi"].map((id) => ({ id, available: true })) } },
+    prefs: () => ({ provider: "claude", models: { claude: "opus-expensive" }, web: "on" }),
+    providerAvailable: (id: string) => true,
+    modelsOf: () => [{ id: "opus-expensive" }, { id: "default" }],
+    modelInfo: () => ({ efforts: [{ id: "high" }] }),
+    modelChoice: () => ({ effort: "high", modelParams: { fast: "true" } }),
+    approvalFor: () => "full",
+    webMode: (w?: string, fallback?: string) => w || fallback || "off",
+    PAGE_MODES: new Set(["board", "ask", "code", "plan"]),
+    FOLDER_MODES: new Set(["code", "plan"]),
+    APPROVALS: ["ask", "edits", "auto", "full"].map((id) => ({ id })),
+  });
+  const providerPref = chat.match(/^  const AGENT_ACTION_PROVIDER_PREF = .*;/m);
+  const agentActionFn = chat.match(/^  function agentActionThreadInput\([^]*?^  }/m);
+  const pageThreadFn = chat.match(/^  function pageThreadSettings\([^]*?^  }/m);
+  assert.ok(providerPref && agentActionFn && pageThreadFn);
+  vm.runInContext([providerPref[0], agentActionFn[0], pageThreadFn[0], 'function launch(thread) { return pageThreadSettings(agentActionThreadInput(thread)); }'].join("\n"), context);
+  const run = (code: string) => vm.runInContext(code, context);
+  const triage = run('launch({ title: "Triage: Board" })');
+  assert.equal(triage.provider, "cursor");
+  assert.equal(triage.model, "composer-2.5");
+  assert.equal(triage.approval, "auto");
+  assert.equal(triage.web, "off");
+  assert.equal(triage.modelParams?.fast, "false");
+  assert.equal(triage.effort, null);
+  const explicit = run('launch({ provider: "claude", model: "picked" })');
+  assert.equal(explicit.provider, "claude");
+  assert.equal(explicit.model, "picked");
+});

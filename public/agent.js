@@ -7902,6 +7902,35 @@
     };
   }
 
+  /** Same provider preference as Kanban board workerDefaults (templates/builtin/kanban.html). */
+  const AGENT_ACTION_PROVIDER_PREF = ["cursor", "codex", "claude", "pi"];
+
+  /**
+   * Settings passed to pageThreadSettings for a template agent action (triage, break down, …).
+   * Without an explicit provider or non-default model, uses fixed economical defaults instead of the
+   * user's last chat model (which is often a heavy coding model).
+   */
+  function agentActionThreadInput(thread) {
+    const t = thread && typeof thread === "object" ? thread : {};
+    const mode = t.mode || "board";
+    const hasOwn = Boolean(t.provider) || Boolean(t.model && t.model !== "default");
+    if (hasOwn) return { ...t, mode };
+    const available = S.config.providers.filter((p) => p.available).map((p) => p.id);
+    const provider = AGENT_ACTION_PROVIDER_PREF.find((id) => available.includes(id)) || available[0];
+    if (!provider) return { ...t, mode };
+    const out = {
+      mode,
+      provider,
+      model: provider === "cursor" ? "composer-2.5" : "default",
+      approval: "auto",
+      web: t.web || "off",
+      fast: t.fast !== undefined ? t.fast : false,
+    };
+    if (t.title) out.title = t.title;
+    if (t.effort) out.effort = t.effort;
+    return out;
+  }
+
   /** The new thread's settings from scribe.agent.start options, or { error }. Unset ones follow the user's defaults. */
   function pageThreadSettings(data) {
     const p = prefs();
@@ -8547,7 +8576,7 @@
       }
       return;
     }
-    const settings = pageThreadSettings({ ...(action.thread || {}), mode: action.thread?.mode || "board" });
+    const settings = pageThreadSettings(agentActionThreadInput(action.thread));
     if (settings.error) {
       notice(`${action.label}: ${settings.error.replace(/_/g, " ")}`);
       return;
