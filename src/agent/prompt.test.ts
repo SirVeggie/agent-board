@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextBlock, contextChipKey, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { contextBlock, contextChipKey, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
 import type { ContextChip, Thread } from "./types.js";
 
 const page = (id: string, title = id): ContextChip => ({ kind: "page", id, key: `scribe:${id}`, title });
@@ -133,4 +136,13 @@ test("threads with no Scribe scope are told they have no page tools", () => {
   const global = threadInstructions(thread({ scope: { kind: "global", ref: null } }), {});
   assert.match(global, /page_show/);
   assert.match(global, /Mode: Pages\./);
+});
+
+test("cursorScribeServers finds Scribe servers in a Cursor MCP config", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-mcp-"));
+  const file = path.join(dir, "mcp.json");
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { scribe: { command: "node" }, board: { args: ["S:/x/agent-board/dist/index.js"] }, keeper: { command: "node" } } }));
+  assert.deepEqual(cursorScribeServers(file), ["scribe", "board"]);
+  assert.deepEqual(cursorScribeServers(path.join(dir, "missing.json")), []);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
