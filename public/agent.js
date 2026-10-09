@@ -7384,22 +7384,24 @@
       );
 
       const keys = el("section", "settings-section");
-      const modes = el("section", "settings-section");
-      modes.append(helpHeading("Mode cycling", "Choose which modes Ctrl+Shift+' cycles through. All modes remain available in the mode selector. With every switch off, the hotkey leaves the current mode unchanged."));
-      this.modeSwitches = new Map();
+      const modeTrack = el("div", "button-track text-track");
+      modeTrack.setAttribute("role", "group");
+      this.modeButtons = new Map();
       for (const mode of MODES) {
-        const control = switchControl(
-          () => !(prefs().disabledModes || []).includes(mode.id),
-          () => void this.toggleCycleMode(mode.id)
-        );
-        this.modeSwitches.set(mode.id, control);
-        modes.append(settingRow(mode.label, control, { id: `ag-cycle-mode-${mode.id}-label` }));
+        const control = button(mode.label, null, () => void this.toggleCycleMode(mode.id));
+        this.modeButtons.set(mode.id, control);
+        modeTrack.append(control);
       }
+      this.renderCycleModes();
+      chat.append(settingRow("Mode cycling", modeTrack, {
+        id: "ag-cycle-modes-label",
+        hint: "Choose which modes Ctrl+Shift+' cycles through. All modes remain available in the mode selector. With every button off, the hotkey leaves the current mode unchanged.",
+      }));
       const list = el("div", "ag-keys");
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, cursor, sources, usage, chat, modes, keys);
+      panel.append(title, providers, cursor, sources, usage, chat, keys);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -7423,21 +7425,21 @@
       }
     },
     renderCycleModes() {
-      for (const [id, control] of this.modeSwitches || []) {
-        control.setAttribute("aria-checked", String(!(prefs().disabledModes || []).includes(id)));
+      for (const [id, control] of this.modeButtons || []) {
+        control.setAttribute("aria-pressed", String(!(prefs().disabledModes || []).includes(id)));
       }
     },
     async toggleCycleMode(id) {
       const disabled = prefs().disabledModes || [];
       const disabledModes = disabled.includes(id) ? disabled.filter((mode) => mode !== id) : [...disabled, id];
-      for (const control of this.modeSwitches.values()) control.disabled = true;
+      for (const control of this.modeButtons.values()) control.disabled = true;
       try {
         S.config.prefs = await api("PUT", "/prefs", { disabledModes });
       } catch (err) {
         notice(err.message);
       } finally {
         this.renderCycleModes();
-        for (const control of this.modeSwitches.values()) control.disabled = false;
+        for (const control of this.modeButtons.values()) control.disabled = false;
       }
     },
     renderStatus() {
