@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
-import { CodexSession, readCodexPlanUsage } from "./providers/codex.js";
+import { CodexSession, readCodexPlanUsage, syncAuthFiles } from "./providers/codex.js";
 import type { RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides } from "./providers/codex.js";
 import type { Thread } from "./types.js";
@@ -475,4 +478,38 @@ test("Codex user input answers include freeform notes; unsupported permission gr
   f.complete();
   await run;
   f.session.dispose();
+});
+
+test("syncAuthFiles keeps the newer Codex login in both places", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-"));
+  const user = path.join(dir, "user.json");
+  const scribe = path.join(dir, "scribe.json");
+  const login = (token: string, at: string) => JSON.stringify({ tokens: { refresh_token: token }, last_refresh: at });
+  try {
+    assert.equal(syncAuthFiles(user, scribe), "none");
+
+    fs.writeFileSync(user, login("a", "2026-01-01T00:00:00Z"));
+    assert.equal(syncAuthFiles(user, scribe), "toScribe");
+    assert.equal(fs.readFileSync(scribe, "utf8"), login("a", "2026-01-01T00:00:00Z"));
+    assert.equal(syncAuthFiles(user, scribe), "none");
+
+    // Scribe's app-server refreshed: the CLI gets the rotated token instead of overwriting it.
+    fs.writeFileSync(scribe, login("b", "2026-01-02T00:00:00Z"));
+    assert.equal(syncAuthFiles(user, scribe), "toUser");
+    assert.equal(fs.readFileSync(user, "utf8"), login("b", "2026-01-02T00:00:00Z"));
+
+    // A fresh `codex login` or CLI refresh is newer again and wins.
+    fs.writeFileSync(user, login("c", "2026-01-03T00:00:00Z"));
+    assert.equal(syncAuthFiles(user, scribe), "toScribe");
+    assert.equal(fs.readFileSync(scribe, "utf8"), login("c", "2026-01-03T00:00:00Z"));
+
+    // A broken Scribe copy is replaced; a broken CLI file is never copied over a good login.
+    fs.writeFileSync(scribe, "{");
+    assert.equal(syncAuthFiles(user, scribe), "toScribe");
+    fs.writeFileSync(user, "{");
+    assert.equal(syncAuthFiles(user, scribe), "toUser");
+    assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")).length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -22,7 +22,7 @@ import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
 /**
  * Codex interactive sessions use app-server; the SDK spawns `codex exec` for summaries. Sessions resume by
  * thread id under Scribe's own CODEX_HOME (data/agent/codex), using the user's ChatGPT login by
- * copying ~/.codex/auth.json (Agent settings Log in runs the bundled `codex login`). The model
+ * syncing ~/.codex/auth.json, newest login wins both ways (Agent settings Log in runs `codex login`). The model
  * picker is the live ChatGPT catalog from `codex app-server` `model/list` (same list as Codex web
  * work mode), with FALLBACK_MODELS only when that call fails. Interactive sessions use a persistent
  * app-server connection for approvals and steering; SDK exec is retained for tool-free summaries.
@@ -66,13 +66,67 @@ function userAuthFile(): string {
   return path.join(os.homedir(), ".codex", "auth.json");
 }
 
-/** Copy the user's Codex login into Scribe's CODEX_HOME so ChatGPT auth works without mixing sessions. */
+/** Share the user's Codex login with Scribe's CODEX_HOME so ChatGPT auth works without mixing sessions. */
 export function syncCodexAuth(): void {
   const home = scribeCodexHome();
   fs.mkdirSync(home, { recursive: true });
-  const src = userAuthFile();
-  const dst = path.join(home, "auth.json");
-  if (fs.existsSync(src)) fs.copyFileSync(src, dst);
+  syncAuthFiles(userAuthFile(), path.join(home, "auth.json"));
+}
+
+/** When a login was written: Codex's `last_refresh`, else the file time. Null when unreadable. */
+function authStamp(file: string, text: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (isPlainRecord(parsed) && typeof parsed.last_refresh === "string") {
+      const at = Date.parse(parsed.last_refresh);
+      if (Number.isFinite(at)) return at;
+    }
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function readText(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Replace through a temp file so a Codex process never reads half a login. */
+function writeAuth(file: string, text: string): void {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, text, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch {
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(file, text, { mode: 0o600 });
+  }
+}
+
+/**
+ * Keep the newer of the two logins in both places. Refresh tokens rotate, so whichever side
+ * refreshed last holds the only working one: copying the CLI's older file over Scribe's would
+ * undo Scribe's refresh, and leaving the CLI's copy stale would sign the CLI out. A tie or an
+ * unreadable Scribe copy goes to the CLI file, which `codex login` writes.
+ */
+export function syncAuthFiles(userFile: string, scribeFile: string): "none" | "toScribe" | "toUser" {
+  const user = readText(userFile);
+  if (user == null) return "none";
+  const scribe = readText(scribeFile);
+  if (scribe === user) return "none";
+  const userAt = authStamp(userFile, user);
+  const scribeAt = scribe == null ? null : authStamp(scribeFile, scribe);
+  if (scribe != null && scribeAt != null && (userAt == null || scribeAt > userAt)) {
+    writeAuth(userFile, scribe);
+    return "toUser";
+  }
+  if (userAt == null) return "none";
+  writeAuth(scribeFile, user);
+  return "toScribe";
 }
 
 export function cliEnv(): Record<string, string> {
