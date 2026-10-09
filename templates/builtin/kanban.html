@@ -3412,12 +3412,10 @@
     }
     if (AGENT_MODE && isReadyCol(colOf(c))) {
       var assigned = workerIdFor(c.assignee);
-      var runners = assigned ? [assigned] : workerIds();
-      runners.filter(function (wid) { return canRunSolo(c, wid); }).forEach(function (wid) {
-        var label = assigned ? "Run worker" : "Run " + workerName(worker(wid));
-        var b = menuButton(menuEl, label, function () { runSolo(id, wid); });
+      if (assigned && canRunSolo(c, assigned)) {
+        var b = menuButton(menuEl, "Run worker", function () { runSolo(id, assigned); });
         b.title = "A chat of its own for this card, beside the worker's run";
-      });
+      }
     }
     // The template's agent actions about one card (context: ["card"]), e.g. Triage this card.
     var cardActions = templateActions.filter(function (a) {
@@ -4932,7 +4930,7 @@
     return w && w.solo && typeof w.solo === "object" ? w.solo : {};
   }
   function canRunSolo(c, id) {
-    return Boolean(hasWorkerApi() && isReadyCol(colOf(c)) && workerReady(worker(id)) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]);
+    return Boolean(workerIdFor(c.assignee) === id && hasWorkerApi() && isReadyCol(colOf(c)) && workerReady(worker(id)) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]);
   }
   function runSolo(cardId, id) {
     var c = card(cardId);
