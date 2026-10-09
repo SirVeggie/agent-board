@@ -1,9 +1,9 @@
 /**
  * Palette search prefixes (Ctrl+D). public/app.js copies these helpers — keep the two in sync.
- * Add a prefix here and in app.js when it ships (AI `?` / `>` is #14).
+ * Add a prefix here and in app.js when it ships.
  */
 
-export type PalettePrefixId = "threads";
+export type PalettePrefixId = "threads" | "ai";
 
 export type PalettePrefixDef = {
   id: PalettePrefixId;
@@ -11,7 +11,10 @@ export type PalettePrefixDef = {
   default: string;
 };
 
-export const PALETTE_PREFIXES: PalettePrefixDef[] = [{ id: "threads", label: "Threads", default: "=" }];
+export const PALETTE_PREFIXES: PalettePrefixDef[] = [
+  { id: "threads", label: "Threads", default: "=" },
+  { id: "ai", label: "Ask AI", default: "?" },
+];
 
 export const PREFIX_MAX = 8;
 

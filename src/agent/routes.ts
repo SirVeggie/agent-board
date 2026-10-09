@@ -13,6 +13,8 @@ import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey } from "./prefs.js";
+import { store } from "../store.js";
+import { AI_QUERY_MAX, aiSearchPrompt, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
 
 function mcpView() {
   const { error, ...file } = readMcpFile();
@@ -56,6 +58,24 @@ export function agentRouter(host: AgentHost): express.Router {
       models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor"), codex: host.cachedModels("codex"), pi: host.cachedModels("pi") },
       limits: host.limits(),
     }))
+  );
+
+  // The palette's `?` search (#245): one summarizer call over a digest of every page the agent may see.
+  router.post(
+    "/palette-search",
+    wrap(async (req, res) => {
+      const query = typeof req.body?.query === "string" ? req.body.query.trim().slice(0, AI_QUERY_MAX) : "";
+      if (!query) throw new Error("query is required");
+      const pages = digestPages([...store.listOpenTabs("agent"), ...store.listClosedTabs("agent")]);
+      const abort = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) abort.abort();
+      });
+      const started = Date.now();
+      const prompt = aiSearchPrompt(query, pages.map((tab) => pageDigest(tab, store.folderPath(tab.folderId))));
+      const { text, model } = await host.summarize(prompt, abort.signal);
+      return { hits: parseAiHits(text, pages.map((tab) => tab.id)), model, pages: pages.length, ms: Date.now() - started };
+    })
   );
 
   // Cursor's browser login (the SDK's Cursor.auth.login); the URL also opens in the system browser.

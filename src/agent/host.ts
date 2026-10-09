@@ -3128,6 +3128,13 @@ export class AgentHost {
     return `${label} (${this.providers[provider].label})`;
   }
 
+  /** One completion with the fork summarizer's model; the palette's AI search (#245) uses it too. */
+  async summarize(prompt: string, signal?: AbortSignal): Promise<{ text: string; model: string }> {
+    const { provider, model } = this.prefs().summarizer;
+    const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
+    return { text: await this.agent(provider).complete(prompt, model, signal), model: label };
+  }
+
   /**
    * Set up a fork's first turn: point the session at the other thread's session, or build the
    * earlier conversation to send ahead of the message, summarizing its middle turns.

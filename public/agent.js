@@ -8794,7 +8794,23 @@ gl_FragColor=vec4(min(col,1.)*alpha,alpha);}`;
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageThreads, pageRequest, ask, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  /** A new thread with this text in its composer, not sent yet (the palette's "Ask in chat", #245). */
+  function askInChat(text) {
+    let view;
+    if (S.fullOpen) {
+      view = full.view;
+    } else if (S.sideOpen && !S.dockShown) {
+      view = sidebar.view;
+    } else {
+      if (!S.dockShown) dock.setShown(true);
+      view = dock.view;
+    }
+    newThread(view);
+    view.fillComposer({ text });
+    setTimeout(() => view.focus(), 70);
+  }
+
+  window.scribeChat = { shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

@@ -1716,6 +1716,29 @@ kbd {
   border-color: rgba(var(--accent-rgb), 0.3);
 }
 
+.palette-section {
+  padding: 8px 12px 2px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.palette-chip.location-ai {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.3);
+}
+
+.palette-row.busy .tab-title {
+  animation: palette-busy 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes palette-busy {
+  to {
+    opacity: 0.45;
+  }
+}
+
 .palette-snippet {
   color: var(--muted);
   font-size: 11px;

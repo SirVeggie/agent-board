@@ -101,10 +101,16 @@
     { id: "peek", name: "Peek" },
     { id: "split", name: "Split" },
   ];
-  /** Keep in sync with src/palettePrefixes.ts. Add a row when a new prefix ships (AI `?`/`>` is #14). */
+  /** Keep in sync with src/palettePrefixes.ts. Add a row when a new prefix ships. */
   const PALETTE_PREFIX_KEY = "scribe.palettePrefixes";
-  const PALETTE_PREFIXES = [{ id: "threads", label: "Threads", default: "=" }];
+  const PALETTE_PREFIXES = [
+    { id: "threads", label: "Threads", default: "=" },
+    { id: "ai", label: "Ask AI", default: "?" },
+  ];
   const PREFIX_MAX = 8;
+  /** Answered `?` questions (#245), newest first, so asking again costs nothing. */
+  const AI_RECENT_KEY = "scribe.aiSearchRecent";
+  const AI_RECENT_MAX = 8;
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "scribe.tightSmall";
   const UI_FX_KEY = "scribe.uiEffects";
@@ -182,6 +188,12 @@
   /** @type {Array<any>} */
   let paletteHits = [];
   let paletteIndex = 0;
+  /** The palette's `?` question: { query, status: "busy" | "done" | "error", hits?, model?, ms?, error?, abort? }. */
+  let aiAsk = null;
+  /** The model the last answer came from, named on the Ask row. */
+  let aiModel = "";
+  /** The `?` query last shown, so a new one selects the Ask row again. */
+  let aiShownQuery = null;
   /** User action in this window that should focus the resulting tab. Agent activate can still decline. */
   let pendingFocus = null;
   /** @type {number | null} */
@@ -3500,15 +3512,20 @@
     paletteEl.hidden = true;
     clearTimeout(paletteTimer);
     paletteReq += 1;
+    aiShownQuery = null;
+    if (aiAsk?.status === "busy") {
+      aiAsk.abort?.abort();
+    }
   }
 
   function updatePaletteChrome(parsed) {
     const threads = parsed.id === "threads";
+    const ai = parsed.id === "ai";
     paletteKind = parsed.id;
     paletteInput.placeholder = threads ? "Search threads" : "Search every page";
-    paletteEl.querySelector(".palette-panel")?.setAttribute("aria-label", threads ? "Search threads" : "Search pages");
+    paletteEl.querySelector(".palette-panel")?.setAttribute("aria-label", threads ? "Search threads" : ai ? "Ask AI about your pages" : "Search pages");
     if (paletteEnterHint) {
-      paletteEnterHint.textContent = threads ? "open in chat" : "open";
+      paletteEnterHint.textContent = threads ? "open in chat" : ai ? "ask or open" : "open";
     }
     for (const el of paletteEl.querySelectorAll("[data-palette-page]")) {
       el.hidden = threads;
@@ -3566,6 +3583,10 @@
       runThreadPaletteSearch(parsed.query);
       return;
     }
+    if (parsed.id === "ai") {
+      void runAiPaletteSearch(parsed.query);
+      return;
+    }
     const req = ++paletteReq;
     const res = await fetch(`/api/search?query=${encodeURIComponent(parsed.query)}&limit=40`);
     if (req !== paletteReq || !isPaletteOpen()) {
@@ -3576,6 +3597,136 @@
     }
     const data = await res.json();
     applyPaletteHits([...spaces.search(parsed.query), ...paletteActionRows(parsed.query), ...(data.tabs || [])]);
+  }
+
+  /**
+   * `?` (#245): the Ask AI row (or its answer) on top, the free text matches below. Nothing is
+   * spent until Enter on the Ask row; an empty `?` lists recent questions with their saved answers.
+   */
+  async function runAiPaletteSearch(query) {
+    const req = ++paletteReq;
+    if (aiShownQuery !== query) {
+      paletteIndex = 0;
+      aiShownQuery = query;
+    }
+    if (!query) {
+      applyPaletteHits(aiRecentRows());
+      return;
+    }
+    const ask = aiAsk?.query === query ? aiAsk : null;
+    const head = ask?.status === "done" ? aiResultRows(ask) : [aiAskRow(query, ask)];
+    applyPaletteHits(head);
+    const res = await fetch(`/api/search?query=${encodeURIComponent(query)}&limit=40`);
+    if (req !== paletteReq || !isPaletteOpen() || !res.ok) {
+      return;
+    }
+    const data = await res.json();
+    const shown = new Set(head.map((hit) => hit.id));
+    const text = (data.tabs || []).filter((tab) => !shown.has(tab.id));
+    if (text.length) {
+      text[0] = { ...text[0], section: "Text matches" };
+    }
+    applyPaletteHits([...head, ...text]);
+  }
+
+  function aiAskRow(query, ask) {
+    const row = { kind: "ai-ask", id: "ai:ask", query, title: `Ask AI: “${query}”`, locationLabel: "AI", location: "ai" };
+    if (ask?.status === "busy") {
+      return { ...row, busy: true, title: aiModel ? `Searching your pages with ${aiModel}…` : "Searching your pages…", snippet: "Esc to stop" };
+    }
+    if (ask?.status === "error") {
+      return { ...row, snippet: `That failed: ${ask.error}. Enter to try again.` };
+    }
+    return { ...row, snippet: aiModel ? `Enter to ask. One call to ${aiModel} over all your pages.` : "Enter to ask. One model call over all your pages." };
+  }
+
+  function aiResultRows(ask) {
+    const rows = [];
+    for (const hit of ask.hits || []) {
+      const tab = findAnyTab(hit.id);
+      if (tab) {
+        rows.push({ ...tab, open: state.tabs.some((item) => item.id === tab.id), snippet: hit.reason });
+      }
+    }
+    const took = ask.ms ? ` · ${(ask.ms / 1000).toFixed(1)} s` : "";
+    const section = `${rows.length ? "AI results" : "No pages fit"} · ${ask.model || "AI"}${took}`;
+    if (rows.length) {
+      rows[0] = { ...rows[0], section };
+    }
+    const chat = {
+      kind: "ai-chat",
+      id: "ai:chat",
+      query: ask.query,
+      title: "Ask in chat for a deeper search",
+      snippet: "Opens a new thread with this question, ready to send",
+      locationLabel: "Chat",
+      location: "ai",
+    };
+    return [...rows, rows.length ? chat : { ...chat, section }];
+  }
+
+  function readAiRecent() {
+    try {
+      const list = JSON.parse(localStorage.getItem(AI_RECENT_KEY) || "[]");
+      return Array.isArray(list) ? list.filter((item) => item && typeof item.query === "string" && Array.isArray(item.hits)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveAiRecent(ask) {
+    const item = { query: ask.query, at: Date.now(), model: ask.model, ms: ask.ms, hits: ask.hits };
+    const list = [item, ...readAiRecent().filter((old) => old.query !== ask.query)].slice(0, AI_RECENT_MAX);
+    localStorage.setItem(AI_RECENT_KEY, JSON.stringify(list));
+  }
+
+  function aiRecentRows() {
+    return readAiRecent().map((item, index) => ({
+      kind: "ai-recent",
+      id: `ai:recent:${index}`,
+      title: item.query,
+      snippet: `${item.hits.length === 1 ? "1 result" : `${item.hits.length} results`} · ${new Date(item.at).toLocaleString()}`,
+      section: index === 0 ? "Recent questions" : undefined,
+      item,
+    }));
+  }
+
+  async function startAiAsk(query) {
+    aiAsk?.abort?.abort();
+    const abort = new AbortController();
+    const ask = { query, status: "busy", abort };
+    aiAsk = ask;
+    runPaletteSearch();
+    try {
+      const res = await fetch("/api/agent/palette-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+        signal: abort.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      Object.assign(ask, { status: "done", hits: data.hits || [], model: data.model || "", ms: data.ms || 0 });
+      aiModel = ask.model || aiModel;
+      saveAiRecent(ask);
+    } catch (err) {
+      if (abort.signal.aborted) {
+        if (aiAsk === ask) {
+          aiAsk = null;
+        }
+      } else {
+        Object.assign(ask, { status: "error", error: err.message || String(err) });
+      }
+    }
+    ask.abort = null;
+    if (aiAsk === ask || !aiAsk) {
+      if (isPaletteOpen() && paletteKind === "ai") {
+        paletteIndex = 0;
+        runPaletteSearch();
+      }
+    }
   }
 
   /** The open page's template agent actions (#152) matching the query, listed above the pages. */
@@ -3609,11 +3760,19 @@
         : "No matching pages"
       : threads
         ? "No threads yet"
-        : "No pages yet";
+        : paletteKind === "ai"
+          ? "Type a question about your pages and press Enter"
+          : "No pages yet";
     for (let index = 0; index < paletteHits.length; index += 1) {
       const tab = paletteHits[index];
+      if (tab.section) {
+        const head = document.createElement("div");
+        head.className = "palette-section";
+        head.textContent = tab.section;
+        paletteList.appendChild(head);
+      }
       const el = document.createElement("div");
-      el.className = "palette-row" + (index === paletteIndex ? " active" : "");
+      el.className = "palette-row" + (index === paletteIndex ? " active" : "") + (tab.busy ? " busy" : "");
       el.role = "option";
       el.setAttribute("aria-selected", index === paletteIndex ? "true" : "false");
       el.addEventListener("mouseenter", () => {
@@ -3644,7 +3803,7 @@
         if (tab.open) {
           chips.appendChild(paletteChip("Current"));
         }
-      } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask") {
+      } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask" || tab.kind?.startsWith("ai-")) {
         if (tab.open) {
           chips.appendChild(paletteChip("Open"));
         }
@@ -3682,7 +3841,7 @@
   }
 
   function highlightPaletteRows() {
-    const rows = paletteList.children;
+    const rows = paletteList.querySelectorAll(".palette-row");
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
       const on = i === paletteIndex;
@@ -3722,6 +3881,28 @@
       if (!window.scribeChat?.openAsk?.(tab.threadId, tab.itemId)) {
         showNotice("Could not open that thread");
       }
+      return;
+    }
+    if (tab.kind === "ai-ask") {
+      if (aiAsk?.query !== tab.query || aiAsk.status !== "busy") {
+        void startAiAsk(tab.query);
+      }
+      return;
+    }
+    if (tab.kind === "ai-chat") {
+      closePalette();
+      if (!window.scribeChat?.askInChat) {
+        showNotice("The agent chat is not ready");
+        return;
+      }
+      window.scribeChat.askInChat(tab.query);
+      return;
+    }
+    if (tab.kind === "ai-recent") {
+      aiAsk = { ...tab.item, status: "done" };
+      const prefix = currentPalettePrefixes().find((item) => item.id === "ai")?.prefix || "?";
+      paletteInput.value = `${prefix} ${tab.item.query}`;
+      runPaletteSearch();
       return;
     }
     if (tab.kind === "action") {
@@ -3978,6 +4159,10 @@
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      if (paletteKind === "ai" && aiAsk?.status === "busy") {
+        aiAsk.abort?.abort();
+        return;
+      }
       closePalette();
     }
   });
