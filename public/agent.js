@@ -2451,13 +2451,28 @@
       const expandedKey = `user:${item.id}`;
       const content = el("div", `ag-user-content${this.expanded.has(expandedKey) ? " expanded" : ""}`);
       const text = el("div", "ag-user-text", item.text);
-      const toggle = button(this.expanded.has(expandedKey) ? "Show less" : "Click to expand", "ag-user-expand", () => {
+      const toggle = el("span", "ag-user-expand", this.expanded.has(expandedKey) ? "Show less" : "Click to expand");
+      toggle.setAttribute("role", "button");
+      toggle.tabIndex = 0;
+      const toggleExpanded = () => {
         const expanded = !content.classList.contains("expanded");
         content.classList.toggle("expanded", expanded);
         if (expanded) this.expanded.add(expandedKey);
         else this.expanded.delete(expandedKey);
         toggle.textContent = expanded ? "Show less" : "Click to expand";
         toggle.setAttribute("aria-expanded", String(expanded));
+      };
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleExpanded();
+      });
+      toggle.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggleExpanded();
+      });
+      content.addEventListener("click", () => {
+        if (content.classList.contains("long") && !content.classList.contains("expanded") && !window.getSelection()?.toString()) toggleExpanded();
       });
       toggle.setAttribute("aria-expanded", String(this.expanded.has(expandedKey)));
       content.append(text, toggle);

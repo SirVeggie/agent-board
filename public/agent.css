@@ -549,16 +549,24 @@ button.ag-tip {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 4em), transparent);
 }
 
+.ag-user-content {
+  position: relative;
+}
+
+.ag-user-content.long:not(.expanded) {
+  cursor: pointer;
+}
+
 .ag-user-expand {
   display: none;
-  margin: 4px auto 0;
-  padding: 5px 14px;
-  border: 1px solid var(--accent-ring);
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font: inherit;
-  font-size: 11px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-shadow: 0 1px 3px var(--bg), 0 0 8px var(--bg);
   cursor: pointer;
 }
 
@@ -566,8 +574,14 @@ button.ag-tip {
   display: block;
 }
 
+.ag-user-content.expanded > .ag-user-expand {
+  position: static;
+  margin-top: 6px;
+}
+
+.ag-user-content:not(.expanded):hover > .ag-user-expand,
 .ag-user-expand:hover {
-  border-color: var(--accent);
+  color: var(--text);
 }
 
 .ag-user-expand:focus-visible {
