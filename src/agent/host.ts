@@ -44,7 +44,7 @@ import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
-import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
+import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
@@ -564,6 +564,7 @@ export class AgentHost {
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
+      disabledModes: cleanDisabledModes(saved.disabledModes),
     };
   }
 
@@ -573,6 +574,7 @@ export class AgentHost {
     // null puts back the starting list.
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
+    if (patch.disabledModes !== undefined) next.disabledModes = cleanDisabledModes(patch.disabledModes);
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     this.db.setSetting("prefs", next);
     return next;

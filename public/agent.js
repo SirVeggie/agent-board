@@ -6934,11 +6934,22 @@
       );
 
       const keys = el("section", "settings-section");
+      const modes = el("section", "settings-section");
+      modes.append(helpHeading("Mode cycling", "Choose which modes Ctrl+Shift+' cycles through. All modes remain available in the mode selector. With every switch off, the hotkey leaves the current mode unchanged."));
+      this.modeSwitches = new Map();
+      for (const mode of MODES) {
+        const control = switchControl(
+          () => !(prefs().disabledModes || []).includes(mode.id),
+          () => void this.toggleCycleMode(mode.id)
+        );
+        this.modeSwitches.set(mode.id, control);
+        modes.append(settingRow(mode.label, control, { id: `ag-cycle-mode-${mode.id}-label` }));
+      }
       const list = el("div", "ag-keys");
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, cursor, sources, usage, chat, keys);
+      panel.append(title, providers, cursor, sources, usage, chat, modes, keys);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -6959,6 +6970,24 @@
           )
         );
         boardPanel.append(section);
+      }
+    },
+    renderCycleModes() {
+      for (const [id, control] of this.modeSwitches || []) {
+        control.setAttribute("aria-checked", String(!(prefs().disabledModes || []).includes(id)));
+      }
+    },
+    async toggleCycleMode(id) {
+      const disabled = prefs().disabledModes || [];
+      const disabledModes = disabled.includes(id) ? disabled.filter((mode) => mode !== id) : [...disabled, id];
+      for (const control of this.modeSwitches.values()) control.disabled = true;
+      try {
+        S.config.prefs = await api("PUT", "/prefs", { disabledModes });
+      } catch (err) {
+        notice(err.message);
+      } finally {
+        this.renderCycleModes();
+        for (const control of this.modeSwitches.values()) control.disabled = false;
       }
     },
     renderStatus() {
@@ -7064,6 +7093,7 @@
     open() {
       if (!this.root) return;
       this.renderStatus();
+      this.renderCycleModes();
       void this.renderSources();
       this.renderSummarizer();
       this.root.hidden = false;
@@ -7676,9 +7706,21 @@
   async function cycleMode() {
     const view = targetView();
     const s = view.settings();
-    const modes = MODES;
-    const at = modes.findIndex((m) => m.id === s.mode);
-    const next = modes[(at + 1) % modes.length];
+    const disabled = prefs().disabledModes || [];
+    const at = MODES.findIndex((m) => m.id === s.mode);
+    let next;
+    for (let offset = 1; offset <= MODES.length; offset += 1) {
+      const mode = MODES[(at + offset) % MODES.length];
+      if (!disabled.includes(mode.id)) {
+        next = mode;
+        break;
+      }
+    }
+    if (!next) {
+      notice("No modes enabled for cycling. Choose modes in Agent settings.");
+      return;
+    }
+    if (next.id === s.mode) return;
     await view.updateSettings({ mode: next.id });
     notice(`Mode: ${next.label}`);
   }

@@ -16,6 +16,8 @@ export type Prefs = {
    */
   modelSettings: Record<string, ModelChoice>;
   mode: ThreadMode;
+  /** Modes skipped by the cycle hotkey; still available in the mode selector. */
+  disabledModes: ThreadMode[];
   approval: ApprovalPolicy;
   /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
   approvals: Partial<Record<ProviderId, ApprovalPolicy>>;
@@ -53,6 +55,7 @@ export const DEFAULT_PREFS: Prefs = {
   modelParams: { cursor: { fast: "false" } },
   modelSettings: {},
   mode: "code",
+  disabledModes: [],
   approval: "ask",
   approvals: {},
   web: "on",
@@ -65,6 +68,12 @@ export const DEFAULT_PREFS: Prefs = {
   worktrees: {},
   summarizer: { provider: "claude", model: "haiku" },
 };
+
+/** Ignore malformed or obsolete mode ids in saved preferences and API patches. */
+export function cleanDisabledModes(value: unknown): ThreadMode[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((mode): mode is ThreadMode => ["code", "ask", "plan", "board"].includes(mode)))];
+}
 
 /** Same as dirKey in public/agent.js, which looks up these keys for new threads. */
 export function workspaceKey(dir: string): string {
