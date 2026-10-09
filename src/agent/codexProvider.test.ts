@@ -6,7 +6,7 @@ import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
 import { CodexSession, readCodexPlanUsage } from "./providers/codex.js";
 import type { RunSink, SessionContext } from "./providers/provider.js";
-import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions } from "./providers/codex.js";
+import { FALLBACK_MODELS, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides } from "./providers/codex.js";
 import type { Thread } from "./types.js";
 
 const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "mode" | "approval" | "web"> => ({
@@ -46,6 +46,13 @@ test("threadOptions maps app-server model, sandbox, web and interactive approval
   assert.equal((pages.config as Record<string, unknown>).model_reasoning_effort, undefined);
   assert.equal(threadOptions(thread({ approval: "full" }), "/work").approvalPolicy, "never");
   assert.equal((threadOptions(thread({ web: "limited" }), "/work").config as Record<string, unknown>).web_search, "disabled");
+});
+
+test("turnStartOverrides always send model and effort; Default is JSON null", () => {
+  assert.deepEqual(turnStartOverrides(thread()), { model: "gpt-5-codex", effort: "medium" });
+  assert.deepEqual(turnStartOverrides(thread({ model: "gpt-6.1-sol", effort: "ultra" })), { model: "gpt-6.1-sol", effort: "ultra" });
+  assert.deepEqual(turnStartOverrides(thread({ model: "default", effort: null })), { model: null, effort: null });
+  assert.deepEqual(turnStartOverrides(thread({ model: "", effort: "unknown" })), { model: null, effort: null });
 });
 
 test("mcpConfig registers the board server as scribe with the thread id", () => {
@@ -418,6 +425,41 @@ test("Codex resumes an existing SDK thread and reuses the connection for subsequ
   f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
   f.f.emit({ id: turn.id, result: { turn: { id: "turn-2" } } });
   assert.equal((await next).status, "done");
+  f.session.dispose();
+});
+
+test("Codex applies a same-session model change on the next turn/start without reconnecting", async () => {
+  const f = sessionFixture();
+  const first = await f.start();
+  const opened = f.f.sent.find((message) => message.method === "turn/start")!;
+  assert.equal(opened.params?.model, "gpt-5-codex");
+  assert.equal(opened.params?.effort, "medium");
+  f.complete();
+  await first.run;
+
+  f.session.update({ ...thread({ model: "gpt-5.2-codex", effort: "high" }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: {} } as Thread);
+  const next = f.session.run({ text: "continue", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
+  await tick();
+  const changed = f.f.sent.filter((message) => message.method === "turn/start").at(-1)!;
+  assert.equal(f.f.sent.filter((message) => message.method === "initialize").length, 1);
+  assert.equal(changed.params?.model, "gpt-5.2-codex");
+  assert.equal(changed.params?.effort, "high");
+  f.f.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-2" } } });
+  f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-2", status: "completed" } } });
+  f.f.emit({ id: changed.id, result: { turn: { id: "turn-2" } } });
+  assert.equal((await next).status, "done");
+
+  f.session.update({ ...thread({ model: "default", effort: null }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: {} } as Thread);
+  const reset = f.session.run({ text: "reset", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
+  await tick();
+  const cleared = f.f.sent.filter((message) => message.method === "turn/start").at(-1)!;
+  assert.equal(f.f.sent.filter((message) => message.method === "initialize").length, 1);
+  assert.equal(cleared.params?.model, null);
+  assert.equal(cleared.params?.effort, null);
+  f.f.emit({ method: "turn/started", params: { threadId: "native-thread", turn: { id: "turn-3" } } });
+  f.f.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-3", status: "completed" } } });
+  f.f.emit({ id: cleared.id, result: { turn: { id: "turn-3" } } });
+  assert.equal((await reset).status, "done");
   f.session.dispose();
 });
 

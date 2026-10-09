@@ -346,6 +346,18 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
   };
 }
 
+/**
+ * Model and effort for `turn/start`. Always sent so a picker change applies on the next turn
+ * without restarting the app-server thread. Scribe "Default" is JSON `null`: omit on thread
+ * start/resume (CLI/config default), and send null here so a previous named override is cleared.
+ */
+export function turnStartOverrides(thread: Pick<Thread, "model" | "effort">): { model: string | null; effort: string | null } {
+  return {
+    model: thread.model && thread.model !== "default" ? thread.model : null,
+    effort: thread.effort && thread.effort in EFFORT_LABELS ? thread.effort : null,
+  };
+}
+
 /** The board MCP server, registered as Codex MCP server `scribe`. */
 export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: string, pages: boolean): NonNullable<CodexOptions["config"]> {
   return {
@@ -720,6 +732,7 @@ export class CodexSession implements ProviderSession {
     return this.thread.cwd;
   }
 
+  /** Reconnect identity. Model and effort stay off this key so a picker change reuses the thread. */
   private key(): string {
     const t = this.thread;
     return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions]);
@@ -844,8 +857,7 @@ export class CodexSession implements ProviderSession {
     this.running = true;
     const done = new Promise<TurnResult>((resolve) => { this.finishTurn = resolve; });
     const result = await this.rpc!.call("turn/start", {
-      threadId: this.nativeId, input: payload,
-      ...(this.thread.effort ? { effort: this.thread.effort } : {}),
+      threadId: this.nativeId, input: payload, ...turnStartOverrides(this.thread),
     });
     if (!isPlainRecord(result) || !isPlainRecord(result.turn) || typeof result.turn.id !== "string") throw new Error("Invalid Codex turn response");
     // turn/started may already have arrived; turn/completed may arrive before the response.
