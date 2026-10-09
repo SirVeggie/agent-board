@@ -3339,13 +3339,6 @@
         var at = boardEl.querySelector('.card[data-id="' + id + '"]');
         if (at) openAssignPicker(id, at);
       });
-      var assigned = workerIdFor(c.assignee);
-      var runners = assigned ? [assigned] : workerIds();
-      runners.filter(function (wid) { return canRunSolo(c, wid); }).forEach(function (wid) {
-        var label = assigned ? "Run worker" : "Run " + workerName(worker(wid));
-        var b = menuButton(menuEl, label, function () { runSolo(id, wid); });
-        b.title = "A chat of its own for this card, beside the worker's run";
-      });
     }
     var thread = c.thread || (c.claim && c.claim.thread);
     if (thread && scribe.agent && typeof scribe.agent.show === "function") {
@@ -3353,6 +3346,15 @@
         scribe.agent.show(thread, { where: "sidebar" }).then(function (r) {
           if (!r || !r.ok) setHint(r && r.error === "not_found" ? "That thread is gone." : "Couldn't open the thread.");
         });
+      });
+    }
+    if (AGENT_MODE && isReadyCol(colOf(c))) {
+      var assigned = workerIdFor(c.assignee);
+      var runners = assigned ? [assigned] : workerIds();
+      runners.filter(function (wid) { return canRunSolo(c, wid); }).forEach(function (wid) {
+        var label = assigned ? "Run worker" : "Run " + workerName(worker(wid));
+        var b = menuButton(menuEl, label, function () { runSolo(id, wid); });
+        b.title = "A chat of its own for this card, beside the worker's run";
       });
     }
     // The template's agent actions about one card (context: ["card"]), e.g. Triage this card.
