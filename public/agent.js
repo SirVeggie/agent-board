@@ -1628,9 +1628,11 @@
       this.scroll.addEventListener("touchstart", releaseStick, { passive: true });
       this.scroll.addEventListener("pointerdown", releaseStick);
       this.stickRo = new ResizeObserver(() => {
+        this.measureUserMessages();
         if (this.stick) this.scrollToEnd();
       });
       this.stickRo.observe(this.transcript);
+      this.stickRo.observe(this.queueList);
       // The scroll shrinks while the queue dock opens; stay at the bottom through it.
       this.stickRo.observe(this.scroll);
       this.root.addEventListener("click", (event) => onLinkClick(event));
@@ -2240,6 +2242,7 @@
         this.groupHost(group.key).append(this.renderGroup(group));
       }
       this.markLatest();
+      this.measureUserMessages();
       this.updateQueueDock();
       this.scrollToEnd(true);
     }
@@ -2406,6 +2409,18 @@
       return Boolean(t && (t.status === "running" || t.status === "waiting"));
     }
 
+    /** Measure rendered height so wrapped paragraphs fold just like multiline messages. */
+    measureUserMessages() {
+      for (const root of [this.transcript, this.queueList]) {
+        for (const content of root.querySelectorAll(".ag-user-content")) {
+          const text = content.querySelector(".ag-user-text");
+          if (!text.clientWidth) continue;
+          const limit = parseFloat(getComputedStyle(text).fontSize) * 16;
+          content.classList.toggle("long", text.scrollHeight > limit + 1);
+        }
+      }
+    }
+
     renderUser(item, queued) {
       const row = el("div", `ag-user${queued ? " queued" : ""}`);
       row.dataset.itemId = item.id;
@@ -2433,7 +2448,20 @@
         }
         bubble.append(chips);
       }
-      bubble.append(el("div", "ag-user-text", item.text));
+      const expandedKey = `user:${item.id}`;
+      const content = el("div", `ag-user-content${this.expanded.has(expandedKey) ? " expanded" : ""}`);
+      const text = el("div", "ag-user-text", item.text);
+      const toggle = button(this.expanded.has(expandedKey) ? "Show less" : "Click to expand", "ag-user-expand", () => {
+        const expanded = !content.classList.contains("expanded");
+        content.classList.toggle("expanded", expanded);
+        if (expanded) this.expanded.add(expandedKey);
+        else this.expanded.delete(expandedKey);
+        toggle.textContent = expanded ? "Show less" : "Click to expand";
+        toggle.setAttribute("aria-expanded", String(expanded));
+      });
+      toggle.setAttribute("aria-expanded", String(this.expanded.has(expandedKey)));
+      content.append(text, toggle);
+      bubble.append(content);
       if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
@@ -3197,6 +3225,7 @@
         this.markEntering(fresh, known);
       }
       this.markLatest();
+      this.measureUserMessages();
       this.updateQueueDock();
       if (stick) this.scrollToEnd();
     }

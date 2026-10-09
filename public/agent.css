@@ -540,6 +540,41 @@ button.ag-tip {
   overflow-wrap: anywhere;
 }
 
+.ag-user-content:not(.expanded) .ag-user-text {
+  max-height: 16em;
+  overflow: hidden;
+}
+
+.ag-user-content.long:not(.expanded) .ag-user-text {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 4em), transparent);
+}
+
+.ag-user-expand {
+  display: none;
+  margin: 4px auto 0;
+  padding: 5px 14px;
+  border: 1px solid var(--accent-ring);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ag-user-content.long > .ag-user-expand {
+  display: block;
+}
+
+.ag-user-expand:hover {
+  border-color: var(--accent);
+}
+
+.ag-user-expand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .ag-user.queued .ag-user-bubble {
   opacity: 0.6;
   border: 1px dashed var(--accent-ring);
