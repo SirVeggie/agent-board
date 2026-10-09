@@ -2477,7 +2477,7 @@
       toggle.setAttribute("aria-expanded", String(this.expanded.has(expandedKey)));
       content.append(text, toggle);
       bubble.append(content);
-      if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
+      if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.reply ? `Reply on card #${item.card.num}` : item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
       // Your turn is marked with an arrow instead of a bubble.

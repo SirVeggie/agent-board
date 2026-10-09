@@ -1,5 +1,15 @@
 # Migrations
 
+## `tabs.reply_to` column (additive, schema still 3)
+
+- **What changed:** A page can have a reply target (#320): `replyTo` on the tab, `{ page: <target tab id>, card?: number }`, set by agents with `page_show` / `page_patch` `replyTo` (keys are resolved to ids). The page's `scribe.reply(data, { summary })` sends its answers there after a click; a Kanban target posts them as the user's comment and passes them on to the card's chat (server side, `AgentHost.cardMessage`). Stored as `tabs.reply_to TEXT` (JSON, nullable).
+- **Why no version bump:** Existing rows are unchanged (null). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureReplyToColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged on purpose: the target is a tab id on this PC. `EXPORT_VERSION` stays `1`.
+- **Protocol:** additive route `POST /api/tabs/:id/reply` (board UI only: refused for agents, and not open to the content origin), a `replyTo` field on tab meta and the `POST /api/tabs` / `patch` bodies, the bridge call `scribe.reply`, and the shell message `scribe-reply`. `VERSION` stays `3.0.0`. Pages need the daemon restarted to use it.
+- **Where:** `src/schema.ts`, `src/dbMigrate.ts` (`ensureReplyToColumn`), `src/types.ts` (`ReplyTarget`), `src/store.ts` (`setReplyTo`, `receiveReply`, `replyDelivered`), `src/actions/kanban.ts` (`reply`, `replyDelivered`), `src/http.ts`, `src/bridge.ts`, `public/app.js` (`onPageReply`).
+- **How to verify:** `a page's reply target is set by agents, persists, …` in `src/store.test.ts`; the reply tests at the end of `src/actions/kanban.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## Kanban workers: chats handed to Scribe as runs (`agent.sqlite` setting, page state, no schema change)
 
 - **What changed:** The daemon now owns the lifecycle of worker chats (#285): plan-limit waits and resumes, worktree merges, and merge-fix requests (`src/agent/pageRuns.ts`). The Kanban template hands each chat over with `scribe.agent.start({ run })` / `scribe.agent.watch()` and only acts on the run's outcome. Runs are kept in the `pageRuns` setting of `agent.sqlite`.

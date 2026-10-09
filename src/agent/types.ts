@@ -330,7 +330,7 @@ export type ItemBody =
       /** Sent by the code of the thread's page (board.agent), or by Scribe itself (going on after a restart); not typed by the user. */
       from?: "page" | "scribe";
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
-      card?: { num: number; title?: string; resume?: boolean };
+      card?: { num: number; title?: string; resume?: boolean; reply?: string };
     }
   | { kind: "text"; text: string; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }

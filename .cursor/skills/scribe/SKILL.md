@@ -339,6 +339,7 @@ scribe.setLocal({ filter: "mine" })
 scribe.bind(el, "draft", { local: true })
 scribe.signal("submitted", { item: "t_1" })   // log an event agents can wait on, with small data
 scribe.action("move", { card: 12, to: "done" })  // run one of the page template's actions
+scribe.reply({ approach: "A" }, { summary: "Picked A" })  // send a form's answers to the page you wired it to; see Forms for a card
 scribe.saveAsset(file)            // store an image/file for this page; see Page assets
 scribe.preview(fileOrAssetId)     // show images, PDFs, text and more in Scribe's viewer; see Previewing files
 scribe.open("scribe:key", { mode })  // open a page or URL as "tab", "peek", or "split"; see Linking pages
@@ -495,6 +496,34 @@ await scribe.agent.watch(threadId, { data: { job: 7 }, after: 0 }); // hand over
 - Agents can't read or change these grants, and an agent changing a page's HTML (or its template) resets the risky ones to Ask: tell the user to re-approve after you edit such a page.
 - Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
 - Keep the thread id in state if the page should continue the same conversation later.
+
+### Forms for a card: replyTo and scribe.reply
+
+A form you make for a Kanban card (questions, mockup feedback, a review) can hand its answers to the card itself, so its submit button does something even after your chat has ended. Wire it when you show the page:
+
+```js
+page_show({ key: "card-320-questions", html, background: true,
+            replyTo: { page: "scribe:agent-todo", card: 320 } })
+```
+
+and have the submit button call `scribe.reply` with the answers and a one-line summary:
+
+```html
+<button type="button" id="send">Send answers</button>
+<script>
+  document.getElementById("send").addEventListener("click", function () {
+    var s = scribe.state;
+    scribe.reply({ approach: s.approach, notes: s.notes }, { summary: "Picked " + s.approach })
+      .then(function (r) { status.textContent = r.ok ? "Sent to #320" : "Not sent: " + r.error; });
+  });
+</script>
+```
+
+- `scribe.reply` needs a click and saves pending edits first. It goes only where `replyTo` points: that is kept with the page, not in its HTML, so the page's code cannot send anywhere else. It resolves `{ ok, target, delivered }` or `{ ok: false, error }`; show the result on the form.
+- On a Kanban board the reply becomes the user's comment on the card: the summary, the answers (short ones as a list, long ones quoted), and a peek link back to the form. It goes on to the card's chat: into its running turn, or Continue when that chat is idle (the board claims the card for it and moves it to working). So the agent gets the answers with the card, without reading the form's state.
+- On any other page it logs a `reply` event (`data`: `{ from, card?, summary, data }`) you can `page_wait` on.
+- Each click sends again and adds a new comment. Name fields so they read well as labels (`approach`, `notes`), and leave unanswered ones empty: empty values are skipped.
+- `page_patch` with `replyTo` (and no edits) wires an existing page; `replyTo: null` clears it.
 
 ## Waiting for user input
 

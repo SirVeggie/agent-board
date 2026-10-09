@@ -243,7 +243,7 @@ function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
     ...(msg.saved.files.length ? { files: msg.saved.files.map(fileEntry) } : {}),
     ...(msg.context.length ? { context: msg.context } : {}),
     ...(msg.from ? { from: msg.from } : {}),
-    ...(msg.card ? { card: { num: msg.card.num, ...(msg.card.title ? { title: msg.card.title } : {}), ...(msg.card.resume ? { resume: true } : {}) } } : {}),
+    ...(msg.card ? { card: { num: msg.card.num, ...(msg.card.title ? { title: msg.card.title } : {}), ...(msg.card.resume ? { resume: true } : {}), ...(msg.card.reply ? { reply: msg.card.reply } : {}) } } : {}),
   };
 }
 

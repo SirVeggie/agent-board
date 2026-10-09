@@ -133,6 +133,7 @@ scribe.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
 scribe.local / scribe.setLocal({ filter })   // this viewer's own state: filters, open panels, drafts
 scribe.signal("submitted", { item: "t_1" })  // log an event agents can wait on
 scribe.action("move", { card: 12, to: "done" })  // run one of the template's actions
+scribe.reply({ approach: "A" }, { summary: "Picked A" })  // after a click: send a form's answers to its replyTo page (a Kanban card)
 ```
 
 A submit button can log the same event without extra script: `data-scribe-signal="submitted"`. The agent then calls `page_wait` with that event name.

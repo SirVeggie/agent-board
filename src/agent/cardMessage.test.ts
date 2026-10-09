@@ -78,3 +78,12 @@ test("Continue sends the host's own note, never steered", () => {
   assert.match(item.text, /^Continue the work on card #12\./);
   assert.deepEqual(item.card, { num: 12, title: "Fix it", resume: true });
 });
+
+test("Continue after a form's reply points the agent at the answer on the card", () => {
+  const { id } = runningThread(false);
+  assert.deepEqual(host.cardMessage(id, { ...card, resume: true, reply: "scribe:card-12-form" }, "ignored"), { delivered: "queued" });
+  const [item] = userItems(id);
+  assert.ok(item && item.kind === "user");
+  assert.match(item.text, /^Continue the work on card #12 with the user's answer: it is the card's newest comment\./);
+  assert.deepEqual(item.card, { num: 12, title: "Fix it", resume: true, reply: "scribe:card-12-form" });
+});
