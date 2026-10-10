@@ -248,6 +248,22 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await moveDrag('.tab[data-id="b"]', area.x + area.width - 5, area.y + area.height / 2);
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), true);
+    // Hover shows swap/stack; body.resizing-split (added while the divider is dragged) hides them.
+    assert.deepEqual(await page.evaluate(() => {
+      const divider = document.querySelector('.split-divider')!;
+      const tools = document.querySelector('.split-tools') as HTMLElement;
+      const ratio = document.querySelector('.split-ratio') as HTMLElement;
+      const sample = () => ({ tools: getComputedStyle(tools).opacity, ratio: getComputedStyle(ratio).opacity });
+      tools.style.transition = ratio.style.transition = "none";
+      divider.classList.add("hot");
+      const hovered = sample();
+      document.body.classList.add("resizing-split");
+      const dragging = sample();
+      document.body.classList.remove("resizing-split");
+      divider.classList.remove("hot");
+      tools.style.transition = ratio.style.transition = "";
+      return { hovered, dragging };
+    }), { hovered: { tools: "1", ratio: "0" }, dragging: { tools: "0", ratio: "1" } });
     await moveDrag('.pane-head[data-pane="b"]', area.x + area.width / 2, area.y + 5);
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('split-col')), true);

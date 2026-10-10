@@ -3529,7 +3529,8 @@ main.split-col .split-tools {
   transform: translate(-50%, -50%);
 }
 
-body.resizing-split .split-tools {
+/* Beat .split-divider.hot so the pill yields to the size readout while dragging. */
+body.resizing-split .split-divider .split-tools {
   opacity: 0;
   pointer-events: none;
 }
