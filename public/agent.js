@@ -999,7 +999,10 @@
           if (!q) list.append(el("div", "ag-menu-sep"));
           continue;
         }
-        if (!item.more && lastHeader && !lastHeader.isConnected) list.append(lastHeader);
+        if (!item.more && lastHeader) {
+          list.append(lastHeader);
+          lastHeader = null;
+        }
         const row = el("button", `ag-menu-item${item.checked ? " on" : ""}${item.danger ? " danger" : ""}`);
         row.type = "button";
         row.disabled = Boolean(item.disabled);
