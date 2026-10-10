@@ -2155,7 +2155,7 @@
   function renderTemplates() {
     const rows = state.templates;
     templateCountEl.textContent = String(rows.length);
-    templateList.replaceChildren(...rows.map((template) => templateRow(template, false)));
+    window.scribeSyncChildren(templateList, rows.map((template) => templateRow(template, false)));
     templateNone.hidden = rows.length > 0;
     if (freshTemplateId) {
       flashTemplateRow(freshTemplateId);
@@ -2165,7 +2165,7 @@
     builtinGroup.classList.toggle("open", state.builtinOpen);
     builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
     builtinCountEl.textContent = String(builtins.length);
-    builtinList.replaceChildren(...builtins.map((template) => templateRow(template, true)));
+    window.scribeSyncChildren(builtinList, builtins.map((template) => templateRow(template, true)));
     const active = activeTab();
     if (isBlank(active)) {
       newPageView.render(active);
@@ -2173,6 +2173,7 @@
   }
 
   function templateRow(template, builtin) {
+    const live = () => findTemplateMeta(template.id);
     const el = document.createElement("div");
     el.className = builtin ? "side-row template-row builtin" : "side-row template-row";
     el.role = "button";
@@ -2180,11 +2181,11 @@
     el.dataset.id = template.id;
     el.dataset.kind = "template";
     el.ariaLabel = template.title;
-    el.addEventListener("click", () => openTemplateModal(template, "create"));
+    el.addEventListener("click", () => live() && openTemplateModal(live(), "create"));
     el.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openTemplateModal(template, "create");
+        live() && openTemplateModal(live(), "create");
       }
     });
 
@@ -2228,7 +2229,7 @@
     el.appendChild(text);
 
     if (builtin) {
-      el.addEventListener("contextmenu", (event) => builtinMenu(event, template, el));
+      el.addEventListener("contextmenu", (event) => live() && builtinMenu(event, live(), el));
     } else {
       const close = document.createElement("button");
       close.className = "tab-close";
@@ -2237,7 +2238,7 @@
       close.setAttribute("aria-label", "Delete template");
       close.addEventListener("click", (event) => {
         event.stopPropagation();
-        deleteTemplate(template);
+        live() && deleteTemplate(live());
       });
       el.appendChild(close);
     }

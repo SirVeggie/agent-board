@@ -4011,8 +4011,7 @@
     renderComposerBar() {
       const s = this.settings();
       const t = this.thread();
-      const bar = this.bar;
-      bar.replaceChildren();
+      const bar = document.createDocumentFragment();
       this.renderForkNote(t);
       const info = modelInfo(s.provider, s.model);
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model", false);
@@ -4045,6 +4044,7 @@
         const policy = button(`${mismatch ? "! " : ""}${p.sandbox}`, "ag-pill", (event) => placeHoverTip(event.currentTarget, noteTip(detail), 280));
         policy.setAttribute("aria-label", `Effective permissions: ${p.sandbox}`);
         policy.setAttribute("aria-description", detail);
+        policy.dataset.permissions = detail;
         bindHoverTip(policy, () => noteTip(detail));
         bar.append(policy);
       }
@@ -4053,13 +4053,13 @@
         const wtBtn = button("", `ag-pill ag-wt ag-wt-icon${wt.ahead || wt.dirty ? " pending" : ""}`, (event) => this.worktreeMenu(event.currentTarget));
         wtBtn.append(icon("git"));
         wtBtn.setAttribute("aria-label", `Worktree ${wt.branch}`);
-        bindHoverTip(wtBtn, () => worktreeTip(wt));
+        bindHoverTip(wtBtn, () => worktreeTip(openWorktree(this.thread()) || wt));
         bar.append(wtBtn);
       } else if ((s.mode === "code" || s.mode === "plan") && s.cwd && !t?.stats.turns) {
-        const wtBtn = button("", `ag-pill ag-wt-icon toggle${s.useWorktree ? " on" : ""}`, () => this.setWorktree(!s.useWorktree));
+        const wtBtn = button("", `ag-pill ag-wt-icon toggle${s.useWorktree ? " on" : ""}`, () => this.setWorktree(!this.settings().useWorktree));
         wtBtn.append(icon("git"));
         wtBtn.setAttribute("aria-label", s.useWorktree ? "Worktree on first message. Click to turn off." : "Works in the folder. Click to use a worktree.");
-        bindHoverTip(wtBtn, () => worktreePendingTip(s.useWorktree));
+        bindHoverTip(wtBtn, () => worktreePendingTip(this.settings().useWorktree));
         bar.append(wtBtn);
       }
       {
@@ -4083,8 +4083,7 @@
       if (meter) bar.append(meter);
       this.ctxMeter = contextMeter(this);
       bar.append(this.ctxMeter);
-      const tail = this.sendSlot;
-      tail.replaceChildren();
+      const tail = document.createDocumentFragment();
       if (this.status) {
         // Status dot and run time at the start of the strip, as in the floating chat.
         const status = t?.status || "idle";
@@ -4100,6 +4099,9 @@
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)", false));
       }
       tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)"));
+      window.scribeSyncChildren(this.bar, [bar]);
+      this.ctxMeter = this.bar.lastChild;
+      window.scribeSyncChildren(this.sendSlot, [tail]);
     }
 
     /**
@@ -5082,16 +5084,16 @@
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
     const hadFocus = Boolean(oldSearch) && document.activeElement === oldSearch;
     const caret = hadFocus ? [oldSearch.selectionStart, oldSearch.selectionEnd] : null;
-    const top = el("div", "ag-list-top");
-    const search = el("input", "ag-input small");
+    const top = container.querySelector(":scope > .ag-list-top") || el("div", "ag-list-top");
+    const search = oldSearch || el("input", "ag-input small");
     search.type = "search";
     search.placeholder = "Search threads";
     search.value = S.search;
-    search.addEventListener("input", () => {
+    search.oninput = () => {
       S.search = search.value;
       container.dataset.activeId = "";
-      fill();
-    });
+      container.agFill();
+    };
     // Up and Down move a highlight through the rows; Enter opens the highlighted thread. The highlight
     // shows from the first arrow press until the search box next gets the focus.
     const rows = () => [...list.querySelectorAll("button.ag-row")];
@@ -5103,7 +5105,7 @@
       container.dataset.activeId = items[i].dataset.id;
       if (scroll) items[i].scrollIntoView({ block: "nearest" });
     };
-    search.addEventListener("keydown", (event) => {
+    search.onkeydown = (event) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -5124,7 +5126,7 @@
         const items = rows();
         (items.find((row) => row.classList.contains("ag-row-active")) || items[0])?.click();
       }
-    });
+    };
     const seg = el("div", "ag-seg small");
     for (const [id, label] of [
       ["here", "Here"],
@@ -5144,11 +5146,11 @@
     newBtn.append(icon("plus"), el("span", null, "New"));
     // Toolbox row above the threads: list toggles that change which rows show, or how.
     const tools = el("div", "ag-list-tools");
-    const workers = button("", "ag-switch-btn", () => {
+    const workers = button("", "ag-switch-btn", (event) => {
       S.hidePageThreads = !S.hidePageThreads;
       localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
-      workers.setAttribute("aria-checked", String(!S.hidePageThreads));
-      fill();
+      event.currentTarget.setAttribute("aria-checked", String(!S.hidePageThreads));
+      container.agFill();
     }, "Threads started by a page (board workers) stay hidden until you type in them, unless this is on");
     workers.setAttribute("role", "switch");
     workers.setAttribute("aria-checked", String(!S.hidePageThreads));
@@ -5161,7 +5163,9 @@
     compact.setAttribute("aria-checked", String(compactThreads()));
     compact.append(el("span", "ag-switch"), el("span", null, "Compact"));
     tools.append(workers, compact);
-    top.append(search, seg, newBtn, tools, ...movedBanners());
+    const oldTools = top.querySelector(".ag-list-tools");
+    if (oldTools) window.scribeSyncChildren(oldTools, [...tools.childNodes]);
+    window.scribeSyncChildren(top, [search, seg, newBtn, oldTools || tools, ...movedBanners()]);
     // The list and its unchanged rows stay in the page: a rebuilt row loses its hover and blinks (#407).
     const list = container.querySelector(":scope > .ag-list") || el("div", "ag-list");
     list.className = `ag-list${compactThreads() ? " compact" : ""}`;
@@ -5291,7 +5295,7 @@
       }
     };
     fill();
-    search.addEventListener("focus", () => container.classList.remove("ag-list-kb"));
+    search.onfocus = () => container.classList.remove("ag-list-kb");
     if (hadFocus) {
       // A re-render while typing keeps the highlight shown or hidden.
       const kb = container.classList.contains("ag-list-kb");
@@ -6899,6 +6903,7 @@
     const ctx = contextInfo(view);
     const level = usageLevel(ctx.fraction);
     const meter = button("", `ag-ctx-meter lvl-${level}${ctx.param ? "" : " fixed"}`, (event) => {
+      const ctx = contextInfo(view);
       if (!ctx.param) return;
       hideUsageTip();
       const cur = ctx.size;

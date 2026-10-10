@@ -1181,6 +1181,68 @@
   <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
 
 <script>
+/**
+ * Re-rendering a list without disturbing the rows that did not change.
+ *
+ * A node that is taken out of the document and put back (or replaced by a new copy) loses `:hover` until the
+ * pointer next moves and drops its running transitions. A list rebuilt on every server event therefore blinks:
+ * the hover highlight falls to nothing and fades back in, on all rows at once (#407).
+ *
+ * `scribeSyncChildren(parent, nodes)` makes `nodes` the children of `parent`, but keeps a child already there
+ * when the new node would look the same, and moves only what is out of place. A kept child keeps its own
+ * listeners: handlers on rows that may be kept must read live data, not what they closed over.
+ */
+(() => {
+  // Set on a node after it is in the page (tooltip.js, hover card), so a fresh copy never has them.
+  const IGNORED = new Set(["aria-description", "aria-describedby"]);
+  // Their state lives in properties, which attributes don't show.
+  const STATEFUL = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
+  function attrs(el) {
+    const out = new Map();
+    for (const { name, value } of el.attributes) {
+      if (IGNORED.has(name)) continue;
+      out.set(name, name === "class" ? value.trim().split(/\s+/).join(" ") : value);
+    }
+    if (out.get("class") === "") out.delete("class");
+    return out;
+  }
+
+  function same(a, b) {
+    if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false;
+    if (a.nodeType !== Node.ELEMENT_NODE) return a.nodeValue === b.nodeValue;
+    if (STATEFUL.has(a.nodeName) && !(a.nodeName === "INPUT" && a.type === "checkbox" && b.type === "checkbox" && a.checked === b.checked)) return false;
+    if (a.childNodes.length !== b.childNodes.length) return false;
+    const mine = attrs(a);
+    const theirs = attrs(b);
+    if (mine.size !== theirs.size) return false;
+    for (const [name, value] of mine) {
+      if (theirs.get(name) !== value) return false;
+    }
+    for (let i = 0; i < a.childNodes.length; i += 1) {
+      if (!same(a.childNodes[i], b.childNodes[i])) return false;
+    }
+    return true;
+  }
+
+  window.scribeSyncChildren = function scribeSyncChildren(parent, nodes) {
+    const wanted = nodes.flatMap((node) => (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? [...node.childNodes] : [node]));
+    const pool = [...parent.childNodes];
+    const next = wanted.map((node) => {
+      let at = pool.indexOf(node);
+      if (at < 0) at = pool.findIndex((old) => same(old, node));
+      return at < 0 ? node : pool.splice(at, 1)[0];
+    });
+    for (const old of pool) old.remove();
+    let cursor = parent.firstChild;
+    for (const node of next) {
+      if (node === cursor) cursor = cursor.nextSibling;
+      else parent.insertBefore(node, cursor);
+    }
+  };
+})();
+
+
 (function () {
   if (!window.scribe) {
     document.getElementById("board").innerHTML = "<p class='need-reload'>Reload the Scribe tab so this page can use shared state.</p>";
@@ -1890,30 +1952,23 @@
     var scrollLeft = boardEl.scrollLeft;
     var listScroll = {};
     boardEl.querySelectorAll(".cards").forEach(function (list) { listScroll[list.dataset.col] = list.scrollTop; });
-    var focusComposer = document.activeElement && document.activeElement.classList.contains("composer-input");
-    // The composer is rebuilt with the board, so keep its caret, selection and scroll across the render.
-    var composerSel = focusComposer ? {
-      value: document.activeElement.value,
-      start: document.activeElement.selectionStart,
-      end: document.activeElement.selectionEnd,
-      dir: document.activeElement.selectionDirection,
-      top: document.activeElement.scrollTop
-    } : null;
-    boardEl.replaceChildren();
+    var boardNodes = [];
     var filtering = filterActive();
     columns().forEach(function (col) {
-      var colEl = el("section", "column");
+      var colEl = Array.from(boardEl.children).find(function (node) { return node.dataset.col === col.id; }) || el("section", "column");
+      var colNodes = [];
       colEl.dataset.col = col.id;
       var head = el("div", "col-head");
       head.dataset.col = col.id;
       if (editingCol === col.id) {
-        var input = el("input", "col-title-input");
-        input.value = col.title;
-        input.addEventListener("keydown", function (e) {
+        var existingInput = colEl.querySelector(".col-title-input");
+        var input = existingInput || el("input", "col-title-input");
+        if (!existingInput) input.value = col.title;
+        if (!existingInput) input.addEventListener("keydown", function (e) {
           if (e.key === "Enter") input.blur();
           if (e.key === "Escape") { editingCol = null; render(); }
         });
-        input.addEventListener("blur", function () {
+        if (!existingInput) input.addEventListener("blur", function () {
           if (editingCol !== col.id) return;
           editingCol = null;
           var title = input.value.trim();
@@ -1921,8 +1976,10 @@
             setColumns(columns().map(function (c) { return c.id === col.id ? Object.assign({}, c, { title: title }) : c; }));
           } else render();
         });
-        head.appendChild(input);
-        setTimeout(function () { input.focus(); input.select(); }, 0);
+        if (!existingInput) {
+          head.appendChild(input);
+          setTimeout(function () { if (input.isConnected && editingCol === col.id && !openId) { input.focus(); input.select(); } }, 0);
+        }
       } else {
         var title = el("span", "col-title", col.title || "Untitled");
         title.addEventListener("click", function (e) {
@@ -1947,21 +2004,49 @@
       menuBtn.setAttribute("aria-label", "Column menu");
       menuBtn.addEventListener("click", function (e) {
         e.stopPropagation();
-        openColumnMenu(col, menuBtn);
+        openColumnMenu(column(col.id), e.currentTarget);
       });
       head.appendChild(menuBtn);
       head.addEventListener("pointerdown", function (e) { startColumnDrag(e, col.id, colEl); });
-      colEl.appendChild(head);
+      var oldHead = colEl.querySelector(".col-head");
+      if (oldHead) {
+        var headNodes = Array.from(head.childNodes);
+        if (editingCol === col.id && existingInput) headNodes.unshift(existingInput);
+        window.scribeSyncChildren(oldHead, headNodes);
+        head = oldHead;
+      }
+      colNodes.push(head);
 
-      var ul = el("ul", "cards");
+      var ul = colEl.querySelector(".cards") || el("ul", "cards");
+      var cardNodes = [];
       ul.dataset.col = col.id;
       visible.forEach(function (c) {
-        ul.appendChild(renderCard(c, col));
+        cardNodes.push(renderCard(c, col));
       });
-      colEl.appendChild(ul);
+      window.scribeSyncChildren(ul, cardNodes);
+      ul.querySelectorAll(".card").forEach(function (node) {
+        var cover = node.querySelector(".cover");
+        var loadedCover = coverEls[node.dataset.id];
+        if (cover && loadedCover && cover !== loadedCover && cover.getAttribute("src") === loadedCover.getAttribute("src")) {
+          cover.replaceWith(loadedCover);
+          cover = loadedCover;
+        }
+        if (cover) coverEls[node.dataset.id] = cover;
+        var line = node.querySelector(".step-text");
+        var liveLine = stepLines[node.dataset.id];
+        if (line && liveLine && line !== liveLine) {
+          line.replaceWith(liveLine);
+          line = liveLine;
+          setStepLine(line, cardStep(card(node.dataset.id)));
+        }
+        if (line) stepLines[node.dataset.id] = line;
+      });
+      colNodes.push(ul);
 
       if (composerCol === col.id) {
-        colEl.appendChild(renderComposer(col));
+        var composer = colEl.querySelector(".composer") || renderComposer(col);
+        composer.querySelector("textarea").value = composerText;
+        colNodes.push(composer);
       } else {
         var add = el("button", "add-card", "+ Add a card");
         add.type = "button";
@@ -1970,9 +2055,10 @@
           focusComposerNext = true;
           render();
         });
-        colEl.appendChild(add);
+        colNodes.push(add);
       }
-      boardEl.appendChild(colEl);
+      window.scribeSyncChildren(colEl, colNodes);
+      boardNodes.push(colEl);
     });
     var addCol = el("button", "add-column", "+ Add column");
     addCol.type = "button";
@@ -1982,21 +2068,16 @@
       setColumns(columns().concat([col]));
       boardEl.scrollLeft = boardEl.scrollWidth;
     });
-    if (!settings().hideAddColumn) boardEl.appendChild(addCol);
+    if (!settings().hideAddColumn) boardNodes.push(addCol);
+    window.scribeSyncChildren(boardEl, boardNodes);
     boardEl.scrollLeft = scrollLeft;
     boardEl.querySelectorAll(".cards").forEach(function (list) {
       if (listScroll[list.dataset.col]) list.scrollTop = listScroll[list.dataset.col];
     });
-    if (focusComposer || focusComposerNext) {
+    if (focusComposerNext) {
       focusComposerNext = false;
       var ta = boardEl.querySelector(".composer-input");
-      if (ta) {
-        ta.focus();
-        if (composerSel && composerSel.value === ta.value) {
-          ta.setSelectionRange(composerSel.start, composerSel.end, composerSel.dir);
-          ta.scrollTop = composerSel.top;
-        }
-      }
+      if (ta && !openId) ta.focus();
     }
   }
 
@@ -2006,7 +2087,7 @@
     var done = col && col.role === "done";
     if (done) li.classList.add("is-done");
     if (c.images.length && c.cover !== false) {
-      // The board is rebuilt on every change; reusing the loaded image keeps its height, so the column keeps its scroll.
+      // Compare a detached copy first; renderBoard restores the loaded image if the card changed.
       var cover = coverEls[c.id];
       if (!cover || cover._src !== c.images[0].data) {
         cover = coverEls[c.id] = el("img", "cover");
@@ -2014,7 +2095,7 @@
         cover.alt = "";
         cover.draggable = false;
       }
-      li.appendChild(cover);
+      li.appendChild(cover.cloneNode(true));
     }
     var labelMap = {};
     labels().forEach(function (l) { labelMap[l.id] = l; });
@@ -2103,6 +2184,7 @@
       if (kind === "working") {
         st.appendChild(el("span", "pulse"));
         var line = stepLines[c.id] || (stepLines[c.id] = el("span", "step-text"));
+        line = line.cloneNode(true);
         st.appendChild(line);
         setStepLine(line, cardStep(c));
       } else {
