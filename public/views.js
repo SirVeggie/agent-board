@@ -680,13 +680,22 @@ window.createViews = function createViews(host) {
     renderBody(body, target);
   }
 
+  let peekDrawn = null;
+
   function renderPeekChrome(top) {
     const show = Boolean(top);
     scrim.hidden = !show;
     card.hidden = !show;
     if (!show) {
+      peekDrawn = null;
       return;
     }
+    // Like a pane's header: redrawn only when what it shows changes.
+    const key = JSON.stringify([frameIdOf(top), titleOf(top), activePeek().stack.length > 1, top.kind === "url" && blocked.has(top.href)]);
+    if (peekDrawn === key) {
+      return;
+    }
+    peekDrawn = key;
     const parts = [];
     if (activePeek().stack.length > 1) {
       parts.push(iconButton(ICONS.back, "Back", () => peekBack(), false));

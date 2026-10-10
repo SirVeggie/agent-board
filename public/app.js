@@ -278,6 +278,7 @@
   let tabScrollRaf = 0;
   /** @type {string | null} */
   let revealedTabId = null;
+  let revealedTabShape = "";
   /** @type {Map<string, HTMLElement>} */
   const tabEls = new Map();
   /** @type {null | {
@@ -767,7 +768,8 @@
           item.stateUpdatedAt = Date.now();
         }
       }
-      if (closed && !views.isShown(msg.id)) {
+      // A page an agent keeps writing to sends these many times a second: draw only the first.
+      if (closed && !views.isShown(msg.id) && !unreadLibrary.has(msg.id)) {
         unreadLibrary.add(msg.id);
         renderChrome();
         library.render();
@@ -787,7 +789,7 @@
           "*"
         );
       }
-      if (tab && !views.isShown(msg.id) && !popout.has(msg.id)) {
+      if (tab && !views.isShown(msg.id) && !popout.has(msg.id) && !unread.has(msg.id)) {
         unread.add(msg.id);
         render();
       }
@@ -1098,7 +1100,7 @@
   function applySideWidth(px) {
     const width = Math.max(220, Math.min(480, px));
     document.documentElement.style.setProperty("--side-width", width + "px");
-    localStorage.setItem(SIDE_WIDTH_KEY, String(width));
+    return width;
   }
 
   function paneSide(key) {
@@ -1668,9 +1670,14 @@
     }
     const active = tabsEl.querySelector(".tab.active");
     if (active && !drag) {
-      const smooth = smoothTabScroll() && revealedTabId != null && revealedTabId !== state.activeId;
-      revealTab(active, smooth);
-      revealedTabId = state.activeId;
+      // Only when the active tab or the strip changed: any other render would pull a strip the user scrolled back.
+      const shape = ordered.length + ":" + tabsEl.clientWidth;
+      if (revealedTabId !== state.activeId || revealedTabShape !== shape) {
+        const smooth = smoothTabScroll() && revealedTabId != null && revealedTabId !== state.activeId;
+        revealTab(active, smooth);
+        revealedTabId = state.activeId;
+        revealedTabShape = shape;
+      }
     } else if (!active) {
       revealedTabId = null;
     }
@@ -5007,17 +5014,27 @@
     sideResizer.setPointerCapture(event.pointerId);
     document.body.classList.add("resizing-side");
 
+    let x = startX;
+    let frame = 0;
+    // The width is a root variable, so each change restyles the page: one per frame, saved on release.
+    function apply() {
+      frame = 0;
+      const dir = document.documentElement.dataset.librarySide === "left" ? 1 : -1;
+      return applySideWidth(startWidth + dir * (x - startX));
+    }
     function onMove(move) {
       if (move.pointerId !== event.pointerId) {
         return;
       }
-      const dir = document.documentElement.dataset.librarySide === "left" ? 1 : -1;
-      applySideWidth(startWidth + dir * (move.clientX - startX));
+      x = move.clientX;
+      frame ||= requestAnimationFrame(apply);
     }
     function onUp(up) {
       if (up.pointerId !== event.pointerId) {
         return;
       }
+      cancelAnimationFrame(frame);
+      localStorage.setItem(SIDE_WIDTH_KEY, String(apply()));
       sideResizer.removeEventListener("pointermove", onMove);
       sideResizer.removeEventListener("pointerup", onUp);
       sideResizer.removeEventListener("pointercancel", onUp);

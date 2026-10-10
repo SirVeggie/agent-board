@@ -2038,7 +2038,7 @@ function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: Boar
         }
       : null,
   });
-  const snippet = `<script src="/tooltip.js?v=2" defer></script>
+  const snippet = `<script src="/tooltip.js?v=3" defer></script>
 <style data-scribe-bridge>${BOARD_STALE_CSS}</style>
 <script>window.__SCRIBE_BOOT__=${boot};
 ${BOARD_BRIDGE_JS}

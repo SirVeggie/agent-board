@@ -2544,6 +2544,15 @@ button.settings-close svg {
     filter 160ms var(--ease);
 }
 
+/* The rule above would otherwise replace the strip's own edge-fade transition. */
+.tabs-wrap > .tabs {
+  transition:
+    opacity 160ms var(--ease),
+    filter 160ms var(--ease),
+    --tabs-fade-left 150ms ease,
+    --tabs-fade-right 150ms ease;
+}
+
 .tabs-wrap.file-drop-over > * {
   opacity: 0.12;
   filter: blur(1.5px);

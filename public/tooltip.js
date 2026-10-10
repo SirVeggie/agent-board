@@ -78,7 +78,10 @@
   document.addEventListener("pointerdown", hide, true);
   document.addEventListener("keydown", hide, true);
   window.addEventListener("blur", hide);
-  window.addEventListener("scroll", hide, true);
+  // Only a scroll that moves the anchor: a chat streaming elsewhere scrolls on every frame.
+  window.addEventListener("scroll", event => {
+    if (anchor && event.target.contains?.(anchor)) hide();
+  }, true);
   window.addEventListener("resize", hide);
 
   // Stored pages and third-party renderers may still assign title dynamically.

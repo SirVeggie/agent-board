@@ -6,7 +6,7 @@
  * otherwise clip it and become its containing block.
  */
 (function () {
-  /** @type {null | { close: (focus?: boolean) => void }} */
+  /** @type {null | { wrap: HTMLElement, close: (focus?: boolean) => void }} */
   let openOne = null;
 
   // Registered before app.js's shortcut handler, so Esc closes the list and nothing else.
@@ -31,7 +31,8 @@
   document.addEventListener(
     "scroll",
     (event) => {
-      if (openOne && !event.target.closest?.(".select-menu")) {
+      // Only a scroll that moves the button: a chat streaming elsewhere scrolls on every frame.
+      if (openOne && !event.target.closest?.(".select-menu") && event.target.contains?.(openOne.wrap)) {
         openOne.close();
       }
     },
@@ -172,7 +173,7 @@
       }
     }
 
-    const api = { close };
+    const api = { wrap, close };
 
     button.addEventListener("click", () => (menu.hidden ? open() : close()));
     button.addEventListener("keydown", (event) => {

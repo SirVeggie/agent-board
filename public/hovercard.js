@@ -258,7 +258,16 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
       hide();
     }
   });
-  window.addEventListener("scroll", hide, true);
+  // Only a scroll that moves the anchor: a chat streaming elsewhere scrolls on every frame.
+  window.addEventListener(
+    "scroll",
+    (event) => {
+      if (anchor && event.target.contains?.(anchor)) {
+        hide();
+      }
+    },
+    true
+  );
   window.addEventListener("wheel", hide, { passive: true, capture: true });
   window.addEventListener("blur", hide);
   window.addEventListener("keydown", hide, true);

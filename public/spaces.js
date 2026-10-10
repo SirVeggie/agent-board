@@ -87,7 +87,8 @@ window.createSpaces = function createSpaces(host) {
     data = { spaces: view.spaces, activeId: view.activeId ?? null, deleted: Array.isArray(view.deleted) ? view.deleted : [] };
     selected = Math.min(selected, Math.max(0, data.spaces.length - 1));
     renderChip();
-    if (open && !drag) {
+    // Not while a name is being typed: a redraw would replace the input.
+    if (open && !drag && !renaming) {
       render();
     }
   }
