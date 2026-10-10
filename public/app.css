@@ -433,7 +433,18 @@ html.spaces-open .chrome-edge {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  --new-tab-room: 34px;
+}
+
+@property --tabs-fade-left {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --tabs-fade-right {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
 }
 
 .tabs {
@@ -449,6 +460,29 @@ html.spaces-open .chrome-edge {
   scrollbar-width: none;
   -ms-overflow-style: none;
   height: 100%;
+  /* Fade the tabs themselves so the live chrome background stays continuous. */
+  --tabs-mask: linear-gradient(to right,
+    rgba(0, 0, 0, calc(1 - var(--tabs-fade-left))) 0,
+    #000 min(48px, 50%),
+    #000 max(calc(100% - 48px), 50%),
+    rgba(0, 0, 0, calc(1 - var(--tabs-fade-right))) 100%);
+  -webkit-mask-image: var(--tabs-mask);
+  mask-image: var(--tabs-mask);
+  transition: --tabs-fade-left 150ms ease, --tabs-fade-right 150ms ease;
+}
+
+.tabs.fade-left {
+  --tabs-fade-left: 1;
+}
+
+.tabs.fade-right {
+  --tabs-fade-right: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabs {
+    transition: none;
+  }
 }
 
 .tabs::-webkit-scrollbar {
@@ -456,27 +490,6 @@ html.spaces-open .chrome-edge {
   height: 0 !important;
   display: none !important;
   background: transparent;
-}
-
-.tabs-fade {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 48px;
-  pointer-events: none;
-  background: linear-gradient(to right, transparent 0%, var(--chrome-solid) 75%);
-  z-index: 1;
-}
-
-.tabs-fade-left {
-  right: auto;
-  left: 0;
-  background: linear-gradient(to left, transparent 0%, var(--chrome-solid) 75%);
-}
-
-#tabs-fade {
-  right: var(--new-tab-room);
 }
 
 .new-tab {
@@ -503,10 +516,6 @@ html.spaces-open .chrome-edge {
   color: var(--heading);
   background: var(--accent-soft);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-}
-
-.tabs-fade[hidden] {
-  display: none;
 }
 
 .tab {

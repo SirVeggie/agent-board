@@ -1,7 +1,5 @@
 (() => {
   const tabsEl = document.getElementById("tabs");
-  const fadeEl = document.getElementById("tabs-fade");
-  const fadeLeftEl = document.getElementById("tabs-fade-left");
   const emptyEl = document.getElementById("empty");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
@@ -1308,8 +1306,8 @@
     const overflow = tabsEl.scrollWidth - tabsEl.clientWidth > 1;
     const moreToTheRight = tabsEl.scrollLeft + tabsEl.clientWidth < tabsEl.scrollWidth - 1;
     const moreToTheLeft = tabsEl.scrollLeft > 1;
-    fadeEl.hidden = !(overflow && moreToTheRight);
-    fadeLeftEl.hidden = !(overflow && moreToTheLeft);
+    tabsEl.classList.toggle("fade-right", overflow && moreToTheRight);
+    tabsEl.classList.toggle("fade-left", overflow && moreToTheLeft);
   }
 
   function lookupTab(el) {
