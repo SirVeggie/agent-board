@@ -59,8 +59,12 @@ after(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   host.dispose();
   store.closeDb();
-  // Windows can hold the database file a moment after it closes.
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // Windows can still hold the scratch folder for a moment (EPERM); a leftover temp folder is no test failure.
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    // left for the OS to clean up
+  }
 });
 
 function parent(approval: ApprovalPolicy = "full"): string {
