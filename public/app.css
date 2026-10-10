@@ -2027,7 +2027,22 @@ kbd {
 .settings-view { display: contents; }
 .settings-view[hidden] { display: none; }
 .settings-header .settings-title { margin: 0; }
-.settings-close { font-size: 22px; padding: 0 10px; background: transparent; }
+button.settings-close {
+  width: var(--control-height);
+  height: var(--control-height);
+  padding: 0;
+  flex: 0 0 auto;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+button.settings-close:hover {
+  color: var(--heading);
+  box-shadow: none;
+}
+button.settings-close svg {
+  display: block;
+}
 .settings-nav {
   display: flex;
   flex-direction: column;

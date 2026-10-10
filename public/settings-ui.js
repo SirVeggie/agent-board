@@ -63,7 +63,7 @@
     const closeButton = document.createElement("button");
     closeButton.type = "button";
     closeButton.className = "settings-close";
-    closeButton.textContent = "×";
+    closeButton.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
     closeButton.setAttribute("aria-label", "Close settings");
     closeButton.dataset.tooltip = "Close settings (Esc)";
     closeButton.addEventListener("click", onClose);
