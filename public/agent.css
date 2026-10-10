@@ -3388,8 +3388,8 @@ html.tight-small .agent-full {
   background: var(--panel);
   border-radius: 16px;
   box-shadow: var(--ag-raised);
-  -webkit-mask-image: none;
-  mask-image: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 32px);
+  mask-image: linear-gradient(to bottom, transparent, #000 32px);
 }
 
 .dock-history {
@@ -3409,6 +3409,8 @@ html.tight-small .agent-full {
 
 .dock-history .ag-scroll {
   max-height: 55vh;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
 }
 
 .dock-history .ag-transcript {
