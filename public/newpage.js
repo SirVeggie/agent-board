@@ -20,7 +20,7 @@
    * goes over the theme's panel colour. On a light theme both tint the panel instead of lighting it.
    */
   const HEAD = `precision highp float;
-uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;
+uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;uniform float u_work;
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 vec2 hash2(vec2 p){return vec2(hash(p),hash(p+19.19));}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
@@ -57,7 +57,11 @@ vec3 c=shade(uv,u_time);
 c+=(hash(gl_FragCoord.xy+fract(u_time))-.5)/128.;
 gl_FragColor=vec4(c,1.);}`;
 
-  const NEBULA = `vec3 shade(vec2 uv,float T){float l;return nebula(uv,T*.05,l);}`;
+  /** Inward highlights gather into a breathing core, without changing the cloud's drift. */
+  const NEBULA = `vec3 shade(vec2 uv,float T){float l;vec3 c=nebula(uv,T*.05,l);
+float r=length(uv);float wave=pow(.5+.5*cos(r*13.+T*1.1),5.);
+float core=exp(-r*6.)*(.6+.4*sin(T*.9));
+return glow(c,u_work*vig(uv)*(vec3(.38,.28,.8)*wave*(.09+.32*l)+vec3(.48,.42,1.)*core*.17));}`;
 
   /** The nebula with three layers of twinkling four-point sparkles, brighter where the matter is dense. */
   const STARDUST = `vec3 shade(vec2 uv,float T){float l;vec3 c=nebula(uv,T*.04,l);vec3 e=vec3(0.);
@@ -77,7 +81,8 @@ float off=(fbm(vec2(x*.8,t+fi))-.5)*.9-.3+fi*.1;float dy=uv.y-off;
 float band=smoothstep(-.02,.03,dy)*exp(-max(dy,0.)*(2.6+fi));
 float streak=.4+.6*noise(vec2(x*26.+fbm(vec2(x*3.,t*2.))*6.,t*3.+fi));
 vec3 col=mix(vec3(.22,.5,1.),vec3(.64,.3,.98),clamp(dy*2.2+fi*.15,0.,1.));
-c+=col*band*streak*(.6-fi*.08);}
+float wave=pow(.5+.5*sin(x*3.-T*1.1-fi*.9),5.);
+c+=col*band*streak*(.6-fi*.08)*(1.+u_work*wave*1.4);}
 c+=vec3(.25,.22,.8)*.1*fbm(uv*2.+t);
 return glow(u_bg,c*vig(uv));}`;
 
@@ -89,7 +94,7 @@ c+=1./length(vec2(p.x/(sin(i.x+t)/.005),p.y/(cos(i.y+t)/.005)));}
 c/=5.;c=1.17-pow(c,1.4);float k=pow(abs(c),8.);
 float depth=fbm(uv*1.5+T*.02);
 vec3 e=vec3(.1,.09,.34)*depth*.5+vec3(.42,.6,1.)*k*.3*(.35+depth)+vec3(.62,.36,1.)*k*k*.1;
-return glow(u_bg,e*vig(uv));}`;
+return glow(u_bg,e*vig(uv)*.2);}`;
 
   /** Height lines of a smooth, shifting terrain, one pixel wide whatever the slope; every fourth is brighter. */
   const CONTOURS = `float f3(vec2 p){return noise(p)*.6+noise(p*2.1+7.)*.28+noise(p*4.3+3.)*.12;}
@@ -102,6 +107,8 @@ float major=step(mod(floor(k+.5),4.),.5);
 vec3 col=mix(vec3(.24,.24,.85),vec3(.6,.3,.98),smoothstep(.35,.6,h));
 col=mix(col,vec3(.35,.68,1.),smoothstep(.55,.75,h));
 vec3 c=col*line*(.35+.65*major)+col*smoothstep(.3,.8,h)*.14;
+float wave=pow(.5+.5*cos(length(uv)*17.-T*1.25),10.);
+c+=vec3(.55,.7,1.)*line*wave*u_work*.65;
 return glow(u_bg,c*vig(uv));}`;
 
   /** The nebula sampled once per cell of a tilted grid and printed as dots sized by its brightness. */
@@ -171,6 +178,8 @@ return glow(c,e);}`;
     // Starts somewhere along the drift, so each new page doesn't open on the same frame.
     let time = Math.random() * 400;
     let running = false;
+    let work = 0;
+    let target = 0;
 
     function build(id) {
       const { frag, sharp, derivatives } = STYLES[id];
@@ -200,8 +209,9 @@ return glow(c,e);}`;
       fx.set({ u_bg: [r, g, b], u_light: 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0 });
     }
 
-    const draw = () => fx?.draw({ u_time: time });
+    const draw = () => fx?.draw({ u_time: time, u_work: work });
     const loop = GL.loop((dt) => {
+      work += (target - work) * Math.min(1, dt * 2);
       time += dt;
       draw();
     });
@@ -210,6 +220,7 @@ return glow(c,e);}`;
       theme();
       if (still.matches) {
         loop.stop();
+        work = target;
         draw();
         return;
       }
@@ -219,10 +230,12 @@ return glow(c,e);}`;
     if (!use("nebula")) return null;
     new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     new ResizeObserver(() => running && draw()).observe(root);
+    still.addEventListener("change", () => running && start());
 
     return {
       /** Run with this background while the screen is shown. */
-      set(on, id) {
+      set(on, id, working = false) {
+        target = working ? 1 : 0;
         running = Boolean(on && use(id));
         if (running) start();
         else loop.stop();
@@ -287,7 +300,7 @@ return glow(c,e);}`;
     function render(tab) {
       root.hidden = !tab;
       current = tab || null;
-      backdrop?.set(Boolean(tab), tab ? background(tab.id) : null);
+      backdrop?.set(Boolean(tab), tab ? background(tab.id) : null, tab ? host.working(tab.id) : false);
       if (!tab) {
         shown = null;
         drawn = "";
@@ -312,7 +325,7 @@ return glow(c,e);}`;
       grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
     }
 
-    window.addEventListener("scribe:newpage-bg", () => current && backdrop?.set(true, background(current.id)));
+    window.addEventListener("scribe:newpage-bg", () => current && backdrop?.set(true, background(current.id), host.working(current.id)));
 
     return {
       render,

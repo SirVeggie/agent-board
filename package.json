@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "test:search": "tsx --test src/search/search.test.ts",
+    "test:newpage": "node --experimental-strip-types --test --test-isolation=none src/newpage.test.ts",
     "start": "node dist/index.js --daemon",
     "mcp": "node dist/index.js",
     "dev": "tsx watch src/index.ts --daemon",
