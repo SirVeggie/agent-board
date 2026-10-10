@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
-test("peeks belong to a tab and a split keeps two equal panes within its space", async (t) => {
+test("peeks stay with their tab; split panes can be focused, arranged and replaced by pointer drag", async (t) => {
   let browser;
   try {
     browser = process.env.SCRIBE_TEST_CHROMIUM
@@ -136,6 +136,39 @@ test("peeks belong to a tab and a split keeps two equal panes within its space",
       await views.open("b", "split");
       spaceIds = ["one"]; space = "one"; views.prune(); views.layout();
       observations.deletedSpaceRemoved = localStorage.getItem("scribe.spaceSplits");
+      // Pointer drop zones cover frames; arranging and replacing reuse the frame pool.
+      select("b");
+      await views.open("c", "split");
+      const keptFrame = frames.get("c")!.el;
+      const box = mainEl.getBoundingClientRect();
+      views.beginPageDrag({ pane: "b" });
+      const topDrop = views.updatePageDrag(box.left + box.width / 2, box.top + 5);
+      observations.edgeDrop = topDrop;
+      observations.overlayVisible = [...mainEl.querySelectorAll(".pane-drop-overlay")].some(el => !(el as HTMLElement).hidden);
+      views.endPageDrag();
+      await views.dropPage({ pane: "b" }, topDrop);
+      observations.dragStack = [panes(), mainEl.classList.contains("split-col")];
+      views.beginPageDrag({ id: "d" });
+      const replace = views.updatePageDrag(box.left + box.width / 2, box.top + box.height / 4);
+      await views.dropPage({ id: "d" }, replace);
+      views.endPageDrag();
+      observations.dragReplace = [panes(), active];
+      await views.dropPage({ id: "d" }, { edge: "right" });
+      observations.dragRight = [panes(), mainEl.classList.contains("split-col")];
+      views.beginPageDrag({ pane: "a" });
+      observations.noDropOutside = views.updatePageDrag(box.right + 20, box.bottom + 20);
+      views.endPageDrag();
+      observations.cancelKeepsLayout = panes();
+      await views.dropPage({ pane: "b" }, { strip: true });
+      observations.dragToStrip = [shown(), pages.has("d"), frames.get("c")!.el === keptFrame];
+      views.beginPageDrag({ id: "c" });
+      await views.dropPage({ id: "c" }, { edge: "left" });
+      views.endPageDrag();
+      observations.dragTabToSplit = [panes(), active];
+      await views.dropPage({ pane: "b" }, { strip: true });
+      await views.dropPage({ id: "c" }, { edge: "bottom" });
+      observations.dragOnlyTab = [shown(), mainEl.classList.contains("split-col")];
+      observations.overlayCleaned = [(mainEl.querySelector(".pane-drop-overlay") as HTMLElement).hidden, document.body.classList.contains("dragging-pane")];
       return observations;
     });
     assert.deepEqual(result, {
@@ -151,7 +184,77 @@ test("peeks belong to a tab and a split keeps two equal panes within its space",
       paneToPeek: ["a,d", false, true], peekToSplit: ["da", false],
       afterReload: ["da", "a"], deletedTarget: "d", deletedSplitNotRestored: "d",
       deletedSpaceRemoved: "{}",
+      edgeDrop: { edge: "top" }, overlayVisible: true, dragStack: ["cb", true],
+      dragReplace: ["db", "b"], dragRight: ["bd", false], noDropOutside: null,
+      cancelKeepsLayout: "bd", dragToStrip: ["b", true, true], dragTabToSplit: ["cb", "b"],
+      dragOnlyTab: ["c,new", true], overlayCleaned: [true, false],
     });
+    // Exercise the actual app.js controller with mouse input, including crossing live iframes.
+    await page.setContent('<div id="strip"><div id="tabs"></div></div><main></main>');
+    await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") + '\n#strip {height:50px} #tabs {display:flex;height:50px} main {position:relative;width:1100px;height:650px} .tab {width:150px;height:40px} iframe {position:absolute;inset:40px 0 0;width:100%;height:90%}' });
+    const appSource = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+    const controller = appSource.slice(appSource.indexOf("  function onTabPointerDown("), appSource.indexOf('  /**\n   * Library row dragged over the strip'));
+    await page.addScriptTag({ content: `{
+      const state = { tabs: ['a','b','c'].map(id => ({id,title:id,pinned:false})), activeId:'a' };
+      const mainEl = document.querySelector('main'), tabsEl = document.querySelector('#tabs'), tabsWrap = document.querySelector('#strip');
+      const libraryToggle = document.createElement('button'), tabEls = new Map(), frames = new Map();
+      let drag = null, dragScrollTimer = 0, toggleHoverTimer = 0, dragSuppressClick = false;
+      const hoverCard = {suspend(){},resume(){}}, library = {stripDragCancel(){},stripDragMove(){return false},stripDragDrop(){return false}};
+      const lookupTab = el => state.tabs.find(t => t.id === el.dataset.id);
+      const stopTabScroll = () => {}, updateTabFade = () => {}, flipStrip = fn => fn();
+      const libraryShown = () => false, setSidebarTab = () => {}, setSideOpen = () => {};
+      const select = id => { views.onSelect(id); state.activeId=id; views.layout(); };
+      const renderTabs = () => { for(const tab of state.tabs) tabsEl.appendChild(tabEls.get(tab.id)); };
+      const views = window.createViews({mainEl,startPaneDrag,contentOrigin:()=>location.origin,
+        tabs:()=>state.tabs,closed:()=>[],activeId:()=>state.activeId,activeTab:()=>state.tabs.find(t=>t.id===state.activeId),
+        findAnyTab:id=>state.tabs.find(t=>t.id===id),isBlank:()=>false,draftId:()=>null,
+        spaceId:()=> 'pointer-test',spaceIds:()=>['pointer-test'],activate:select,selectTab:select,
+        frame:id=>frames.get(id),frameIds:()=>[...frames.keys()],ensureFrame:meta=>{
+          if(!frames.has(meta.id)){const el=document.createElement('iframe');mainEl.appendChild(el);frames.set(meta.id,{el});}
+          return frames.get(meta.id);
+        },discardFrame:()=>{},markSeen:()=>{},render:()=>views.layout()
+      });
+      for(const tab of state.tabs){ const el=document.createElement('div');el.className='tab';el.dataset.id=tab.id;el.textContent=tab.title;
+        el.addEventListener('pointerdown',e=>onTabPointerDown(e,el));tabEls.set(tab.id,el); }
+      renderTabs(); views.layout();
+      window.addEventListener('keydown',e=>{if(e.key==='Escape')abortDrag();});
+      window.dragTest = {views,state,frames};
+      ${controller}
+    }` });
+    const moveDrag = async (selector: string, x: number, y: number) => {
+      const rect = await page.locator(selector).boundingBox();
+      assert.ok(rect);
+      await page.mouse.move(rect.x + 40, rect.y + rect.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(rect.x + 50, rect.y + rect.height / 2);
+      await page.mouse.move(x, y, { steps: 5 });
+    };
+    const area = await page.locator('main').boundingBox();
+    assert.ok(area);
+    await moveDrag('.tab[data-id="b"]', area.x + area.width - 5, area.y + area.height / 2);
+    await page.mouse.up();
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), true);
+    await moveDrag('.pane-head[data-pane="b"]', area.x + area.width / 2, area.y + 5);
+    await page.mouse.up();
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('split-col')), true);
+    await moveDrag('.tab[data-id="c"]', area.x + area.width / 2, area.y + area.height * 0.75);
+    await page.mouse.up();
+    assert.equal(await page.evaluate(() => (window as any).dragTest.frames.get('c').el.dataset.pane), 'b');
+    await moveDrag('.pane-head[data-pane="b"]', 80, 25);
+    await page.mouse.up();
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
+    assert.equal(await page.locator('.tab').count(), 3);
+    await moveDrag('.tab[data-id="b"]', area.x + 5, area.y + 200);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
+    assert.equal(await page.locator('.pane-drop-overlay').evaluate(el => (el as HTMLElement).hidden), true);
+    assert.equal(await page.evaluate(() => document.body.classList.contains('dragging-pane')), false);
+    await moveDrag('.tab[data-id="b"]', area.x + 5, area.y + 200);
+    await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1 })));
+    await page.mouse.up();
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
+    assert.equal(await page.locator('.tab').count(), 3);
   } finally {
     await browser.close();
   }

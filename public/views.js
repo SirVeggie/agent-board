@@ -58,6 +58,7 @@ window.createViews = function createViews(host) {
   let pendingAnchor = null;
   let hoverTimer = 0;
   let resizing = null;
+  let pageDrag = null;
 
   /* ---------- DOM ---------- */
 
@@ -92,6 +93,18 @@ window.createViews = function createViews(host) {
   const flashEl = el("div", "view-flash");
   flashEl.addEventListener("animationend", () => flashEl.classList.remove("on"));
   mainEl.appendChild(flashEl);
+  const dropOverlay = el("div", "pane-drop-overlay");
+  const dropPreview = el("div", "pane-drop-preview");
+  dropOverlay.appendChild(dropPreview);
+  dropOverlay.hidden = true;
+  mainEl.appendChild(dropOverlay);
+  for (const pane of PANES) {
+    paneEls[pane].head.addEventListener("pointerdown", (event) => {
+      if (event.button === 0 && !event.target.closest("button")) {
+        host.startPaneDrag?.(event, pane, paneEls[pane].head);
+      }
+    });
+  }
 
   scrim.addEventListener("mousedown", (event) => {
     event.preventDefault();
@@ -793,6 +806,109 @@ window.createViews = function createViews(host) {
     host.render();
   }
 
+  /* ---------- pointer drops from the strip and pane headers ---------- */
+
+  function beginPageDrag(source) {
+    pageDrag = source;
+    dropOverlay.hidden = false;
+    dropPreview.hidden = true;
+    document.body.classList.add("dragging-pane");
+  }
+
+  function pageDropAt(x, y) {
+    if (!pageDrag || !host.activeId()) return null;
+    const box = mainEl.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    const dx = x - box.left, dy = y - box.top;
+    const edges = [
+      ["left", dx / Math.min(90, box.width * 0.2)],
+      ["right", (box.width - dx) / Math.min(90, box.width * 0.2)],
+      ["top", dy / Math.min(90, box.height * 0.2)],
+      ["bottom", (box.height - dy) / Math.min(90, box.height * 0.2)],
+    ].sort((a, b) => a[1] - b[1]);
+    const split = activeSplit();
+    if (edges[0][1] <= 1) {
+      const edge = edges[0][0];
+      const col = edge === "top" || edge === "bottom";
+      if ((col ? box.height < SPLIT_MIN_PANE_HEIGHT * 2 : mainTooNarrow())) return null;
+      return { edge };
+    }
+    if (pageDrag.pane) return null;
+    const second = split && (split.dir === "col" ? dy / box.height : dx / box.width) > ratioFor(split);
+    return { pane: second ? "b" : "a" };
+  }
+
+  function updatePageDrag(x, y) {
+    const drop = pageDropAt(x, y);
+    dropPreview.hidden = !drop;
+    if (!drop) return null;
+    const split = activeSplit();
+    let left = 0, top = 0, width = 1, height = 1;
+    if (drop.edge) {
+      if (drop.edge === "left" || drop.edge === "right") {
+        width = 0.5; left = drop.edge === "right" ? 0.5 : 0;
+      } else {
+        height = 0.5; top = drop.edge === "bottom" ? 0.5 : 0;
+      }
+    } else if (split) {
+      const ratio = ratioFor(split), second = drop.pane === "b";
+      if (split.dir === "col") { top = second ? ratio : 0; height = second ? 1 - ratio : ratio; }
+      else { left = second ? ratio : 0; width = second ? 1 - ratio : ratio; }
+    }
+    Object.assign(dropPreview.style, { left: left * 100 + "%", top: top * 100 + "%", width: width * 100 + "%", height: height * 100 + "%" });
+    dropPreview.textContent = drop.edge ? "Place " + drop.edge : "Replace pane";
+    return drop;
+  }
+
+  function endPageDrag() {
+    pageDrag = null;
+    dropOverlay.hidden = true;
+    document.body.classList.remove("dragging-pane");
+  }
+
+  function canCloseDraggedPane(pane) {
+    const split = activeSplit();
+    return Boolean(split && (pane !== PANES[split.side] || split.other.kind === "page"));
+  }
+
+  async function dropPage(source, drop) {
+    if (!drop) return;
+    if (drop.strip) {
+      if (source.pane && canCloseDraggedPane(source.pane)) closePane(source.pane);
+      return;
+    }
+    let split = activeSplit();
+    if (drop.edge) {
+      let pane = source.pane || paneOf(source.id);
+      if (!pane) {
+        if (source.id === host.activeId()) {
+          await open(source.id, "split");
+        } else {
+          setSplit({ kind: "page", id: source.id });
+        }
+        split = activeSplit();
+        pane = paneOf(source.id);
+      }
+      if (!split || !pane) return;
+      const side = drop.edge === "right" || drop.edge === "bottom" ? 1 : 0;
+      split.side = pane === PANES[split.side] ? side : 1 - side;
+      split.dir = drop.edge === "top" || drop.edge === "bottom" ? "col" : "row";
+      split.ratio = 0.5;
+      saveSplits();
+      host.render();
+    } else if (source.id) {
+      const existing = paneOf(source.id);
+      if (existing) {
+        if (existing !== drop.pane) swapPanes();
+      } else if (!split || drop.pane === PANES[split.side]) {
+        host.selectTab(source.id);
+      } else {
+        setSplit({ kind: "page", id: source.id });
+        host.render();
+      }
+    }
+  }
+
   /** Take a pane out of the split and show its page as a peek over the other one. */
   function paneToPeek(pane) {
     const split = activeSplit();
@@ -1295,6 +1411,11 @@ window.createViews = function createViews(host) {
     prune,
     modeFromEvent,
     roleOf,
+    beginPageDrag,
+    updatePageDrag,
+    endPageDrag,
+    canCloseDraggedPane,
+    dropPage,
     peekOpen: () => Boolean(activePeek()),
   };
 };

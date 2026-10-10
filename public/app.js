@@ -325,6 +325,7 @@
     icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE, folderInstructions: FOLDER_INSTRUCTIONS_SVG, folderInstructionsTitle: FOLDER_INSTRUCTIONS_TITLE },
   });
   const views = window.createViews({
+    startPaneDrag,
     mainEl,
     contentOrigin,
     tabs: () => state.tabs,
@@ -1586,6 +1587,18 @@
     window.addEventListener("pointercancel", onTabPointerUp);
   }
 
+  function startPaneDrag(event, pane, head) {
+    if (drag) return;
+    drag = {
+      pane, sourceHead: head, el: head.cloneNode(true),
+      pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+      moved: false, originOrder: state.tabs.map((tab) => tab.id), scrollDir: 0,
+    };
+    window.addEventListener("pointermove", onTabPointerMove);
+    window.addEventListener("pointerup", onTabPointerUp);
+    window.addEventListener("pointercancel", onTabPointerUp);
+  }
+
   function onTabPointerMove(event) {
     if (!drag || event.pointerId !== drag.pointerId) {
       return;
@@ -1603,11 +1616,21 @@
     }
     event.preventDefault();
     positionDraggedTab(event.clientX, event.clientY);
+    drag.pageDrop = views.updatePageDrag(event.clientX, event.clientY);
+    const strip = tabsWrap.getBoundingClientRect();
+    const overStrip = event.clientX >= strip.left && event.clientX <= strip.right && event.clientY >= strip.top && event.clientY <= strip.bottom;
+    drag.overStrip = overStrip;
+    const closePane = drag.pane && overStrip && views.canCloseDraggedPane(drag.pane);
+    tabsWrap.classList.toggle("pane-close-drop", Boolean(closePane));
+    if (drag.pane) {
+      if (closePane) drag.pageDrop = { strip: true };
+      return;
+    }
     trackToggleHover(event.clientX, event.clientY);
     const tab = state.tabs.find((item) => item.id === drag.id);
     const overLibrary = Boolean(tab && tab.key !== "scribe:welcome" && library.stripDragMove(tab, event.clientX, event.clientY));
     drag.el.classList.toggle("to-library", overLibrary);
-    if (overLibrary) {
+    if (overLibrary || drag.pageDrop || !overStrip) {
       updateDragScroll(Number.NaN);
       return;
     }
@@ -1643,18 +1666,20 @@
       return;
     }
     const el = drag.el;
-    const rect = el.getBoundingClientRect();
+    const rect = (drag.sourceHead || el).getBoundingClientRect();
     drag.moved = true;
     stopTabScroll();
     drag.offsetX = drag.startX - rect.left;
     drag.offsetY = drag.startY - rect.top;
     drag.width = rect.width;
-    const placeholder = document.createElement("div");
-    placeholder.className = "tab-drop-slot";
-    placeholder.style.width = rect.width + "px";
-    placeholder.style.height = rect.height + "px";
-    el.replaceWith(placeholder);
-    drag.placeholder = placeholder;
+    if (!drag.pane) {
+      const placeholder = document.createElement("div");
+      placeholder.className = "tab-drop-slot";
+      placeholder.style.width = rect.width + "px";
+      placeholder.style.height = rect.height + "px";
+      el.replaceWith(placeholder);
+      drag.placeholder = placeholder;
+    }
     el.classList.add("dragging");
     document.body.appendChild(el);
     el.style.position = "fixed";
@@ -1673,8 +1698,9 @@
     tabsEl.classList.add("reordering");
     document.body.classList.add("dragging-tab");
     hoverCard.suspend();
+    views.beginPageDrag(drag.pane ? { pane: drag.pane } : { id: drag.id });
     positionDraggedTab(event.clientX, event.clientY);
-    moveDropSlot();
+    if (!drag.pane) moveDropSlot();
   }
 
   function positionDraggedTab(clientX, clientY) {
@@ -1873,6 +1899,8 @@
   }
 
   function stopDragVisual() {
+    views.endPageDrag();
+    tabsWrap.classList.remove("pane-close-drop");
     if (dragScrollTimer) {
       clearInterval(dragScrollTimer);
       dragScrollTimer = 0;
@@ -1908,6 +1936,10 @@
     el.style.margin = "";
     el.style.transform = "";
     el.style.transition = "";
+    if (drag.pane) {
+      el.remove();
+      return;
+    }
     if (drag.placeholder && drag.placeholder.isConnected) {
       drag.placeholder.replaceWith(el);
     } else if (!el.isConnected) {
@@ -1936,10 +1968,15 @@
     if (!drag || event.pointerId !== drag.pointerId) {
       return;
     }
+    if (event.type === "pointercancel") {
+      abortDrag();
+      return;
+    }
+    if (drag.moved) onTabPointerMove(event);
     const moved = drag.moved;
     const id = drag.id;
     const origin = drag.originOrder;
-    const before = moved ? neighborBeforeId() : null;
+    const before = moved && !drag.pane ? neighborBeforeId() : null;
     const changed = moved && state.tabs.map((tab) => tab.id).join("\0") !== origin.join("\0");
     if (!moved) {
       window.removeEventListener("pointermove", onTabPointerMove);
@@ -1948,23 +1985,31 @@
       drag = null;
       return;
     }
+    const source = drag.pane ? { pane: drag.pane } : { id };
+    const pageDrop = drag.pageDrop;
+    const outside = !drag.overStrip && !pageDrop;
     const draggedTab = state.tabs.find((tab) => tab.id === id);
-    const filed = Boolean(draggedTab && library.stripDragDrop(draggedTab));
+    const filed = Boolean(!drag.pane && !pageDrop && draggedTab && library.stripDragDrop(draggedTab));
+    library.stripDragCancel();
     stopDragVisual();
     drag = null;
     dragSuppressClick = true;
     window.setTimeout(() => {
       dragSuppressClick = false;
     }, 0);
-    if (filed) {
+    if (filed || pageDrop || source.pane || outside) {
       restoreTabOrder(origin);
     }
     renderTabs();
+    if (pageDrop || source.pane) {
+      await views.dropPage(source, pageDrop);
+      return;
+    }
     if (filed) {
       tabEls.get(id)?.classList.add("filing");
       return;
     }
-    if (!changed) {
+    if (!changed || outside) {
       return;
     }
     try {
