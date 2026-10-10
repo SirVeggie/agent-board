@@ -3063,16 +3063,44 @@ main {
   }
 }
 
-/* An iframe is a replaced element: with width or height auto it falls back to 300x150 instead of filling its insets. */
-main.has-split #frames iframe[data-role="primary"] {
-  width: calc(var(--split) * 100%);
+/* A split's two panes, "a" first and "b" second: side by side, or stacked with .split-col. Each pane's
+ * box is set here once; its header, frame, New page screen and body all read it. */
+main.has-split [data-pane] {
+  --pane-x: 0%;
+  --pane-y: 0%;
+  --pane-w: calc(var(--split) * 100%);
+  --pane-h: 100%;
 }
 
-#frames iframe[data-role="secondary"] {
-  top: var(--view-head);
-  left: calc(var(--split) * 100%);
-  width: calc((1 - var(--split)) * 100%);
-  height: calc(100% - var(--view-head));
+main.has-split [data-pane="b"] {
+  --pane-x: calc(var(--split) * 100%);
+  --pane-w: calc((1 - var(--split)) * 100%);
+}
+
+main.has-split.split-col [data-pane] {
+  --pane-w: 100%;
+  --pane-h: calc(var(--split) * 100%);
+}
+
+main.has-split.split-col [data-pane="b"] {
+  --pane-x: 0%;
+  --pane-y: calc(var(--split) * 100%);
+  --pane-h: calc((1 - var(--split)) * 100%);
+}
+
+/* An iframe is a replaced element: with width or height auto it falls back to 300x150 instead of filling its insets. */
+main.has-split #frames iframe[data-pane],
+main.has-split .newpage[data-pane],
+.pane-body {
+  top: calc(var(--pane-y) + var(--view-head));
+  left: var(--pane-x);
+  right: auto;
+  bottom: auto;
+  width: var(--pane-w);
+  height: calc(var(--pane-h) - var(--view-head));
+}
+
+main.has-split #frames iframe[data-pane] {
   z-index: 2;
 }
 
@@ -3151,8 +3179,8 @@ html[data-theme="cream"] .peek-card {
 
 .peek-scrim[hidden],
 .peek-card[hidden],
-.split-head[hidden],
-.split-body[hidden],
+.pane-head[hidden],
+.pane-body[hidden],
 .split-divider[hidden] {
   display: none;
 }
@@ -3168,12 +3196,72 @@ html[data-theme="cream"] .peek-card {
   border-bottom: 1px solid var(--border);
 }
 
-.split-head {
+/* A pane's header is part of the chrome, like the tab strip: the focused pane's title reads like the
+ * active tab's, and carries its accent line. */
+.pane-head {
   position: absolute;
-  top: 0;
-  right: 0;
-  left: calc(var(--split) * 100%);
+  top: var(--pane-y);
+  left: var(--pane-x);
+  width: var(--pane-w);
   z-index: 3;
+  background: var(--chrome-solid);
+  cursor: default;
+  user-select: none;
+}
+
+.pane-head .view-title-text {
+  font-weight: 500;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+
+.pane-head.focused .view-title-text {
+  color: var(--heading);
+}
+
+.pane-head::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: var(--accent-glow);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.pane-head.focused::after {
+  opacity: 0.7;
+}
+
+.pane-head .view-btn {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.pane-head:hover .view-btn,
+.pane-head.focused .view-btn,
+.pane-head .view-btn:focus-visible {
+  opacity: 1;
+}
+
+/* The other pane's tab: still on screen, so it is marked, but quieter than the active one. */
+.tab.beside {
+  color: var(--text);
+  background: rgba(var(--lift-rgb), 0.05);
+}
+
+.tab.beside::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: rgba(var(--lift-rgb), 0.22);
 }
 
 .view-title {
@@ -3226,12 +3314,8 @@ button.view-btn:hover {
   background: var(--panel);
 }
 
-.split-body {
+.pane-body {
   position: absolute;
-  top: var(--view-head);
-  right: 0;
-  bottom: 0;
-  left: calc(var(--split) * 100%);
   z-index: 1;
 }
 
@@ -3274,6 +3358,17 @@ button.view-btn:hover {
   outline: none;
 }
 
+main.split-col .split-divider {
+  top: calc(var(--split) * 100%);
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 10px;
+  margin: -5px 0 0;
+  cursor: row-resize;
+}
+
 .split-divider::before,
 .split-divider::after {
   content: "";
@@ -3296,15 +3391,80 @@ button.view-btn:hover {
   transition: opacity 0.15s ease;
 }
 
+main.split-col .split-divider::before,
+main.split-col .split-divider::after {
+  left: 0;
+  right: 0;
+  bottom: auto;
+  width: auto;
+}
+
+main.split-col .split-divider::before {
+  top: 5px;
+  height: 1px;
+}
+
+main.split-col .split-divider::after {
+  top: 4px;
+  height: 3px;
+}
+
 .split-divider.hot::after,
 .split-divider:focus-visible::after,
 body.resizing-split .split-divider::after {
   opacity: 1;
 }
 
+/* Swap and stack: a small pill on the middle of the divider, shown while the pointer is on or near it.
+ * The pill is wider than the divider, so its edges give the pointer some room on both sides. */
+.split-tools {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--chrome-solid);
+  box-shadow: 0 0 0 1px var(--border), 0 6px 18px rgba(0, 0, 0, 0.4);
+  transform: translate(-50%, -50%) scale(0.92);
+  opacity: 0;
+  pointer-events: none;
+  cursor: default;
+  transition: opacity 0.15s ease, transform 0.15s var(--ease);
+}
+
+main.split-col .split-tools {
+  flex-direction: row;
+}
+
+.split-divider.hot .split-tools,
+.split-divider:focus-within .split-tools {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+}
+
+body.resizing-split .split-tools {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.split-tools .view-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
 body.resizing-split {
   cursor: col-resize;
   user-select: none;
+}
+
+body.resizing-split.resizing-col {
+  cursor: row-resize;
 }
 
 body.resizing-split iframe {

@@ -1,6 +1,7 @@
 (() => {
   const tabsEl = document.getElementById("tabs");
   const emptyEl = document.getElementById("empty");
+  const newPageEl = document.getElementById("newpage");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
   const libraryToggle = document.getElementById("library-toggle");
@@ -315,12 +316,7 @@
     rerender: () => render(),
     modeFromEvent: (event) => views.modeFromEvent(event),
     openIn: (id, mode) => views.open(id, mode),
-    canSplit: (id) => {
-      if (!state.activeId) return false;
-      if (state.activeId !== id) return true;
-      const idx = state.tabs.findIndex((tab) => tab.id === id);
-      return Boolean((idx >= 0 ? state.tabs[idx + 1] ?? state.tabs[idx - 1] : null)?.id);
-    },
+    canSplit: () => Boolean(state.activeId),
     hoverCard,
     stripSlot,
     clearStripSlot,
@@ -333,12 +329,15 @@
     contentOrigin,
     tabs: () => state.tabs,
     closed: () => state.closed,
-    findAnyTab,
+    findAnyTab: (id) => findAnyTab(id) || (state.draft?.id === id ? state.draft : null),
     activeId: () => state.activeId,
     spaceId: () => spaces.activeId() || "default",
     spaceIds: () => spaces.ids().length ? spaces.ids() : ["default"],
-    // A blank page has no frame: the New page screen stands in for it.
-    activeTab: () => (isBlank(activeTab()) ? null : activeTab()),
+    activeTab,
+    isBlank,
+    draftId: () => state.draft?.id || null,
+    activate: activatePage,
+    newPage,
     frame: (id) => frames.get(id) || null,
     frameIds: () => [...frames.keys()],
     ensureFrame,
@@ -752,6 +751,9 @@
     const neighbor = neighborTabId(tab.id);
     state.tabs = state.tabs.filter((item) => item.id !== tab.id);
     unread.delete(tab.id);
+    if (wasOpen) {
+      views.onClosed(tab.id);
+    }
     const shown = views.isShown(tab.id) && state.activeId !== tab.id;
     if (shown) {
       refreshFrame(tab);
@@ -853,17 +855,24 @@
     return Boolean(state.draft && state.activeId === state.draft.id);
   }
 
-  /** Ctrl+T: a New page in front, with no tab until a thread or a template makes it a page. */
+  /**
+   * Ctrl+T: a New page in front (in the focused pane of a split), with no tab until a thread or a
+   * template makes it a page. Resolves to whether a New page is in front.
+   */
   async function newPage() {
-    if (draftActive()) {
+    // The one draft is already on screen, in front or in the other pane of a split.
+    if (state.draft && views.isShown(state.draft.id)) {
+      if (!draftActive()) {
+        activatePage(state.draft.id);
+      }
       newPageView.focus();
-      return;
+      return true;
     }
     const res = await fetch("/api/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => null);
     const data = res?.ok ? await res.json().catch(() => null) : null;
     if (!data?.tab) {
       showNotice("Could not open a new page");
-      return;
+      return false;
     }
     const from = draftActive() ? state.draftFrom : state.activeId;
     state.draft = data.tab;
@@ -875,14 +884,16 @@
     render();
     reportViewer();
     newPageView.focus();
+    return true;
   }
 
   /**
-   * Leaving a draft throws it away. The request waits a moment: a chat that keeps its unsent text
-   * as a thread when you leave makes the draft a page, and that has to reach the daemon first.
+   * Leaving a draft throws it away, unless it stays on screen as the other pane of a split. The
+   * request waits a moment: a chat that keeps its unsent text as a thread when you leave makes the
+   * draft a page, and that has to reach the daemon first.
    */
   function dropLeftDraft() {
-    if (!state.draft || state.activeId === state.draft.id) {
+    if (!state.draft || state.activeId === state.draft.id || views.isShown(state.draft.id)) {
       return;
     }
     const id = state.draft.id;
@@ -894,7 +905,14 @@
   }
 
   function closeDraft() {
-    const back = state.tabs.some((tab) => tab.id === state.draftFrom) ? state.draftFrom : state.tabs[state.tabs.length - 1]?.id ?? null;
+    const beside = views.otherPage()?.id;
+    const inFront = draftActive();
+    views.onClosed(state.draft.id);
+    if (!inFront) {
+      render();
+      return;
+    }
+    const back = [beside, state.draftFrom].find((id) => id && state.tabs.some((tab) => tab.id === id)) ?? state.tabs[state.tabs.length - 1]?.id ?? null;
     state.activeId = back;
     syncHash();
     render();
@@ -1349,6 +1367,7 @@
     el.className =
       "tab" +
       (tab.id === state.activeId ? " active" : "") +
+      (tab.id !== state.activeId && views.paneOf(tab.id) ? " beside" : "") +
       (tab.pinned ? " pinned" : "") +
       (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "") +
       (window.scribeChat?.pageStatus(tab.id) ? ` agent-${window.scribeChat.pageStatus(tab.id)}` : "");
@@ -2573,16 +2592,22 @@
     frames.delete(id);
   }
 
-  /** The active tab, plus any split beside it and a peek over it; views.js decides where each frame sits. */
+  /** The active tab, plus any pane beside it and a peek over it; views.js decides where each frame sits. */
   function renderFrames() {
     const tab = activeTab();
     emptyEl.hidden = Boolean(tab);
     document.title = tab ? tab.title + " · Scribe" : "Scribe";
-    const blank = isBlank(tab);
-    mainEl.classList.toggle("blank-page", blank);
     views.layout();
-    if (tab && !blank) newPageView.replace(tab, frames.get(tab.id)?.el);
-    else newPageView.render(blank ? tab : null);
+    // The New page screen stands in for a blank page's frame, in whichever pane the page is.
+    const beside = views.otherPage();
+    const blank = isBlank(tab) ? tab : isBlank(beside) ? beside : null;
+    const pane = blank ? views.paneOf(blank.id) : "";
+    mainEl.classList.toggle("blank-page", Boolean(blank));
+    if (pane) newPageEl.dataset.pane = pane;
+    else delete newPageEl.dataset.pane;
+    if (blank) newPageView.render(blank);
+    else if (tab) newPageView.replace(tab, frames.get(tab.id)?.el);
+    else newPageView.render(null);
   }
 
   /** Clear the unread blips of a page that is on screen in a peek or split. */
@@ -2785,6 +2810,23 @@
     }
     pendingFocus = null;
     return true;
+  }
+
+  /** Put a page in front: a tab, or the New page when it sits in the other pane of a split. */
+  function activatePage(id) {
+    if (state.draft?.id !== id) {
+      selectTab(id, { fromUser: true });
+      return;
+    }
+    if (state.activeId === id) {
+      return;
+    }
+    views.onSelect(id);
+    state.activeId = id;
+    lastInteractedAt = Date.now();
+    syncHash();
+    render();
+    reportViewer();
   }
 
   function selectTab(id, { fromUser } = {}) {
@@ -4486,6 +4528,7 @@
         runShortcut(event.data.action);
       }
     } else if (event.data?.type === "scribe-activity") {
+      views.onFrameActive(frameIdByWindow(event.source));
       noteEdit();
     } else if (event.data?.type === "scribe-open" || event.data?.type === "scribe-resolve") {
       onPageLink(event);

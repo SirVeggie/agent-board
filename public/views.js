@@ -1,8 +1,9 @@
 /**
  * Page links and the views they open: a peek (a fixed card over the page area) and a split
- * (a second pane tied to the space that opened it). app.js owns the frame pool; this decides
- * which pooled iframe sits where. Frames are only ever restyled, never moved in the DOM,
- * because moving an iframe reloads it.
+ * (two equal panes, kept per space). The focused pane always shows the active tab, so the tab
+ * strip, the address and the floating chat follow focus; the split only stores the other pane.
+ * app.js owns the frame pool; this decides which pooled iframe sits where. Frames are only ever
+ * restyled, never moved in the DOM, because moving an iframe reloads it.
  */
 window.createViews = function createViews(host) {
   const mainEl = host.mainEl;
@@ -11,6 +12,9 @@ window.createViews = function createViews(host) {
   /** Below this page-area width a split opens as a peek instead. */
   const SPLIT_MIN_MAIN = 720;
   const SPLIT_MIN_PANE = 280;
+  /** The least height of a stacked pane, header included. */
+  const SPLIT_MIN_PANE_HEIGHT = 160;
+  const PANES = ["a", "b"];
   const SPLIT_MIN_RATIO = 0.2;
   const SPLIT_MAX_RATIO = 0.8;
   const SPLIT_SNAP = 0.02;
@@ -23,6 +27,9 @@ window.createViews = function createViews(host) {
     split: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8.5 2.5v11" stroke="currentColor" stroke-width="1.3"/><rect x="8.5" y="3" width="5.5" height="10" fill="currentColor" opacity="0.35"/></svg>',
     peek: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="4.5" y="5" width="7" height="6" rx="1" fill="currentColor" opacity="0.5"/></svg>',
     tab: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 13.5v-8a1.5 1.5 0 0 1 1.5-1.5h3.5l1.5 2h5a1.5 1.5 0 0 1 1.5 1.5v6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M1 13.5h14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+    swap: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 5.5h10M9.5 2.5l3 3-3 3M13.5 10.5h-10M6.5 7.5l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    stack: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 8h13" stroke="currentColor" stroke-width="1.3"/></svg>',
+    sideBySide: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 2.5v11" stroke="currentColor" stroke-width="1.3"/></svg>',
     browser: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
   };
 
@@ -30,9 +37,15 @@ window.createViews = function createViews(host) {
 
   /** Space and host tab → its peek stack. */
   const peeks = new Map();
-  /** Space id → its split. A split is a temporary view, not board data. */
-  /** @type {Map<string, { target: Target, ratio: number }>} */
+  /**
+   * Space id → its split. A split is a temporary view, not board data. `other` is the pane without
+   * focus, `side` the place (0 first, 1 second) of the focused one, and `seen` the active tab the
+   * split was last laid out with, which takes the other pane when focus lands there by another route.
+   */
+  /** @type {Map<string, { other: Target, ratio: number, dir: "row" | "col", side: 0 | 1, seen: string | null }>} */
   const splits = loadSplits();
+  /** Pages on their way into the strip for a split. */
+  const opening = new Set();
   let lastRatio = clampStoredRatio(Number(readStorage(SPLIT_RATIO_KEY)));
   /** Where a link-opened tab came from; closing it returns there while it's still the tab you're on. */
   const openedFrom = new Map();
@@ -55,16 +68,24 @@ window.createViews = function createViews(host) {
   const peekHead = el("div", "view-head");
   const peekBody = el("div", "view-body");
   card.append(peekHead, peekBody);
-  const splitHead = el("div", "view-head split-head");
-  const splitBody = el("div", "view-body split-body");
+  /** Pane → its header and the area under its frame. */
+  const paneEls = Object.fromEntries(
+    PANES.map((pane) => {
+      const head = el("div", "view-head pane-head");
+      const body = el("div", "view-body pane-body");
+      head.dataset.pane = pane;
+      body.dataset.pane = pane;
+      return [pane, { head, body, drawn: "" }];
+    })
+  );
   const divider = el("div", "split-divider");
   divider.setAttribute("role", "separator");
-  divider.setAttribute("aria-orientation", "vertical");
   divider.setAttribute("aria-label", "Resize split");
   divider.setAttribute("aria-valuemin", String(SPLIT_MIN_RATIO * 100));
   divider.setAttribute("aria-valuemax", String(SPLIT_MAX_RATIO * 100));
   divider.tabIndex = 0;
-  for (const node of [scrim, card, splitHead, splitBody, divider]) {
+  const tools = el("div", "split-tools");
+  for (const node of [scrim, card, paneEls.a.head, paneEls.a.body, paneEls.b.head, paneEls.b.body, divider]) {
     node.hidden = true;
     mainEl.appendChild(node);
   }
@@ -97,6 +118,15 @@ window.createViews = function createViews(host) {
     return btn;
   }
 
+  const swapBtn = iconButton(ICONS.swap, "Swap panes", () => swapPanes());
+  const dirBtn = iconButton(ICONS.stack, "Stack panes", () => toggleDir());
+  tools.append(swapBtn, dirBtn);
+  // A press or a key on a button must not resize the split.
+  for (const type of ["pointerdown", "dblclick", "keydown"]) {
+    tools.addEventListener(type, (event) => event.stopPropagation());
+  }
+  divider.appendChild(tools);
+
   /* ---------- storage ---------- */
 
   function readStorage(key) {
@@ -124,9 +154,15 @@ window.createViews = function createViews(host) {
     try {
       const raw = JSON.parse(readStorage(SPLITS_KEY) || "{}");
       for (const [spaceId, value] of Object.entries(raw || {})) {
-        const target = value?.page ? { kind: "page", id: String(value.page) } : value?.url ? { kind: "url", href: String(value.url) } : null;
-        if (target) {
-          map.set(spaceId, { target, ratio: clampStoredRatio(Number(value.ratio)) });
+        const other = value?.page ? { kind: "page", id: String(value.page) } : value?.url ? { kind: "url", href: String(value.url) } : null;
+        if (other) {
+          map.set(spaceId, {
+            other,
+            ratio: clampStoredRatio(Number(value.ratio)),
+            dir: value.dir === "col" ? "col" : "row",
+            side: value.side === 1 ? 1 : 0,
+            seen: typeof value.seen === "string" ? value.seen : null,
+          });
         }
       }
     } catch {
@@ -138,7 +174,13 @@ window.createViews = function createViews(host) {
   function saveSplits() {
     const out = {};
     for (const [spaceId, split] of splits) {
-      out[spaceId] = split.target.kind === "page" ? { page: split.target.id, ratio: split.ratio } : { url: split.target.href, ratio: split.ratio };
+      out[spaceId] = {
+        ...(split.other.kind === "page" ? { page: split.other.id } : { url: split.other.href }),
+        ratio: split.ratio,
+        dir: split.dir,
+        side: split.side,
+        seen: split.seen,
+      };
     }
     writeStorage(SPLITS_KEY, JSON.stringify(out));
   }
@@ -256,10 +298,56 @@ window.createViews = function createViews(host) {
     return peek ? peek.stack[peek.stack.length - 1] : null;
   }
 
+  /** A page that can fill a pane: it has a tab in the strip (or is about to), or is the New page. */
+  function showable(id) {
+    return host.tabs().some((tab) => tab.id === id) || host.draftId() === id || opening.has(id);
+  }
+
+  /**
+   * The split around the active tab. When the active tab became the page of the other pane (Back,
+   * an agent's focus request, a closed tab's neighbor), focus moved there: the tab that was active
+   * takes the other pane, or the split ends when that tab is gone.
+   */
   function activeSplit() {
     const active = host.activeId();
-    const split = active ? splits.get(host.spaceId()) || null : null;
-    return split?.target.kind === "page" && split.target.id === active ? null : split;
+    const spaceId = host.spaceId();
+    const split = active ? splits.get(spaceId) || null : null;
+    if (!split) {
+      return null;
+    }
+    if (split.other.kind === "page" && split.other.id === active) {
+      const prev = split.seen;
+      if (!prev || prev === active || !showable(prev)) {
+        splits.delete(spaceId);
+        saveSplits();
+        return null;
+      }
+      split.other = { kind: "page", id: prev };
+      split.side = split.side ? 0 : 1;
+    }
+    if (split.seen !== active) {
+      split.seen = active;
+      saveSplits();
+    }
+    return split;
+  }
+
+  /** Which pane ("a" first, "b" second) a frame is in, or "" outside a split. */
+  function paneOf(frameId) {
+    const split = activeSplit();
+    if (!split) {
+      return "";
+    }
+    if (frameId === host.activeId()) {
+      return PANES[split.side];
+    }
+    return frameId === frameIdOf(split.other) ? PANES[1 - split.side] : "";
+  }
+
+  /** The page in the pane without focus, or null. */
+  function otherPage() {
+    const split = activeSplit();
+    return split?.other.kind === "page" ? host.findAnyTab(split.other.id) : null;
   }
 
   /** Every frame the current view puts on screen, so the pool never evicts one of them. */
@@ -271,7 +359,7 @@ window.createViews = function createViews(host) {
     }
     const split = activeSplit();
     if (split) {
-      ids.add(frameIdOf(split.target));
+      ids.add(frameIdOf(split.other));
     }
     const top = peekTarget();
     if (top) {
@@ -330,7 +418,7 @@ window.createViews = function createViews(host) {
     for (const peek of peeks.values()) {
       for (const target of peek.stack) keep.add(frameIdOf(target));
     }
-    for (const split of splits.values()) keep.add(frameIdOf(split.target));
+    for (const split of splits.values()) keep.add(frameIdOf(split.other));
     for (const id of host.frameIds()) {
       if (id.startsWith("url:") && !keep.has(id)) {
         host.discardFrame(id);
@@ -390,25 +478,41 @@ window.createViews = function createViews(host) {
   /* ---------- layout ---------- */
 
   function ratioFor(split) {
-    const width = mainEl.clientWidth || 1;
-    const lo = Math.max(SPLIT_MIN_RATIO, Math.min(0.5, SPLIT_MIN_PANE / width));
-    const hi = Math.min(SPLIT_MAX_RATIO, Math.max(0.5, 1 - SPLIT_MIN_PANE / width));
+    const col = split.dir === "col";
+    const size = (col ? mainEl.clientHeight : mainEl.clientWidth) || 1;
+    const min = col ? SPLIT_MIN_PANE_HEIGHT : SPLIT_MIN_PANE;
+    const lo = Math.max(SPLIT_MIN_RATIO, Math.min(0.5, min / size));
+    const hi = Math.min(SPLIT_MAX_RATIO, Math.max(0.5, 1 - min / size));
     return Math.min(hi, Math.max(lo, split.ratio));
   }
 
   /** Put every pooled frame where the view wants it. Called from app.js's render. */
   function layout() {
-    const primary = host.activeTab();
-    const split = primary ? activeSplit() : null;
+    const active = host.activeTab();
+    const split = active ? activeSplit() : null;
+    if (split && sameTarget(peekTarget(), split.other)) {
+      setPeek(null);
+    }
     const top = peekTarget();
     const roles = new Map();
-    if (primary) {
-      host.ensureFrame(primary);
-      roles.set(primary.id, "primary");
+    const panes = new Map();
+    // A New page has no frame: the New page screen stands in for it.
+    if (active && !host.isBlank(active)) {
+      host.ensureFrame(active);
+      roles.set(active.id, "primary");
     }
     if (split) {
-      if (frameFor(split.target)) {
-        roles.set(frameIdOf(split.target), "secondary");
+      const other = split.other.kind === "page" ? metaFor(split.other) : null;
+      if (!host.isBlank(other) && frameFor(split.other)) {
+        roles.set(frameIdOf(split.other), "secondary");
+      }
+      panes.set(active.id, PANES[split.side]);
+      panes.set(frameIdOf(split.other), PANES[1 - split.side]);
+      if (split.other.kind === "page") {
+        host.markSeen(split.other.id);
+        if (host.tabs().some((tab) => tab.id === split.other.id)) {
+          opening.delete(split.other.id);
+        }
       }
     }
     if (top) {
@@ -419,46 +523,81 @@ window.createViews = function createViews(host) {
         host.markSeen(top.id);
       }
     }
-    if (split?.target.kind === "page") {
-      host.markSeen(split.target.id);
-    }
     for (const id of host.frameIds()) {
       const entry = host.frame(id);
       const role = roles.get(id) || "";
+      const pane = role === "peek" ? "" : panes.get(id) || "";
       entry.el.classList.toggle("inactive", !role);
       if (entry.el.dataset.role !== role) {
         entry.el.dataset.role = role;
       }
+      if ((entry.el.dataset.pane || "") !== pane) {
+        if (pane) entry.el.dataset.pane = pane;
+        else delete entry.el.dataset.pane;
+      }
     }
     mainEl.classList.toggle("has-split", Boolean(split));
+    mainEl.classList.toggle("split-col", split?.dir === "col");
     mainEl.classList.toggle("has-peek", Boolean(top));
     if (split) {
       const ratio = ratioFor(split);
       mainEl.style.setProperty("--split", String(ratio));
       divider.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
     }
-    renderSplitChrome(split);
+    renderSplitChrome(split, active);
     renderPeekChrome(top);
     dropUnusedUrlFrames();
     deliverAnchor();
   }
 
-  function renderSplitChrome(split) {
+  function renderSplitChrome(split, active) {
     const show = Boolean(split);
-    splitHead.hidden = !show;
-    splitBody.hidden = !show;
     divider.hidden = !show;
+    for (const pane of PANES) {
+      paneEls[pane].head.hidden = !show;
+      paneEls[pane].body.hidden = !show;
+    }
     if (!show) {
       return;
     }
-    const target = split.target;
-    splitHead.replaceChildren(
-      headTitle(target),
-      openOutButton(target, () => promote(target, { fromSplit: host.spaceId() })),
-      iconButton(ICONS.peek, "Show as peek", () => splitToPeek()),
-      iconButton(ICONS.close, "Close split", () => closeSplit(), false)
-    );
-    renderBody(splitBody, target);
+    const col = split.dir === "col";
+    divider.setAttribute("aria-orientation", col ? "horizontal" : "vertical");
+    const dirLabel = col ? "Show side by side" : "Stack panes";
+    if (dirBtn.getAttribute("aria-label") !== dirLabel) {
+      dirBtn.innerHTML = col ? ICONS.sideBySide : ICONS.stack;
+      dirBtn.dataset.tooltip = dirLabel;
+      dirBtn.setAttribute("aria-label", dirLabel);
+    }
+    const focused = PANES[split.side];
+    for (const pane of PANES) {
+      const target = pane === focused ? { kind: "page", id: active.id } : split.other;
+      renderPaneHead(pane, target, pane === focused, split);
+    }
+  }
+
+  /** A pane's header. Redrawn only when what it shows changes, so a button under the pointer stays put. */
+  function renderPaneHead(pane, target, focused, split) {
+    const { head, body } = paneEls[pane];
+    head.classList.toggle("focused", focused);
+    // A site has no tab to fall back to, so the page beside it can't be closed out of the split.
+    const closable = target.kind === "url" || split.other.kind === "page";
+    const key = JSON.stringify([frameIdOf(target), titleOf(target), closable, target.kind === "url" && blocked.has(target.href)]);
+    if (paneEls[pane].drawn === key) {
+      return;
+    }
+    paneEls[pane].drawn = key;
+    const parts = [headTitle(target)];
+    if (target.kind === "url") {
+      parts.push(iconButton(ICONS.browser, "Open in browser", () => openBrowser(target.href)));
+    }
+    if (closable) {
+      parts.push(
+        iconButton(ICONS.peek, "Show as peek", () => paneToPeek(pane)),
+        iconButton(ICONS.close, "Close pane", () => closePane(pane), false)
+      );
+    }
+    head.replaceChildren(...parts);
+    renderBody(body, target);
   }
 
   function renderPeekChrome(top) {
@@ -474,7 +613,9 @@ window.createViews = function createViews(host) {
     }
     parts.push(
       headTitle(top),
-      openOutButton(top, () => promote(top, { fromPeek: true })),
+      top.kind === "url"
+        ? iconButton(ICONS.browser, "Open in browser", () => openBrowser(top.href))
+        : iconButton(ICONS.tab, "Open as tab", () => promote(top)),
       iconButton(ICONS.split, "Show in split", () => peekToSplit()),
       iconButton(ICONS.close, "Close", () => closePeek(), false)
     );
@@ -504,12 +645,6 @@ window.createViews = function createViews(host) {
       wrap.dataset.tooltip = titleOf(target);
     }
     return wrap;
-  }
-
-  function openOutButton(target, onClick) {
-    return target.kind === "url"
-      ? iconButton(ICONS.browser, "Open in browser", () => openBrowser(target.href))
-      : iconButton(ICONS.tab, "Open as tab", onClick);
   }
 
   /** The area under a peek or split frame: a loading line for sites, or why a site can't be shown. */
@@ -573,29 +708,112 @@ window.createViews = function createViews(host) {
     }
   }
 
-  function closeSplit() {
-    if (!splits.delete(host.spaceId())) {
+  function focusActiveFrame() {
+    host.frame(host.activeId())?.el.focus();
+  }
+
+  /** Give a page pane a tab in the strip when it has none: both panes of a split are tabs. */
+  function ensureTab(target) {
+    if (target.kind !== "page" || showable(target.id)) {
+      return;
+    }
+    opening.add(target.id);
+    Promise.resolve(host.openPage(target.id, { activate: false })).finally(() => {
+      // The tab arrives over the socket; give it a moment before the split may be pruned without it.
+      setTimeout(() => opening.delete(target.id), 2000);
+    });
+  }
+
+  /** Show `target` in the pane without focus, starting a split (side by side) when there is none. */
+  function setSplit(target) {
+    const spaceId = host.spaceId();
+    const prev = activeSplit();
+    ensureTab(target);
+    splits.set(spaceId, {
+      other: target,
+      ratio: prev?.ratio || lastRatio,
+      dir: prev?.dir || "row",
+      side: prev?.side || 0,
+      seen: host.activeId(),
+    });
+    saveSplits();
+  }
+
+  /** End the split, keeping the page of the other pane. Closing the focused pane moves focus there. */
+  function closePane(pane) {
+    const split = activeSplit();
+    if (!split) {
       return false;
     }
+    const focused = pane === PANES[split.side];
+    splits.delete(host.spaceId());
     saveSplits();
-    host.render();
+    if (focused && split.other.kind === "page" && showable(split.other.id)) {
+      host.activate(split.other.id);
+    } else {
+      host.render();
+    }
+    focusActiveFrame();
     return true;
   }
 
-  function setSplit(target) {
-    const spaceId = host.spaceId();
-    splits.set(spaceId, { target, ratio: splits.get(spaceId)?.ratio || lastRatio });
-    saveSplits();
+  function closeSplit() {
+    const split = activeSplit();
+    return split ? closePane(PANES[1 - split.side]) : false;
   }
 
-  function splitToPeek() {
+  /** Move focus to a pane; the tab strip and the chat follow, as they do for a tab switch. */
+  function focusPane(pane) {
+    const split = activeSplit();
+    if (!split || pane === PANES[split.side] || split.other.kind !== "page" || !showable(split.other.id)) {
+      return false;
+    }
+    host.activate(split.other.id);
+    return true;
+  }
+
+  function swapPanes() {
     const split = activeSplit();
     if (!split) {
       return;
     }
+    split.side = split.side ? 0 : 1;
+    split.ratio = 1 - ratioFor(split);
+    saveSplits();
+    host.render();
+  }
+
+  function toggleDir() {
+    const split = activeSplit();
+    if (!split) {
+      return;
+    }
+    split.dir = split.dir === "col" ? "row" : "col";
+    saveSplits();
+    host.render();
+  }
+
+  /** Take a pane out of the split and show its page as a peek over the other one. */
+  function paneToPeek(pane) {
+    const split = activeSplit();
+    if (!split) {
+      return;
+    }
+    const focused = pane === PANES[split.side];
+    const target = focused ? { kind: "page", id: host.activeId() } : split.other;
+    if (host.isBlank(metaFor(target))) {
+      host.showNotice("A New page can't be shown as a peek");
+      return;
+    }
+    if (focused && (split.other.kind !== "page" || !showable(split.other.id))) {
+      return;
+    }
     splits.delete(host.spaceId());
     saveSplits();
-    setPeek({ stack: [split.target] });
+    if (focused) {
+      host.activate(split.other.id);
+    }
+    setPeek({ stack: [target] });
     host.render();
     focusPeek();
   }
@@ -610,23 +828,17 @@ window.createViews = function createViews(host) {
       host.showNotice(active ? "The window is too narrow for a split" : "Open a tab first to split beside it");
       return;
     }
-    setSplit(top);
     setPeek(null);
+    setSplit(top);
     host.render();
   }
 
-  /** "Open as tab" from a peek or split. The frame stays in the pool, so the page doesn't reload. */
-  function promote(target, { fromPeek = false, fromSplit = null } = {}) {
+  /** "Open as tab" from a peek. The frame stays in the pool, so the page doesn't reload. */
+  function promote(target) {
     if (target.kind !== "page") {
       return;
     }
-    if (fromPeek) {
-      setPeek(null);
-    }
-    if (fromSplit) {
-      splits.delete(fromSplit);
-      saveSplits();
-    }
+    setPeek(null);
     navigate(target.id, {});
   }
 
@@ -706,7 +918,7 @@ window.createViews = function createViews(host) {
 
     const split = activeSplit();
     const visibleAsPrimary = target.kind === "page" && target.id === active;
-    const visibleInSplit = split && sameTarget(split.target, target);
+    const visibleInSplit = split && sameTarget(split.other, target);
 
     if (mode === "peek") {
       if (visibleAsPrimary || visibleInSplit) {
@@ -732,17 +944,24 @@ window.createViews = function createViews(host) {
     }
 
     // split
+    if (visibleInSplit) {
+      if (source.role === "peek") setPeek(null);
+      host.render();
+      flash(frameId);
+      return { ok: true, mode, alreadyVisible: true, ...(target.kind === "page" ? { id: target.id } : { url: target.href }) };
+    }
     if (visibleAsPrimary) {
-      const tabs = host.tabs();
-      const idx = tabs.findIndex((tab) => tab.id === active);
-      const neighbor = (idx >= 0 ? tabs[idx + 1] ?? tabs[idx - 1] : null)?.id;
-      if (!neighbor || neighbor === active) {
-        host.showNotice("Open another tab to split beside");
-        return { ok: false, error: "no_neighbor" };
+      // Splitting the tab you are on: it keeps its place and a New page opens beside it, with focus.
+      if (split || host.draftId() === active) {
+        host.render();
+        flash(frameId);
+        return { ok: true, mode, id: target.id, alreadyVisible: true };
       }
-      closeSplit();
-      host.selectTab(neighbor);
-      setSplit(target);
+      if (!(await host.newPage()) || host.activeId() === active) {
+        return { ok: false, error: "no_new_page" };
+      }
+      splits.set(host.spaceId(), { other: target, ratio: lastRatio, dir: "row", side: 1, seen: host.activeId() });
+      saveSplits();
       host.render();
       return { ok: true, mode, id: target.id };
     }
@@ -775,11 +994,17 @@ window.createViews = function createViews(host) {
 
   /* ---------- hooks from app.js ---------- */
 
-  /** The user picked a tab. Picking the page shown beside it in a split takes it out of the split. */
+  /**
+   * The user picked a tab: it shows in the focused pane. Picking the page of the other pane moves
+   * focus there instead, so the two trade places in the split's bookkeeping, not on screen.
+   */
   function onSelect(nextId) {
     const split = activeSplit();
-    if (split?.target.kind === "page" && split.target.id === nextId) {
-      splits.delete(host.spaceId());
+    const from = host.activeId();
+    if (split?.other.kind === "page" && split.other.id === nextId && from) {
+      split.other = { kind: "page", id: from };
+      split.side = split.side ? 0 : 1;
+      split.seen = nextId;
       saveSplits();
     }
     const top = peekTarget();
@@ -795,6 +1020,12 @@ window.createViews = function createViews(host) {
 
   /** The tab to return to when `id` leaves the strip, if a link opened it and you haven't moved on. */
   function returnTarget(id) {
+    // Closing the focused pane's tab leaves the other pane, not a neighbor from the strip.
+    const split = id === host.activeId() ? activeSplit() : null;
+    if (split?.other.kind === "page" && host.tabs().some((tab) => tab.id === split.other.id)) {
+      openedFrom.delete(id);
+      return split.other.id;
+    }
     const from = openedFrom.get(id);
     openedFrom.delete(id);
     return from && from !== id && host.tabs().some((tab) => tab.id === from) ? from : null;
@@ -809,7 +1040,7 @@ window.createViews = function createViews(host) {
       }
     }
     for (const [spaceId, split] of [...splits]) {
-      if (split.target.kind === "page" && split.target.id === id) {
+      if (split.other.kind === "page" && split.other.id === id) {
         splits.delete(spaceId);
         changed = true;
       }
@@ -817,6 +1048,23 @@ window.createViews = function createViews(host) {
     openedFrom.delete(id);
     if (changed) {
       saveSplits();
+    }
+  }
+
+  /** A tab left the strip. A pane is always a tab, so the split it was in ends. */
+  function onClosed(id) {
+    const split = splits.get(host.spaceId());
+    if (split?.other.kind === "page" && split.other.id === id) {
+      splits.delete(host.spaceId());
+      saveSplits();
+    }
+  }
+
+  /** Something was pressed or typed in a page: the pane showing it takes focus. */
+  function onFrameActive(frameId) {
+    const split = activeSplit();
+    if (split && frameId && frameId === frameIdOf(split.other)) {
+      focusPane(PANES[1 - split.side]);
     }
   }
 
@@ -841,7 +1089,8 @@ window.createViews = function createViews(host) {
       }
     }
     for (const [spaceId, split] of [...splits]) {
-      if (!spaceIds.includes(spaceId) || (split.target.kind === "page" && !host.findAnyTab(split.target.id))) {
+      const gone = split.other.kind === "page" && (spaceId === host.spaceId() ? !showable(split.other.id) : !host.findAnyTab(split.other.id));
+      if (!spaceIds.includes(spaceId) || gone) {
         splits.delete(spaceId);
         changed = true;
       }
@@ -886,6 +1135,30 @@ window.createViews = function createViews(host) {
     return role || "primary";
   }
 
+  /* ---------- pane focus ---------- */
+
+  // A press on a pane's header or its New page screen. Pages report their own (onFrameActive).
+  mainEl.addEventListener(
+    "pointerdown",
+    (event) => {
+      const paneEl = event.target instanceof Element ? event.target.closest("[data-pane]") : null;
+      if (paneEl && !event.target.closest(".pane-head button")) {
+        focusPane(paneEl.dataset.pane);
+      }
+    },
+    true
+  );
+  // Sites and embedded pages have no bridge to report a press: the frame taking focus says it.
+  window.addEventListener("blur", () => {
+    setTimeout(() => {
+      const el = document.activeElement;
+      const split = el?.tagName === "IFRAME" ? activeSplit() : null;
+      if (split && host.frame(frameIdOf(split.other))?.el === el) {
+        focusPane(PANES[1 - split.side]);
+      }
+    }, 0);
+  });
+
   /* ---------- split divider ---------- */
 
   function applyRatio(ratio, snap) {
@@ -929,7 +1202,9 @@ window.createViews = function createViews(host) {
     event.preventDefault();
     divider.setPointerCapture(event.pointerId);
     document.body.classList.add("resizing-split");
+    document.body.classList.toggle("resizing-col", activeSplit()?.dir === "col");
     const rect = mainEl.getBoundingClientRect();
+    const col = activeSplit()?.dir === "col";
     let raf = 0;
     let latest = 0;
     resizing = { pointerId: event.pointerId };
@@ -937,7 +1212,7 @@ window.createViews = function createViews(host) {
       if (move.pointerId !== event.pointerId) {
         return;
       }
-      latest = (move.clientX - rect.left) / rect.width;
+      latest = col ? (move.clientY - rect.top) / rect.height : (move.clientX - rect.left) / rect.width;
       if (!raf) {
         raf = requestAnimationFrame(() => {
           raf = 0;
@@ -978,9 +1253,9 @@ window.createViews = function createViews(host) {
     }
     const step = event.shiftKey ? 0.1 : 0.02;
     const current = ratioFor(split);
-    if (event.key === "ArrowLeft") {
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
       applyRatio(current - step, false);
-    } else if (event.key === "ArrowRight") {
+    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
       applyRatio(current + step, false);
     } else if (event.key === "Home") {
       applyRatio(0, false);
@@ -1010,6 +1285,12 @@ window.createViews = function createViews(host) {
     isShown,
     onSelect,
     onDeleted,
+    onClosed,
+    onFrameActive,
+    paneOf,
+    otherPage,
+    closeSplit,
+    focusPane,
     returnTarget,
     prune,
     modeFromEvent,
