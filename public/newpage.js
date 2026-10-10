@@ -1,6 +1,6 @@
 /**
  * The New page screen (Ctrl+T): what a blank page shows instead of a frame. Shapeless moving
- * matter behind a short prompt and the templates; picking one fills this page. Once the page has a
+ * matter (one of several shader backgrounds, taking turns) behind a short prompt and the templates; picking one fills this page. Once the page has a
  * chat thread, the templates step aside and the screen waits for what the agent makes.
  */
 (() => {
@@ -11,21 +11,27 @@
   const SPARK_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.2l1.5 3.9 3.9 1.5-3.9 1.5L8 12l-1.5-3.9L2.6 6.6l3.9-1.5z" fill="currentColor"/><circle cx="12.8" cy="12.6" r="1.5" fill="currentColor"/></svg>';
 
+  /** Settings key, also written by the Layout track in app.js: the chosen background ids, comma-separated. */
+  const BG_KEY = "scribe.newPageBackgrounds";
+
   /**
-   * A slow nebula: fractal noise warped through itself twice (domain warping), coloured from deep
-   * navy through indigo and violet to a cool blue rim, laid over the theme's panel colour and faded
-   * out at the edges. Dithered so the soft gradients don't band.
+   * What every background shares: noise, the nebula (fractal noise warped through itself twice,
+   * coloured from deep navy through indigo and violet to a cool blue rim), and the two ways matter
+   * goes over the theme's panel colour. On a light theme both tint the panel instead of lighting it.
    */
-  const FRAG = `precision mediump float;
-uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;uniform float u_energy;
+  const HEAD = `precision highp float;
+uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+vec2 hash2(vec2 p){return vec2(hash(p),hash(p+19.19));}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
 return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y);}
 float fbm(vec2 p){float v=0.,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);
 for(int i=0;i<5;i++){v+=a*noise(p);p=m*p;a*=.5;}return v;}
-void main(){
-vec2 uv=(gl_FragCoord.xy-.5*u_res)/min(u_res.x,u_res.y);
-float t=u_time*.05;
+float vig(vec2 uv){return smoothstep(1.3,.1,length(uv*vec2(.8,1.)));}
+vec3 cover(vec3 col,float a,float al){return u_light>.5?mix(u_bg,mix(col,vec3(1.),.2),al):mix(u_bg,col,a);}
+vec3 glow(vec3 base,vec3 e){float m=max(e.r,max(e.g,e.b));
+return u_light>.5?mix(base,mix(e/max(m,.001),vec3(1.),.2),clamp(m,0.,1.)*.6):base+e;}
+vec3 neb(vec2 uv,float t,out float lum){
 vec2 p=uv*1.35;
 vec2 q=vec2(fbm(p+vec2(0.,t)),fbm(p+vec2(5.2,1.3)-t*.8));
 vec2 r=vec2(fbm(p+3.*q+vec2(1.7,9.2)+t*.6),fbm(p+3.*q+vec2(8.3,2.8)-t*.5));
@@ -34,37 +40,169 @@ vec3 deep=vec3(.05,.06,.20),indigo=vec3(.20,.19,.72),violet=vec3(.56,.26,.96),bl
 vec3 col=mix(deep,indigo,smoothstep(.2,.7,f));
 col=mix(col,violet,smoothstep(.45,.95,length(q))*.85);
 col=mix(col,blue,smoothstep(.5,.85,r.y)*.65);
-float lum=smoothstep(.3,.85,f);
-col*=.4+1.5*lum*lum*(.85+.3*u_energy);
-col+=vec3(.78,.7,1.)*pow(smoothstep(.5,.88,f),4.)*(.7+.5*u_energy);
-float vig=smoothstep(1.3,.1,length(uv*vec2(.8,1.)));
-float a=clamp((.3+.9*lum)*vig,0.,1.);
-vec3 outc=u_light>.5?mix(u_bg,mix(col,vec3(1.),.2),lum*vig*.6):mix(u_bg,col,a);
-outc+=(hash(gl_FragCoord.xy+fract(u_time))-.5)/128.;
-gl_FragColor=vec4(outc,1.);}`;
+lum=smoothstep(.3,.85,f);
+col*=.4+1.275*lum*lum;
+col+=vec3(.78,.7,1.)*pow(smoothstep(.5,.88,f),4.)*.7;
+return col;}
+vec3 nebula(vec2 uv,float t,out float lum){
+vec3 col=neb(uv,t,lum);float v=vig(uv);
+vec3 o=cover(col,clamp((.3+.9*lum)*v,0.,1.),lum*v*.6);lum*=v;return o;}
+`;
+
+  /** Dithered so the soft gradients don't band. */
+  const TAIL = `
+void main(){
+vec2 uv=(gl_FragCoord.xy-.5*u_res)/min(u_res.x,u_res.y);
+vec3 c=shade(uv,u_time);
+c+=(hash(gl_FragCoord.xy+fract(u_time))-.5)/128.;
+gl_FragColor=vec4(c,1.);}`;
+
+  const NEBULA = `vec3 shade(vec2 uv,float T){float l;return nebula(uv,T*.05,l);}`;
+
+  /** The nebula with three layers of twinkling four-point sparkles, brighter where the matter is dense. */
+  const STARDUST = `vec3 shade(vec2 uv,float T){float l;vec3 c=nebula(uv,T*.04,l);vec3 e=vec3(0.);
+for(int i=0;i<3;i++){float fi=float(i);float s=9.+fi*8.;
+vec2 g=uv*s+vec2(T*.02*(fi+1.),T*.035);vec2 id=floor(g);vec2 h=hash2(id+fi*17.);
+vec2 d=fract(g)-.5-(h-.5)*.6;float r=length(d);
+float tw=pow(.5+.5*sin(T*(.8+h.x*2.5)+h.y*6.283),6.);
+float g1=pow(smoothstep(.3,0.,r),4.)*.5+smoothstep(.05,0.,r);
+float sp=max(0.,1.-abs(d.x)*28.)*max(0.,1.-abs(d.y)*4.5)+max(0.,1.-abs(d.y)*28.)*max(0.,1.-abs(d.x)*4.5);
+e+=mix(vec3(.75,.85,1.),vec3(.95,.8,1.),h.y)*(g1+sp*.45)*tw*step(h.x,.5)*(.15+1.6*l)*(1.-fi*.25);}
+return glow(c,e);}`;
+
+  /** Four hanging veils, each a wavy lower edge that fades upward, streaked with fine vertical rays. */
+  const AURORA = `vec3 shade(vec2 uv,float T){float t=T*.05;vec3 c=vec3(0.);
+for(int i=0;i<4;i++){float fi=float(i);float x=uv.x*(.9+fi*.25)+fi*3.1;
+float off=(fbm(vec2(x*.8,t+fi))-.5)*.9-.3+fi*.1;float dy=uv.y-off;
+float band=smoothstep(-.02,.03,dy)*exp(-max(dy,0.)*(2.6+fi));
+float streak=.4+.6*noise(vec2(x*26.+fbm(vec2(x*3.,t*2.))*6.,t*3.+fi));
+vec3 col=mix(vec3(.22,.5,1.),vec3(.64,.3,.98),clamp(dy*2.2+fi*.15,0.,1.));
+c+=col*band*streak*(.6-fi*.08);}
+c+=vec3(.25,.22,.8)*.1*fbm(uv*2.+t);
+return glow(u_bg,c*vig(uv));}`;
+
+  /** Light through moving water: the classic iterated caustic net, kept faint over a deep blue haze. */
+  const CAUSTICS = `vec3 shade(vec2 uv,float T){vec2 p=uv*4.5-vec2(250.);vec2 i=p;float c=1.;
+for(int n=0;n<5;n++){float t=T*.16*(1.-3.5/float(n+1));
+i=p+vec2(cos(t-i.x)+sin(t+i.y),sin(t-i.y)+cos(t+i.x));
+c+=1./length(vec2(p.x/(sin(i.x+t)/.005),p.y/(cos(i.y+t)/.005)));}
+c/=5.;c=1.17-pow(c,1.4);float k=pow(abs(c),8.);
+float depth=fbm(uv*1.5+T*.02);
+vec3 e=vec3(.1,.09,.34)*depth*.5+vec3(.42,.6,1.)*k*.3*(.35+depth)+vec3(.62,.36,1.)*k*k*.1;
+return glow(u_bg,e*vig(uv));}`;
+
+  /** Height lines of a smooth, shifting terrain, one pixel wide whatever the slope; every fourth is brighter. */
+  const CONTOURS = `float f3(vec2 p){return noise(p)*.6+noise(p*2.1+7.)*.28+noise(p*4.3+3.)*.12;}
+vec3 shade(vec2 uv,float T){float t=T*.05;vec2 p=uv*1.1;
+vec2 q=vec2(f3(p+vec2(0.,t)),f3(p+vec2(5.2,1.3)-t*.8));
+float h=f3(p*.9+1.6*q+vec2(t*.4,0.));float k=h*22.;
+float d=abs(fract(k+.5)-.5);float w=fwidth(k);
+float line=1.-smoothstep(w*.5,w*1.5,d);
+float major=step(mod(floor(k+.5),4.),.5);
+vec3 col=mix(vec3(.24,.24,.85),vec3(.6,.3,.98),smoothstep(.35,.6,h));
+col=mix(col,vec3(.35,.68,1.),smoothstep(.55,.75,h));
+vec3 c=col*line*(.35+.65*major)+col*smoothstep(.3,.8,h)*.14;
+return glow(u_bg,c*vig(uv));}`;
+
+  /** The nebula sampled once per cell of a tilted grid and printed as dots sized by its brightness. */
+  const HALFTONE = `vec3 shade(vec2 uv,float T){float m=min(u_res.x,u_res.y);float cells=m/9.;
+vec2 g=mat2(.866,-.5,.5,.866)*uv*cells;vec2 id=floor(g)+.5;vec2 f=fract(g)-.5;
+vec2 cuv=mat2(.866,.5,-.5,.866)*id/cells;float l;vec3 col=neb(cuv,T*.05,l);float v=vig(cuv);
+float rad=.5*sqrt(clamp(l*v*1.6+.06*v,0.,1.));float aa=cells/m;
+float a=(1.-smoothstep(rad-aa,rad+aa,length(f)))*step(.03,rad);
+return cover(col*1.3+.04,a,a*.6);}`;
+
+  /** Out-of-focus discs with a brighter rim, drifting at three depths over a dimmed nebula. */
+  const BOKEH = `vec3 shade(vec2 uv,float T){float l;vec3 c=mix(u_bg,nebula(uv,T*.04,l),.5);vec3 e=vec3(0.);
+for(int i=0;i<3;i++){float fi=float(i);float s=2.4+fi*1.9;
+vec2 g=uv*s+vec2(T*.018*(fi+1.),-T*.03*(1.+fi*.5))+fi*5.3;
+vec2 id=floor(g);vec2 h=hash2(id+fi*31.);vec2 d=fract(g)-.5-(h-.5)*.45;
+float rr=.16+.14*h.y,r=length(d);
+float disc=smoothstep(rr,rr-.035,r);float ring=smoothstep(.035,0.,abs(r-rr+.03));
+vec3 bc=mix(vec3(.32,.56,1.),vec3(.68,.36,1.),h.y);
+e+=bc*(disc*.17+ring*.1)*step(h.x,.5)*(.55+.45*sin(T*.5+h.x*20.))*(1.-fi*.22)*vig(uv);}
+return glow(c,e);}`;
+
+  /**
+   * The backgrounds, by the ids the setting stores. Half resolution suits the soft ones and keeps
+   * them cheap on big screens; the ones made of lines and dots need every pixel.
+   */
+  const STYLES = {
+    nebula: { frag: NEBULA },
+    stardust: { frag: STARDUST },
+    aurora: { frag: AURORA },
+    caustics: { frag: CAUSTICS },
+    contours: { frag: CONTOURS, sharp: true, derivatives: true },
+    halftone: { frag: HALFTONE, sharp: true },
+    bokeh: { frag: BOKEH },
+  };
+
+  /** The backgrounds the user left on in Settings; all of them when nothing valid is stored. */
+  function chosen() {
+    const ids = (localStorage.getItem(BG_KEY) || "").split(",").filter((id) => STYLES[id]);
+    return ids.length ? ids : Object.keys(STYLES);
+  }
+
+  let bag = [];
+  let lastPick = null;
+
+  /**
+   * The next background, drawn from a bag of the chosen ones that refills when it runs out, so
+   * each shows equally often. A refill doesn't start with the one just shown.
+   */
+  function pick() {
+    const ids = chosen();
+    bag = bag.filter((id) => ids.includes(id));
+    if (!bag.length) bag = [...ids];
+    const pool = bag.length > 1 ? bag.filter((id) => id !== lastPick) : bag;
+    lastPick = pool[Math.floor(Math.random() * pool.length)];
+    bag.splice(bag.indexOf(lastPick), 1);
+    return lastPick;
+  }
 
   /** The shader behind the New page screen; null when WebGL isn't there (the CSS blobs show then). */
-  function createNebula(canvas) {
-    // Half resolution: the nebula is all soft gradients, and this keeps it cheap on big screens.
-    const fx = window.scribeGL?.create(canvas, FRAG, { scale: 0.5 });
-    if (!fx) return null;
+  function createBackdrop(root) {
+    const GL = window.scribeGL;
+    if (!GL) return null;
     const still = matchMedia("(prefers-reduced-motion: reduce)");
+    let canvas = root.querySelector(".np-canvas");
+    let fx = null;
+    let style = null;
     // Starts somewhere along the drift, so each new page doesn't open on the same frame.
     let time = Math.random() * 400;
-    let energy = 0;
-    let target = 0;
     let running = false;
 
+    function build(id) {
+      const { frag, sharp, derivatives } = STYLES[id];
+      return GL.create(canvas, (derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "") + HEAD + frag + TAIL, {
+        scale: sharp ? () => Math.min(2, devicePixelRatio || 1) : 0.5,
+        extensions: derivatives ? ["OES_standard_derivatives"] : [],
+      });
+    }
+
+    /** One shader per WebGL context, so another background gets a fresh canvas. The nebula stands in for one that won't compile. */
+    function use(id) {
+      if (fx && id === style) return true;
+      if (fx) {
+        fx.destroy();
+        const next = canvas.cloneNode();
+        canvas.replaceWith(next);
+        canvas = next;
+      }
+      fx = build(id) || (id !== "nebula" && build("nebula")) || null;
+      style = fx ? id : null;
+      return Boolean(fx);
+    }
+
     function theme() {
-      const m = getComputedStyle(canvas.parentElement).backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
+      const m = getComputedStyle(root).backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
       const [r, g, b] = m.slice(0, 3).map((v) => v / 255);
       fx.set({ u_bg: [r, g, b], u_light: 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0 });
     }
 
-    const draw = () => fx.draw({ u_time: time, u_energy: energy });
-    const loop = window.scribeGL.loop((dt) => {
-      energy += (target - energy) * Math.min(1, dt * 1.5);
-      time += dt * (1 + energy * 2.5);
+    const draw = () => fx?.draw({ u_time: time });
+    const loop = GL.loop((dt) => {
+      time += dt;
       draw();
     });
 
@@ -72,22 +210,21 @@ gl_FragColor=vec4(outc,1.);}`;
       theme();
       if (still.matches) {
         loop.stop();
-        energy = target;
         draw();
         return;
       }
       loop.start();
     }
 
+    if (!use("nebula")) return null;
     new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    new ResizeObserver(() => running && draw()).observe(canvas);
+    new ResizeObserver(() => running && draw()).observe(root);
 
     return {
-      /** Run while the screen is shown; working speeds the drift up and brightens it. */
-      set(on, working) {
-        target = working ? 1 : 0;
-        running = on;
-        if (on) start();
+      /** Run with this background while the screen is shown. */
+      set(on, id) {
+        running = Boolean(on && use(id));
+        if (running) start();
         else loop.stop();
       },
     };
@@ -112,8 +249,11 @@ gl_FragColor=vec4(outc,1.);}`;
     const gridHead = root.querySelector(".newpage-templates-head");
     askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
     askBtn.addEventListener("click", () => host.openChat());
-    const nebula = createNebula(root.querySelector(".np-canvas"));
-    root.classList.toggle("gl", Boolean(nebula));
+    const backdrop = createBackdrop(root);
+    root.classList.toggle("gl", Boolean(backdrop));
+    /** Each blank page keeps the background it drew, so coming back to it doesn't change it. */
+    const picks = new Map();
+    let current = null;
     /** The page shown and what was drawn for it, so a re-render with nothing new keeps focus and scroll. */
     let shown = null;
     let drawn = "";
@@ -139,9 +279,15 @@ gl_FragColor=vec4(outc,1.);}`;
       return [...own.map((t) => [t, false]), ...builtins.map((t) => [t, true])];
     }
 
+    function background(id) {
+      if (!chosen().includes(picks.get(id))) picks.set(id, pick());
+      return picks.get(id);
+    }
+
     function render(tab) {
       root.hidden = !tab;
-      nebula?.set(Boolean(tab), tab ? host.working(tab.id) : false);
+      current = tab || null;
+      backdrop?.set(Boolean(tab), tab ? background(tab.id) : null);
       if (!tab) {
         shown = null;
         drawn = "";
@@ -165,6 +311,8 @@ gl_FragColor=vec4(outc,1.);}`;
       gridHead.hidden = !list.length;
       grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
     }
+
+    window.addEventListener("scribe:newpage-bg", () => current && backdrop?.set(true, background(current.id)));
 
     return {
       render,

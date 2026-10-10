@@ -8,7 +8,8 @@
 
   /**
    * opts: alpha (transparent canvas; the shader writes premultiplied colour), scale (backing pixels
-   * per CSS pixel, or a function returning it). Null when WebGL isn't there or the shader fails.
+   * per CSS pixel, or a function returning it), extensions (WebGL extensions the shader needs).
+   * Null when WebGL isn't there or the shader fails.
    */
   function create(canvas, frag, opts = {}) {
     const gl = canvas.getContext("webgl", {
@@ -19,6 +20,7 @@
       powerPreference: "low-power",
     });
     if (!gl) return null;
+    for (const name of opts.extensions || []) gl.getExtension(name);
     const shader = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src);

@@ -121,6 +121,17 @@
   /** Also read by aurora.js, which draws the title bar edge. */
   const AURORA_EDGE_KEY = "scribe.auroraEdge";
   const AURORA_IDLE_KEY = "scribe.auroraIdle";
+  /** Also read by newpage.js, which draws them. Stored as the chosen ids, comma-separated; nothing stored means all. */
+  const NEWPAGE_BG_KEY = "scribe.newPageBackgrounds";
+  const NEWPAGE_BGS = [
+    { id: "nebula", name: "Nebula" },
+    { id: "stardust", name: "Stardust" },
+    { id: "aurora", name: "Aurora curtains" },
+    { id: "caustics", name: "Caustics" },
+    { id: "contours", name: "Contour map" },
+    { id: "halftone", name: "Halftone" },
+    { id: "bokeh", name: "Bokeh" },
+  ];
   /** Also read by chromefx.js, which draws the title bar background. The first entry is the default. */
   const CHROME_FX_KEY = "scribe.chromeFx";
   const CHROME_FX_WHEN_KEY = "scribe.chromeFxWhen";
@@ -373,11 +384,16 @@
   renderLinkModes();
   renderPaneSides();
   renderChromeFx();
+  renderNewPageBgs();
   renderPalettePrefixSettings();
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
   bindSettingHint(
     document.getElementById("ui-fx-label"),
     "Shader motion on controls like the floating chat orb whenever it is visible. Off, they hold a still frame. The New page background still moves."
+  );
+  bindSettingHint(
+    document.getElementById("newpage-bgs-label"),
+    "Each new blank page shows one of the backgrounds turned on here. They take turns in random order, so each comes up equally often."
   );
   bindSettingHint(
     document.getElementById("chrome-fx-label"),
@@ -999,6 +1015,29 @@
         localStorage.setItem(key, item.id);
         renderChoiceTrack(track, options, key, event);
         window.dispatchEvent(new Event(event));
+      });
+      track.appendChild(btn);
+    }
+  }
+
+  /** A track where any number of options can be on, but never none. */
+  function renderNewPageBgs() {
+    const track = document.getElementById("newpage-bgs");
+    const stored = (localStorage.getItem(NEWPAGE_BG_KEY) || "").split(",");
+    let on = NEWPAGE_BGS.map((item) => item.id).filter((id) => stored.includes(id));
+    if (!on.length) on = NEWPAGE_BGS.map((item) => item.id);
+    track.replaceChildren();
+    for (const item of NEWPAGE_BGS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = item.name;
+      btn.setAttribute("aria-pressed", String(on.includes(item.id)));
+      btn.addEventListener("click", () => {
+        const next = on.includes(item.id) ? on.filter((id) => id !== item.id) : [...on, item.id];
+        if (!next.length) return;
+        localStorage.setItem(NEWPAGE_BG_KEY, next.join(","));
+        renderNewPageBgs();
+        window.dispatchEvent(new Event("scribe:newpage-bg"));
       });
       track.appendChild(btn);
     }

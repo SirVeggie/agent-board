@@ -2319,6 +2319,18 @@ kbd {
   color: var(--text);
 }
 
+.setting-row-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 2px;
+}
+
+.button-track.wrap-track {
+  flex-wrap: wrap;
+  flex-shrink: 1;
+}
+
 .setting-hinted {
   text-decoration: underline dotted;
   text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
