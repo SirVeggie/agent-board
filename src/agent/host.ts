@@ -81,6 +81,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
+import { isProviderId } from "./types.js";
 
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
@@ -108,6 +109,9 @@ export function openWorktree(thread: Thread): ThreadWorktree | null {
 }
 
 /** Code and Plan threads in a workspace can have a worktree; Pages and Ask never edit files. */
+/** Helpers one thread may have working at once. */
+const MAX_HELPERS = 4;
+
 function wantsWorktree(thread: Thread): boolean {
   return Boolean(thread.useWorktree && thread.cwd && (thread.mode === "code" || thread.mode === "plan") && !openWorktree(thread));
 }
@@ -159,7 +163,7 @@ type QueuedMessage = {
   /** Where the images and files were saved, in the same order. */
   saved: { images: FileRef[]; files: FileRef[] };
   context: ContextChip[];
-  from?: "page" | "scribe";
+  from?: "page" | "scribe" | "agent";
   /** A Kanban card the board sent this about (a comment on it, or Continue). */
   card?: CardRef;
 };
@@ -201,7 +205,9 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
       ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n"
       : msg.from === "scribe"
         ? "<context>\nSent by Scribe itself, not typed by the user.\n</context>\n\n"
-        : "";
+        : msg.from === "agent"
+          ? "<context>\nA brief from the agent this helper thread works for, not typed by the user. Your final reply goes back to that agent.\n</context>\n\n"
+          : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
   const recap = !thread.rewind?.recap
@@ -287,7 +293,7 @@ export type PageAskResult =
 /** A workspace folder that is gone, and the folder Scribe thinks it became (same file id), if any. */
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe"; card?: CardRef };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent"; card?: CardRef };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -308,6 +314,8 @@ export class AgentHost {
   private pending = new Map<string, Pending>();
   /** "Allow once" answers to web_request, per thread, until a web call uses them. */
   private webPasses = new Map<string, Array<{ call: WebCall; at: number }>>();
+  /** agent_run calls waiting for a helper thread to go idle. */
+  private turnWaiters = new Map<string, Array<() => void>>();
   private commandCache = new Map<string, SlashCommand[]>();
   private deltaBuf = new Map<string, { threadId: string; text: string }>();
   private deltaTimer: NodeJS.Timeout | null = null;
@@ -366,7 +374,7 @@ export class AgentHost {
     this.ctx = {
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
-      isWorker: (id) => pageOwned(this.loadItems(id)),
+      isWorker: (id) => this.unattended(id),
       permissions: (id, policy) => {
         const thread = this.threads.get(id);
         if (!thread) return;
@@ -378,7 +386,7 @@ export class AgentHost {
       claudeHooks: () => this.prefs().claudeHooks,
       mcpServers: (thread) => serversForThread(thread),
       // Not for board workers: nobody watches their threads to approve commands.
-      cursorHostShell: (threadId) => this.prefs().cursorHostShell && !pageOwned(this.loadItems(threadId)),
+      cursorHostShell: (threadId) => this.prefs().cursorHostShell && !this.unattended(threadId),
       limits: (provider, info) => this.recordLimits(provider, info),
       task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
       followUp: (threadId, id) => this.followUp(threadId, id),
@@ -693,6 +701,7 @@ export class AgentHost {
       searxngUrl: cleanSearxngUrl(saved.searxngUrl),
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
+      helpers: saved.helpers === true,
       disabledModes: cleanDisabledModes(saved.disabledModes),
     };
   }
@@ -703,6 +712,7 @@ export class AgentHost {
     // null puts back the starting list.
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
+    if (patch.helpers !== undefined) next.helpers = patch.helpers === true;
     if (patch.disabledModes !== undefined) next.disabledModes = cleanDisabledModes(patch.disabledModes);
     if (patch.searxngUrl !== undefined) {
       next.searxngUrl = cleanSearxngUrl(patch.searxngUrl);
@@ -1293,6 +1303,7 @@ export class AgentHost {
   private scopeInfo(thread: Thread): ScopeInfo {
     const info = this.scopePages(thread);
     if (this.prefs().searxngUrl) info.webSearch = true;
+    if (this.prefs().helpers && !thread.helperOf) info.helpers = true;
     if (thread.provider === "claude") {
       const have = new Set(serversForThread(thread).map((s) => s.name));
       const leftOut = claudeOwnServers(threadWorkspace(thread)).filter((name) => !have.has(name));
@@ -1791,7 +1802,7 @@ export class AgentHost {
     const run = this.runs.get(threadId);
     if (!run) return { allowed: false, message: "Web access is off for this thread, and with no turn running the user cannot be asked. Carry on without it." };
     const importance = opts.importance ?? "useful";
-    const waitMs = pageOwned(this.loadItems(threadId)) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
     const domains = webCallDomains(call);
     const title = call.kind === "fetch" ? `Web access: fetch ${call.url}` : `Web access: search${call.query ? ` “${call.query}”` : ""}${domains.length ? ` on ${domains.join(", ")}` : ""}`;
     const detail = [
@@ -1897,7 +1908,7 @@ export class AgentHost {
     const run = this.runs.get(threadId);
     if (!run) return { allowed: false, message: "With no turn running the user cannot be asked.", scopes: labels(granted()) };
     const importance = opts.importance ?? "useful";
-    const waitMs = pageOwned(this.loadItems(threadId)) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
     const detail = [
       `The agent asks to read the transcripts of other threads: ${labels(want).join("; ")}. Importance: ${importance}.`,
       opts.reason?.trim(),
@@ -2074,6 +2085,178 @@ export class AgentHost {
     };
   }
 
+  /** Nobody is watching this chat: a page (board worker) runs it, or it is a helper of such a chat. */
+  private unattended(threadId: string): boolean {
+    if (pageOwned(this.loadItems(threadId))) return true;
+    const parent = this.threads.get(threadId)?.helperOf;
+    return Boolean(parent && this.threads.has(parent) && pageOwned(this.loadItems(parent)));
+  }
+
+  // ---------- helper agents ----------
+
+  /** agent_models: the providers and models agent_run can use. */
+  async helperModels(threadId: string, provider?: string): Promise<{ providers: Array<Record<string, unknown>> }> {
+    this.helperParent(threadId);
+    if (provider !== undefined && !isProviderId(provider)) throw new Error(`Unknown provider ${provider}. Providers: ${Object.keys(this.providers).join(", ")}.`);
+    const status = await this.providerStatus();
+    const rows: Array<Record<string, unknown>> = [];
+    for (const s of status) {
+      if (provider && s.id !== provider) continue;
+      if (!s.available) {
+        if (provider) rows.push({ provider: s.id, label: s.label, available: false, ...(s.detail ? { detail: s.detail } : {}) });
+        continue;
+      }
+      const models = await this.models(s.id).catch(() => []);
+      rows.push({
+        provider: s.id,
+        label: s.label,
+        models: models.map((m) => ({ id: m.id, ...(m.label !== m.id ? { label: m.label } : {}), ...(m.efforts.length ? { efforts: m.efforts.map((e) => e.id) } : {}) })),
+      });
+    }
+    return { providers: rows };
+  }
+
+  /** The thread an agent_run or agent_models call came from, when it may start helpers. */
+  private helperParent(threadId: string): Thread {
+    const parent = this.threads.get(threadId);
+    if (!parent) throw new Error("Helper agents only work in Scribe chat threads.");
+    if (parent.helperOf) throw new Error("A helper cannot start helpers of its own. Do the task yourself.");
+    if (!this.prefs().helpers) throw new Error("Helper agents are turned off (Agent settings, Helper agents). Do the work yourself, and tell the user if they asked for a helper.");
+    return parent;
+  }
+
+  /** The model a helper call names, by id or label; the error lists what there is. */
+  private async helperModel(provider: ProviderId, want: string | undefined): Promise<ModelOption | null> {
+    const models = await this.models(provider);
+    if (!want) return null;
+    const q = want.trim().toLowerCase();
+    const exact = models.find((m) => m.id === want) ?? models.find((m) => m.id.toLowerCase() === q || m.label.toLowerCase() === q);
+    if (exact) return exact;
+    const partial = models.filter((m) => m.id.toLowerCase().includes(q) || m.label.toLowerCase().includes(q));
+    if (partial.length === 1) return partial[0];
+    const list = (partial.length ? partial : models).slice(0, 40).map((m) => m.id);
+    throw new Error(`${partial.length ? `"${want}" matches several ${provider} models` : `No ${provider} model "${want}"`}. Pick one of: ${list.join(", ")}.`);
+  }
+
+  /** Ask the user before a thread starts a helper, unless it has full access or they allowed helpers for the thread. */
+  private async approveHelper(parent: Thread, what: string, task: string, signal?: AbortSignal): Promise<void> {
+    if (parent.approval === "full" || parent.helpersAllowed) return;
+    const run = this.runs.get(parent.id);
+    if (!run) throw new Error("With no turn running the user cannot be asked to allow a helper.");
+    const options: ApprovalOption[] = [
+      { id: "once", label: "Allow", kind: "allow_once" },
+      { id: "thread", label: "Allow for this thread", kind: "allow_always" },
+      { id: "deny", label: "Deny", kind: "reject_once" },
+    ];
+    this.closeBlocks(run);
+    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace with this thread's mode and permissions.\n\n${clip(task, 2000)}`;
+    const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Start a helper agent: ${what}`.slice(0, 300), detail, options, status: "pending" });
+    let decision: ApprovalDecision;
+    try {
+      decision = await this.waitPending<ApprovalDecision>(parent.id, run, "approval", item.id, signal);
+    } catch {
+      throw new Error("The request to start a helper was cancelled.");
+    }
+    if (decision.optionId === "deny") throw new Error(decision.note ? `The user denied the helper: ${decision.note}` : "The user denied the helper. Do the work yourself.");
+    if (decision.optionId === "thread") {
+      const t = this.threads.get(parent.id);
+      if (t) {
+        t.helpersAllowed = true;
+        this.db.saveThread(t);
+      }
+    }
+  }
+
+  /**
+   * agent_run from a thread's MCP: hand a task to a helper thread on another provider or model, wait
+   * for its turn to end and return its final reply. The helper works in the caller's folder (an open
+   * worktree is shared) with its mode, approval and web setting. thread sends a follow-up to a helper
+   * this thread started earlier.
+   */
+  async runHelper(
+    threadId: string,
+    opts: { task: string; provider?: string; model?: string; effort?: string; thread?: string; signal?: AbortSignal }
+  ): Promise<Record<string, unknown>> {
+    const parent = this.helperParent(threadId);
+    const task = opts.task.trim();
+    if (!task) throw new Error("task is required: a brief the helper can work from on its own.");
+    let helper: Thread;
+    if (opts.thread) {
+      const existing = this.threads.get(opts.thread);
+      if (!existing || existing.helperOf !== threadId) throw new Error(`No helper ${opts.thread} of this thread. Leave thread out to start a new one.`);
+      if (this.runs.has(existing.id) || this.queues.get(existing.id)?.length) throw new Error("That helper is still working on its last task.");
+      if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
+      helper = existing;
+    } else {
+      if (!opts.provider || !isProviderId(opts.provider)) throw new Error(`provider is required: one of ${Object.keys(this.providers).join(", ")}. agent_models lists their models.`);
+      const provider = opts.provider;
+      const status = (await this.providerStatus()).find((s) => s.id === provider);
+      if (!status?.available) throw new Error(`${status?.label ?? provider} is not available${status?.detail ? `: ${status.detail}` : "."}`);
+      const model = await this.helperModel(provider, opts.model);
+      if (opts.effort && model && !model.efforts.some((e) => e.id === opts.effort)) {
+        throw new Error(model.efforts.length ? `${model.id} has no effort "${opts.effort}". Its efforts: ${model.efforts.map((e) => e.id).join(", ")}.` : `${model.id} has no effort setting; leave effort out.`);
+      }
+      const busy = [...this.threads.values()].filter((t) => t.helperOf === threadId && this.runs.has(t.id)).length;
+      if (busy >= MAX_HELPERS) throw new Error(`This thread already has ${busy} helpers working. Wait for one to finish.`);
+      await this.approveHelper(parent, `${status.label}${model ? ` (${model.label})` : ""}`, task, opts.signal);
+      // The folder can have changed while the user was asked (a worktree made or closed).
+      const now = this.requireThread(threadId);
+      const wt = openWorktree(now);
+      const draft = this.draftThread({
+        title: `Helper: ${titleFrom(task)}`,
+        provider,
+        ...(model ? { model: model.id } : {}),
+        ...(opts.effort ? { effort: opts.effort } : {}),
+        mode: now.mode,
+        approval: now.approval,
+        web: now.web,
+        // A helper for files and commands gets no page tools; one of a Pages thread works on the same pages.
+        scope: now.mode === "board" ? now.scope : { kind: "workspace", ref: now.cwd },
+        cwd: now.cwd,
+        useWorktree: Boolean(wt),
+      });
+      draft.helperOf = threadId;
+      if (wt) draft.worktree = { ...wt };
+      this.threads.set(draft.id, draft);
+      this.items.set(draft.id, []);
+      this.turns.set(draft.id, []);
+      this.seq.set(draft.id, 0);
+      this.db.saveThread(draft);
+      this.emit({ type: "agent_thread", thread: this.view(draft) });
+      helper = draft;
+    }
+    if (opts.signal?.aborted) throw new Error("cancelled");
+    const done = new Promise<void>((resolve) => {
+      const list = this.turnWaiters.get(helper.id) ?? [];
+      list.push(resolve);
+      this.turnWaiters.set(helper.id, list);
+    });
+    const onAbort = () => void this.cancel(helper.id);
+    opts.signal?.addEventListener("abort", onAbort);
+    try {
+      this.send(helper.id, { text: task, from: "agent" });
+      await done;
+    } finally {
+      opts.signal?.removeEventListener("abort", onAbort);
+    }
+    const turn = this.loadTurns(helper.id).at(-1);
+    if (!turn) throw new Error("The helper did not run.");
+    const { reply } = this.turnText(this.loadItems(helper.id), turn, false);
+    const files = (turn.files ?? []).map((f) => `${f.status} ${f.path}`);
+    const latest = this.threads.get(helper.id) ?? helper;
+    return {
+      thread: helper.id,
+      provider: latest.provider,
+      model: turn.model,
+      status: turn.status,
+      ...(turn.error ? { error: turn.error } : {}),
+      reply: reply || (turn.status === "done" ? "(The helper ended its turn without a final message. Check its changes yourself.)" : ""),
+      ...(files.length ? { files } : {}),
+      ...(turn.usage?.inputTokens !== undefined || turn.usage?.outputTokens !== undefined ? { tokens: { input: turn.usage.inputTokens ?? 0, output: turn.usage.outputTokens ?? 0 } } : {}),
+      note: "Check this work yourself before you rely on it. To send the same helper a follow-up, pass thread.",
+    };
+  }
+
   /** Use up an "Allow once" pass from web_request that covers this call. */
   private takeWebPass(threadId: string, call: WebCall): boolean {
     const passes = (this.webPasses.get(threadId) ?? []).filter((p) => Date.now() - p.at < WEB_PASS_MS);
@@ -2165,6 +2348,10 @@ export class AgentHost {
         }
       }
       this.emitThread(threadId);
+    }
+    // Its helpers stop with it: nobody is left to read their reports.
+    for (const t of this.threads.values()) {
+      if (t.helperOf === threadId && this.runs.has(t.id)) void this.cancel(t.id);
     }
     if (!run) return;
     run.cancelled = true;
@@ -2377,7 +2564,8 @@ export class AgentHost {
     if (latest) {
       latest.activityAt = Date.now();
       this.db.saveThread(latest);
-      if (!pageOwned(this.loadItems(threadId))) this.unread.add(threadId);
+      // A helper reports to the agent that started it, not to the user.
+      if (!pageOwned(this.loadItems(threadId)) && !latest.helperOf) this.unread.add(threadId);
     }
     this.emitThread(threadId);
 
@@ -2387,6 +2575,10 @@ export class AgentHost {
       return;
     }
     this.drainQueue(threadId);
+    if (!this.runs.has(threadId)) {
+      for (const done of this.turnWaiters.get(threadId) ?? []) done();
+      this.turnWaiters.delete(threadId);
+    }
     void this.pageRuns.check(threadId);
   }
 

@@ -36,6 +36,11 @@ export type Prefs = {
    * first, instead of Cursor's own shell under Auto-review. Board workers keep Cursor's shell.
    */
   cursorHostShell: boolean;
+  /**
+   * Agents may hand tasks to a helper agent on another provider or model (agent_run), when told to.
+   * Off by default: a helper spends that provider's quota.
+   */
+  helpers: boolean;
   recentWorkspaces: string[];
   /**
    * Last workspace used for a folder scope ("folder:<id>"), so new threads there start in it.
@@ -65,6 +70,7 @@ export const DEFAULT_PREFS: Prefs = {
   searxngUrl: "",
   claudeHooks: false,
   cursorHostShell: false,
+  helpers: false,
   recentWorkspaces: [],
   scopeWorkspaces: {},
   favoriteModels: [],

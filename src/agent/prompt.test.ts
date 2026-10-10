@@ -55,6 +55,16 @@ test("Code threads with no workspace are told they start in a scratch folder", (
   assert.doesNotMatch(threadInstructions(thread({ cwd: "/work" }), {}), /Workspace: none/);
 });
 
+test("helper agents are only mentioned when they are on, and never to a helper", () => {
+  const thread = (over: Partial<Thread>): Thread =>
+    ({ provider: "claude", mode: "code", cwd: "/work", scope: { kind: "global", ref: null }, ...over }) as Thread;
+  assert.doesNotMatch(threadInstructions(thread({}), {}), /agent_run/);
+  assert.match(threadInstructions(thread({}), { helpers: true }), /agent_run .*Use it only when the user, or the instructions for this thread, told you/);
+  const helper = threadInstructions(thread({ helperOf: "th_1" }), { helpers: true });
+  assert.doesNotMatch(helper, /agent_run/);
+  assert.match(helper, /Helper thread: .*Your final reply goes back to that agent/);
+});
+
 test("every thread is told to check a message that looks meant for another thread", () => {
   const thread = (over: Partial<Thread>): Thread =>
     ({ provider: "cursor", mode: "board", cwd: null, scope: { kind: "global", ref: null }, ...over }) as Thread;

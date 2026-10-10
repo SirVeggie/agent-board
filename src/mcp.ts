@@ -1442,6 +1442,7 @@ export async function startMcp(): Promise<void> {
     if (pages) registerAsk(server);
     registerWebRequest(server);
     registerThreadTools(server);
+    registerHelperTools(server);
   }
 
   const transport = new StdioServerTransport();
@@ -1625,6 +1626,67 @@ function registerThreadTools(server: McpServer): void {
     },
     { readOnlyHint: true },
     async ({ thread, from, limit, q, kinds, full, importance }, extra) => call("read", { thread, from, limit, q, kinds, full, importance }, extra)
+  );
+}
+
+/**
+ * agent_run, agent_models: hand a task to a helper agent on another provider or model (a model the
+ * user hosts locally, a cheaper one), when the user told the agent to. Off until the user turns
+ * Helper agents on in Agent settings; the host refuses the calls until then.
+ */
+function registerHelperTools(server: McpServer): void {
+  server.tool(
+    "agent_models",
+    "List the providers and models agent_run can hand a task to. Only for when the user, or this chat's instructions, told you to use a helper agent on another model.",
+    { provider: z.string().optional().describe("Only this provider: claude, cursor, codex or pi (Native: the user's own model sources, such as a locally hosted model).") },
+    { readOnlyHint: true },
+    async ({ provider }, extra) => {
+      try {
+        const { status, data } = await api("POST", "/api/helper/models", { provider }, { signal: extra.signal });
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "agent_models failed");
+      }
+    }
+  );
+
+  server.tool(
+    "agent_run",
+    "Hand a task to a helper agent on another provider or model and wait for it to finish. Use this ONLY when the user, or this chat's instructions, told you to hand work to another model, and then only with the model and for the kind of work they named: never on your own to save effort, go faster or get a second opinion. It spends the user's quota with that provider, and the user may be asked to allow it. The helper works in this chat's workspace with this chat's mode and permissions, in a chat thread of its own the user can open. It sees none of this conversation, so task must stand on its own: the goal, the files and folders involved, what done looks like, how to check it, and what to leave alone. Returns the helper's final reply, the files its turn changed, its status and its thread id. Check the work yourself (read the diff, run the tests) before you build on it or report it as done. Pass thread to send a follow-up to a helper you started earlier in this chat, which keeps its context. Several calls at once run helpers side by side in the same folder: only do that for tasks that touch different files.",
+    {
+      task: z.string().describe("The brief: everything the helper needs to do the task without seeing this conversation."),
+      provider: z.string().optional().describe("claude, cursor, codex or pi (Native: the user's own model sources, such as a locally hosted model). Required for a new helper."),
+      model: z.string().optional().describe("Model id or name from agent_models. Default: the provider's last used model."),
+      effort: z.string().optional().describe("Reasoning effort, one of the model's efforts in agent_models. Default: the model's last used one."),
+      thread: z.string().optional().describe("Thread id an earlier agent_run returned, to send that helper a follow-up instead of starting a new one. provider, model and effort are then ignored."),
+    },
+    async ({ task, provider, model, effort, thread }, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `The helper agent is working (${seconds}s)` } })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api("POST", "/api/helper/run", { task, provider, model, effort, thread }, { signal: extra.signal });
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "agent_run failed");
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
   );
 }
 

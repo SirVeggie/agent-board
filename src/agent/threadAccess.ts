@@ -133,7 +133,7 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
   switch (item.kind) {
     case "user": {
       if (item.dropped) return null;
-      const who = item.from === "page" ? "user (sent by page)" : item.from === "scribe" ? "scribe" : "user";
+      const who = item.from === "page" ? "user (sent by page)" : item.from === "scribe" ? "scribe" : item.from === "agent" ? "agent that started this helper" : "user";
       return `[${who}] ${clip(item.text, max * 2)}`;
     }
     case "text":

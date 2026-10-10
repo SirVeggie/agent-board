@@ -2669,6 +2669,7 @@
       if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.reply ? `Reply on card #${item.card.num}` : item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
+      else if (item.from === "agent") bubble.prepend(el("div", "ag-from-page", "Brief from the agent that started this helper"));
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
       row.append(bubble);
@@ -5051,6 +5052,7 @@
     const meta = el("span", "ag-row-meta");
     meta.append(providerIcon(t.provider), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
     if (t.fromPage) meta.append(el("span", null, "·"), el("span", null, "page"));
+    if (t.helperOf) meta.append(el("span", null, "·"), el("span", null, "helper"));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
     const wt = openWorktree(t);
     if (wt) {
@@ -7643,6 +7645,31 @@
         })
       );
 
+      const helpers = el("section", "settings-section");
+      const helpersOn = switchControl(
+        () => Boolean(prefs().helpers),
+        () => {
+          const on = !prefs().helpers;
+          S.config.prefs = { ...prefs(), helpers: on };
+          api("PUT", "/prefs", { helpers: on })
+            .then((next) => {
+              S.config.prefs = next;
+            })
+            .catch((err) => {
+              S.config.prefs = { ...prefs(), helpers: !on };
+              helpersOn.setAttribute("aria-checked", String(!on));
+              notice(err.message);
+            });
+        }
+      );
+      helpers.append(
+        el("h3", null, "Helper agents"),
+        settingRow("Agents can hand tasks to other models", helpersOn, {
+          id: "ag-helpers-label",
+          hint: "When you tell an agent to, it can give a task to another provider or model, such as one you host yourself, and check the result. The helper is a thread of its own in the same folder, with the same mode and permissions. You are asked before each new helper unless the thread has Full access.",
+        })
+      );
+
       const sources = el("section", "settings-section");
       this.sources = el("div", "ag-sources");
       const sourceActions = el("div", "settings-actions");
@@ -7767,7 +7794,7 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, cursor, sources, usage, chat, keys);
+      panel.append(title, providers, cursor, helpers, sources, usage, chat, keys);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;

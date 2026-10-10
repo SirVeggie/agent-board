@@ -920,6 +920,51 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /**
+   * agent_run and agent_models from a Scribe chat's MCP: hand a task to a helper agent on another
+   * provider or model. run stays open until the helper's turn ends; closing it stops the helper.
+   */
+  app.post("/api/helper/:op", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "Helper agents only work in Scribe chat threads." });
+      return;
+    }
+    const host = agentHost;
+    const body = isPlainObject(req.body) ? req.body : {};
+    const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    const op = req.params.op;
+    const run = (): Promise<unknown> => {
+      if (op === "models") return host.helperModels(thread, str(body.provider, 40));
+      if (op === "run") {
+        return host.runHelper(thread, {
+          task: typeof body.task === "string" ? body.task : "",
+          provider: str(body.provider, 40),
+          model: str(body.model, 200),
+          effort: str(body.effort, 40),
+          thread: str(body.thread, 60),
+          signal: abort.signal,
+        });
+      }
+      return Promise.reject(new Error(`unknown op: ${op}`));
+    };
+    run()
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
   app.post("/api/undo", (_req, res) => {
     try {
       const { tab } = store.restoreLast();

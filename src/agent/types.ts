@@ -58,6 +58,10 @@ export type Thread = {
   webGrants?: WebGrants;
   /** Other threads the user let this one read (thread_list, thread_read), by scope. */
   threadGrants?: ThreadGrants;
+  /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
+  helperOf?: string;
+  /** The user let this thread's agent start helpers (agent_run) without asking again. */
+  helpersAllowed?: boolean;
   scope: ThreadScope;
   /** Working directory for file and shell tools. While the thread has an open worktree, a folder inside it. */
   cwd: string | null;
@@ -327,8 +331,8 @@ export type ItemBody =
       steer?: "waiting" | "folded";
       /** Temporarily held in the queue while an editing popup is open. */
       editing?: boolean;
-      /** Sent by the code of the thread's page (board.agent), or by Scribe itself (going on after a restart); not typed by the user. */
-      from?: "page" | "scribe";
+      /** Sent by the code of the thread's page (board.agent), by Scribe itself (going on after a restart), or by the agent this helper thread works for; not typed by the user. */
+      from?: "page" | "scribe" | "agent";
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
       card?: { num: number; title?: string; resume?: boolean; reply?: string };
     }

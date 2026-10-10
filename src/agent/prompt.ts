@@ -14,6 +14,8 @@ export type ScopeInfo = {
   webSearch?: boolean;
   /** Servers in the user's own Claude Code config that this Claude thread does not get (Scribe's MCP list replaces that config). */
   mcpLeftOut?: string[];
+  /** Helper agents are on in Agent settings, and this thread is not a helper itself: it has agent_run. */
+  helpers?: boolean;
 };
 
 /**
@@ -119,6 +121,15 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   lines.push(
     "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. The user is asked to allow it first; thread_access says why."
   );
+  if (thread.helperOf) {
+    lines.push(
+      "Helper thread: the messages here come from another agent, the one the user works with in another thread, which hands you tasks. Your final reply goes back to that agent, not to the user, and it sees nothing else of this thread. Do the task as briefed and no more. End with a short report: what you did, the files you changed, how you checked it, and anything you left undone or are unsure of. Do not ask questions and wait: if the brief is not enough to go on, say what is missing in your reply. Do not commit, push or merge unless the brief says so."
+    );
+  } else if (scope.helpers) {
+    lines.push(
+      "Helper agents: agent_run hands a task to an agent on another provider or model (agent_models lists them). It works in this thread's workspace with this thread's mode and permissions, and its final reply comes back as the result. Use it only when the user, or the instructions for this thread, told you to hand work to another model, and then only with the model and for the kind of work they named. Never start a helper on your own: not to save effort, not to go faster, not for a second opinion. It spends the user's quota with that provider, and the user may be asked to allow it. The result stays yours to answer for: write a brief that stands on its own (the helper sees none of this conversation), and check what it did (read the diff, run the tests) before you build on it or report it as done."
+    );
+  }
   if (thread.scope.kind === "page" && scope.page?.blank) {
     lines.push(
       "",
