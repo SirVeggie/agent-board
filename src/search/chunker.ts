@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { htmlToText } from "../librarySearch.js";
 import type { Tab } from "../types.js";
 
-export const CHUNKER_VERSION = "1";
+export const CHUNKER_VERSION = "2";
 export type SearchDeclaration = { records: SearchRecord[] };
 export type SearchRecord = { path: string; skip?: Record<string, unknown>; title: string; text: string[]; anchor: string; label?: string; context?: "page" | "record" };
 export type TextChunk = { key: string; kind: "page" | "section" | "record"; anchor: string | null; headingId?: string; label: string; title: string; text: string; snippet: string; hash: string };
@@ -82,7 +82,8 @@ export function chunkPage(tab: Pick<Tab, "title" | "html" | "state">, folder: st
   const visible = htmlToText(html);
   const titles = records.map(r => words(values(r.value, r.spec.title)[0])).filter(Boolean).join("\n");
   const pageText = declaration ? titles : [visible, words(tab.state)].filter(Boolean).join("\n");
-  if (pageText.length < 40 && records.every(r => words(r.value).length < 40)) return [];
+  // Empty pages rank for everything, so they are skipped. A declared list with one short item is still a page.
+  if (declaration ? !records.some(r => words(r.value)) : pageText.length < 40 && records.every(r => words(r.value).length < 40)) return [];
   add("page", "page", null, tab.title, tab.title, `Folder: ${folder ?? "/"}.\n${pageText.slice(0, 3000)}`);
   for (const { path, value, spec } of records) {
     const anchor = String(values(value, spec.anchor)[0] ?? "");

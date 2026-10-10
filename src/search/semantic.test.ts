@@ -73,6 +73,9 @@ test("template declarations index cards and todos with stable identities and cle
   assert.equal(cs[0].hash, changed[0].hash); assert.equal(record.key, changed[1].key); assert.notEqual(record.hash, changed[1].hash);
   const list = chunkPage(page("List", { todos: [{ id: "t_a", text: "Get groceries", description: "Buy plenty of vegetables for the whole week" }] }), null, todo);
   assert.equal(list[1].anchor, "t_a"); assert.equal(list[1].title, "List"); assert.match(list[1].text, /vegetables/);
+  // A one-item list is short but not empty; a list with no items is.
+  assert.deepEqual(chunkPage(page("Shopping list", { todos: [{ id: "t_a", text: "eggs" }] }), null, todo).map(c => c.kind), ["page", "record"]);
+  assert.equal(chunkPage(page("Shopping list", { todos: [] }), null, todo).length, 0);
 });
 
 test("long cards separate comments, all content remains bounded and searchable", () => {

@@ -1,5 +1,5 @@
 // Pack-dependent retrieval eval, not a unit test. The source library is read-only.
-// npm run build && npm run eval:search -- --data <data-dir> [--max-rss-gb 4]
+// npm run build && npm run eval:search -- --data <data-dir> [--pack <data-dir>] [--max-rss-gb 4] [--verbose]
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,11 +14,14 @@ import { detectSearchPack, searchEnabled } from "../dist/search/pack.js";
 const args = process.argv.slice(2);
 const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
 const root = path.resolve(option("--data", dataDir()));
+const verbose = args.includes("--verbose");
 const maxRssGb = Number(option("--max-rss-gb", "4"));
 if (!Number.isFinite(maxRssGb) || maxRssGb <= 0) throw new Error("--max-rss-gb must be positive");
-const pack = detectSearchPack(root);
+// The pack can live in another data folder, so a library without one is evaluated untouched.
+const packRoot = path.resolve(option("--pack", root));
+const pack = detectSearchPack(packRoot);
 if (pack.status !== "ready") throw new Error(`A real search pack is required: ${pack.message} (${pack.folder})`);
-if (!searchEnabled(root)) throw new Error("Enable the installed pack in Settings → Search before running this eval.");
+if (!searchEnabled(packRoot)) throw new Error("Enable the installed pack in Settings → Search before running this eval.");
 
 const library = new DatabaseSync(path.join(root, "scribe.sqlite"), { readOnly: true });
 let pages, folders, templates, bindings;
@@ -43,7 +46,7 @@ const declaration = page => {
   return template?.search ? parseSearchDeclaration(JSON.parse(template.search)) : builtins.get(template?.builtin_key)?.search;
 };
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-search-eval-"));
-const embedder = new SearchEmbedder({ root });
+const embedder = new SearchEmbedder({ root: packRoot });
 const index = new SearchIndex(scratch, { pages: () => pages, get: id => byId.get(id), folder, declaration }, embedder);
 const queries = JSON.parse(fs.readFileSync(new URL("./semantic-search-proto/queries.json", import.meta.url), "utf8"));
 const answers = [];
@@ -67,6 +70,7 @@ try {
     const rank = ranked.findIndex(hit => byId.get(hit.tab_id)?.key === query.want && (!query.card || hit.kind === "record" && hit.anchor === String(query.card))) + 1;
     answers.push(rank || Infinity);
     console.log(`${rank > 0 && rank <= 3 ? "PASS" : "MISS"} rank=${rank || "absent"} ${query.q}`);
+    if (verbose && !(rank > 0 && rank <= 3)) for (const hit of ranked.slice(0, 5)) console.log(`     ${hit.score.toFixed(3)} ${hit.kind} ${byId.get(hit.tab_id)?.title} › ${hit.label}`);
   }
   const top1 = answers.filter(r => r <= 1).length, top3 = answers.filter(r => r <= 3).length, top5 = answers.filter(r => r <= 5).length;
   const modelPeakGb = embedder.peakRssBytes / 1024 ** 3;
