@@ -3252,14 +3252,13 @@ html[data-theme="cream"] .peek-card {
 /* The other pane's tab: still on screen, so it is marked, but quieter than the active one. */
 .tab.beside {
   color: var(--text);
-  background: rgba(var(--lift-rgb), 0.05);
 }
 
 .tab.beside::after {
   content: "";
   position: absolute;
-  left: 10px;
-  right: 10px;
+  left: 25%;
+  right: 25%;
   bottom: 0;
   height: 2px;
   border-radius: 2px 2px 0 0;
