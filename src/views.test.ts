@@ -321,7 +321,49 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     assert.ok(Math.abs(motion.samples[2] - area.width / 2) < 1);
     assert.equal(motion.entering, true);
     assert.equal(motion.cancelled, true);
+    const peekMotion = await page.evaluate(async () => {
+      const { views, frames, state } = (window as any).dragTest;
+      const target = state.tabs.find((tab: any) => tab.id !== state.activeId).id;
+      await views.open(target, 'peek');
+      const frame = frames.get(target).el;
+      const card = document.querySelector('.peek-card') as HTMLElement;
+      const scrim = document.querySelector('.peek-scrim') as HTMLElement;
+      // Finish opening before inspecting the exit animation.
+      for (const node of [frame, card, scrim]) for (const animation of node.getAnimations()) animation.finish();
+      views.closePeek();
+      views.layout(); // Unrelated renders must keep the closing frame visible.
+      const animations = [frame, card, scrim].map(node => node.getAnimations().find((animation: Animation) => !(animation as CSSAnimation).animationName)!);
+      for (const animation of animations) animation.pause();
+      const samples = [0, 80, 160].map(time => {
+        for (const animation of animations) animation.currentTime = time;
+        return [frame, card, scrim].map(node => Number(getComputedStyle(node).opacity));
+      });
+      const visibleDuringClose = !card.hidden && frame.dataset.role === 'peek' && frame.inert;
+      const repeatedClose = views.closePeek();
+      for (const animation of animations) animation.finish();
+      await Promise.all(animations.map(animation => animation.finished));
+      await Promise.resolve();
+      const cleaned = card.hidden && scrim.hidden && frame.classList.contains('inactive') && !frame.inert;
+      await views.open(target, 'peek');
+      views.closePeek();
+      const oldFinished = frame.getAnimations().map((animation: Animation) => animation.finished);
+      await views.open(target, 'peek');
+      await Promise.allSettled(oldFinished);
+      return { samples, visibleDuringClose, repeatedClose, cleaned, reopened: !card.hidden && !frame.inert && frame === frames.get(target).el };
+    });
+    assert.deepEqual(peekMotion.samples[0], [1, 1, 1]);
+    assert.ok(peekMotion.samples[1].every((opacity: number) => opacity > 0 && opacity < 1));
+    assert.deepEqual(peekMotion.samples[2], [0, 0, 0]);
+    assert.equal(peekMotion.visibleDuringClose, true);
+    assert.equal(peekMotion.repeatedClose, true);
+    assert.equal(peekMotion.cleaned, true);
+    assert.equal(peekMotion.reopened, true);
     await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await page.evaluate(() => {
+      const { views } = (window as any).dragTest;
+      views.closePeek();
+      return (document.querySelector('.peek-card') as HTMLElement).hidden;
+    }), true);
     assert.equal(await page.evaluate(async () => {
       const { views, frames, state } = (window as any).dragTest;
       await views.open(state.tabs.find((tab: any) => tab.id !== state.activeId).id, 'split');

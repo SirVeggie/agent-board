@@ -61,6 +61,7 @@ window.createViews = function createViews(host) {
   let pageDrag = null;
   let splitAnimations = [];
   let splitLayoutKey = "";
+  let closingPeek = null;
 
   /* ---------- DOM ---------- */
 
@@ -392,6 +393,7 @@ window.createViews = function createViews(host) {
     if (top) {
       ids.add(frameIdOf(top));
     }
+    if (closingPeek && closingPeek.key === peekKey()) ids.add(frameIdOf(closingPeek.target));
     return ids;
   }
 
@@ -565,6 +567,10 @@ window.createViews = function createViews(host) {
       setPeek(null);
     }
     const top = peekTarget();
+    // A new peek or a different tab takes over immediately, without an old
+    // animation later hiding the new view.
+    if (closingPeek && (top || closingPeek.key !== peekKey() || sameTarget(closingPeek.target, split?.other))) stopPeekClosing();
+    const visibleTop = top || closingPeek?.target;
     const roles = new Map();
     const panes = new Map();
     // A New page has no frame: the New page screen stands in for it.
@@ -586,11 +592,11 @@ window.createViews = function createViews(host) {
         }
       }
     }
-    if (top) {
-      if (frameFor(top)) {
-        roles.set(frameIdOf(top), "peek");
+    if (visibleTop) {
+      if (frameFor(visibleTop)) {
+        roles.set(frameIdOf(visibleTop), "peek");
       }
-      if (top.kind === "page") {
+      if (top?.kind === "page") {
         host.markSeen(top.id);
       }
     }
@@ -609,7 +615,7 @@ window.createViews = function createViews(host) {
     }
     mainEl.classList.toggle("has-split", Boolean(split));
     mainEl.classList.toggle("split-col", split?.dir === "col");
-    mainEl.classList.toggle("has-peek", Boolean(top));
+    mainEl.classList.toggle("has-peek", Boolean(visibleTop));
     if (split) {
       const ratio = ratioFor(split);
       mainEl.style.setProperty("--split", String(ratio));
@@ -683,6 +689,7 @@ window.createViews = function createViews(host) {
   let peekDrawn = null;
 
   function renderPeekChrome(top) {
+    if (!top && closingPeek) return;
     const show = Boolean(top);
     scrim.hidden = !show;
     card.hidden = !show;
@@ -769,8 +776,29 @@ window.createViews = function createViews(host) {
   }
 
   function closePeek({ refocus = true } = {}) {
+    if (closingPeek) return true;
     if (!activePeek()) {
       return false;
+    }
+    const target = peekTarget();
+    if (!card.hidden && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const nodes = [scrim, card, host.frame(frameIdOf(target))?.el].filter(Boolean);
+      const closing = { key: peekKey(), target, nodes, animations: [] };
+      closingPeek = closing;
+      const options = { duration: 160, easing: getComputedStyle(mainEl).getPropertyValue("--ease").trim() || "ease", fill: "forwards" };
+      for (const node of nodes) {
+        const style = getComputedStyle(node);
+        node.inert = true;
+        closing.animations.push(node.animate([
+          { opacity: style.opacity, transform: style.transform },
+          { opacity: 0, transform: node === scrim ? "none" : "translateY(6px) scale(0.99)" },
+        ], options));
+      }
+      Promise.all(closing.animations.map(animation => animation.finished)).then(() => {
+        if (closingPeek !== closing) return;
+        stopPeekClosing();
+        host.render();
+      }).catch(() => {}); // A replacement view cancels these animations.
     }
     setPeek(null);
     host.render();
@@ -778,6 +806,13 @@ window.createViews = function createViews(host) {
       host.frame(host.activeId())?.el.focus();
     }
     return true;
+  }
+
+  function stopPeekClosing() {
+    if (!closingPeek) return;
+    for (const node of closingPeek.nodes) node.inert = false;
+    for (const animation of closingPeek.animations) animation.cancel();
+    closingPeek = null;
   }
 
   function peekBack() {
