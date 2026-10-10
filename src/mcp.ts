@@ -110,16 +110,11 @@ const INSTRUCTIONS = [
 ].join(" ");
 
 const NO_PAGES_INSTRUCTIONS =
-  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread tools to read other threads in its workspace, the agent browser, and read_file for scoped text reads where the mode permits them.";
+  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread tools to read other threads in its workspace, the agent browser, and scoped file tools for Codex where the mode permits them.";
 
-export async function startMcp(): Promise<void> {
-  await ensureDaemon();
-  // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
-  const pages = !(process.env.SCRIBE_THREAD && process.env.SCRIBE_PAGES === "off");
-  const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
-  const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
-  const revisions = new SeenRevisions();
-  if (process.env.SCRIBE_THREAD) {
+/** Only Scribe's Codex sessions need substitutes for native read/search tools. */
+export function registerCodexFileTools(server: McpServer, env = process.env): void {
+  if (env.SCRIBE_THREAD && env.SCRIBE_PROVIDER === "codex") {
     server.tool(
       "read_file",
       "Read a local UTF-8 text file, or list a folder, without a shell. Prefer this for routine file reads. Paths are absolute or relative to the current Scribe workspace. The host checks the current mode and read roots: workspace, Scribe-recorded worktree links and this thread's attachments, including resolved link targets. Only Code mode with Full access permits outside paths. Returns numbered lines (a folder: one entry per line, folders ending in /), totalLines, truncated and nextOffset. Defaults to 200 lines; maximum 1000 lines, 32000 output characters and a 64 MiB file. Use nextOffset to continue. Lines over 2000 characters are cut, and the note says how many. Pages/Chat mode has no file access.",
@@ -136,7 +131,42 @@ export async function startMcp(): Promise<void> {
         } catch (err) { return errorResult((err as Error).message); }
       }
     );
+    for (const grep of [false, true]) {
+      server.tool(
+        grep ? "grep_files" : "list_files",
+        `${grep ? "Search file contents with ripgrep; returns paths, line numbers and matching text (cut at 2000 characters)." : "List files recursively, optionally filtered by a glob."} Uses read_file's host-enforced mode and resolved read roots, without a shell or command approval. Defaults to the workspace. Skips .git and node_modules unless path targets them directly; hidden entries require includeHidden. Ignores are otherwise disabled. Results are bounded to 32000 characters; continue with nextOffset. Narrow path/glob for large searches.`,
+        {
+          path: z.string().min(1).optional().describe("File or folder, absolute or workspace-relative. Default: ."),
+          glob: z.string().min(1).max(1000).optional().describe("Shell-style glob: *.ts matches basenames, **/*.ts matches relative paths, !*.test.ts excludes basenames. Dotfiles need an explicit dot, e.g. .*.ts, even with includeHidden."),
+          includeHidden: z.boolean().optional().describe("Include hidden entries. Default false."),
+          offset: z.number().int().min(1).max(10000).optional().describe("First result, numbered from 1. Default 1."),
+          limit: z.number().int().min(1).max(1000).optional().describe("Maximum results. Default 200."),
+          ...(grep ? {
+            pattern: z.string().min(1).max(1000).describe("Ripgrep regular expression or literal when fixedStrings is true."),
+            fixedStrings: z.boolean().optional().describe("Match literal text. Default false."),
+            ignoreCase: z.boolean().optional().describe("Case-insensitive search. Default false."),
+          } : {}),
+        },
+        { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        async (input) => {
+          try {
+            const { status, data } = await api("POST", grep ? "/api/grep-files" : "/api/list-files", input);
+            return status >= 400 ? errorResult((data as ApiError).error ?? "File search denied") : jsonResult(data);
+          } catch (err) { return errorResult((err as Error).message); }
+        }
+      );
+    }
   }
+}
+
+export async function startMcp(): Promise<void> {
+  await ensureDaemon();
+  // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
+  const pages = !(process.env.SCRIBE_THREAD && process.env.SCRIBE_PAGES === "off");
+  const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
+  const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
+  const revisions = new SeenRevisions();
+  registerCodexFileTools(server);
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {
     const client = server.server.getClientVersion();

@@ -7,7 +7,7 @@ export const READ_FILE_MAX_BYTES = 64 * 1024 * 1024;
 export const READ_FILE_MAX_CHARS = 32_000;
 /** Longer lines (minified code, logs) are cut, as Claude Code's read does, instead of refusing the page. */
 export const READ_FILE_MAX_LINE_CHARS = 2_000;
-type ReadScope = Pick<Thread, "cwd" | "mode" | "approval"> & Partial<Pick<Thread, "id" | "worktree">>;
+export type ReadScope = Pick<Thread, "cwd" | "mode" | "approval"> & Partial<Pick<Thread, "id" | "worktree">>;
 
 function inside(root: string, file: string): boolean {
   const rel = path.relative(root, file);
@@ -46,21 +46,29 @@ async function readRoots(thread: ReadScope): Promise<Array<{ lexical: string; re
 }
 
 /** Host-side gate: MCP tools run outside Codex's shell sandbox. Never trust a caller-supplied scope. */
-export async function readScopedFile(thread: ReadScope | null, input: { path?: unknown; offset?: unknown; limit?: unknown }) {
+export async function scopedReadResolver(thread: ReadScope | null) {
   if (!thread || thread.mode === "board") throw new Error("File reads are unavailable in this thread's mode.");
-  if (typeof input.path !== "string" || !input.path.trim() || input.path.includes("\0")) throw new Error("path must be a nonempty local file path.");
+  const full = thread.mode === "code" && thread.approval === "full";
+  const roots = full ? [] : await readRoots(thread);
+  return async (inputPath: unknown) => {
+    if (typeof inputPath !== "string" || !inputPath.trim() || inputPath.includes("\0")) throw new Error("path must be a nonempty local file path.");
+    if (!thread.cwd && !path.isAbsolute(inputPath)) throw new Error("No workspace is available for this relative file read.");
+    const target = path.resolve(thread.cwd ?? process.cwd(), inputPath);
+    const matching = roots.filter((root) => inside(root.lexical, target) || inside(root.real, target));
+    if (!full && !matching.length) throw new Error("File read denied: path is outside the workspace scope and this thread's read roots.");
+    const real = await fs.realpath(target);
+    if (!full && !matching.some((root) => inside(root.real, real))) throw new Error("File read denied: link target is outside this thread's read roots.");
+    return { target, real };
+  };
+}
+
+export async function readScopedFile(thread: ReadScope | null, input: { path?: unknown; offset?: unknown; limit?: unknown }) {
+  const resolve = await scopedReadResolver(thread);
+  const { target, real } = await resolve(input.path);
   const offset = input.offset ?? 1;
   const limit = input.limit ?? 200;
   if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 1) throw new Error("offset must be a positive line number.");
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error("limit must be between 1 and 1000 lines.");
-  const full = thread.mode === "code" && thread.approval === "full";
-  if (!thread.cwd && !path.isAbsolute(input.path)) throw new Error("No workspace is available for this relative file read.");
-  const target = path.resolve(thread.cwd ?? process.cwd(), input.path);
-  const roots = full ? [] : await readRoots(thread);
-  const matching = roots.filter((root) => inside(root.lexical, target) || inside(root.real, target));
-  if (!full && !matching.length) throw new Error("File read denied: path is outside the workspace scope and this thread's read roots.");
-  const real = await fs.realpath(target);
-  if (!full && !matching.some((root) => inside(root.real, real))) throw new Error("File read denied: link target is outside this thread's read roots.");
   const page = new LinePage(offset, limit);
   const stat = await fs.stat(real);
   if (stat.isDirectory()) {

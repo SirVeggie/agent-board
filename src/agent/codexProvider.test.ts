@@ -96,6 +96,7 @@ test("mcpConfig registers the board server as scribe with the thread id", () => 
   assert.deepEqual(server.args, ["dist/index.js"]);
   assert.equal(server.env.SCRIBE_PORT, "4747");
   assert.equal(server.env.SCRIBE_THREAD, "th_abc");
+  assert.equal(server.env.SCRIBE_PROVIDER, "codex");
   assert.equal(server.env.SCRIBE_PAGES, undefined);
 
   const none = mcpConfig({ boardMcp: { command: "node", args: [], env: {} } }, "th_none", false);

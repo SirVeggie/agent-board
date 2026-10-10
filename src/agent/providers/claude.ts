@@ -636,7 +636,7 @@ class ClaudeSession implements ProviderSession {
     const webTools = ["WebSearch", "WebFetch"];
     const { command, args } = this.ctx.boardMcp;
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
-    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}) };
+    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, SCRIBE_PROVIDER: "claude", ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}) };
     const permissionMode = permissionModeFor(thread);
     const userServers = this.userServers();
     // Servers set to run without asking; the rest go through canUseTool like any tool.

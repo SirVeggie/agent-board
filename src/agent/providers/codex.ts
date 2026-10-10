@@ -466,6 +466,7 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
         env: {
           ...ctx.boardMcp.env,
           SCRIBE_THREAD: threadId,
+          SCRIBE_PROVIDER: "codex",
           ...(pages ? {} : { SCRIBE_PAGES: "off" }),
         },
       },

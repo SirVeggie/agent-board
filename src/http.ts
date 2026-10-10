@@ -44,6 +44,7 @@ import { AgentHost } from "./agent/host.js";
 import { worktreePreviewRouter } from "./worktreePreview.js";
 import { agentRouter } from "./agent/routes.js";
 import { readScopedFile } from "./agent/readFile.js";
+import { searchScopedFiles } from "./agent/searchFiles.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
@@ -765,6 +766,16 @@ export async function startHttp(): Promise<http.Server> {
       res.status(403).json({ error: (err as Error).message });
     }
   });
+
+  for (const grep of [false, true]) {
+    app.post(grep ? "/api/grep-files" : "/api/list-files", async (req, res) => {
+      const id = req.get(THREAD_HEADER);
+      const thread = id && agentHost ? agentHost.getThread(id) : null;
+      if (!thread) { res.status(403).json({ error: "File search requires a current Scribe chat thread." }); return; }
+      try { res.json(await searchScopedFiles(thread, isPlainObject(req.body) ? req.body : {}, grep)); }
+      catch (err) { res.status(403).json({ error: (err as Error).message }); }
+    });
+  }
 
   /** page_ask from a Scribe chat's MCP: the thread's turn shows the page as a question and waits on its submit event. */
   app.post("/api/ask", (req, res) => {

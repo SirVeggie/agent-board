@@ -91,7 +91,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       break;
   }
   if (thread.provider === "codex" && thread.mode !== "board") {
-    lines.push("Files: prefer the scribe MCP read_file tool for routine local text reads instead of shell commands. It accepts path (a file, or a folder to list), a 1-based offset and limit, and returns numbered lines and nextOffset for continuation. Reads cover the workspace, Scribe-recorded worktree links and this thread's attachments, with resolved link targets checked. Code mode with Full access permits outside reads. A denied read does not authorize bypassing the scope through a shell.");
+    lines.push("Files: prefer the scribe MCP read_file for routine text reads, list_files for recursive file discovery (optional glob), and grep_files for content searches (pattern, optional glob, fixedStrings and ignoreCase), instead of shell commands. All accept path, a 1-based offset and limit, and return nextOffset for continuation. Searches skip .git and node_modules unless targeted directly; includeHidden includes hidden entries. Reads and searches cover the workspace, Scribe-recorded worktree links and this thread's attachments, with resolved link targets checked. Code mode with Full access permits outside reads. A denied read or search does not authorize bypassing the scope through a shell.");
   }
   // Pi always and Cursor without full web get Scribe's web_search when a SearXNG instance is set.
   const scribeSearch = Boolean(scope.webSearch) && (thread.provider === "pi" || thread.provider === "cursor");

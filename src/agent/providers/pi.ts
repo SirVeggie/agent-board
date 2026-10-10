@@ -402,7 +402,7 @@ class BoardTools {
 
   private async open(): Promise<ToolDefinition[]> {
     const client = new Client({ name: "scribe-pi", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, ...(this.pages ? {} : { SCRIBE_PAGES: "off" }) };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "pi", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }) };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();
