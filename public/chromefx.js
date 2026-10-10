@@ -98,7 +98,7 @@ gl_FragColor=outc(acc/max(a,1e-3),a*(.4+.4*u_busy));}`;
     time += dt * (always ? 1 : level);
     draw();
     if (!always && !busy && level === 0 && show === showTarget()) loop.stop();
-  });
+  }, { element: () => canvas });
 
   const resized = new ResizeObserver(() => {
     if (fx && !loop.running) draw();

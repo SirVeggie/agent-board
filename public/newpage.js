@@ -263,7 +263,7 @@ return glow(c,e);}`;
       time += dt;
       motionTime += dt * (1 + .1 * work);
       draw();
-    });
+    }, { element: root });
 
     function start() {
       theme();

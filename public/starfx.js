@@ -109,14 +109,14 @@ gl_FragColor=over(pm(sc,fill),c);}`;
     const loop = GL.loop((dt) => {
       time += dt;
       if (!canvas.isConnected || !draw()) loop.stop();
-    });
+    }, { element: canvas });
 
     function update() {
       if (dead || !canvas.isConnected) {
         loop.stop();
         return;
       }
-      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx") && canvas.getClientRects().length > 0;
+      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx");
       if (moving) loop.start();
       else {
         loop.stop();

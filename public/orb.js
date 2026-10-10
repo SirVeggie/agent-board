@@ -211,10 +211,10 @@ gl_FragColor=c;
     const loop = window.scribeGL.loop(dt => {
       time += dt * (busy ? 2 : .6);
       if (!draw()) loop.stop();
-    });
+    }, { element: btn });
     function update() {
       if (disposed || broken) return;
-      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx") && btn.getClientRects().length > 0;
+      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx");
       btn.classList.toggle("fx-live", moving);
       if (moving) loop.start();
       else { loop.stop(); draw(); }

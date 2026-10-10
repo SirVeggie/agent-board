@@ -165,46 +165,127 @@
     };
   }
 
-  /**
-   * A frame loop at about 30 fps, plenty for slow shader motion: step(dt) gets the seconds since
-   * the last frame (0 on the first). It idles while the window is hidden and picks up after.
-   */
-  function loop(step) {
-    let running = false;
-    let frame = 0;
-    let last = 0;
-    function tick(now) {
-      frame = 0;
-      if (!running || document.hidden) return;
-      if (now - last >= 32) {
-        const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
-        last = now;
-        step(dt);
+  const loops = new Set();
+  const observed = new Map();
+  // The wait before asking for the next frame. Short of 33 ms, so that frame is the one about 33 ms
+  // after the last tick at 60 Hz and at 120 Hz alike, not the one after it.
+  const interval = 26;
+  let timer = 0;
+  let frame = 0;
+  let ticking = false;
+  let polling = false;
+  const intersection = typeof IntersectionObserver === "function" ? new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const record = observed.get(entry.target);
+      if (record) record.visible = entry.isIntersecting && entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0;
+    }
+    if (polling) {
+      cancelTick();
+      schedule();
+    }
+  }) : null;
+
+  function unobserve(state) {
+    const record = observed.get(state.element);
+    if (record && --record.users === 0) {
+      intersection?.unobserve(state.element);
+      observed.delete(state.element);
+    }
+    state.element = null;
+  }
+
+  function visible(state) {
+    if (!state.source) return true;
+    const element = typeof state.source === "function" ? state.source() : state.source;
+    if (element !== state.element) {
+      unobserve(state);
+      state.last = null;
+      state.element = element;
+      if (element) {
+        const record = observed.get(element);
+        if (record) record.users++;
+        else {
+          observed.set(element, { users: 1, visible: true });
+          intersection?.observe(element);
+        }
       }
-      if (running) frame = requestAnimationFrame(tick);
     }
-    function kick() {
-      if (frame || !running || document.hidden) return;
-      last = 0;
-      frame = requestAnimationFrame(tick);
+    const shown = element && element.isConnected && (typeof element.checkVisibility === "function"
+      ? element.checkVisibility({ visibilityProperty: true })
+      : element.getClientRects().length > 0) && observed.get(element).visible;
+    if (!shown) state.last = null;
+    return Boolean(shown);
+  }
+
+  function cancelTick() {
+    if (timer) clearTimeout(timer);
+    if (frame) cancelAnimationFrame(frame);
+    timer = frame = 0;
+    polling = false;
+  }
+
+  function schedule(delay = 0) {
+    if (ticking || timer || frame || !loops.size || document.hidden) return;
+    let shown = false;
+    for (const state of loops) if (visible(state)) shown = true;
+    if (!shown) {
+      polling = true;
+      timer = setTimeout(() => { timer = 0; polling = false; schedule(); }, 250);
+    } else if (delay > 0) {
+      timer = setTimeout(() => { timer = 0; schedule(); }, delay);
+    } else frame = requestAnimationFrame(tick);
+  }
+
+  function tick(now) {
+    frame = 0;
+    if (document.hidden) return;
+    // New starts wait for the next tick; a stopped and restarted loop also gets a fresh first step.
+    const batch = Array.from(loops, (state) => [state, state.generation]);
+    ticking = true;
+    try {
+      for (const [state, generation] of batch) {
+        if (!loops.has(state) || state.generation !== generation || !visible(state)) continue;
+        const dt = state.last === null ? 0 : Math.min(0.1, (now - state.last) / 1000);
+        state.last = now;
+        state.step(dt);
+      }
+    } finally {
+      ticking = false;
+      schedule(Math.max(1, interval - (performance.now() - now)));
     }
-    document.addEventListener("visibilitychange", kick);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    cancelTick();
+    for (const state of loops) state.last = null;
+    schedule();
+  });
+
+  /** Shared 30 fps motion; unseen elements pause, then resume with a first dt of 0. */
+  function loop(step, options = {}) {
+    const state = { step, source: options.element, element: null, last: null, generation: 0 };
+    let dead = false;
+    function stop() {
+      loops.delete(state);
+      state.last = null;
+      unobserve(state);
+      if (!loops.size) cancelTick();
+    }
     return {
-      get running() {
-        return running;
-      },
+      get running() { return loops.has(state); },
       start() {
-        running = true;
-        kick();
+        if (dead || loops.has(state)) return;
+        state.generation++;
+        state.last = null;
+        loops.add(state);
+        if (polling) cancelTick();
+        schedule();
       },
-      stop() {
-        running = false;
-        if (frame) cancelAnimationFrame(frame);
-        frame = 0;
-      },
+      stop,
       destroy() {
-        this.stop();
-        document.removeEventListener("visibilitychange", kick);
+        stop();
+        dead = true;
+        state.step = state.source = null;
       },
     };
   }

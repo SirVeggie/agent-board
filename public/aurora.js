@@ -57,7 +57,7 @@ gl_FragColor=vec4(col*a,a);}`;
     }
     time += dt;
     fx.draw({ u_time: time, ...window.scribeGL.palette() });
-  });
+  }, { element: canvas });
 
   function glReady() {
     if (fx === undefined) fx = window.scribeGL?.lazy(canvas, FRAG, { alpha: true, scale: 0.5, onError: () => { loop.stop(); root.classList.remove("on"); } }) || null;
