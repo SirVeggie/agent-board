@@ -13,6 +13,7 @@
 
   /** Settings key, also written by the Layout track in app.js: the chosen background ids, comma-separated. */
   const BG_KEY = "scribe.newPageBackgrounds";
+  const PROVIDER_KEY = "scribe.newPageProviderColors";
 
   /**
    * What every background shares: noise, the nebula (fractal noise warped through itself twice,
@@ -21,6 +22,11 @@
    */
   const HEAD = `precision highp float;
 uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;uniform float u_work;
+uniform float u_tint;uniform vec3 u_c0;uniform vec3 u_c1;uniform vec3 u_c2;uniform vec3 u_c3;
+vec3 tint(vec3 col){if(u_tint<.5)return col;
+float m=max(col.r,max(col.g,col.b)),t=clamp(m,0.,1.)*3.;
+vec3 c=t<1.?mix(u_c0,u_c1,t):t<2.?mix(u_c1,u_c2,t-1.):mix(u_c2,u_c3,t-2.);
+return c*m/max(max(c.r,max(c.g,c.b)),.001);}
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 vec2 hash2(vec2 p){return vec2(hash(p),hash(p+19.19));}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
@@ -28,8 +34,9 @@ return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+v
 float fbm(vec2 p){float v=0.,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);
 for(int i=0;i<5;i++){v+=a*noise(p);p=m*p;a*=.5;}return v;}
 float vig(vec2 uv){return smoothstep(1.3,.1,length(uv*vec2(.8,1.)));}
-vec3 cover(vec3 col,float a,float al){return u_light>.5?mix(u_bg,mix(col,vec3(1.),.2),al):mix(u_bg,col,a);}
+vec3 cover(vec3 col,float a,float al){col=tint(col);return u_light>.5?mix(u_bg,mix(col,vec3(1.),.2),al):mix(u_bg,col,a);}
 vec3 glow(vec3 base,vec3 e){float m=max(e.r,max(e.g,e.b));
+e=tint(e);
 return u_light>.5?mix(base,mix(e/max(m,.001),vec3(1.),.2),clamp(m,0.,1.)*.6):base+e;}
 vec3 neb(vec2 uv,float t,out float lum){
 vec2 p=uv*1.35;
@@ -180,6 +187,7 @@ return glow(c,e);}`;
     let running = false;
     let work = 0;
     let target = 0;
+    let palette = null;
 
     function build(id) {
       const { frag, sharp, derivatives } = STYLES[id];
@@ -207,6 +215,9 @@ return glow(c,e);}`;
       const m = getComputedStyle(root).backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
       const [r, g, b] = m.slice(0, 3).map((v) => v / 255);
       fx.set({ u_bg: [r, g, b], u_light: 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0 });
+      fx.set({ u_tint: palette ? 1 : 0, ...Object.fromEntries((palette || ["#000000", "#000000", "#000000", "#000000"]).map((c, i) => [
+        "u_c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16) / 255),
+      ])) });
     }
 
     const draw = () => fx?.draw({ u_time: time, u_work: work });
@@ -234,7 +245,8 @@ return glow(c,e);}`;
 
     return {
       /** Run with this background while the screen is shown. */
-      set(on, id, working = false) {
+      set(on, id, working = false, colors = null) {
+        palette = colors;
         target = working ? 1 : 0;
         running = Boolean(on && use(id));
         if (running) start();
@@ -252,7 +264,7 @@ return glow(c,e);}`;
 
   /**
    * host: templates() and builtins() (template metas), pick(template), threads(id) (the page's chat
-   * threads), working(id) (an agent is at work on it), openChat().
+   * threads), working(id) (an agent is at work on it), openChat(), provider() (the floating chat's provider).
    */
   window.createNewPage = (host) => {
     const root = document.getElementById("newpage");
@@ -297,10 +309,17 @@ return glow(c,e);}`;
       return picks.get(id);
     }
 
+    function updateBackdrop(provider = host.provider?.()) {
+      const colors = localStorage.getItem(PROVIDER_KEY) !== "0" && provider ? window.scribeOrb?.colors(provider) : null;
+      root.classList.toggle("provider-colors", Boolean(colors));
+      if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
+      backdrop?.set(Boolean(current), current ? background(current.id) : null, current ? host.working(current.id) : false, colors);
+    }
+
     function render(tab) {
       root.hidden = !tab;
       current = tab || null;
-      backdrop?.set(Boolean(tab), tab ? background(tab.id) : null, tab ? host.working(tab.id) : false);
+      updateBackdrop();
       if (!tab) {
         shown = null;
         drawn = "";
@@ -325,7 +344,10 @@ return glow(c,e);}`;
       grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
     }
 
-    window.addEventListener("scribe:newpage-bg", () => current && backdrop?.set(true, background(current.id), host.working(current.id)));
+    window.addEventListener("scribe:newpage-bg", () => updateBackdrop());
+    window.addEventListener("scribe:dock-provider", (event) => updateBackdrop(event.detail.provider));
+    window.addEventListener("scribe:orb-appearance", () => updateBackdrop());
+    window.addEventListener("scribe:threads-ready", () => updateBackdrop());
 
     return {
       render,

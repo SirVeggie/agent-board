@@ -3966,6 +3966,12 @@ main.blank-page #frames iframe:not(.inactive) {
   animation: np-turn 60s linear infinite reverse;
 }
 
+.newpage.provider-colors .np-blob { background: radial-gradient(circle, rgba(var(--np-c1), 0.26), rgba(var(--np-c1), 0.08) 38%, transparent 68%); }
+.newpage.provider-colors .np-b2 { background: radial-gradient(circle, rgba(var(--np-c2), 0.24), rgba(var(--np-c2), 0.07) 38%, transparent 68%); }
+.newpage.provider-colors .np-b3 { background: radial-gradient(circle, rgba(var(--np-c3), 0.2), rgba(var(--np-c3), 0.06) 38%, transparent 68%); }
+.newpage.provider-colors .np-b5 { background: radial-gradient(circle, rgba(var(--np-c2), 0.16), transparent 65%); }
+.newpage.provider-colors .np-swirl { background: conic-gradient(from 0deg, transparent, rgba(var(--np-c1), 0.07) 12%, transparent 26%, rgba(var(--np-c2), 0.05) 48%, transparent 62%, rgba(var(--np-c3), 0.06) 80%, transparent); }
+
 .np-grain {
   position: absolute;
   inset: 0;

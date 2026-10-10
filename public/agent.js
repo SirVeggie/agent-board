@@ -5358,6 +5358,10 @@
       this.scopeBtn.dataset.tooltip = SCOPE_CHIP_TITLE;
       this.fitScope();
       this.orbFx?.setProvider(s.provider);
+      if (this.provider !== s.provider) {
+        this.provider = s.provider;
+        window.dispatchEvent(new CustomEvent("scribe:dock-provider", { detail: { provider: s.provider } }));
+      }
       // Hovering the orb opens the threads flyout, so it has no plain tooltip.
       this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
@@ -8842,7 +8846,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

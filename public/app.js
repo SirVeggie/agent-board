@@ -121,6 +121,8 @@
   const AURORA_IDLE_KEY = "scribe.auroraIdle";
   /** Also read by newpage.js, which draws them. Stored as the chosen ids, comma-separated; nothing stored means all. */
   const NEWPAGE_BG_KEY = "scribe.newPageBackgrounds";
+  const NEWPAGE_PROVIDER_KEY = "scribe.newPageProviderColors";
+  const newPageProviderToggle = document.getElementById("newpage-provider-colors");
   const NEWPAGE_BGS = [
     { id: "nebula", name: "Nebula" },
     { id: "stardust", name: "Stardust" },
@@ -356,6 +358,7 @@
     threads: (id) => window.scribeChat?.pageThreads?.(id) || 0,
     working: (id) => window.scribeChat?.pageStatus?.(id) || null,
     openChat: () => window.scribeChat?.shortcut("dock"),
+    provider: () => window.scribeChat?.dockProvider?.(),
   });
   const trash = window.createTrash({
     showNotice,
@@ -383,6 +386,7 @@
   renderPaneSides();
   renderChromeFx();
   renderNewPageBgs();
+  applyFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY, true);
   renderPalettePrefixSettings();
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
   bindSettingHint(
@@ -392,6 +396,10 @@
   bindSettingHint(
     document.getElementById("newpage-bgs-label"),
     "Each new blank page shows one of the backgrounds turned on here. They take turns in random order, so each comes up equally often."
+  );
+  bindSettingHint(
+    document.getElementById("newpage-provider-colors-label"),
+    "Use the selected floating chat provider's shape colours for the New page background, including your custom palette. Off restores the default background colours."
   );
   bindSettingHint(
     document.getElementById("chrome-fx-label"),
@@ -4231,6 +4239,10 @@
   showClearToggle.addEventListener("click", () => toggleFlag(showClearToggle, SHOW_CLEAR_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   uiFxToggle.addEventListener("click", () => toggleFlag(uiFxToggle, UI_FX_KEY));
+  newPageProviderToggle.addEventListener("click", () => {
+    toggleFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY);
+    window.dispatchEvent(new Event("scribe:newpage-bg"));
+  });
   auroraEdgeToggle.addEventListener("click", () => toggleFlag(auroraEdgeToggle, AURORA_EDGE_KEY));
   auroraIdleToggle.addEventListener("click", () => toggleFlag(auroraIdleToggle, AURORA_IDLE_KEY));
   clearBtn.addEventListener("click", async () => {

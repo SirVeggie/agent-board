@@ -329,6 +329,6 @@ gl_FragColor=c;
     if (!previewFx) error.textContent = "WebGL is unavailable. The chat uses the gradient fallback.";
   }
   document.getElementById("dock-appearance")?.addEventListener("click", openSettings);
-  window.scribeOrb = { create, openSettings };
+  window.scribeOrb = { create, openSettings, colors: (provider) => [...(settings[provider] || defaults(provider)).colors] };
 })();
 
