@@ -253,3 +253,35 @@ test("reduced motion freezes time, updates working state and preserves it across
   s.tick(.1);
   assert.ok(s.draws.at(-1)!.u_time > time);
 });
+
+test("the creating screen covers a page, takes a fresh background and dissolves into the page that opens", async () => {
+  const s = screen();
+  const made = s.frame();
+  s.page.render({ id: "notes" }, true);
+  assert.equal(s.root.hidden, false);
+  assert.equal(s.classes.has("cover"), true);
+  assert.equal(s.classes.has("has-thread"), true);
+  assert.equal(s.running(), true);
+  // One fade in, and none again for a re-render of the same cover.
+  assert.equal(s.animations.length, 1);
+  s.page.render({ id: "notes" }, true);
+  assert.equal(s.animations.length, 1);
+  s.tick(5);
+  assert.ok(s.draws.at(-1)!.u_work > 0.9);
+  // Another page comes to the front: the screen holds until it loads, then fades over it.
+  s.page.replace({ id: "made" }, made);
+  assert.equal(s.root.hidden, false);
+  made.load();
+  assert.equal(s.animations.length, 3);
+  s.animations.forEach((animation) => animation.finish());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(s.root.hidden, true);
+  assert.equal(s.running(), false);
+});
+
+test("a page that is not covered still drops the screen at once for another page", () => {
+  const s = screen();
+  s.page.render({ id: "draft" });
+  s.page.replace({ id: "other" }, s.frame());
+  assert.equal(s.root.hidden, true);
+});

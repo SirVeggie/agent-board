@@ -4554,6 +4554,81 @@ main.blank-page #frames iframe:not(.inactive) {
   }
 }
 
+/* While the floating chat writes a page: a word for what the agent is at, and the page's title. */
+.newpage-intent {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(12px);
+  visibility: hidden;
+  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s 420ms;
+}
+
+.newpage.intent .newpage-intent {
+  opacity: 1;
+  filter: blur(0);
+  visibility: visible;
+  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s;
+}
+
+.newpage-intent-word {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: transparent;
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.55) 30%, #fff 50%, rgba(255, 255, 255, 0.55) 70%) 0 0 / 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: np-intent-sheen 2.6s linear infinite;
+}
+
+.newpage-intent-title {
+  max-width: min(520px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.newpage-intent-title:empty {
+  display: none;
+}
+
+@keyframes np-intent-sheen {
+  from { background-position: 110% 0; }
+  to { background-position: -110% 0; }
+}
+
+/* Over a page that is there already, a click puts the page back. */
+.newpage.cover {
+  cursor: pointer;
+}
+
+main.has-split .newpage.cover[data-pane] {
+  z-index: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .newpage-intent,
+  .newpage.intent .newpage-intent {
+    transition: none;
+  }
+
+  .newpage-intent-word {
+    animation: none;
+    background-position: 50% 0;
+  }
+}
+
 .newpage-title {
   margin: 0 0 8px;
   font-size: 26px;

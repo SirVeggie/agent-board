@@ -2,6 +2,8 @@
  * The New page screen (Ctrl+T): what a blank page shows instead of a frame. Shapeless moving
  * matter (one of several shader backgrounds, taking turns) behind a short prompt and the templates; picking one fills this page. Once the page has a
  * chat thread, the templates step aside and the screen waits for what the agent makes.
+ * The same screen covers a page that is there already while the floating chat writes a new one
+ * (the creating screen), then dissolves into that page.
  */
 (() => {
   const FILE_SVG =
@@ -292,6 +294,10 @@ return glow(c,e);}`;
     };
   }
 
+  /** What the creating screen says the agent is at, in turn. */
+  const INTENT_WORDS = ["Imagining…", "Sketching…", "Shaping…", "Building…", "Polishing…"];
+  const INTENT_WORD_MS = 2600;
+
   function el(tag, cls, text) {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -301,7 +307,9 @@ return glow(c,e);}`;
 
   /**
    * host: templates() and builtins() (template metas), pick(template), threads(id) (the page's chat
-   * threads), working(id) (an agent is at work on it), openChat(), provider() (the floating chat's provider).
+   * threads), working(id) (an agent is at work on it), openChat(), provider() (the floating chat's provider),
+   * intent(id) (the new page the floating chat is writing from this page: { title }, else null) and
+   * dismissIntent() (the user clicked the creating screen away).
    */
   window.createNewPage = (host) => {
     const root = document.getElementById("newpage");
@@ -310,12 +318,20 @@ return glow(c,e);}`;
     const askBtn = root.querySelector(".newpage-ask");
     const grid = root.querySelector(".newpage-templates");
     const gridHead = root.querySelector(".newpage-templates-head");
+    const intentWord = root.querySelector(".newpage-intent-word");
+    const intentTitle = root.querySelector(".newpage-intent-title");
     askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
     askBtn.addEventListener("click", () => host.openChat());
     const backdrop = createBackdrop(root);
     /** Each blank page keeps the background it drew, so coming back to it doesn't change it. */
     const picks = new Map();
     let current = null;
+    /** The screen is over a page that has content (the creating screen), not standing in for a blank one. */
+    let covering = false;
+    let wordTimer = 0;
+    let wordAt = 0;
+    let lastIntent = null;
+    root.addEventListener("click", () => covering && !replacement && host.dismissIntent?.());
     /** The page shown and what was drawn for it, so a re-render with nothing new keeps focus and scroll. */
     let shown = null;
     let drawn = "";
@@ -333,7 +349,8 @@ return glow(c,e);}`;
     /** Hold the waiting screen until its own page loads, then dissolve it over the page. */
     function replace(tab, frame) {
       if (replacement?.id === tab.id) return;
-      if (!frame || current?.id !== tab.id) {
+      // The creating screen dissolves into whichever page comes to the front, usually the one just made.
+      if (!frame || (current?.id !== tab.id && !covering)) {
         render(null);
         return;
       }
@@ -396,28 +413,66 @@ return glow(c,e);}`;
       root.classList.toggle("provider-colors", Boolean(colors));
       if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
       else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));
-      backdrop?.set(Boolean(current), current ? background(current.id) : null, current ? host.working(current.id) : false, colors);
+      const id = covering ? "cover" : current?.id;
+      backdrop?.set(Boolean(current), current ? background(id) : null, current ? covering || host.working(id) : false, colors);
     }
 
-    function render(tab) {
+    function showWord() {
+      intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      intentWord.animate?.(
+        [{ opacity: 0, filter: "blur(8px)", transform: "translateY(8px)" }, { opacity: 1, filter: "blur(0px)", transform: "none" }],
+        { duration: 520, easing: "ease-out" }
+      );
+      wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
+    }
+
+    /** The words take turns while a page is being written; they stay as they are when it ends, to fade with the screen. */
+    function setIntent(intent) {
+      root.classList.toggle("intent", Boolean(intent));
+      clearTimeout(wordTimer);
+      if (!intent) return;
+      intentTitle.textContent = intent.title || "";
+      wordAt = 0;
+      showWord();
+    }
+
+    /** cover: the page has content, and the screen goes over it while the floating chat writes a new page. */
+    function render(tab, cover = false) {
       cancelReplacement();
+      const entering = Boolean(tab && cover) && !(covering && current?.id === tab.id);
       root.hidden = !tab;
       current = tab || null;
+      covering = Boolean(tab && cover);
+      // Each new page gets a background of its own.
+      if (entering) picks.delete("cover");
       updateBackdrop();
       if (!tab) {
         shown = null;
         drawn = "";
+        lastIntent = null;
+        setIntent(null);
         return;
       }
-      const threads = host.threads(tab.id);
-      const working = host.working(tab.id);
+      if (entering && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        root.animate([{ opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)" }], { duration: 420, easing: "ease-in-out" });
+      }
+      const intent = host.intent?.(tab.id) || null;
+      const threads = covering ? 1 : host.threads(tab.id);
+      const working = covering || host.working(tab.id);
       const list = threads ? [] : templateList();
-      const key = JSON.stringify([tab.id, threads, working, list.map(([t]) => [t.id, t.title, t.description])]);
+      const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description])]);
       if (shown === tab.id && drawn === key) return;
+      // The same call with more known about it (its title) keeps the word it is on.
+      const sameIntent = Boolean(intent) && shown === tab.id && lastIntent === intent.itemId;
       shown = tab.id;
       drawn = key;
       root.classList.toggle("has-thread", threads > 0);
       root.classList.toggle("working", Boolean(working));
+      root.classList.toggle("cover", covering);
+      if (sameIntent) intentTitle.textContent = intent.title || "";
+      else setIntent(intent);
+      lastIntent = intent ? intent.itemId : null;
       body.inert = threads > 0;
       // Keep the existing text and template cards in place while they fade away.
       if (threads > 0) return;

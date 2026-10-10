@@ -532,6 +532,8 @@ class ClaudeSession implements ProviderSession {
   private instructions = "";
   /** Streamed tool_use blocks by content index for the current message. */
   private streamTools = new Map<number, string>();
+  /** page_show calls whose input is still streaming, by block index: the JSON so far, until its head is reported. */
+  private streamPageShows = new Map<number, string>();
   private streamedText = false;
   /**
    * Steering. Claude Code queues a message sent mid-turn and folds it into the running turn between
@@ -1252,6 +1254,7 @@ class ClaudeSession implements ProviderSession {
     const parent = msg.parent_tool_use_id ?? undefined;
     if (event.type === "message_start") {
       this.streamTools.clear();
+      this.streamPageShows.clear();
       return;
     }
     if (event.type === "content_block_start" && isPlainRecord(event.content_block)) {
@@ -1264,12 +1267,26 @@ class ClaudeSession implements ProviderSession {
         if (block.name === "AskUserQuestion" || block.name === "ExitPlanMode") return;
         const described = describeTool(block.name, {}, this.thread.cwd);
         sink.toolStart({ toolId: block.id, name: block.name, tool: toolKind(block.name), title: block.name.startsWith("mcp__") ? described.title : block.name, status: "pending", parentToolId: parent });
+        if (!parent && /(^|__)page_show$/.test(block.name)) this.streamPageShows.set(Number(event.index), "");
       }
       return;
     }
     if (event.type === "content_block_delta" && isPlainRecord(event.delta)) {
       const delta = event.delta;
       if (parent) return;
+      if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+        // A page's HTML takes a while to write: say which page it is as soon as the call names it.
+        const index = Number(event.index);
+        const json = this.streamPageShows.get(index);
+        const toolId = this.streamTools.get(index);
+        if (json === undefined || !toolId) return;
+        const head = pageShowHead(json + delta.partial_json);
+        if (head) {
+          this.streamPageShows.delete(index);
+          sink.toolUpdate(toolId, { input: head });
+        } else this.streamPageShows.set(index, json + delta.partial_json);
+        return;
+      }
       if (delta.type === "text_delta" && typeof delta.text === "string") {
         this.streamedText = true;
         sink.text(delta.text);
@@ -1340,4 +1357,23 @@ function summarizeInput(input: Record<string, unknown>): string {
   } catch {
     return "";
   }
+}
+
+/** How much of a streaming page_show call to read for its key and title before reporting what was found. */
+const PAGE_SHOW_HEAD = 400;
+
+/**
+ * The key, id and title of a page_show call whose input JSON is still streaming, once the content
+ * (html or htmlPath) has started or enough has arrived; null while it is too early to tell.
+ * Quotes inside a string value are escaped, so these only match the call's own fields.
+ */
+export function pageShowHead(json: string): { key?: string; id?: string; title?: string } | null {
+  if (json.length < PAGE_SHOW_HEAD && !/"html(Path)?"\s*:/.test(json)) return null;
+  const head: { key?: string; id?: string; title?: string } = {};
+  for (const field of ["key", "id", "title"] as const) {
+    const match = new RegExp(`"${field}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*")`).exec(json);
+    if (!match) continue;
+    try { head[field] = String(JSON.parse(match[1])); } catch { /* A broken escape: leave the field out. */ }
+  }
+  return head;
 }

@@ -4794,6 +4794,19 @@
 
   const PAGE_WRITE_TOOLS = new Set(["page_show", "page_patch", "page_update", "page_action"]);
 
+  /**
+   * A page_show call still under way that makes a page there isn't one of yet, in front: { title }.
+   * A call with no input yet says nothing about which page it is for, so it has to wait.
+   */
+  function newPageCall(item) {
+    if (item.kind !== "tool" || item.parentToolId || (item.status !== "pending" && item.status !== "running")) return null;
+    if (!isRecord(item.input) || item.input.background === true) return null;
+    const page = pageTool(item);
+    if (page?.name !== "page_show") return null;
+    if (page.ref && app()?.resolvePages?.([page.ref])?.[page.ref]) return null;
+    return { title: typeof item.input.title === "string" ? item.input.title.trim() : "" };
+  }
+
   function isRecord(value) {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
@@ -5657,6 +5670,8 @@
     feedLines: new Map(),
     /** When each thread's current run started, for threads whose turn list is not loaded. */
     starts: new Map(),
+    /** The page_show call writing a new page in this chat: { itemId, threadId, title }. */
+    pageIntent: null,
     mount() {
       const main = document.querySelector(".workspace main");
       if (!main) return;
@@ -6060,7 +6075,21 @@
         }
       }, 1400);
     },
+    /** Tell the shell (its creating screen) which new page this chat is writing, or that it stopped. */
+    setPageIntent(intent) {
+      const prev = this.pageIntent;
+      if (!intent && !prev) return;
+      if (intent && prev && prev.itemId === intent.itemId && prev.title === intent.title) return;
+      this.pageIntent = intent;
+      window.dispatchEvent(new CustomEvent("scribe:page-intent", { detail: intent }));
+    },
     onItem(item) {
+      // Followed by the call, not the thread on show: the chat moves to the new page while it is still being written.
+      if (this.pageIntent?.itemId === item.id || item.threadId === this.view.threadId) {
+        const call = newPageCall(item);
+        if (call) this.setPageIntent({ itemId: item.id, threadId: item.threadId, ...call });
+        else if (this.pageIntent?.itemId === item.id) this.setPageIntent(null);
+      }
       if (item.threadId !== this.view.threadId) return;
       if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan") && item.status === "pending") {
         if (!S.dockShown) this.setShown(true);
@@ -6075,6 +6104,7 @@
       this.paintLiveItem(item);
     },
     onTurn(turn) {
+      if (turn.status !== "running" && turn.threadId === this.pageIntent?.threadId) this.setPageIntent(null);
       if (turn.threadId !== this.view.threadId) return;
       if (turn.status !== "running") this.live = null;
       this.renderHandle();

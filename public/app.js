@@ -155,6 +155,15 @@
   const NEWPAGE_BG_KEY = "scribe.newPageBackgrounds";
   const NEWPAGE_PROVIDER_KEY = "scribe.newPageProviderColors";
   const newPageProviderToggle = document.getElementById("newpage-provider-colors");
+  const PAGE_INTENT_KEY = "scribe.pageIntent";
+  const pageIntentToggle = document.getElementById("page-intent");
+  /** How long the creating screen waits for the new page to open once its call is over, before it gives the old page back. */
+  const PAGE_INTENT_GRACE_MS = 700;
+  /**
+   * The new page the floating chat is writing (agent.js reports the call): { itemId, title, origin, ending }.
+   * origin is the page that was in front when it began, which the creating screen covers.
+   */
+  let pageIntent = null;
   const NEWPAGE_BGS = [
     { id: "nebula", name: "Nebula" },
     { id: "stardust", name: "Stardust" },
@@ -417,6 +426,8 @@
     working: (id) => window.scribeChat?.pageStatus?.(id) || null,
     openChat: () => window.scribeChat?.shortcut("dock"),
     provider: () => window.scribeChat?.dockProvider?.(),
+    intent: (id) => (pageIntent?.origin === id ? pageIntent : null),
+    dismissIntent: () => endPageIntent(),
   });
   const trash = window.createTrash({
     showNotice,
@@ -452,6 +463,7 @@
   renderChromeFx();
   renderNewPageBgs();
   applyFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY, true);
+  applyFlag(pageIntentToggle, PAGE_INTENT_KEY, true);
   renderPalettePrefixSettings();
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
   bindSettingHint(
@@ -465,6 +477,10 @@
   bindSettingHint(
     document.getElementById("newpage-provider-colors-label"),
     "Use the selected floating chat provider's shape colours for the New page background, including your custom palette. Off restores the default background colours."
+  );
+  bindSettingHint(
+    document.getElementById("page-intent-label"),
+    "When an agent in the floating chat starts writing a new page, the page in front gives way to a New page background until the new page opens. Click the screen to get the page back."
   );
   bindSettingHint(
     document.getElementById("chrome-fx-label"),
@@ -2845,13 +2861,38 @@
     // The New page screen stands in for a blank page's frame, in whichever pane the page is.
     const beside = views.otherPage();
     const blank = isBlank(tab) ? tab : isBlank(beside) ? beside : null;
-    const pane = blank ? views.paneOf(blank.id) : "";
+    const cover = !blank && tab && pageIntent?.origin === tab.id ? tab : null;
+    const pane = blank ? views.paneOf(blank.id) : cover ? views.paneOf(cover.id) : "";
     mainEl.classList.toggle("blank-page", Boolean(blank));
     if (pane) newPageEl.dataset.pane = pane;
     else delete newPageEl.dataset.pane;
     if (blank) newPageView.render(blank);
+    else if (cover) newPageView.render(cover, true);
     else if (tab) newPageView.replace(tab, frames.get(tab.id)?.el);
     else newPageView.render(null);
+  }
+
+  function endPageIntent() {
+    if (!pageIntent) return;
+    clearTimeout(pageIntent.ending);
+    pageIntent = null;
+    renderFrames();
+  }
+
+  /** The floating chat began or stopped writing a new page. */
+  function onPageIntent(intent) {
+    if (!intent) {
+      // The new page usually opens just as its call ends: hold the screen so it can dissolve into that page.
+      if (pageIntent && !pageIntent.ending) pageIntent.ending = setTimeout(endPageIntent, PAGE_INTENT_GRACE_MS);
+      return;
+    }
+    if (pageIntent?.itemId === intent.itemId) {
+      pageIntent.title = intent.title;
+    } else {
+      clearTimeout(pageIntent?.ending);
+      pageIntent = flagOn(pageIntentToggle) && !childId && state.activeId ? { itemId: intent.itemId, title: intent.title, origin: state.activeId, ending: 0 } : null;
+    }
+    renderFrames();
   }
 
   /** Clear the unread blips of a page that is on screen in a peek or split. */
@@ -4911,6 +4952,11 @@
     toggleFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY);
     window.dispatchEvent(new Event("scribe:newpage-bg"));
   });
+  pageIntentToggle.addEventListener("click", () => {
+    toggleFlag(pageIntentToggle, PAGE_INTENT_KEY);
+    if (!flagOn(pageIntentToggle)) endPageIntent();
+  });
+  window.addEventListener("scribe:page-intent", (event) => onPageIntent(event.detail));
   auroraEdgeToggle.addEventListener("click", () => toggleFlag(auroraEdgeToggle, AURORA_EDGE_KEY));
   auroraIdleToggle.addEventListener("click", () => toggleFlag(auroraIdleToggle, AURORA_IDLE_KEY));
   clearBtn.addEventListener("click", async () => {
