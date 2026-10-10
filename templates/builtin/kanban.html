@@ -1891,6 +1891,14 @@
     var listScroll = {};
     boardEl.querySelectorAll(".cards").forEach(function (list) { listScroll[list.dataset.col] = list.scrollTop; });
     var focusComposer = document.activeElement && document.activeElement.classList.contains("composer-input");
+    // The composer is rebuilt with the board, so keep its caret, selection and scroll across the render.
+    var composerSel = focusComposer ? {
+      value: document.activeElement.value,
+      start: document.activeElement.selectionStart,
+      end: document.activeElement.selectionEnd,
+      dir: document.activeElement.selectionDirection,
+      top: document.activeElement.scrollTop
+    } : null;
     boardEl.replaceChildren();
     var filtering = filterActive();
     columns().forEach(function (col) {
@@ -1982,7 +1990,13 @@
     if (focusComposer || focusComposerNext) {
       focusComposerNext = false;
       var ta = boardEl.querySelector(".composer-input");
-      if (ta) ta.focus();
+      if (ta) {
+        ta.focus();
+        if (composerSel && composerSel.value === ta.value) {
+          ta.setSelectionRange(composerSel.start, composerSel.end, composerSel.dir);
+          ta.scrollTop = composerSel.top;
+        }
+      }
     }
   }
 
