@@ -7,7 +7,7 @@
     sky: ["#0d2a5c", "#3b82f6", "#93c5fd", "#fff7d6"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy" };
+  const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", none: "None" };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", breathing: "Animated glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
   const ICON_PALETTES = {
@@ -106,7 +106,7 @@ vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return liquid3d(uv,t);if(u_style<1.5)return mesh(uv,t);if(u_style<2.5)return ring(uv,t);
 if(u_style<3.5)return ink(uv,t);if(u_style<4.5)return plasma(uv,t);if(u_style<5.5)return halftone(uv,t);
-return galaxy(uv*1.6,t);
+if(u_style<6.5)return galaxy(uv*1.6,t);return vec4(0.);
 }
 vec4 mark(vec2 uv,float t){
 float d=sym(uv/u_iconSize)*u_iconSize;float inside=aaIn(d);float a=0.;vec3 c=mix(u_i0,u_i1,.7);
@@ -152,9 +152,10 @@ gl_FragColor=u_bleedmode<.5?vec4(0.):surface(uv,u_time);return;}
 vec2 uv=(gl_FragCoord.xy-.5*u_res)/s*u_bleed;px=u_bleed/s;
 vec4 c=base(uv,u_time);
 float r=length(uv);
+if(u_style<5.5){
 c*=1.-smoothstep(.9,1.05,r);
 float edge=exp(-abs(r-.97)*15.)*(1.-smoothstep(1.,1.26,r))*.22;
-c=over(c,pm(mix(u_c2,u_c3,.35),edge));
+c=over(c,pm(mix(u_c2,u_c3,.35),edge));}
 if(u_symbol>.5){
 // Give bright icons a dark underlay, and dark icons a light one.
 float d=sym(uv/u_iconSize)*u_iconSize;

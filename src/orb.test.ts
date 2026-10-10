@@ -103,12 +103,20 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     await selects.nth(2).selectOption("glow");
     await selects.nth(1).selectOption("mesh");
     const capture = async (): Promise<number[]> => page.locator(".dock-orb-canvas").evaluate(canvas => (canvas as any).lastPixels);
-    // Every shape has translucent pixels outside its 30px silhouette for a soft edge.
-    for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone", "galaxy"]) {
+    // Circular shapes have a soft edge; the galaxy retains its own fading arms.
+    await selects.nth(2).selectOption("none");
+    for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone"]) {
       await selects.nth(1).selectOption(shape);
       const pixels = await capture();
       assert.ok(pixels[(38 * 76 + 69) * 4 + 3] > 0, shape + " edge glow");
     }
+    await selects.nth(1).selectOption("galaxy");
+    assert.equal((await capture())[(38 * 76 + 69) * 4 + 3], 0, "no circular galaxy halo");
+    await selects.nth(1).selectOption("none");
+    await selects.nth(3).selectOption("none");
+    assert.ok((await capture()).every(v => v === 0), "no shape or icon is transparent");
+    await selects.nth(2).selectOption("glow");
+    assert.ok((await capture()).some(v => v > 0), "icon works without a shape");
     await selects.nth(1).selectOption("mesh");
     const meshIcon = await capture();
     await selects.nth(1).selectOption("galaxy");
@@ -138,6 +146,8 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
       }
       await selects.nth(1).selectOption("galaxy");
     }
+    await selects.nth(0).selectOption("cursor");
+    await selects.nth(1).selectOption("none");
     await selects.nth(0).selectOption("codex");
     await selects.nth(1).selectOption("ring");
     await selects.nth(4).selectOption("ember");
@@ -149,6 +159,7 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     assert.equal(saved.claude.iconSize, 1);
     assert.deepEqual(saved.claude.iconColors, ["#7ee7ff", "#ffffff"]);
     assert.equal(saved.cursor.bleed, "flares");
+    assert.equal(saved.cursor.style, "none");
     assert.equal(saved.pi.bleed, "none");
     await page.getByRole("button", { name: "Customize", exact: true }).click();
     await selects.nth(0).selectOption("codex");
