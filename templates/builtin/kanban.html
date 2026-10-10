@@ -504,6 +504,7 @@
     padding: 20px 22px 18px;
     position: relative;
   }
+  .modal:focus { outline: none; }
   .modal.drop-target { outline: 2px dashed var(--accent); outline-offset: -6px; }
   .modal-close {
     position: absolute;
@@ -1051,7 +1052,7 @@
   <div class="workers-pop hidden" id="workersPop" role="dialog" aria-label="Workers"></div>
 
   <div class="overlay hidden" id="overlay">
-    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="modal" id="modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="mTitle">
       <button class="modal-close" id="mClose" type="button" aria-label="Close">×</button>
       <div class="m-head">
         <div class="m-num" id="mNum"></div>
@@ -2572,7 +2573,8 @@
     var c = card(id);
     if (c && hasUnread(c)) updateCard(id, function (x) { x.seenAt = Date.now(); return x; });
     renderModal();
-    mTitle.focus();
+    // Enter the dialog without highlighting an editable control before Tab is pressed.
+    modal.focus({ preventScroll: true });
   }
   function closeCard() {
     if (editingDesc) saveDescription();
@@ -5927,7 +5929,7 @@
     var first = list[0], last = list[list.length - 1];
     var active = document.activeElement;
     if (e.shiftKey) {
-      if (active === first || !root.contains(active)) {
+      if (active === root || active === first || !root.contains(active)) {
         e.preventDefault();
         last.focus();
       }

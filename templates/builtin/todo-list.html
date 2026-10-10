@@ -321,6 +321,7 @@
     position: relative;
     transform: translateZ(0);
   }
+  .modal:focus { outline: none; }
   .modal.drop-target {
     outline: 2px dashed var(--accent);
     outline-offset: -6px;
@@ -553,7 +554,7 @@
   </div>
   <input class="col-title-input hidden" id="colInput" type="text" autocomplete="off" aria-label="Column name">
   <div class="overlay hidden" id="overlay">
-    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal" id="modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <button class="modal-close" id="close" type="button" aria-label="Close">×</button>
       <div class="modal-head">
         <label class="modal-done" title="Mark complete">
@@ -1213,7 +1214,8 @@
     modalTitle.classList.remove("hidden");
     scribe.setLocal({ openId: id, draftDesc: "", draftTitle: "" });
     syncModal();
-    modalTitle.focus();
+    // Enter the dialog without highlighting an editable control before Tab is pressed.
+    modal.focus({ preventScroll: true });
   }
 
   function closeModal() {
@@ -1792,7 +1794,7 @@
     var first = list[0], last = list[list.length - 1];
     var active = document.activeElement;
     if (event.shiftKey) {
-      if (active === first || !root.contains(active)) {
+      if (active === root || active === first || !root.contains(active)) {
         event.preventDefault();
         last.focus();
       }
