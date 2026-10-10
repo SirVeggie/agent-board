@@ -155,3 +155,12 @@ test("Pi threads hear about web_search only when a SearXNG instance is set", () 
   assert.match(threadInstructions(thread({ web: "limited" }), { webSearch: true }), /covers those sites\)\. web_search or web_fetch elsewhere/);
   assert.match(threadInstructions(thread({ web: "limited", provider: "cursor" }), {}), /web_fetch \(there is no web search\)/);
 });
+
+test("Claude threads are told which of the user's own MCP servers they do not get", () => {
+  const thread = (over: Partial<Thread>): Thread =>
+    ({ provider: "claude", mode: "code", cwd: "/work", web: "on", scope: { kind: "global", ref: null }, ...over }) as Thread;
+  assert.match(threadInstructions(thread({}), { mcpLeftOut: ["keeper", "db"] }), /MCP servers: .*Not available here, even where a skill says to use one: `keeper`, `db`\. Do not search for their tools/);
+  assert.doesNotMatch(threadInstructions(thread({}), {}), /MCP servers:/);
+  assert.doesNotMatch(threadInstructions(thread({}), { mcpLeftOut: [] }), /MCP servers:/);
+  assert.doesNotMatch(threadInstructions(thread({ provider: "cursor" }), { mcpLeftOut: ["keeper"] }), /MCP servers:/);
+});

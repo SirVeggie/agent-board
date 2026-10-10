@@ -46,7 +46,7 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
-import { serversForThread } from "./mcpConfig.js";
+import { claudeOwnServers, serversForThread, threadWorkspace } from "./mcpConfig.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -1227,7 +1227,13 @@ export class AgentHost {
 
   private scopeInfo(thread: Thread): ScopeInfo {
     const info = this.scopePages(thread);
-    return this.prefs().searxngUrl ? { ...info, webSearch: true } : info;
+    if (this.prefs().searxngUrl) info.webSearch = true;
+    if (thread.provider === "claude") {
+      const have = new Set(serversForThread(thread).map((s) => s.name));
+      const leftOut = claudeOwnServers(threadWorkspace(thread)).filter((name) => !have.has(name));
+      if (leftOut.length) info.mcpLeftOut = leftOut;
+    }
+    return info;
   }
 
   private scopePages(thread: Thread): ScopeInfo {

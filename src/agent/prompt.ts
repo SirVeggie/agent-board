@@ -12,6 +12,8 @@ export type ScopeInfo = {
   folderInstructions?: FolderInstructionPage[];
   /** A SearXNG instance is set in Agent settings: Pi threads (and Cursor ones without full web) have web_search. */
   webSearch?: boolean;
+  /** Servers in the user's own Claude Code config that this Claude thread does not get (Scribe's MCP list replaces that config). */
+  mcpLeftOut?: string[];
 };
 
 /**
@@ -105,6 +107,13 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
         ? `Web access is limited to the user's allowlist of domains${openSearch ? " (a web search that names no domains covers those sites)" : ""}. ${tools} elsewhere asks the user first.`
         : `Web access is off in this thread: ${tools} asks the user first.`,
       "To say why and how much you need it, call web_request first with importance: necessary (waits until answered), important (about 2 hours), useful (15 minutes) or trivial (2 minutes). In a chat run by a board worker an unanswered request is refused after that wait; then carry on without the web, doing what you can."
+    );
+  }
+  if (thread.provider === "claude" && scope.mcpLeftOut?.length) {
+    // The user's skills still load, and one written for such a server (keeper) otherwise sends the agent looking for tools that are not there (#346).
+    const names = scope.mcpLeftOut.map((n) => `\`${n}\``).join(", ");
+    lines.push(
+      `MCP servers: this thread gets the servers in Scribe's own MCP list, not the ones in your Claude Code config. Not available here, even where a skill says to use one: ${names}. Do not search for their tools. Do what you can without them, and say in your reply what you could not do or check because of it; the user can add a server under Agent settings, MCP servers.`
     );
   }
   lines.push(

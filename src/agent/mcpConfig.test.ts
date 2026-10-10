@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { bridgeAsks } from "./mcpBridge.js";
-import { applyImport, removeCursorImports, bridgedToolName, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, serversForThread, writeMcpFile } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, serversForThread, writeMcpFile } from "./mcpConfig.js";
 
 const thread = (mode: "code" | "ask" | "plan" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
 
@@ -135,4 +135,19 @@ test("Cursor cleanup refuses changed source files, changed Scribe copies and unr
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("claudeOwnServers names what Claude Code would load in a workspace", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-claude-own-"));
+  const ws = path.join(home, "proj");
+  fs.mkdirSync(ws);
+  assert.deepEqual(claudeOwnServers(ws, home), []);
+  fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({
+    mcpServers: { keeper: { command: "k" }, scribe: { command: "s" } },
+    projects: { [ws]: { mcpServers: { local: { command: "l" } } }, [path.join(home, "other")]: { mcpServers: { nope: { command: "n" } } } },
+  }));
+  fs.writeFileSync(path.join(ws, ".mcp.json"), JSON.stringify({ mcpServers: { shared: { url: "http://s" }, keeper: { command: "k2" } } }));
+  assert.deepEqual(claudeOwnServers(ws, home).sort(), ["keeper", "local", "shared"]);
+  assert.deepEqual(claudeOwnServers(null, home), ["keeper"]);
+  fs.rmSync(home, { recursive: true, force: true });
 });

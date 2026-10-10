@@ -322,6 +322,36 @@ export function importCandidates(workspaces: string[], current: McpFile = readMc
   return out;
 }
 
+let claudeCache: { file: string; mtime: number; value: unknown } | null = null;
+
+/**
+ * Names of the servers Claude Code itself would load in a workspace (~/.claude.json, its entry for the
+ * folder, the folder's .mcp.json). Claude threads get Scribe's list in their place, so a skill written
+ * for one of these finds its tools missing unless the user imported it.
+ */
+export function claudeOwnServers(workspace: string | null, home = os.homedir()): string[] {
+  const file = path.join(home, ".claude.json");
+  let claude: unknown = null;
+  try {
+    // Claude Code rewrites this file often and it grows large: parse it again only when it changed.
+    const mtime = fs.statSync(file).mtimeMs;
+    if (claudeCache?.file !== file || claudeCache.mtime !== mtime) claudeCache = { file, mtime, value: readJson(file) };
+    claude = claudeCache.value;
+  } catch {
+    /* no Claude Code config */
+  }
+  const names = new Set(Object.keys(cleanLayer(claude).mcpServers));
+  if (workspace) {
+    const key = workspaceKey(workspace);
+    const projects = isPlainRecord(claude) && isPlainRecord(claude.projects) ? claude.projects : {};
+    for (const [dir, project] of Object.entries(projects)) {
+      if (workspaceKey(dir) === key) for (const name of Object.keys(cleanLayer(project).mcpServers)) names.add(name);
+    }
+    for (const name of Object.keys(cleanLayer(readJson(path.join(workspace, ".mcp.json"))).mcpServers)) names.add(name);
+  }
+  return [...names];
+}
+
 /** Add picked candidates to the file (a name already there is replaced). */
 export function applyImport(file: McpFile, picked: Array<{ scope: string; name: string; server: unknown }>): McpFile {
   const next: McpFile = { mcpServers: { ...file.mcpServers }, workspaces: { ...file.workspaces } };
