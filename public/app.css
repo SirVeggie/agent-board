@@ -1906,8 +1906,11 @@ kbd {
   position: relative;
   z-index: 1;
   width: min(520px, 100%);
+  min-width: min(320px, 100%);
+  max-width: 100%;
   max-height: 100%;
   overflow-y: auto;
+  resize: horizontal;
   overscroll-behavior: contain;
   padding: 28px 28px 24px;
   background: color-mix(in srgb, var(--panel) 55%, transparent);
