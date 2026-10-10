@@ -189,8 +189,8 @@ The weights and the cut-off are first guesses from 28 queries. Keep the query se
 
 ## Gaps in Scribe this depends on
 
-- A link can scroll a page to an element id, but nothing opens a kanban card or list item from outside the page. Card hits need a way to open the page focused on one record.
-- `searchLibrary` and `searchPages` strip the HTML and stringify the state of every page on every query. The chunker's extracted text would give them a cache.
+- #355: a link can scroll a page to an element id, but nothing opens a kanban card or list item from outside the page. Card hits need a way to open the page focused on one record.
+- #356: `searchLibrary` and `searchPages` strip the HTML and stringify the state of every page on every query. The chunker's extracted text would give them a cache.
 
 ## Open questions
 
