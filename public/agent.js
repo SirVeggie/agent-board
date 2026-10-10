@@ -1916,6 +1916,7 @@
 
     setThread(id) {
       if (this.threadId === id && id) return;
+      this.closeHelper();
       this.parkComposer();
       this.threadId = id;
       if (id) this.draft = null;
@@ -1940,13 +1941,35 @@
 
     /** Show a thread here, and make it the one this view comes back to. */
     openThread(id) {
+      if (this.variant === "helper") { this.setThread(id); return; }
       if (this.variant !== "dock") setCurrent(id);
       else dock.remember(id);
       this.setThread(id);
     }
 
+    openHelper(id) {
+      if (!this.helperView) {
+        this.helperView = new ChatView("helper");
+        this.helperView.owner = this;
+      }
+      for (const node of [this.header, this.scroll, this.queueDock, this.composer]) node.inert = true;
+      this.root.append(this.helperView.root);
+      this.helperView.setThread(id);
+      this.helperView.focus();
+    }
+
+    closeHelper() {
+      if (!this.helperView?.root.isConnected) return;
+      this.helperView.parkComposer();
+      this.helperView.root.remove();
+      this.helperView.threadId = null;
+      for (const node of [this.header, this.scroll, this.queueDock, this.composer]) node.inert = false;
+      this.focus();
+    }
+
     /** An empty composer for a new thread. Whatever was being written here is kept (see parkComposer). */
     startDraft(scope, settings = {}) {
+      this.closeHelper();
       this.parkComposer();
       this.threadId = null;
       this.draft = { scope, settings: { ...settings } };
@@ -2087,6 +2110,8 @@
         acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)", false));
       } else if (this.variant === "full") {
         acts.append(button(icon("collapse"), "ag-icon-btn", () => leaveFull(), "Back to Scribe (Esc)", false));
+      } else if (this.variant === "helper") {
+        acts.append(button(icon("close"), "ag-icon-btn", () => this.owner.closeHelper(), "Close helper and return to parent chat", false));
       }
       top.append(acts);
       this.header.append(top);
@@ -3039,7 +3064,7 @@
       node.dataset.itemId = it.id;
       if (call.id) node.dataset.helper = call.id;
       if (call.live) node.dataset.live = "1";
-      const head = button("", "ag-tool-head", () => this.toggle(key, node));
+      const head = button("", "ag-tool-head", () => h ? this.openHelper(h.id) : this.toggle(key, node));
       head.append(call.live ? el("span", "ag-spin") : state === "error" ? icon("cross", "ag-ico ag-st-err") : icon("task", "ag-ico"));
       const label = el("span", "ag-tool-label");
       const task = typeof call.input.task === "string" ? call.input.task.trim() : "";
@@ -3057,7 +3082,7 @@
       }
       head.append(el("span", `ag-task-badge ts-${state}`, { running: "working", waiting: "needs you", done: "done", error: "failed", stopped: "stopped" }[state]));
       if (it.endedAt && it.startedAt && it.endedAt - it.startedAt > 1500) head.append(el("span", "ag-muted ag-dur", R.duration(it.endedAt - it.startedAt)));
-      head.append(icon("chevron", "ag-ico ag-chev"));
+      if (h) head.setAttribute("aria-label", `Open helper: ${name}`);
       node.append(head);
 
       const line = el("div", "ag-task-line");
@@ -3080,24 +3105,27 @@
       if (tokens) line.append(el("span", "ag-task-usage", `${tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : tokens} tokens`));
       if (h) {
         const actions = el("span", "ag-task-actions");
-        actions.append(
-          button("Open thread", "ag-btn tiny", (event) => {
-            event.stopPropagation();
-            this.openThread(h.id);
-          })
-        );
+        actions.append(button(icon("chevron"), "ag-icon-btn small ag-chev", (event) => {
+          event.stopPropagation();
+          this.toggle(key, node);
+        }, "Show helper brief and report"));
+        actions.lastChild.setAttribute("aria-label", "Show helper brief and report");
         if (call.live && h.status !== "idle") {
           actions.append(
-            button("Stop", "ag-btn tiny", (event) => {
+            button(icon("stop"), "ag-send stop ag-helper-stop", (event) => {
               event.stopPropagation();
               event.currentTarget.disabled = true;
               api("POST", `/threads/${encodeURIComponent(h.id)}/cancel`).catch((err) => notice(err.message));
-            })
+            }, "Stop this helper")
           );
+          actions.lastChild.setAttribute("aria-label", "Stop this helper");
         }
         line.append(actions);
       }
       if (line.childElementCount) node.append(line);
+      if (h) node.addEventListener("click", (event) => {
+        if (!event.target.closest("button, a, input, .ag-tool-body")) this.openHelper(h.id);
+      });
 
       const body = el("div", "ag-tool-body");
       const part = (heading, text) => {
@@ -3119,8 +3147,11 @@
 
     /** A helper of this thread changed: bring its rows in the transcript and the strip above the input up to date. */
     onHelper(helper) {
+      if (helper.status === "idle" && !S.details.has(helper.id) && !S.loading.has(helper.id)) {
+        ensureDetail(helper.id).then((detail) => { if (detail) this.onHelper(S.threads.get(helper.id) || helper); });
+      }
       const detail = S.details.get(this.threadId);
-      for (const node of this.transcript.querySelectorAll(".ag-helper-call[data-live]")) {
+      for (const node of this.transcript.querySelectorAll(".ag-helper-call")) {
         if (node.dataset.helper && node.dataset.helper !== helper.id) continue;
         const it = detail?.byId.get(node.dataset.itemId);
         const call = it && helperCall(it);
@@ -3149,6 +3180,19 @@
     renderHelperDock() {
       const box = this.helperDock;
       const busy = this.threadId ? helpersOf(this.threadId).filter((t) => t.status !== "idle" && !t.archived) : [];
+      const approvals = busy.filter((t) => t.asking?.kind === "approval");
+      const approvalKey = JSON.stringify(approvals.map((t) => [t.id, t.title, t.model, t.asking]));
+      if (approvalKey !== this.helperApprovalKey) {
+        this.helperApprovalKey = approvalKey;
+        this.helperApprovals.replaceChildren();
+        this.helperApprovals.hidden = !approvals.length;
+        for (const t of approvals) {
+          const wrap = el("div", "ag-helper-approval");
+          wrap.append(button(`Helper · ${helperName(t)} · ${modelLabel(t.provider, t.model)}`, "ag-helper-approval-name", () => this.openHelper(t.id)));
+          wrap.append(this.renderApproval({ ...t.asking, id: t.asking.itemId, requestId: t.asking.itemId, options: t.asking.options || [], status: "pending" }));
+          this.helperApprovals.append(wrap);
+        }
+      }
       this.helpersBusy = busy.length;
       const shown = busy.filter((t) => !this.helperRowInView(t.id));
       const limit = this.variant === "dock" ? 1 : 3;
@@ -3177,7 +3221,7 @@
       }
       for (const t of shown) {
         const item = el("div", "ag-helper-item");
-        const row = button("", "ag-helper-row", () => this.openThread(t.id), "Open the helper's thread");
+        const row = button("", "ag-helper-row", () => this.openHelper(t.id), "Open the helper's thread");
         row.append(
           t.status === "waiting" ? el("span", "ag-dot s-waiting") : el("span", "ag-spin"),
           providerIcon(t.provider),
@@ -3191,6 +3235,7 @@
             api("POST", `/threads/${encodeURIComponent(t.id)}/cancel`).catch((err) => notice(err.message));
           }, "Stop this helper")
         );
+        item.lastChild.setAttribute("aria-label", "Stop this helper");
         box.append(item);
       }
     }
@@ -3813,7 +3858,9 @@
       // Working helpers of this thread, above the input.
       this.helperDock = el("div", "ag-helpers");
       this.helperDock.hidden = true;
-      box.append(this.slash, this.helperDock, this.forkNote, this.ctxRow);
+      this.helperApprovals = el("div", "ag-helper-approvals");
+      this.helperApprovals.hidden = true;
+      box.append(this.slash, this.helperApprovals, this.helperDock, this.forkNote, this.ctxRow);
       if (this.variant === "dock") {
         box.append(this.input);
       } else {
@@ -4901,14 +4948,35 @@
     return t.activity?.line || "Starting…";
   }
 
+  /** Helpers appear through their parent in the active list, including between parent turns. */
+  function activeThreads() {
+    return [...S.threads.values()].filter((t) => !t.helperOf).map((t) => {
+      const busy = helpersOf(t.id).filter((h) => !h.archived && h.status !== "idle");
+      const helper = busy.find((h) => h.status === "waiting") || busy[0];
+      if (!helper || t.status === "waiting" || (t.status === "running" && helper.status !== "waiting")) return t;
+      return { ...t, status: helper.status, asking: undefined, activity: { line: `Helper · ${helperName(helper)}: ${helperStep(helper)}` } };
+    });
+  }
+
   /** An agent_run tool call: its input, its result, and the helper thread it started or sent on (once known). */
   function helperCall(it) {
     if (it.kind !== "tool" || !(/agent_run$/.test(it.name || "") || /agent_run$/.test(it.title || ""))) return null;
     const input = isRecord(it.input) ? it.input : {};
-    const result = parseToolJson(it.output);
+    let result = parseToolJson(it.output);
     const id = [it.helper, input.thread, result?.thread].find((v) => typeof v === "string" && v.trim()) || "";
-    const live = it.status === "running" || it.status === "pending";
     const thread = id ? S.threads.get(id) || null : null;
+    const live = thread ? thread.status !== "idle" : it.status === "running" || it.status === "pending";
+    // A background launch returns a receipt; the finished helper supplies the report.
+    if (result?.status === "running" && thread?.status === "idle") {
+      const detail = S.details.get(id);
+      const turn = detail && [...detail.turns.values()].at(-1);
+      result = {
+        ...result, status: turn?.status || "done", error: turn?.error,
+        reply: detail?.items.filter((item) => item.turnId === turn?.id && item.kind === "text").at(-1)?.text,
+        files: turn?.files?.map((file) => `${file.status} ${file.path}`),
+        tokens: { input: turn?.usage?.inputTokens || 0, output: turn?.usage?.outputTokens || 0 },
+      };
+    }
     const ended = it.status === "error" || result?.status === "error" ? "error" : result?.status && result.status !== "done" ? "stopped" : "done";
     return { id, input, result, thread, live, state: live ? (thread?.status === "waiting" ? "waiting" : "running") : ended };
   }
@@ -6174,7 +6242,7 @@
   function renderBadge() {
     const btn = document.getElementById("agent-toggle");
     if (!btn) return;
-    const threads = [...S.threads.values()];
+    const threads = activeThreads();
     const waiting = threads.some((t) => t.status === "waiting");
     const running = threads.filter((t) => t.status === "running").length;
     const unread = threads.filter((t) => t.unread && !t.archived && !t.fromPage).length;
@@ -6321,7 +6389,7 @@
    */
   function flyoutSnapshot(from) {
     const now = Date.now();
-    const threads = [...S.threads.values()];
+    const threads = activeThreads();
     const next = syncFlyoutHold(threads, now);
     clearTimeout(flyoutHoldTimer);
     if (next != null) flyoutHoldTimer = setTimeout(() => renderBadge(), Math.max(0, next - now) + 30);
@@ -6727,7 +6795,8 @@
   };
 
   function views() {
-    return [sidebar.view, full.view, dock.view];
+    const roots = [sidebar.view, full.view, dock.view];
+    return roots.flatMap((view) => view.helperView?.root.isConnected ? [view, view.helperView] : [view]);
   }
 
   function renderLists() {
@@ -9403,6 +9472,11 @@
     }
     if (modalStack.length) {
       modalStack[modalStack.length - 1]();
+      return true;
+    }
+    const helperOwner = [sidebar.view, full.view, dock.view].find((view) => view.helperView?.visible());
+    if (helperOwner) {
+      helperOwner.closeHelper();
       return true;
     }
     if (S.fullOpen) {

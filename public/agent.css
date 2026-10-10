@@ -1509,6 +1509,80 @@ button.ag-tool-head:hover {
 }
 
 /* An agent_run call: the helper's model after its name, and room between brief and report. */
+.ag-helper-call {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--ag-sunken);
+  cursor: pointer;
+}
+
+.ag-helper-call > .ag-tool-head {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding: 0;
+}
+
+.ag-helper-call .ag-tool-label {
+  flex: 1 1 180px;
+  white-space: normal;
+}
+
+.ag-helper-call .ag-tool-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ag-helper-call .ag-task-line {
+  margin: 8px 0 0;
+}
+
+.ag-helper-call .ag-helper-stop {
+  width: 28px;
+  height: 28px;
+}
+
+.ag-helper-call .ag-tool-body {
+  cursor: auto;
+}
+
+.ag-view { position: relative; }
+.ag-view-helper {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: inherit;
+}
+
+.ag-helper-approvals {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.ag-helper-approval {
+  padding: 8px;
+  border: 1px solid var(--ag-warn);
+  border-radius: 10px;
+  margin-bottom: 6px;
+}
+
+.ag-helper-approval-name {
+  display: block;
+  width: 100%;
+  text-align: left;
+  color: var(--ag-warn);
+  font: inherit;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
 .ag-helper-model {
   flex-shrink: 0;
   display: inline-flex;
@@ -3015,8 +3089,8 @@ button.ag-row.unread .ag-row-title {
 
 /* Helpers under the thread that started them: indented, on a rail, in smaller rows. */
 .ag-row-helpers {
-  margin: 0 0 3px 15px;
-  padding-left: 5px;
+  margin: 0 0 3px 30px;
+  padding-left: 10px;
   border-left: 1px solid rgba(var(--lift-rgb), 0.12);
 }
 
