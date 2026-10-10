@@ -4654,7 +4654,7 @@
   });
   libraryToggle.addEventListener("click", () => setSideOpen(!state.sideOpen));
   newTabBtn.addEventListener("click", () => runShortcut("new-page"));
-  // The New page screen hides its templates once the page has a thread, and says when the agent works.
+  // The New page screen leaves only its background once the page has a thread.
   window.addEventListener("scribe:agent-threads", () => {
     const tab = activeTab();
     if (isBlank(tab)) {

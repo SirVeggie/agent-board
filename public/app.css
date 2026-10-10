@@ -4389,6 +4389,10 @@ main.blank-page #frames iframe:not(.inactive) {
   text-align: center;
 }
 
+.newpage.has-thread .newpage-body {
+  display: none;
+}
+
 .newpage-title {
   margin: 0 0 8px;
   font-size: 26px;
