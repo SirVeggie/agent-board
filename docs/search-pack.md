@@ -23,3 +23,14 @@ npm run test:search
 ```
 
 Release validation still requires building the full pack and trying it with the desktop app's bundled Node runtime on each distributed platform.
+
+Verify the ZIP after extracting it into a separate test folder:
+
+```bash
+npm run build
+node tools/verify-search-pack.mjs <extracted-pack-folder>
+```
+
+This checks every manifest hash, pack detection, and real offline query/document/image inference through Scribe's child process. It uses temporary search settings and does not install the pack into your library.
+
+To try it in the app, extract into the folder shown in Settings → Search, reopen Settings, confirm **Ready**, and enable **Search by meaning**. Wait for indexing, then open the palette with Ctrl+D and search with `~` followed by a description of a page or card. Try wording different from its title. ZIP installation currently requires manual extraction; Scribe's page import is not a search-pack installer.
