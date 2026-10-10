@@ -3523,7 +3523,7 @@ html.tight-small .agent-full {
   }
 }
 
-/* A long, slow ember sweep along the output's visible bottom edge while the agent works. */
+/* A long, slow provider-coloured sweep along the output's visible bottom edge while the agent works. */
 .dock-sweep {
   display: block;
   position: absolute;
@@ -3549,7 +3549,7 @@ html.tight-small .agent-full {
   top: 0;
   bottom: 0;
   width: 60%;
-  background: linear-gradient(90deg, transparent, var(--ag-live) 50%, transparent);
+  background: linear-gradient(90deg, transparent, var(--dock-sweep-palette, var(--ag-live) 50%), transparent);
   opacity: 0.8;
   animation: dock-sweep 4.6s ease-in-out infinite;
 }

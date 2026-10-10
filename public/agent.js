@@ -5601,6 +5601,7 @@
       this.root = root;
       this.history = history;
       this.view.root = root;
+      window.addEventListener("scribe:orb-appearance", () => this.renderSweep());
       this.view.root.addEventListener("click", (event) => onLinkClick(event));
       this.feed.addEventListener("click", () => this.setExpanded(true));
       this.apply();
@@ -5687,6 +5688,7 @@
       this.scopeBtn.dataset.tooltip = SCOPE_CHIP_TITLE;
       this.fitScope();
       this.orbFx?.setProvider(s.provider);
+      this.renderSweep();
       if (this.provider !== s.provider) {
         this.provider = s.provider;
         window.dispatchEvent(new CustomEvent("scribe:dock-provider", { detail: { provider: s.provider } }));
@@ -5694,6 +5696,12 @@
       // Hovering the orb opens the threads flyout, so it has no plain tooltip.
       this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
+    },
+    /** Match the running accent to the provider's shape palette, including custom colours. */
+    renderSweep() {
+      const colors = window.scribeOrb?.colors(this.view.settings().provider);
+      if (colors) this.root.style.setProperty("--dock-sweep-palette", `${colors[1]} 30%, ${colors[2]} 50%, ${colors[3]} 70%`);
+      else this.root.style.removeProperty("--dock-sweep-palette");
     },
     /** With both a Scribe scope and a workspace, show only the workspace once either name would be cut off. */
     fitScope() {
