@@ -104,6 +104,8 @@ export type ReplyOutcome = ActionOutcome & { deliver?: ReplyDelivery };
 
 export type ActionSet = {
   actions: Record<string, ActionDef>;
+  /** Initialize a new page from its template state and parsed form values, before it is opened. */
+  seed?(state: BoardState, values: TemplateValues): BoardState;
   /**
    * Another page's scribe.reply aimed at this page (its reply target). Without this hook the
    * target only gets a `reply` event. Runs as the user: the user's click sent it.

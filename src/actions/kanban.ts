@@ -505,6 +505,26 @@ function cardEvent(state: BoardState, card: Card): Record<string, unknown> {
 }
 
 export const kanbanActions: ActionSet = {
+  seed(state, values) {
+    // Match the page's ensureShape fallback for older boards. Never replace custom starting columns.
+    if (columns(state).length) return state;
+    const presets: Record<string, Array<[string, string?, number?]>> = {
+      simple: [["To do"], ["Doing"], ["Done", "done"]],
+      dev: [["Backlog"], ["Ready"], ["In progress", undefined, 3], ["Review"], ["Done", "done"]],
+      agent: [["Inbox"], ["Ready for agent", "agent"], ["Agent working", "working"], ["Needs review", "review"], ["Done", "done"]],
+    };
+    const preset = Object.hasOwn(presets, str(values.preset)) ? presets[str(values.preset)] : presets.dev;
+    state.columns = preset.map(([title, role, wip]) => ({
+      id: newId("col"), title,
+      ...(role && (values.agentMode !== false || role === "done") ? { role } : {}),
+      ...(wip ? { wip } : {}),
+    }));
+    if (!labels(state).length) {
+      state.labels = [["Bug", "#ff6b7a"], ["Feature", "#6ea8ff"], ["Chore", "#8b95a8"]]
+        .map(([name, color]) => ({ id: newId("lb"), name, color }));
+    }
+    return state;
+  },
   actions: {
     list: {
       description:

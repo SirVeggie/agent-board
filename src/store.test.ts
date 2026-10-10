@@ -1491,6 +1491,81 @@ test("opening a built-in opens a local copy, created once", () => {
   store.closeDb();
 });
 
+test("Kanban opens with usable preset state before any browser script runs", () => {
+  const store = loaded();
+  try {
+    const presets: Array<[string, Array<[string, string?, number?]>]> = [
+      ["simple", [["To do"], ["Doing"], ["Done", "done"]]],
+      ["dev", [["Backlog"], ["Ready"], ["In progress", undefined, 3], ["Review"], ["Done", "done"]]],
+      ["agent", [["Inbox"], ["Ready for agent", "agent"], ["Agent working", "working"], ["Needs review", "review"], ["Done", "done"]]],
+    ];
+    for (const [preset, expected] of presets) {
+      for (const agentMode of [true, false]) {
+        const { tab } = store.openFromTemplate("builtin:kanban", { title: preset, preset, agentMode });
+        const cols = tab.state.columns as Array<{ id: string; title: string; role?: string; wip?: number }>;
+        assert.deepEqual(cols.map((c) => [c.title, c.role, c.wip]), expected.map(([title, role, wip]) =>
+          [title, agentMode || role === "done" ? role : undefined, wip]));
+        assert.equal(new Set(cols.map((c) => c.id)).size, cols.length);
+        assert.deepEqual((tab.state.labels as Array<{ name: string }>).map((l) => l.name), ["Bug", "Feature", "Chore"]);
+        assert.deepEqual(tab.state.cards, []);
+        assert.equal(tab.state.nextNum, 1);
+        store.runAction(tab.id, "create", {
+          title: "Headless card", labels: ["Bug"],
+          ...(preset === "agent" && agentMode ? { column: "agent" } : {}),
+        }, { by: "agent" });
+        const [card] = tab.state.cards as Array<{ num: number; col: string }>;
+        assert.equal(card.num, 1);
+        assert.equal(card.col, cols[preset === "agent" && agentMode ? 1 : 0].id);
+        assert.equal(tab.state.nextNum, 2);
+      }
+    }
+    const template = store.findTemplate("kanban")!.template;
+    assert.deepEqual(template.initialState, { columns: [], labels: [], cards: [], nextNum: 1 });
+  } finally {
+    store.closeDb();
+  }
+});
+
+test("Kanban seeds a draft and persists its columns and headless actions", () => {
+  const store = loaded();
+  const draft = store.createDraft();
+  const { tab, template } = store.openFromTemplate("builtin:kanban", { preset: "agent" }, { into: draft.id });
+  assert.equal(tab.id, draft.id);
+  store.runAction(tab.id, "create", { title: "Persisted card", column: "agent" }, { by: "agent" });
+  const state = structuredClone(tab.state);
+  const other = store.openFromTemplate(template.id, { preset: "agent" }).tab;
+  assert.notDeepEqual(other.state.columns, tab.state.columns);
+  assert.deepEqual(other.state.cards, []);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  try {
+    assert.deepEqual(again.get(tab.id)!.state, state);
+    again.runAction(tab.id, "claim", { card: 1 }, { by: "agent", label: "Test" });
+  } finally {
+    again.closeDb();
+  }
+});
+
+test("Kanban keeps a local copy's custom initial columns and labels", () => {
+  const store = loaded();
+  try {
+    const { template } = store.copyBuiltinTemplate("kanban");
+    const initialState = {
+      columns: [{ id: "custom", title: "Custom" }],
+      labels: [{ id: "custom-label", name: "Custom label" }],
+      cards: [], nextNum: 7, settings: { showDoneDate: true },
+    };
+    store.upsertTemplate({ id: template.id, title: template.title, html: template.html, fields: template.fields, initialState });
+    const { tab } = store.openFromTemplate(template.id, { preset: "agent" });
+    assert.deepEqual(tab.state, initialState);
+    store.runAction(tab.id, "create", { title: "Custom card" }, { by: "agent" });
+    assert.deepEqual(template.initialState, initialState);
+  } finally {
+    store.closeDb();
+  }
+});
+
 test("a built-in's local copy keeps its link after edits and a reload", () => {
   const store = loaded();
   const { template } = store.copyBuiltinTemplate("markdown-note");

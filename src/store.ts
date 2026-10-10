@@ -880,14 +880,17 @@ export class BoardStore extends EventEmitter {
     const parsed = parseTemplateValues(template.fields, values);
     const title = renderTemplateTitle(template, parsed);
     const html = this.renderBoundHtml(template, title, parsed);
+    const initialState = structuredClone(template.initialState ?? {});
+    const actionSet = template.source?.builtin ? BUILTIN_ACTIONS[template.source.builtin] : undefined;
+    const state = actionSet?.seed ? actionSet.seed(initialState, parsed) : initialState;
     const tab = opts?.into
-      ? this.fillBlank(this.openBlank(opts.into), { title, html, pin: true, state: template.initialState, actor: opts.actor })
+      ? this.fillBlank(this.openBlank(opts.into), { title, html, pin: true, state, actor: opts.actor })
       : this.upsert({
           title,
           html,
           pin: true,
           activate: opts?.activate !== false,
-          state: template.initialState,
+          state,
           actor: opts?.actor,
         }).tab;
     if (opts?.agentHidden) {
