@@ -15,6 +15,15 @@ Pages under 40 characters of text are skipped, so empty pages do not rank for ev
 
 Page scores use `0.5 page + 0.3 best chunk + 0.2 second-best chunk`; with one chunk it supplies both chunk terms. Content results allow at most three chunks per page. Results stay within 0.08 of the top visible score. The last 50 query vectors are cached.
 
+## Palette
+
+- Normal search (Ctrl+D): word matches show first. For a query of three characters or more, pages found by meaning that are not already listed are appended under a "Related" divider. Rows above and the selection do not move.
+- The semantic prefix (default `~`, set under Settings → Palette prefixes) skips the word search: pages by the blended score, then the other matching sections and cards under "Sections and cards".
+- A semantic row shows the page, what matched (the section heading or the record's label, such as "#335 Card title") and the snippet.
+- Enter on a section hit opens the page at the section: by the heading's `id` when it has one, otherwise by the anchor `scribe-section:N` (the page's Nth h1 to h4), which the page bridge resolves. A card hit opens the page only, until #355.
+- While the index is building, the divider and the prefix's empty state say "indexing N of M pages".
+- With search off or no pack, normal search makes no semantic request, and the prefix shows one row that says how to turn it on; Enter on it opens Settings.
+
 ## Pack-dependent eval
 
 ```powershell

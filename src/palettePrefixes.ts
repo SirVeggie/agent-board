@@ -3,7 +3,7 @@
  * Add a prefix here and in app.js when it ships.
  */
 
-export type PalettePrefixId = "threads" | "ai";
+export type PalettePrefixId = "threads" | "ai" | "semantic";
 
 export type PalettePrefixDef = {
   id: PalettePrefixId;
@@ -14,6 +14,7 @@ export type PalettePrefixDef = {
 export const PALETTE_PREFIXES: PalettePrefixDef[] = [
   { id: "threads", label: "Threads", default: "=" },
   { id: "ai", label: "Ask AI", default: "?" },
+  { id: "semantic", label: "By meaning", default: "~" },
 ];
 
 export const PREFIX_MAX = 8;

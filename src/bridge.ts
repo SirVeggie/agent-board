@@ -849,6 +849,11 @@ export const BOARD_BRIDGE_JS = `
       return;
     }
     var el = document.getElementById(name) || document.getElementsByName(name)[0];
+    // "scribe-section:3": the page's third h1 to h4, for a search hit in a section whose heading has no id.
+    var section = /^scribe-section:(\\d+)$/.exec(name);
+    if (!el && section) {
+      el = document.querySelectorAll("h1, h2, h3, h4")[Number(section[1]) - 1];
+    }
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ behavior: "smooth", block: "start" });
     }

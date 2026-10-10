@@ -108,11 +108,14 @@
   const PALETTE_PREFIXES = [
     { id: "threads", label: "Threads", default: "=" },
     { id: "ai", label: "Ask AI", default: "?" },
+    { id: "semantic", label: "By meaning", default: "~" },
   ];
   const PREFIX_MAX = 8;
   /** Answered `?` questions (#245), newest first, so asking again costs nothing. */
   const AI_RECENT_KEY = "scribe.aiSearchRecent";
   const AI_RECENT_MAX = 8;
+  /** Shorter queries get no "Related" rows: a letter or two says too little to match by meaning. */
+  const SEMANTIC_MIN_QUERY = 3;
   /** Also read by the inline script in index.html so the first paint already has the right spacing. */
   const TIGHT_SMALL_KEY = "scribe.tightSmall";
   const UI_FX_KEY = "scribe.uiEffects";
@@ -217,6 +220,12 @@
   let paletteReq = 0;
   /** "pages" or a prefix id from PALETTE_PREFIXES. */
   let paletteKind = "pages";
+  /** Search by meaning (#372): the pack's state from /api/search/status, read when the palette opens. Null until known. */
+  let semanticStatus = null;
+  let semanticStatusReq = null;
+  let relatedTimer = 0;
+  /** "indexing 40 of 116 pages" while the index is building, else "". */
+  let semanticProgress = "";
   /** @type {Array<any>} */
   let paletteHits = [];
   let paletteIndex = 0;
@@ -1216,6 +1225,7 @@
   const searchSwitch = document.getElementById("search-enabled");
   const searchPackStatus = document.getElementById("search-pack-status");
   function renderSearchSettings(result) {
+    semanticStatus = result;
     searchPackStatus.textContent = result.message;
     document.getElementById("search-pack-folder").textContent = result.folder;
     searchSwitch.disabled = result.status !== "ready";
@@ -3643,6 +3653,7 @@
     paletteEl.hidden = false;
     paletteInput.value = "";
     paletteIndex = 0;
+    loadSemanticStatus();
     showLocalPaletteRows();
     paletteInput.focus();
     paletteInput.select();
@@ -3655,6 +3666,7 @@
     releasePaletteTrap = null;
     paletteEl.hidden = true;
     clearTimeout(paletteTimer);
+    clearTimeout(relatedTimer);
     paletteReq += 1;
     aiShownQuery = null;
     if (aiAsk?.status === "busy") {
@@ -3666,8 +3678,11 @@
     const threads = parsed.id === "threads";
     const ai = parsed.id === "ai";
     paletteKind = parsed.id;
+    const semantic = parsed.id === "semantic";
     paletteInput.placeholder = threads ? "Search threads" : "Search every page";
-    paletteEl.querySelector(".palette-panel")?.setAttribute("aria-label", threads ? "Search threads" : ai ? "Ask AI about your pages" : "Search pages");
+    paletteEl
+      .querySelector(".palette-panel")
+      ?.setAttribute("aria-label", threads ? "Search threads" : ai ? "Ask AI about your pages" : semantic ? "Search pages by meaning" : "Search pages");
     if (paletteEnterHint) {
       paletteEnterHint.textContent = threads ? "open in chat" : ai ? "ask or open" : "open";
     }
@@ -3719,8 +3734,14 @@
   async function runPaletteSearch() {
     const parsed = parsePaletteQuery(paletteInput.value, currentPalettePrefixes());
     updatePaletteChrome(parsed);
+    clearTimeout(relatedTimer);
     if (parsed.id === "pages" && !parsed.query) {
+      paletteReq += 1;
       showLocalPaletteRows();
+      return;
+    }
+    if (parsed.id === "semantic") {
+      void runSemanticPaletteSearch(parsed.query);
       return;
     }
     if (parsed.id === "threads") {
@@ -3741,6 +3762,159 @@
     }
     const data = await res.json();
     applyPaletteHits([...spaces.search(parsed.query), ...paletteActionRows(parsed.query), ...(data.tabs || [])]);
+    if (semanticStatus?.enabled && parsed.query.length >= SEMANTIC_MIN_QUERY) {
+      relatedTimer = setTimeout(() => void addRelatedRows(parsed.query, req), 120);
+    }
+  }
+
+  function loadSemanticStatus() {
+    semanticStatusReq = fetch("/api/search/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then((status) => {
+        semanticStatus = status;
+      });
+    return semanticStatusReq;
+  }
+
+  async function fetchSemantic(query, scope) {
+    try {
+      const res = await fetch(`/api/search/semantic?q=${encodeURIComponent(query.slice(0, 500))}&scope=${scope}&limit=8`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        return data;
+      }
+      if (data.status) {
+        // 503 with the pack's state: search was switched off or the pack went away since the palette opened.
+        semanticStatus = data;
+      }
+      return { error: data.error || `HTTP ${res.status}` };
+    } catch (err) {
+      return { error: err.message || String(err) };
+    }
+  }
+
+  function indexProgress(index) {
+    return index && (index.indexing || index.pendingPages > 0) && index.indexedPages < index.totalPages
+      ? `indexing ${index.indexedPages} of ${index.totalPages} pages`
+      : "";
+  }
+
+  /** Palette rows for semantic hits: the page, with what matched (section heading or "#335 Card title") and a snippet. */
+  function semanticRows(hits) {
+    return hits.map((hit) => {
+      const tab = findAnyTab(hit.id) || { id: hit.id, title: hit.title, folderPath: hit.folder };
+      // A section opens at its heading: by id when it has one, else by its place among the page's h1 to h4.
+      const anchor =
+        hit.kind === "section" ? hit.headingId || (Number(hit.anchor) > 0 ? `scribe-section:${hit.anchor}` : "") : "";
+      return {
+        ...tab,
+        open: state.tabs.some((item) => item.id === hit.id),
+        section: undefined,
+        matchLabel: hit.label && hit.label !== tab.title ? hit.label : "",
+        snippet: hit.snippet,
+        anchor,
+      };
+    });
+  }
+
+  /**
+   * Normal search (#372): pages found by meaning that the word search did not list, under a
+   * "Related" divider. They are appended, so the rows above and the selection stay where they are.
+   */
+  async function addRelatedRows(query, req) {
+    const data = await fetchSemantic(query, "pages");
+    if (req !== paletteReq || !isPaletteOpen() || !data.hits) {
+      return;
+    }
+    const listed = new Set(paletteHits.map((hit) => hit.id));
+    const rows = semanticRows(data.hits.filter((hit) => !listed.has(hit.id)));
+    if (!rows.length) {
+      return;
+    }
+    const progress = indexProgress(data.index);
+    rows[0].section = progress ? `Related · ${progress}` : "Related";
+    paletteHits = [...paletteHits, ...rows];
+    const top = paletteList.scrollTop;
+    renderPalette();
+    paletteList.scrollTop = top;
+  }
+
+  function semanticInfoRow(title, snippet, settings = false) {
+    return { kind: "semantic-info", id: "semantic:info", title, snippet, settings };
+  }
+
+  function semanticOffRow() {
+    const status = semanticStatus?.status;
+    const how =
+      status === "ready"
+        ? "Switch it on in Settings → Search."
+        : status === "wrong-version" || status === "invalid"
+          ? `The search pack can't be used: ${semanticStatus.message}.`
+          : "It needs the optional search pack: unzip it into the folder shown in Settings → Search, then switch it on there.";
+    return semanticInfoRow("Search by meaning is off", `${how} Enter opens Settings.`, true);
+  }
+
+  /** The semantic prefix (#372): pages by meaning, then the sections and cards that matched. No word search. */
+  async function runSemanticPaletteSearch(query) {
+    const req = ++paletteReq;
+    const stale = () => req !== paletteReq || !isPaletteOpen();
+    if (!semanticStatus) {
+      await (semanticStatusReq || loadSemanticStatus());
+      if (stale()) {
+        return;
+      }
+    }
+    if (!semanticStatus?.enabled) {
+      paletteIndex = 0;
+      applyPaletteHits([semanticOffRow()]);
+      return;
+    }
+    if (!query) {
+      applyPaletteHits([]);
+      const res = await fetch("/api/search/index/status").catch(() => null);
+      const index = res?.ok ? await res.json() : null;
+      if (!stale()) {
+        semanticProgress = indexProgress(index);
+        renderPalette();
+      }
+      return;
+    }
+    // Wait out fast typing: each query costs the model about 150 ms.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (stale()) {
+      return;
+    }
+    // The first search after a while loads the model (several seconds), so say that something is happening.
+    const busy = setTimeout(() => {
+      if (!stale()) {
+        paletteIndex = 0;
+        applyPaletteHits([{ ...semanticInfoRow("Searching by meaning…", "The first search loads the model, which takes a few seconds."), busy: true }]);
+      }
+    }, 400);
+    const [pages, chunks] = await Promise.all([fetchSemantic(query, "pages"), fetchSemantic(query, "chunks")]);
+    clearTimeout(busy);
+    if (stale()) {
+      return;
+    }
+    paletteIndex = 0;
+    if (!pages.hits) {
+      applyPaletteHits([semanticStatus?.enabled ? semanticInfoRow("Search by meaning failed", pages.error) : semanticOffRow()]);
+      return;
+    }
+    semanticProgress = indexProgress(pages.index);
+    // A page row already shows its best chunk; list the other matching sections and cards below.
+    const key = (hit) => `${hit.id}|${hit.kind}|${hit.anchor}`;
+    const reasons = new Set(pages.hits.map(key));
+    const pageRows = semanticRows(pages.hits);
+    const chunkRows = semanticRows((chunks.hits || []).filter((hit) => hit.kind !== "page" && !reasons.has(key(hit))));
+    if (pageRows.length && semanticProgress) {
+      pageRows[0].section = `Pages · ${semanticProgress}`;
+    }
+    if (chunkRows.length) {
+      chunkRows[0].section = "Sections and cards";
+    }
+    applyPaletteHits([...pageRows, ...chunkRows]);
   }
 
   /**
@@ -3898,15 +4072,23 @@
     paletteEmpty.hidden = !empty;
     const parsed = parsePaletteQuery(paletteInput.value, currentPalettePrefixes());
     const threads = paletteKind === "threads";
+    const semantic = paletteKind === "semantic";
     paletteEmpty.textContent = parsed.query
       ? threads
         ? "No matching threads"
-        : "No matching pages"
+        : semantic
+          ? "Nothing close to that"
+          : "No matching pages"
       : threads
         ? "No threads yet"
         : paletteKind === "ai"
           ? "Type a question about your pages and press Enter"
-          : "No pages yet";
+          : semantic
+            ? "Describe what you are looking for. Pages, sections and cards are matched by meaning, not by their words."
+            : "No pages yet";
+    if (semantic && semanticProgress) {
+      paletteEmpty.textContent += ` Still ${semanticProgress}.`;
+    }
     for (let index = 0; index < paletteHits.length; index += 1) {
       const tab = paletteHits[index];
       if (tab.section) {
@@ -3947,14 +4129,14 @@
         if (tab.open) {
           chips.appendChild(paletteChip("Current"));
         }
-      } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask" || tab.kind?.startsWith("ai-")) {
+      } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask" || tab.kind?.startsWith("ai-") || tab.kind === "semantic-info") {
         if (tab.open) {
           chips.appendChild(paletteChip("Open"));
         }
       } else if (!tab.open) {
         chips.appendChild(paletteChip("Closed"));
       }
-      const folder = tab.folderId ? library.pathOf(tab.folderId) : "";
+      const folder = tab.folderId ? library.pathOf(tab.folderId) : tab.folderPath || "";
       if (folder) {
         chips.appendChild(paletteChip(folder, "folder"));
       }
@@ -3963,10 +4145,16 @@
       }
       el.appendChild(main);
 
-      if (tab.snippet) {
+      if (tab.snippet || tab.matchLabel) {
         const snippet = document.createElement("div");
         snippet.className = "palette-snippet";
-        snippet.textContent = tab.snippet;
+        if (tab.matchLabel) {
+          const label = document.createElement("span");
+          label.className = "palette-match";
+          label.textContent = tab.matchLabel;
+          snippet.appendChild(label);
+        }
+        snippet.append(tab.snippet || "");
         el.appendChild(snippet);
       }
       paletteList.appendChild(el);
@@ -4049,6 +4237,13 @@
       runPaletteSearch();
       return;
     }
+    if (tab.kind === "semantic-info") {
+      if (tab.settings) {
+        closePalette();
+        openSettings();
+      }
+      return;
+    }
     if (tab.kind === "action") {
       closePalette();
       void window.scribeChat?.runAction(tab.tab, tab.action);
@@ -4067,6 +4262,11 @@
       return;
     }
     closePalette();
+    if (tab.anchor) {
+      // A section found by meaning: open the page scrolled to it.
+      views.open(tab.id, mode === "peek" || mode === "split" ? mode : "tab", { anchor: tab.anchor });
+      return;
+    }
     if (mode === "peek" || mode === "split") {
       views.open(tab.id, mode);
       return;

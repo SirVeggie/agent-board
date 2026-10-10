@@ -1826,6 +1826,16 @@ kbd {
   -webkit-box-orient: vertical;
 }
 
+.palette-match {
+  color: var(--text);
+  margin-right: 6px;
+}
+
+.palette-match::after {
+  content: " \00b7";
+  color: var(--muted);
+}
+
 .palette-empty {
   padding: 18px 12px;
   color: var(--muted);

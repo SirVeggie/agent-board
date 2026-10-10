@@ -12,10 +12,11 @@ import {
 
 const threads = { id: "threads", prefix: "=" };
 
-test("threads default is =, Ask AI is ?", () => {
+test("threads default is =, Ask AI is ?, by meaning is ~", () => {
   assert.deepEqual(PALETTE_PREFIXES, [
     { id: "threads", label: "Threads", default: "=" },
     { id: "ai", label: "Ask AI", default: "?" },
+    { id: "semantic", label: "By meaning", default: "~" },
   ]);
 });
 
@@ -31,12 +32,12 @@ test("normalizePrefix trims, rejects blanks, spaces, and overlong values", () =>
 test("palettePrefixList uses defaults when storage is missing or junk", () => {
   assert.deepEqual(
     palettePrefixList(null).map((p) => p.prefix),
-    ["=", "?"]
+    ["=", "?", "~"]
   );
-  assert.deepEqual(palettePrefixList("not-json").map((p) => p.prefix), ["=", "?"]);
-  assert.deepEqual(palettePrefixList("[]").map((p) => p.prefix), ["=", "?"]);
-  assert.deepEqual(palettePrefixList('{"threads":"#"}').map((p) => p.prefix), ["#", "?"]);
-  assert.deepEqual(palettePrefixList('{"threads":"","extra":"x"}').map((p) => p.prefix), ["=", "?"]);
+  assert.deepEqual(palettePrefixList("not-json").map((p) => p.prefix), ["=", "?", "~"]);
+  assert.deepEqual(palettePrefixList("[]").map((p) => p.prefix), ["=", "?", "~"]);
+  assert.deepEqual(palettePrefixList('{"threads":"#"}').map((p) => p.prefix), ["#", "?", "~"]);
+  assert.deepEqual(palettePrefixList('{"threads":"","extra":"x"}').map((p) => p.prefix), ["=", "?", "~"]);
 });
 
 test("serializePalettePrefixes stores only overrides", () => {
@@ -92,4 +93,10 @@ test("duplicatePrefixIds marks every id that shares a token", () => {
     ])].sort(),
     ["ask", "threads"]
   );
+});
+
+test("~ sends the query to semantic search", () => {
+  const prefixes = palettePrefixList(null);
+  assert.deepEqual(parsePaletteQuery("~ talking to add tasks", prefixes), { id: "semantic", query: "talking to add tasks", prefix: "~" });
+  assert.deepEqual(parsePaletteQuery("~", prefixes), { id: "semantic", query: "", prefix: "~" });
 });
