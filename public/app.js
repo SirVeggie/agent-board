@@ -2601,11 +2601,13 @@
       const el = document.createElement("iframe");
       el.title = tab.title;
       el.sandbox = SANDBOX;
+      el.classList.add("frame-loading");
       el.addEventListener("load", () => {
         el.dataset.loaded = "1";
+        el.classList.remove("frame-loading");
       });
-      framesEl.appendChild(el);
       loadFrame(el, tab);
+      framesEl.appendChild(el);
       entry = { el, revision: tab.revision };
       frames.set(tab.id, entry);
     } else {

@@ -517,9 +517,12 @@ window.createViews = function createViews(host) {
         ], options));
       } else {
         const offset = split.dir === "col" ? "translateY(16px)" : "translateX(16px)";
+        // A cold frame reveals its content after load. An opacity keyframe captured here
+        // would otherwise override that reveal, then snap to visible when it finishes.
+        const loading = node.matches("iframe.frame-loading, iframe.url-loading");
         splitAnimations.push(node.animate([
-          { opacity: 0, transform: offset },
-          { opacity: getComputedStyle(node).opacity, transform: "none" },
+          { ...(loading ? {} : { opacity: 0 }), transform: offset },
+          { ...(loading ? {} : { opacity: getComputedStyle(node).opacity }), transform: "none" },
         ], options));
       }
     }

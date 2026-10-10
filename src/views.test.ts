@@ -326,6 +326,55 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       await views.open(state.tabs.find((tab: any) => tab.id !== state.activeId).id, 'split');
       return [...frames.values()].some((frame: any) => frame.el.getAnimations().length > 0);
     }), false);
+    // Exercise the actual frame loader with a cold document whose response arrives
+    // during the split animation. Loading must not pin opacity to zero until it ends.
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    let releaseCold!: () => void;
+    const coldResponse = new Promise<void>(resolve => { releaseCold = resolve; });
+    await page.route('http://views.test/cold', async route => {
+      await coldResponse;
+      await route.fulfill({ contentType: 'text/html', body: '<body style="background:#234">Loaded</body>' });
+    });
+    await page.setContent('<main style="width:1100px;height:650px"><div id="frames"></div></main>');
+    await page.addStyleTag({ content: fs.readFileSync(new URL('../public/app.css', import.meta.url), 'utf8') });
+    const ensureFrameSource = appSource.slice(appSource.indexOf('  function ensureFrame('), appSource.indexOf('  /** Keep the iframe'));
+    const loadFrameSource = appSource.slice(appSource.indexOf('  function loadFrame('), appSource.indexOf('  function discardFrame('));
+    await page.addScriptTag({ content: `{
+      const mainEl = document.querySelector('main'), framesEl = document.querySelector('#frames'), frames = new Map();
+      const tabs = ['primary','cold'].map(id => ({id,title:id,revision:1}));
+      const SANDBOX = 'allow-scripts', EMBED_ALLOW = '', viewUrl = tab => 'http://views.test/' + tab.id;
+      const evictOverflow = () => {}, touchFrame = () => {};
+      ${ensureFrameSource}
+      ${loadFrameSource}
+      const views = window.createViews({mainEl,contentOrigin:()=>location.origin,
+        tabs:()=>tabs,closed:()=>[],activeId:()=> 'primary',activeTab:()=>tabs[0],findAnyTab:id=>tabs.find(t=>t.id===id),
+        isBlank:()=>false,draftId:()=>null,spaceId:()=> 'cold-test',spaceIds:()=>['cold-test'],
+        frame:id=>frames.get(id),frameIds:()=>[...frames.keys()],ensureFrame,discardFrame:()=>{},
+        markSeen:()=>{},render:()=>views.layout()
+      });
+      views.layout(); window.coldTest = {views,frames};
+    }` });
+    await page.waitForFunction(() => (window as any).coldTest.frames.get('primary').el.dataset.loaded);
+    const pending = await page.evaluate(async () => {
+      const { views, frames } = (window as any).coldTest;
+      await views.open('cold', 'split');
+      const frame = frames.get('cold').el;
+      (window as any).coldFrame = frame;
+      const animation = frame.getAnimations().find((a: Animation) => a.effect instanceof KeyframeEffect && a.effect.getKeyframes().some((k: ComputedKeyframe) => k.transform));
+      animation.pause(); animation.currentTime = 100;
+      return { opacity: getComputedStyle(frame).opacity, loading: frame.classList.contains('frame-loading') };
+    });
+    assert.deepEqual(pending, { opacity: '0', loading: true });
+    releaseCold();
+    await page.waitForFunction(() => (window as any).coldFrame.dataset.loaded);
+    await page.waitForFunction(() => getComputedStyle((window as any).coldFrame).opacity === '1');
+    assert.equal(await page.evaluate(() => {
+      const { views, frames } = (window as any).coldTest;
+      const frame = frames.get('cold').el;
+      const transformStillRunning = frame.getAnimations().some((a: Animation) => a.playState === 'paused');
+      views.layout();
+      return transformStillRunning && frame === (window as any).coldFrame && getComputedStyle(frame).opacity === '1';
+    }), true);
   } finally {
     await browser.close();
   }

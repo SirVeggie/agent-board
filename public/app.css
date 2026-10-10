@@ -3125,8 +3125,20 @@ main.has-split .newpage[data-pane] {
   animation: peek-in 0.16s var(--ease);
 }
 
+#frames iframe.frame-loading,
 #frames iframe.url-loading {
   opacity: 0;
+}
+
+/* Let the pane open immediately, but reveal cold iframe content only after load. */
+main.has-split #frames iframe[data-pane] {
+  transition: opacity 0.16s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main.has-split #frames iframe[data-pane] {
+    transition: none;
+  }
 }
 
 /* "Already here": an outline laid over the frame. A frame's own inset shadow would sit under the page it shows. */
