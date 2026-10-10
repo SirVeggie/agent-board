@@ -415,6 +415,60 @@ export class AgentHost {
     }
     this.pruneTimer = setTimeout(() => this.pruneSessions(), PRUNE_FIRST_MS);
     this.pruneTimer.unref?.();
+    this.unusedPages = new Set(this.db.getSetting<string[]>("unusedPages", []));
+    store.on("tab_closed", this.onPageClosed);
+    store.on("tab_upserted", this.onPageUpserted);
+    this.scheduleUnusedPageCleanup();
+  }
+
+  private unusedPages = new Set<string>();
+  private unusedPageCleanupScheduled = false;
+
+  private onPageClosed = (id: string): void => {
+    const tab = store.get(id);
+    if (!tab || !isBlankPage(tab) || tab.provenance) return;
+    this.unusedPages.add(id);
+    this.cleanupUnusedPages();
+  };
+
+  private onPageUpserted = (tab: { id: string }): void => {
+    // Reopening cancels the request, including if this tab is later parked in another space.
+    if (!store.isClosed(tab.id) && this.unusedPages.delete(tab.id)) {
+      this.db.setSetting("unusedPages", [...this.unusedPages]);
+    }
+  };
+
+  private scheduleUnusedPageCleanup(): void {
+    if (this.closed || !this.unusedPages.size || this.unusedPageCleanupScheduled) return;
+    this.unusedPageCleanupScheduled = true;
+    // A completed turn may start its queued/carried message in the same stack.
+    queueMicrotask(() => {
+      this.unusedPageCleanupScheduled = false;
+      if (!this.closed) this.cleanupUnusedPages();
+    });
+  }
+
+  private cleanupUnusedPages(): void {
+    const openInSpaces = new Set(store.spacesView().spaces.flatMap((space) => space.tabs.map((tab) => tab.id)));
+    for (const id of this.unusedPages) {
+      const tab = store.get(id);
+      if (!tab || !store.isClosed(id) || openInSpaces.has(id) || !isBlankPage(tab) || tab.provenance) {
+        this.unusedPages.delete(id);
+        continue;
+      }
+      const busy = [...this.threads.values()].some((thread) => {
+        const run = this.runs.get(thread.id);
+        const belongs = (thread.scope.kind === "page" && thread.scope.ref === id) || run?.turn.page?.id === id;
+        return belongs && (run || this.resuming.has(thread.id) || (this.status.get(thread.id) ?? "idle") !== "idle"
+          || this.queues.get(thread.id)?.length || this.backgroundTasks(thread.id));
+      });
+      if (!busy) {
+        // Use the normal Trash path, retaining both undo and the chat transcript.
+        store.deletePermanent(id);
+        this.unusedPages.delete(id);
+      }
+    }
+    this.db.setSetting("unusedPages", [...this.unusedPages]);
   }
 
   private pruneTimer: NodeJS.Timeout | null = null;
@@ -602,6 +656,8 @@ export class AgentHost {
 
   dispose(): void {
     this.closed = true;
+    store.off("tab_closed", this.onPageClosed);
+    store.off("tab_upserted", this.onPageUpserted);
     if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
     if (this.pageRunTimer) clearInterval(this.pageRunTimer);
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
@@ -1073,6 +1129,7 @@ export class AgentHost {
       log(`Removing the files of ${id} failed: ${(err as Error).message}`);
     }
     this.emit({ type: "agent_thread_deleted", id });
+    this.scheduleUnusedPageCleanup();
   }
 
   markRead(id: string): void {
@@ -1198,6 +1255,7 @@ export class AgentHost {
   private emitThread(id: string): void {
     const thread = this.threads.get(id);
     if (thread) this.emit({ type: "agent_thread", thread: this.view(thread) });
+    this.scheduleUnusedPageCleanup();
   }
 
   private loadItems(id: string): Item[] {

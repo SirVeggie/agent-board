@@ -7,6 +7,7 @@ import type { ItemBody } from "./types.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-follow-"));
 process.env.SCRIBE_HOME = dir;
+process.env.SCRIBE_FAKE_AGENTS = "1";
 const { store } = await import("../store.js");
 const { AgentHost } = await import("./host.js");
 
@@ -74,4 +75,113 @@ test("followToPage ignores a missing thread or page", () => {
   assert.equal(host.followToPage("th_nope", pageId), false);
   assert.equal(host.followToPage(thread.id, "t_nope"), false);
   assert.deepEqual(host.getThread(thread.id)?.scope, { kind: "global", ref: null });
+});
+
+function newPage() {
+  const draft = store.createDraft();
+  const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: draft.id } });
+  return { id: draft.id, thread: thread.id };
+}
+
+async function settled(thread: string) {
+  const deadline = Date.now() + 5000;
+  while (host.runInfo(thread).running) {
+    assert.ok(Date.now() < deadline, "fake turn should finish");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("closing an untouched New page removes it from Library and retains its thread", () => {
+  const { id, thread } = newPage();
+  store.closeTab(id);
+  assert.equal(store.get(id), undefined);
+  assert.ok(host.getThread(thread));
+  assert.ok(store.listTrash().some((batch) => batch.tabs.some((tab) => tab.id === id)));
+});
+
+test("closed New pages wait for every running thread", async () => {
+  const { id, thread } = newPage();
+  const second = host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: id } });
+  host.send(thread, { text: "[fake:hang]" });
+  host.send(second.id, { text: "[fake:hang]" });
+  store.closeTab(id);
+  assert.ok(store.get(id));
+  await host.cancel(thread);
+  await settled(thread);
+  assert.ok(store.get(id), "the second thread still needs the page");
+  await host.cancel(second.id);
+  await settled(second.id);
+  assert.equal(store.get(id), undefined);
+});
+
+test("queued turns keep the closed New page until the last turn finishes", async () => {
+  const { id, thread } = newPage();
+  host.send(thread, { text: "[fake:delay=50]" });
+  assert.equal(host.send(thread, { text: "[fake:delay=50]" }).queued, true);
+  store.closeTab(id);
+  assert.ok(store.get(id));
+  await settled(thread);
+  assert.equal(store.get(id), undefined);
+});
+
+test("an agent write while the closed page is running prevents cleanup", async () => {
+  const { id, thread } = newPage();
+  host.send(thread, { text: "[fake:hang]" });
+  store.closeTab(id);
+  store.patchHtml(id, { html: "<p>Investigation</p>", actor: { thread, at: Date.now() } });
+  await host.cancel(thread);
+  await settled(thread);
+  assert.match(store.get(id)?.html ?? "", /<p>Investigation<\/p>/);
+});
+
+test("agent state edits protect a New page even when its HTML is blank", () => {
+  const { id, thread } = newPage();
+  store.writeState(id, { ops: [{ op: "set", path: "notes", value: "keep" }], actor: { thread, at: Date.now() } });
+  store.closeTab(id);
+  assert.ok(store.get(id));
+});
+
+test("reopening a New page cancels deferred cleanup", async () => {
+  const { id, thread } = newPage();
+  host.send(thread, { text: "[fake:hang]" });
+  store.closeTab(id);
+  store.openPage(id);
+  await host.cancel(thread);
+  await settled(thread);
+  assert.ok(store.get(id));
+  assert.equal(store.isClosed(id), false);
+});
+
+test("closing a page with content keeps it in the Library", () => {
+  const id = page("keep-content");
+  store.closeTab(id);
+  assert.ok(store.get(id));
+});
+
+test("closing a New page in one space preserves its tab in another space", () => {
+  const { id } = newPage();
+  store.ensureSpaces();
+  const main = store.spacesView().activeId!;
+  store.createSpace({ copyTabs: true, activate: true });
+  store.closeTab(id);
+  assert.ok(store.get(id));
+  store.switchSpace(main);
+  assert.equal(store.isClosed(id), false);
+  store.closeTab(id);
+  assert.equal(store.get(id), undefined);
+});
+
+test("deferred cleanup survives a host restart", async () => {
+  const { id, thread } = newPage();
+  // A thread waiting to resume must protect the page just like a live turn.
+  const internals = host as unknown as { resuming: Set<string> };
+  internals.resuming.add(thread);
+  store.closeTab(id);
+  assert.ok(store.get(id));
+  host.dispose();
+  host = new AgentHost(() => undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(store.get(id), undefined);
+  assert.ok(host.getThread(thread));
 });
