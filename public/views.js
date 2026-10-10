@@ -192,6 +192,9 @@ window.createViews = function createViews(host) {
   }
 
   function saveSplits() {
+    if (host.solo) {
+      return;
+    }
     const out = {};
     for (const [spaceId, split] of splits) {
       out[spaceId] = {
@@ -329,6 +332,10 @@ window.createViews = function createViews(host) {
    * takes the other pane, or the split ends when that tab is gone.
    */
   function activeSplit() {
+    // A page in a window of its own has no panes; the splits belong to the main window.
+    if (host.solo) {
+      return null;
+    }
     const active = host.activeId();
     const spaceId = host.spaceId();
     const split = active ? splits.get(spaceId) || null : null;
@@ -689,10 +696,10 @@ window.createViews = function createViews(host) {
       top.kind === "url"
         ? iconButton(ICONS.browser, "Open in browser", () => openBrowser(top.href))
         : iconButton(ICONS.tab, "Open as tab", () => promote(top)),
-      iconButton(ICONS.split, "Show in split", () => peekToSplit()),
+      !host.solo && iconButton(ICONS.split, "Show in split", () => peekToSplit()),
       iconButton(ICONS.close, "Close", () => closePeek(), false)
     );
-    peekHead.replaceChildren(...parts);
+    peekHead.replaceChildren(...parts.filter(Boolean));
     card.setAttribute("aria-label", titleOf(top));
     renderBody(peekBody, top);
   }
@@ -1097,6 +1104,9 @@ window.createViews = function createViews(host) {
 
     const active = host.activeId();
     const frameId = frameIdOf(target);
+    if (mode === "split" && host.solo) {
+      mode = "peek";
+    }
     if (mode === "split" && (!active || mainTooNarrow())) {
       mode = !active && target.kind === "page" ? "tab" : "peek";
     }

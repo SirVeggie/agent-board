@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <link rel="stylesheet" href="./app.css?v=71">
+  <link rel="stylesheet" href="./app.css?v=72">
   <link rel="stylesheet" href="./agent.css?v=32">
   <link rel="stylesheet" href="./orb.css?v=2">
   <script>
@@ -23,6 +23,13 @@
       }
       if (localStorage.getItem("scribe.refreshOverlay") === "0") {
         document.documentElement.classList.add("no-refresh-overlay");
+      }
+      // A page in a window of its own (popout.js): no tab strip or sidebars from the first paint.
+      if (new URLSearchParams(location.search).has("popout")) {
+        document.documentElement.classList.add("popout");
+        if (window.__TAURI__ && window.__TAURI__.core) {
+          document.documentElement.classList.add("desktop");
+        }
       }
       if (localStorage.getItem("scribe.tightSmall") !== "0") {
         document.documentElement.classList.add("tight-small");
@@ -425,9 +432,10 @@
   <script src="./dom-sync.js?v=1"></script>
   <script src="./hovercard.js?v=7"></script>
   <script src="./select.js?v=2"></script>
-  <script src="./library.js?v=13"></script>
+  <script src="./library.js?v=14"></script>
   <script src="./trash.js?v=2"></script>
-  <script src="./views.js?v=6"></script>
+  <script src="./popout.js?v=1"></script>
+  <script src="./views.js?v=7"></script>
   <script src="./focusTrap.js?v=1"></script>
   <script src="./settings-ui.js?v=2"></script>
   <script src="./preview.js?v=3"></script>
@@ -439,12 +447,12 @@
   <script src="./aurora.js?v=2"></script>
   <script src="./chromefx.js?v=1"></script>
   <script src="./starfx.js?v=1"></script>
-  <script src="./app.js?v=84"></script>
+  <script src="./app.js?v=85"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
   <script src="./agent-render.js?v=12"></script>
-  <script src="./agent.js?v=54"></script>
-  <script src="./desktop.js?v=6"></script>
+  <script src="./agent.js?v=55"></script>
+  <script src="./desktop.js?v=7"></script>
 </body>
 </html>

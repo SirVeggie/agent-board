@@ -202,6 +202,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const mainEl = document.querySelector('main'), tabsEl = document.querySelector('#tabs'), tabsWrap = document.querySelector('#strip');
       const libraryToggle = document.createElement('button'), tabEls = new Map(), frames = new Map();
       let drag = null, dragScrollTimer = 0, toggleHoverTimer = 0, dragSuppressClick = false;
+      const popout = {desktop:false};
       const hoverCard = {suspend(){},resume(){}}, library = {stripDragCancel(){},stripDragMove(){return false},stripDragDrop(){return false}};
       const lookupTab = el => state.tabs.find(t => t.id === el.dataset.id);
       const stopTabScroll = () => {}, updateTabFade = () => {}, flipStrip = fn => fn();

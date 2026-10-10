@@ -103,6 +103,9 @@
   const tabsWrap = tabsEl.parentElement;
   const mainEl = document.querySelector("main");
   const linkModeTrack = document.getElementById("link-mode");
+  const popout = window.scribePopout;
+  /** Set when this window shows one page on its own (popout.js): no strip, no sidebars, never another page. */
+  const childId = popout.childId;
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
@@ -221,7 +224,7 @@
     activeId: null,
     connected: false,
     restored: false,
-    sideOpen: localStorage.getItem(SIDE_OPEN_KEY) === "1",
+    sideOpen: !childId && localStorage.getItem(SIDE_OPEN_KEY) === "1",
     sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "library",
     /** The Trash view replaces the sidebar tabs until Back. */
     trashOpen: false,
@@ -242,6 +245,8 @@
   let socket = null;
   let reconnectTimer = 0;
   let startupTimer = 0;
+  /** The strip is known: before the first snapshot nothing can be said about a page's tab being gone. */
+  let snapshotSeen = false;
   let lastInteractedAt = 0;
   let lastEditAt = 0;
   let viewerHidden = false;
@@ -300,6 +305,15 @@
   /** @type {HTMLElement | null} */
   let stripSlotEl = null;
 
+  /** The desktop app's child window has a title bar of its own: the page's title and the window buttons. */
+  let popoutTitle = null;
+  if (childId) {
+    popoutTitle = document.createElement("div");
+    popoutTitle.className = "popout-title";
+    popoutTitle.setAttribute("data-tauri-drag-region", "");
+    document.querySelector(".chrome").appendChild(popoutTitle);
+  }
+
   const hoverCard = window.createHoverCard({
     describe: describeForCard,
     openThread: (id) => window.scribeChat?.openThread?.(id),
@@ -345,6 +359,9 @@
     modeFromEvent: (event) => views.modeFromEvent(event),
     openIn: (id, mode) => views.open(id, mode),
     canSplit: () => Boolean(state.activeId),
+    // The desktop app drags a tab out of the window instead.
+    canPopOut: (id) => !popout.desktop && canPopOut(state.tabs.find((tab) => tab.id === id)),
+    popOut: (id) => popOut(id),
     hoverCard,
     stripSlot,
     clearStripSlot,
@@ -354,6 +371,7 @@
   });
   const views = window.createViews({
     startPaneDrag,
+    solo: Boolean(childId),
     mainEl,
     contentOrigin,
     tabs: () => state.tabs,
@@ -569,7 +587,8 @@
       spaces.apply(msg.spaces);
       views.prune();
       // After a space switch the address still names the old space's tab: don't reopen it here.
-      const hash = msg.reset ? "" : location.hash.replace(/^#/, "");
+      snapshotSeen = true;
+      const hash = msg.reset || childId ? "" : location.hash.replace(/^#/, "");
       const fromOpen = hash ? state.tabs.find((tab) => tab.id === hash || tab.key === hash) : null;
       const fromClosed = hash ? state.closed.find((tab) => tab.id === hash || tab.key === hash) : null;
       if (state.draft && findAnyTab(state.draft.id)) {
@@ -666,7 +685,7 @@
         lastInteractedAt = Date.now();
         syncHash();
       }
-      if (structural && !views.isShown(msg.tab.id)) {
+      if (structural && !views.isShown(msg.tab.id) && !popout.has(msg.tab.id)) {
         unread.add(msg.tab.id);
       }
       if (structural) {
@@ -724,6 +743,13 @@
       return;
     }
     if (msg.type === "tab_focus_request") {
+      if (childId) {
+        // The daemon asked this window because it was used last; the page belongs in the main one.
+        if (msg.id !== childId) {
+          popout.request({ type: "focus-request", id: msg.id, thread: msg.thread });
+        }
+        return;
+      }
       if (msg.thread) {
         window.scribeChat?.followThread?.(msg.thread, msg.id);
       }
@@ -761,7 +787,7 @@
           "*"
         );
       }
-      if (tab && !views.isShown(msg.id)) {
+      if (tab && !views.isShown(msg.id) && !popout.has(msg.id)) {
         unread.add(msg.id);
         render();
       }
@@ -868,6 +894,9 @@
   let historyIndex = typeof history.state?.boardIndex === "number" ? history.state.boardIndex : 0;
 
   function syncHash() {
+    if (childId) {
+      return;
+    }
     if (!state.activeId) {
       if (location.hash) {
         history.replaceState({ boardIndex: historyIndex }, "", location.pathname + location.search);
@@ -936,6 +965,9 @@
    * template makes it a page. Resolves to whether a New page is in front.
    */
   async function newPage() {
+    if (childId) {
+      return false;
+    }
     // The one draft is already on screen, in front or in the other pane of a split.
     if (state.draft && views.isShown(state.draft.id)) {
       if (!draftActive()) {
@@ -1051,8 +1083,10 @@
   }
 
   function setSideOpen(open) {
-    state.sideOpen = Boolean(open);
-    localStorage.setItem(SIDE_OPEN_KEY, state.sideOpen ? "1" : "0");
+    state.sideOpen = Boolean(open) && !childId;
+    if (!childId) {
+      localStorage.setItem(SIDE_OPEN_KEY, state.sideOpen ? "1" : "0");
+    }
     if (state.sideOpen) {
       library.refreshSearch();
     }
@@ -1432,7 +1466,8 @@
     el.className =
       "tab" +
       (tab.id === state.activeId ? " active" : "") +
-      (tab.id !== state.activeId && views.paneOf(tab.id) ? " beside" : "") +
+      ((tab.id !== state.activeId && views.paneOf(tab.id)) || popout.has(tab.id) ? " beside" : "") +
+      (popout.has(tab.id) ? " popped" : "") +
       (tab.pinned ? " pinned" : "") +
       (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "") +
       (window.scribeChat?.pageStatus(tab.id) ? ` agent-${window.scribeChat.pageStatus(tab.id)}` : "");
@@ -2076,7 +2111,9 @@
     const pageDrop = drag.pageDrop;
     const outside = !drag.overStrip && !pageDrop;
     const draggedTab = state.tabs.find((tab) => tab.id === id);
-    const filed = Boolean(!drag.pane && !pageDrop && draggedTab && library.stripDragDrop(draggedTab));
+    // Let go outside the window (the desktop app): the page gets a window of its own there.
+    const tornOff = Boolean(popout.desktop && !drag.pane && outside && outsideWindow(event) && canPopOut(draggedTab));
+    const filed = Boolean(!tornOff && !drag.pane && !pageDrop && draggedTab && library.stripDragDrop(draggedTab));
     library.stripDragCancel();
     stopDragVisual();
     drag = null;
@@ -2088,6 +2125,10 @@
       restoreTabOrder(origin);
     }
     renderTabs();
+    if (tornOff) {
+      popOut(id, { x: event.screenX - TEAR_OFF_GRIP.x, y: event.screenY - TEAR_OFF_GRIP.y });
+      return;
+    }
     if (pageDrop || source.pane) {
       await views.dropPage(source, pageDrop);
       return;
@@ -2112,6 +2153,76 @@
     } catch {
       restoreTabOrder(origin);
       renderTabs();
+    }
+  }
+
+  /** Where in the new window's title bar the pointer lands after a tab is dragged out. */
+  const TEAR_OFF_GRIP = { x: 120, y: 18 };
+  /** A drag has to leave the window by this much, so a slip past the edge of the strip is not a tear-off. */
+  const TEAR_OFF_MARGIN = 12;
+
+  function outsideWindow(event) {
+    return (
+      event.clientX < -TEAR_OFF_MARGIN ||
+      event.clientY < -TEAR_OFF_MARGIN ||
+      event.clientX > window.innerWidth + TEAR_OFF_MARGIN ||
+      event.clientY > window.innerHeight + TEAR_OFF_MARGIN
+    );
+  }
+
+  function canPopOut(tab) {
+    return Boolean(popout.supported && tab && !isBlank(tab) && !popout.has(tab.id) && state.tabs.some((item) => item.id === tab.id));
+  }
+
+  /** Give an open tab's page a window of its own. The tab stays in the strip and stands for that window. */
+  function popOut(id, at) {
+    const tab = state.tabs.find((item) => item.id === id);
+    if (!canPopOut(tab)) {
+      return;
+    }
+    if (!popout.open(tab, at)) {
+      showNotice("The browser blocked the new window. Allow pop-ups for Scribe to open pages in their own windows.");
+    }
+  }
+
+  /** The nearest tab to `id` that is not in a window of its own, right side first. */
+  function freeNeighborId(id) {
+    const idx = state.tabs.findIndex((tab) => tab.id === id);
+    for (let step = 1; step < state.tabs.length; step += 1) {
+      for (const tab of [state.tabs[idx + step], state.tabs[idx - step]]) {
+        if (tab && !popout.has(tab.id)) {
+          return tab.id;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Windows and the strip agree before anything is drawn. A child window shows its page and closes
+   * when that page's tab leaves the strip. In the main window a page in its own window is never the
+   * one in front, and a window whose tab is gone is closed.
+   */
+  function settlePopouts() {
+    if (!snapshotSeen) {
+      return;
+    }
+    if (childId) {
+      state.activeId = state.tabs.some((tab) => tab.id === childId) ? childId : null;
+      if (!state.activeId) {
+        popout.closeSelf();
+      }
+      return;
+    }
+    for (const id of popout.ids()) {
+      if (!state.tabs.some((tab) => tab.id === id)) {
+        popout.close(id);
+      }
+    }
+    if (state.activeId && popout.has(state.activeId)) {
+      state.activeId = freeNeighborId(state.activeId);
+      syncHash();
+      reportViewer();
     }
   }
 
@@ -2719,7 +2830,10 @@
   function renderFrames() {
     const tab = activeTab();
     emptyEl.hidden = !state.restored || Boolean(tab);
-    document.title = tab ? tab.title + " · Scribe" : "Scribe";
+    document.title = tab ? (childId ? tab.title : tab.title + " · Scribe") : "Scribe";
+    if (popoutTitle) {
+      popoutTitle.textContent = tab?.title || "";
+    }
     views.layout();
     // The New page screen stands in for a blank page's frame, in whichever pane the page is.
     const beside = views.otherPage();
@@ -2911,6 +3025,7 @@
   }
 
   function render() {
+    settlePopouts();
     dropLeftDraft();
     renderFrames();
     renderChrome();
@@ -2953,7 +3068,20 @@
   }
 
   function selectTab(id, { fromUser } = {}) {
+    if (childId) {
+      if (id !== childId) {
+        showInMain(id);
+      }
+      return;
+    }
     if (!state.tabs.some((tab) => tab.id === id)) {
+      return;
+    }
+    if (popout.has(id)) {
+      // Its page is in a window of its own: the tab brings that window forward.
+      if (fromUser) {
+        popout.focus(id);
+      }
       return;
     }
     if (fromUser) {
@@ -3014,6 +3142,10 @@
 
   /** Gives a Library page a tab (or focuses it). `before` places it in the strip; null means the end of its group. */
   async function openPage(id, { activate = true, before } = {}) {
+    if (childId) {
+      showInMain(id);
+      return;
+    }
     unreadLibrary.delete(id);
     if (activate) {
       pendingFocus = { id };
@@ -3039,6 +3171,12 @@
     }
     renderChrome();
     library.render();
+  }
+
+  /** A child window cannot show another page: the main window opens it, and comes forward where it can. */
+  function showInMain(id) {
+    popout.request({ type: "show", id });
+    popout.focusMain();
   }
 
   function findAnyTab(id) {
@@ -3408,6 +3546,19 @@
     if (document.querySelector("dialog[open]")) {
       return;
     }
+    if (childId) {
+      // One page and the floating chat: the strip, Library, and palette shortcuts belong to the main window.
+      if (action === "close-tab") {
+        if (!views.closePeek()) {
+          popout.closeSelf();
+        }
+      } else if (action === "download") {
+        downloadActive();
+      } else if (action.startsWith("agent-")) {
+        window.scribeChat?.shortcut(action.slice("agent-".length));
+      }
+      return;
+    }
     if (action === "settings") { openSettings(); return; }
     if (action === "agent-settings") { window.scribeChat?.openSettings(); return; }
     if (action === "palette") {
@@ -3442,17 +3593,31 @@
   }
 
   function cycleTab(step) {
-    const count = state.tabs.length;
+    // Pages in their own windows are skipped: their tabs only bring those windows forward.
+    const ring = state.tabs.filter((tab) => !popout.has(tab.id));
+    const count = ring.length;
     if (count === 0) {
       return;
     }
-    const at = state.tabs.findIndex((tab) => tab.id === state.activeId);
-    const next = at < 0 ? state.tabs[step > 0 ? 0 : count - 1] : state.tabs[(at + step + count) % count];
+    const at = ring.findIndex((tab) => tab.id === state.activeId);
+    const next = at < 0 ? ring[step > 0 ? 0 : count - 1] : ring[(at + step + count) % count];
     selectTab(next.id, { fromUser: true });
   }
 
   function onBoardShortcut(event) {
     if (document.querySelector("dialog[open]")) {
+      return;
+    }
+    if (childId) {
+      if (event.key === "Escape") {
+        if (window.scribeChat?.escape() || library.onEscape() || views.escape()) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      } else if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        downloadActive();
+      }
       return;
     }
     if ((event.ctrlKey || event.metaKey) && ((event.altKey && event.key.toLowerCase() === "s") || (!event.altKey && (event.code === "Comma" || event.key === "," || event.key === "<")))) {
@@ -4640,6 +4805,8 @@
     }
     if (event.data?.type === "scribe-download") {
       downloadActive();
+    } else if (childId && ["scribe-undo", "scribe-help", "scribe-palette", "scribe-shortcut"].includes(event.data?.type)) {
+      // The strip's and the Library's shortcuts stay with the main window.
     } else if (event.data?.type === "scribe-undo") {
       undoClose();
     } else if (event.data?.type === "scribe-help") {
@@ -4887,6 +5054,33 @@
   });
 
   window.addEventListener("scribe:threads-ready", () => library.render());
+
+  popout.onChange(() => {
+    // A page that left for its own window gives up its pane, and its frame here.
+    for (const id of popout.ids()) {
+      views.onClosed(id);
+    }
+    render();
+    for (const id of popout.ids()) {
+      if (!views.isShown(id)) {
+        discardFrame(id);
+      }
+    }
+  });
+  popout.onRequest((request) => {
+    if (childId || typeof request?.id !== "string") {
+      return;
+    }
+    if (request.type === "focus-request") {
+      applyEvent({ type: "tab_focus_request", id: request.id, thread: request.thread });
+    } else if (request.type === "show") {
+      if (state.tabs.some((tab) => tab.id === request.id)) {
+        selectTab(request.id, { fromUser: true });
+      } else if (findAnyTab(request.id)) {
+        openPage(request.id);
+      }
+    }
+  });
 
   setSideOpen(state.sideOpen);
   connect();

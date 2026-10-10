@@ -9,6 +9,8 @@
   const chrome = document.querySelector(".chrome");
   const actions = chrome.querySelector(".actions");
   const HIDDEN_KEY = "scribe.desktop.hiddenButtons";
+  /** A page in a window of its own (popout.js): a title bar with the window buttons, and none of the main window's settings. */
+  const child = Boolean(window.scribePopout?.childId);
   root.classList.add("desktop");
 
   // Empty strip space and the spacing around panels move the window; double-click maximizes.
@@ -137,6 +139,14 @@
   function run(button) {
     closeMenu();
     invoke("window_action", { action: button.action });
+  }
+
+  /** Whether a title bar button is left out. A child window always keeps Close and never has Compact. */
+  function isHidden(button) {
+    if (child) {
+      return button.id === "compact" || (button.id !== "close" && hidden.has(button.id));
+    }
+    return hidden.has(button.id);
   }
 
   let menu = null;
@@ -301,12 +311,12 @@
   function render() {
     for (const button of BUTTONS) {
       const el = elements[button.id];
-      el.hidden = hidden.has(button.id);
+      el.hidden = isHidden(button);
       const label = button.hint ? `${button.label()} (${button.hint})` : button.label();
       el.dataset.tooltip = label;
       el.setAttribute("aria-label", label);
     }
-    moreBtn.hidden = hidden.size < BUTTONS.length;
+    moreBtn.hidden = child || hidden.size < BUTTONS.length;
     for (const button of BUTTONS) {
       buttonTrack.toggles[button.id].setAttribute("aria-pressed", String(!hidden.has(button.id)));
     }
@@ -328,7 +338,7 @@
       window.scribeSetHidden?.(state.hidden);
     }
     desktop = state;
-    root.classList.toggle("compact", state.compact);
+    root.classList.toggle("compact", state.compact && !child);
     render();
   }
 
@@ -338,6 +348,10 @@
   // the app swaps in its offline page, which brings the board back once the daemon answers.
   let offlineTimer = 0;
   addEventListener("scribe:connection", (event) => {
+    if (child) {
+      // The offline page belongs to the main window; this one waits for the daemon.
+      return;
+    }
     if (event.detail.connected) {
       clearTimeout(offlineTimer);
       offlineTimer = 0;
@@ -346,6 +360,21 @@
       offlineTimer = setTimeout(() => invoke("window_action", { action: "daemon-offline" }), 4000);
     }
   });
+  if (child) {
+    // The app only reports the main window's changes: ask after a resize, which is what maximizing is.
+    let resizeTimer = 0;
+    addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => invoke("desktop_state").then(setState), 120);
+    });
+    // The buttons follow Settings → Desktop in the main window.
+    addEventListener("storage", (event) => {
+      if (event.key === HIDDEN_KEY) {
+        hidden = loadHidden();
+        render();
+      }
+    });
+  }
   render();
   invoke("desktop_state").then(setState);
 })();

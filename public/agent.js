@@ -168,6 +168,9 @@
 
   /* ---------- state ---------- */
 
+  /** A page in a window of its own (popout.js) has no sidebar: every chat there is the floating one. */
+  const SOLO = Boolean(window.scribePopout?.childId);
+
   const S = {
     config: { providers: [], prefs: null, models: { claude: [], cursor: [], codex: [], pi: [] } },
     threads: new Map(),
@@ -175,7 +178,7 @@
     loading: new Map(),
     commands: new Map(),
     current: localStorage.getItem(LS.current) || null,
-    sideOpen: localStorage.getItem(LS.side) === "1",
+    sideOpen: !SOLO && localStorage.getItem(LS.side) === "1",
     fullOpen: false,
     dockShown: localStorage.getItem(LS.dock) === "1",
     dockExpanded: false,
@@ -5438,6 +5441,10 @@
       this.apply();
     },
     setOpen(open) {
+      if (SOLO) {
+        if (open && !S.dockShown) dock.setShown(true);
+        return;
+      }
       S.sideOpen = open;
       localStorage.setItem(LS.side, open ? "1" : "0");
       this.apply();
@@ -5616,7 +5623,7 @@
         this.scopeBtn,
         el("span", "dock-top-sep"),
         button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)"),
-        button(icon("expand"), "ag-icon-btn small", () => {
+        !SOLO && button(icon("expand"), "ag-icon-btn small", () => {
           const id = this.view.threadId;
           if (id) setCurrent(id);
           sidebar.setOpen(true);
@@ -6359,7 +6366,7 @@
       head.append(el("b", null, "Active"), el("span", null, counts.join(" · ")));
       this.node.replaceChildren(head);
       for (const entry of rows) this.node.append(this.row(entry));
-      if (hidden) {
+      if (hidden && !SOLO) {
         this.node.append(
           button(`+${hidden} in the sidebar`, "ag-fly-more", () => {
             this.close();
@@ -8565,6 +8572,7 @@
    * Without it (background starts and sends) nothing the user has open is closed.
    */
   function showPageThread(id, where, { reveal = false } = {}) {
+    if (SOLO && where === "sidebar") where = "dock";
     if (reveal) {
       closeMenu();
       setCurrent(id);
@@ -9002,6 +9010,7 @@
   /* ---------- keys ---------- */
 
   function shortcut(action) {
+    if (action === "side" && SOLO) action = "dock";
     if (action === "side") {
       if (S.fullOpen) leaveFull("side");
       else sidebar.setOpen(!S.sideOpen);
@@ -9013,7 +9022,7 @@
       dock.setShown(!S.dockShown);
     } else if (action === "full") {
       if (S.fullOpen) leaveFull();
-      else enterFull(dockFocused() ? "dock" : "side");
+      else enterFull(SOLO || dockFocused() ? "dock" : "side");
     } else if (action === "model") {
       void cycleModel();
     } else if (action === "effort") {
@@ -9046,6 +9055,7 @@
   /** The chat a thread shortcut acts on: the full window, the focused (or only) floating chat, else the sidebar, opened if needed. */
   function shortcutChat() {
     if (S.fullOpen) return "full";
+    if (SOLO && !S.dockShown) dock.setShown(true);
     if (S.dockShown && (dockFocused() || !S.sideOpen)) return "dock";
     if (!S.sideOpen) sidebar.setOpen(true);
     return "side";
@@ -9438,7 +9448,7 @@
     let view;
     if (S.fullOpen) {
       view = full.view;
-    } else if (target === "side" || (!target && S.sideOpen && !S.dockShown)) {
+    } else if (!SOLO && (target === "side" || (!target && S.sideOpen && !S.dockShown))) {
       if (!S.sideOpen) sidebar.setOpen(true);
       view = sidebar.view;
     } else {

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow, Window, WindowEvent};
 
-use crate::{board, startup};
+use crate::{board, startup, CHILD_PREFIX, MAIN};
 
 const NORMAL_SIZE: (f64, f64) = (1280.0, 800.0);
 const COMPACT_SIZE: (f64, f64) = (440.0, 600.0);
@@ -126,6 +126,10 @@ pub fn apply_initial<R: Runtime>(window: &WebviewWindow<R>) {
 }
 
 pub fn toggle_compact<R: Runtime>(window: &WebviewWindow<R>) {
+    // Compact is the main window's form factor; a child window's shortcut does nothing.
+    if window.label() != MAIN {
+        return;
+    }
     let state = state(window);
     let mut layout = state.layout.lock().unwrap();
     if window.is_minimized().unwrap_or(false) {
@@ -210,6 +214,27 @@ pub fn push_state<R: Runtime>(window: &WebviewWindow<R>) {
 }
 
 pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    if window.label() != MAIN {
+        // A child window (a page on its own) keeps no layout. The main window marks its tab, so tell it.
+        if matches!(event, WindowEvent::Destroyed) {
+            if let Some(main) = window.get_webview_window(MAIN) {
+                let _ = main.eval(format!(
+                    "window.scribePopout && window.scribePopout.windowClosed({:?})",
+                    window.label()
+                ));
+            }
+        }
+        return;
+    }
+    if matches!(event, WindowEvent::Destroyed) {
+        // The main window is gone for good (not hidden in the tray): its pages' windows go with it.
+        for (label, child) in window.webview_windows() {
+            if label.starts_with(CHILD_PREFIX) {
+                let _ = child.close();
+            }
+        }
+        return;
+    }
     let Some(webview) = window.get_webview_window(window.label()) else {
         return;
     };

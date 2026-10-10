@@ -18,7 +18,10 @@ use tauri::ipc::CapabilityBuilder;
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-const MAIN: &str = "main";
+pub(crate) const MAIN: &str = "main";
+/// Labels of the windows that show one page on their own (public/popout.js).
+pub(crate) const CHILD_PREFIX: &str = "child-";
+const CHILD_SIZE: (f64, f64) = (960.0, 720.0);
 
 /// Why the daemon last failed to start, for the offline page.
 #[derive(Default)]
@@ -86,6 +89,91 @@ async fn set_desktop_setting(
     Ok(layout::desktop_state(&window))
 }
 
+/// A page in a window of its own: `open` it (or bring it forward when it is open), `focus` it, or
+/// `focus-main` to bring the main window forward from one.
+#[tauri::command]
+async fn child_window(
+    app: AppHandle,
+    action: String,
+    id: String,
+    title: Option<String>,
+    x: Option<f64>,
+    y: Option<f64>,
+) -> Result<(), String> {
+    match action.as_str() {
+        "open" => open_child(&app, &id, title.as_deref().unwrap_or("Scribe"), x.zip(y)).map_err(|err| err.to_string()),
+        "focus" => {
+            if let Some(window) = app.get_webview_window(&child_label(&id)) {
+                raise(&window);
+            }
+            Ok(())
+        }
+        "focus-main" => {
+            if let Some(window) = app.get_webview_window(MAIN) {
+                focus(&window);
+            }
+            Ok(())
+        }
+        _ => Err(format!("Unknown child window action: {action}")),
+    }
+}
+
+/// Keep in sync with labelOf in public/popout.js.
+fn child_label(id: &str) -> String {
+    let safe: String = id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .collect();
+    format!("{CHILD_PREFIX}{safe}")
+}
+
+fn raise(window: &WebviewWindow) {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// The board again, told to show one page: its own title bar, no tab strip, at `at` on screen.
+fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>) -> Result<(), Box<dyn std::error::Error>> {
+    let label = child_label(id);
+    if let Some(window) = app.get_webview_window(&label) {
+        raise(&window);
+        return Ok(());
+    }
+    let mut url: Url = format!("{}/", board::base_url()).parse()?;
+    url.query_pairs_mut().append_pair("popout", id);
+    let board_origin = url.origin();
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+        .title(title)
+        .disable_drag_drop_handler()
+        .inner_size(CHILD_SIZE.0, CHILD_SIZE.1)
+        .min_inner_size(320.0, 240.0)
+        .decorations(true)
+        .on_new_window(|url, _| {
+            board::open_external(url.as_str());
+            NewWindowResponse::Deny
+        })
+        .on_navigation(move |url| {
+            if url.origin() == board_origin {
+                return true;
+            }
+            board::open_external(url.as_str());
+            false
+        });
+    if let Some((x, y)) = at {
+        builder = builder.position(x, y);
+    }
+    let window = builder.build()?;
+    // Stripped after the build for the same reason as the main window's.
+    window.set_decorations(false)?;
+    #[cfg(windows)]
+    {
+        keys::install(&window);
+        embeds::install(&window, board::port());
+    }
+    Ok(())
+}
+
 /// For the offline page: whether the daemon answers, optionally after trying to start it.
 #[tauri::command]
 async fn daemon_status(app: AppHandle, start: bool) -> DaemonStatus {
@@ -145,7 +233,8 @@ fn main() {
             desktop_state,
             window_action,
             set_desktop_setting,
-            daemon_status
+            daemon_status,
+            child_window
         ])
         .on_window_event(layout::on_window_event)
         .setup(move |app| {
@@ -161,12 +250,14 @@ fn main() {
                 CapabilityBuilder::new("scribe")
                     .remote(format!("{base}/*"))
                     .window(MAIN)
+                    .window(format!("{CHILD_PREFIX}*"))
                     .permission("core:window:allow-start-dragging")
                     .permission("core:window:allow-internal-toggle-maximize")
                     .permission("allow-desktop-state")
                     .permission("allow-window-action")
                     .permission("allow-set-desktop-setting")
-                    .permission("allow-daemon-status"),
+                    .permission("allow-daemon-status")
+                    .permission("allow-child-window"),
             )?;
             let layout = layout::load(app.handle());
             let close_to_tray = layout.close_to_tray();

@@ -6,7 +6,7 @@ fn main() {
             .expect("failed to write shared tooltips into desktop assets");
     }
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&["desktop_state", "window_action", "set_desktop_setting", "daemon_status"]),
+        tauri_build::AppManifest::new().commands(&["desktop_state", "window_action", "set_desktop_setting", "daemon_status", "child_window"]),
     ))
     .expect("failed to run tauri-build");
 }

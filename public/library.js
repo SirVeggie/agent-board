@@ -996,6 +996,7 @@ window.createLibrary = function createLibrary(host) {
       !open && { label: "Open in background", action: () => activatePage(id, false) },
       host.activeId() !== id && { label: "Peek", action: () => host.openIn(id, "peek") },
       host.canSplit(id) && { label: "Open in split", action: () => host.openIn(id, "split") },
+      host.canPopOut?.(id) && { label: "Open in new window", action: () => host.popOut(id) },
       { label: tab.pinned ? "Unpin" : "Pin", action: () => host.setPinned(id, !tab.pinned) },
       "sep",
       { label: "Rename", action: () => reveal(id, { rename: true }) },

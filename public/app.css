@@ -3387,7 +3387,39 @@ body.dragging-pane iframe { pointer-events: none; }
   }
 }
 
-/* The other pane's tab: still on screen, so it is marked, but quieter than the active one. */
+/* A page in a window of its own (popout.js). The browser's popup has its own title bar, so the
+ * board's goes; the desktop app's window keeps it for the page title and the window buttons. */
+.popout-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0 16px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--heading);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+html.popout .chrome {
+  height: 38px;
+}
+
+html.popout:not(.desktop) .chrome,
+html.popout:not(.desktop) .chrome-edge,
+html.popout .brand,
+html.popout .tabs-wrap,
+html.popout .actions,
+html.popout .side-pane,
+html.popout .agent-pane,
+html.popout #empty,
+html.popout #newpage {
+  display: none !important;
+}
+
+/* The other pane's tab, or one whose page is in its own window: still on screen, so it is marked,
+ * but quieter than the active one. */
 .tab.beside {
   color: var(--text);
 }
