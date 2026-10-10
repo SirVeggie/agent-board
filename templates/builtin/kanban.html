@@ -2358,22 +2358,35 @@
     var top = r.top - (m ? m.m42 : 0);
     return { left: left, top: top, right: left + node.offsetWidth, bottom: top + node.offsetHeight };
   }
+  function offscreen(box) {
+    return box.bottom < 0 || box.top > window.innerHeight || box.right < 0 || box.left > window.innerWidth;
+  }
   /** FLIP: whatever `mutate` moves slides from its old spot instead of jumping. */
   function slide(nodes, mutate) {
     var before = nodes.map(function (n) { return layoutBox(n); });
     mutate();
+    // Measure everything before writing any style: a write between two reads makes the browser
+    // lay the board out again for each node, which is what made a long column lag.
+    var moved = [];
     nodes.forEach(function (n, i) {
       if (!n.isConnected) return;
       var now = layoutBox(n);
       var dx = before[i].left - now.left;
       var dy = before[i].top - now.top;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
-      n.style.transition = "none";
-      n.style.transform = "translate(" + dx + "px, " + dy + "px)";
+      if (offscreen(before[i]) && offscreen(now)) return;
+      moved.push({ node: n, dx: dx, dy: dy });
+    });
+    if (!moved.length) return;
+    moved.forEach(function (m) {
+      m.node.style.transition = "none";
+      m.node.style.transform = "translate(" + m.dx + "px, " + m.dy + "px)";
+    });
+    requestAnimationFrame(function () {
       requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-          n.style.transition = SLIDE;
-          n.style.transform = "";
+        moved.forEach(function (m) {
+          m.node.style.transition = SLIDE;
+          m.node.style.transform = "";
         });
       });
     });
@@ -2481,11 +2494,11 @@
 
   function startCardDrag(e, id, cardEl) {
     if (e.button !== 0 || isInteractive(e.target)) return;
-    var ghost, slot, offX, offY;
+    var ghost, slot, offX, offY, rect, lastX, lastY, idle = false;
     trackDrag(e, {
       click: function () { openCard(id); },
       begin: function (start) {
-        var rect = cardEl.getBoundingClientRect();
+        rect = cardEl.getBoundingClientRect();
         offX = start.x - rect.left;
         offY = start.y - rect.top;
         ghost = cardEl.cloneNode(true);
@@ -2502,16 +2515,24 @@
         drag = { kind: "card" };
       },
       frame: function (x, y) {
-        ghost.style.left = x - offX + "px";
-        ghost.style.top = y - offY + "px";
+        // Nothing moved and nothing is auto-scrolling: the slot is already where it belongs.
+        if (idle && x === lastX && y === lastY) return;
+        lastX = x;
+        lastY = y;
+        // Moved with a transform (no layout), and its center worked out rather than measured,
+        // so a frame doesn't lay the board out just to follow the pointer.
+        var gx = x - offX, gy = y - offY;
+        ghost.style.transform = "translate(" + (gx - rect.left) + "px, " + (gy - rect.top) + "px) rotate(1.5deg) scale(1.02)";
         var b = boardEl.getBoundingClientRect();
-        boardEl.scrollLeft += edgeSpeed(x, b.left, b.right);
-        var g = ghost.getBoundingClientRect();
-        var list = listAt(g.left + g.width / 2);
+        var sx = edgeSpeed(x, b.left, b.right);
+        if (sx) boardEl.scrollLeft += sx;
+        idle = !sx;
+        var list = listAt(gx + rect.width / 2);
         if (!list) return;
         var lr = list.getBoundingClientRect();
-        list.scrollTop += edgeSpeed(y, lr.top, lr.bottom);
-        placeCardSlot(slot, list, g.top + g.height / 2);
+        var sy = edgeSpeed(y, lr.top, lr.bottom);
+        if (sy) { list.scrollTop += sy; idle = false; }
+        placeCardSlot(slot, list, gy + rect.height / 2);
       },
       end: function (cancelled) {
         var list = slot.parentNode;
@@ -2557,7 +2578,7 @@
 
   function startColumnDrag(e, colId, colEl) {
     if (e.button !== 0 || isInteractive(e.target) || editingCol) return;
-    var ghost, slot, offX, offY;
+    var ghost, slot, offX, offY, rect;
     function sibling(dir) {
       var n = dir > 0 ? slot.nextElementSibling : slot.previousElementSibling;
       while (n && n === colEl) n = dir > 0 ? n.nextElementSibling : n.previousElementSibling;
@@ -2565,7 +2586,7 @@
     }
     trackDrag(e, {
       begin: function (start) {
-        var rect = colEl.getBoundingClientRect();
+        rect = colEl.getBoundingClientRect();
         offX = start.x - rect.left;
         offY = start.y - rect.top;
         ghost = colEl.cloneNode(true);
@@ -2582,12 +2603,11 @@
         drag = { kind: "column" };
       },
       frame: function (x, y) {
-        ghost.style.left = x - offX + "px";
-        ghost.style.top = y - offY + "px";
+        ghost.style.transform = "translate(" + (x - offX - rect.left) + "px, " + (y - offY - rect.top) + "px) rotate(1deg)";
         var b = boardEl.getBoundingClientRect();
-        boardEl.scrollLeft += edgeSpeed(x, b.left, b.right);
-        var g = ghost.getBoundingClientRect();
-        var gx = g.left + g.width / 2;
+        var sx = edgeSpeed(x, b.left, b.right);
+        if (sx) boardEl.scrollLeft += sx;
+        var gx = x - offX + rect.width / 2;
         for (var guard = 0; guard < 30; guard++) {
           var box = layoutBox(slot);
           var next = sibling(1);
