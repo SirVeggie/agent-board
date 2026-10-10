@@ -6614,10 +6614,10 @@
     return detailWindows(limits).filter((w) => w.id !== "cursor_on_demand" || w.utilization > 0);
   }
 
-  /** Compact chip: Claude's 5-hour, Cursor's Included, else the fullest listed window. */
+  /** Compact chip: Claude/Codex's 5-hour, Cursor's Included, else the fullest listed window. */
   function compactWindow(limits) {
     const listed = chipWindows(limits);
-    return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "cursor_included") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
+    return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "codex:codex:primary") || limits.windows.find((w) => w.id === "cursor_included") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
   }
 
   /** Plan usage on the composer: one percent in the floating chat and sidebar, or "5h 84%" windows in the full window. Nothing until the provider has reported. */
