@@ -111,10 +111,11 @@
     color: var(--text);
   }
   .select-list button .tick-mark { width: 14px; flex: 0 0 auto; color: var(--accent); font-size: 12px; }
+  .select-list button.excluded .tick-mark { color: var(--danger, #f87171); }
   .select-list button.active { background: rgba(255, 255, 255, .08); }
   .select-list button[aria-selected="true"] { font-weight: 600; }
   .select-list button.placeholder { color: var(--muted); }
-  .select-list.has-search {
+  .select-list.has-search, .select-list.filter-list {
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1031,9 +1032,9 @@
     </div>
     <div class="toolbar" id="toolbar">
       <input class="field search" id="search" type="search" placeholder="Search cards   /" autocomplete="off">
-      <select class="field" id="fLabel" aria-label="Filter by label"></select>
-      <select class="field" id="fPriority" aria-label="Filter by priority"></select>
-      <select class="field" id="fAssignee" aria-label="Filter by assignee"></select>
+      <select class="field" id="fLabel" data-filter="label" aria-label="Filter by label"></select>
+      <select class="field" id="fPriority" data-filter="priority" aria-label="Filter by priority"></select>
+      <select class="field" id="fAssignee" data-filter="assignee" aria-label="Filter by assignee"></select>
       <select class="field" id="fDue" aria-label="Filter by due date">
         <option value="">Any due date</option>
         <option value="late">Overdue</option>
@@ -1506,9 +1507,41 @@
   }
 
   // ---------- filtering ----------
+  function filterChoice(key) {
+    var value = view()[key];
+    // Keep single selections saved by earlier versions of the board.
+    if (value && typeof value === "object") return { include: arr(value.include).map(String), exclude: arr(value.exclude).map(String) };
+    return { include: value != null && value !== "" ? [String(value)] : [], exclude: [] };
+  }
+  function cycleFilter(key, value) {
+    var choice = filterChoice(key);
+    if (!value) choice = { include: [], exclude: [] };
+    else if (choice.exclude.indexOf(value) !== -1) {
+      choice.exclude = choice.exclude.filter(function (x) { return x !== value; });
+      choice.include = choice.include.filter(function (x) { return x !== value; });
+    } else if (choice.include.indexOf(value) !== -1) {
+      choice.include = choice.include.filter(function (x) { return x !== value; });
+      choice.exclude.push(value);
+    } else choice.include.push(value);
+    var patch = {};
+    patch[key] = choice;
+    setView(patch);
+  }
+  function matchesChoice(key, values) {
+    var choice = filterChoice(key);
+    function has(x) {
+      return values.some(function (value) {
+        return key === "assignee" ? value.toLowerCase() === x.toLowerCase() : value === x;
+      });
+    }
+    return !choice.exclude.some(has) && (!choice.include.length || choice.include.some(has));
+  }
   function filterActive() {
     var v = view();
-    return Boolean(v.q || v.label || v.priority || v.assignee || v.due);
+    return Boolean(v.q || v.due || ["label", "priority", "assignee"].some(function (key) {
+      var choice = filterChoice(key);
+      return choice.include.length || choice.exclude.length;
+    }));
   }
   function searchHay(c) {
     var comments = arr(c.comments).map(function (cm) { return str(cm && cm.text); }).join("\n");
@@ -1523,11 +1556,9 @@
       var hay = searchHay(c);
       for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) === -1) return false;
     }
-    if (v.label && c.labels.indexOf(v.label) === -1) return false;
-    if (v.priority !== undefined && v.priority !== "" && v.priority !== null && String(c.priority) !== String(v.priority)) return false;
-    if (v.assignee) {
-      if (v.assignee === "__none" ? str(c.assignee).trim() : str(c.assignee).trim().toLowerCase() !== str(v.assignee).toLowerCase()) return false;
-    }
+    if (!matchesChoice("label", arr(c.labels))) return false;
+    if (!matchesChoice("priority", [String(c.priority)])) return false;
+    if (!matchesChoice("assignee", [str(c.assignee).trim() || "__none"])) return false;
     if (v.due) {
       var t = dueTime(c.due);
       var today = dueTime(todayStr());
@@ -1554,7 +1585,8 @@
     return out.sort(function (a, b) { return a.localeCompare(b); });
   }
   // ---------- themed dropdowns ----------
-  // Each <select> stays the source of truth (value, options, change events) and is hidden;
+  // Single-value selects keep their value and change events; filters use the viewer's choices.
+  // Each <select> supplies the options and is hidden;
   // a button and a list stand in for it. The open list lives in <body>, because the card
   // overlay's blur and scrolling would otherwise clip it.
   var openSelect = null;
@@ -1575,10 +1607,24 @@
     var query = "";
     var visible = [];
     var searchable = sel.hasAttribute("data-search");
+    var filterKey = sel.getAttribute("data-filter");
     var typeBuf = "";
     var typeTimer = 0;
 
     function sync() {
+      if (filterKey) {
+        var choice = filterChoice(filterKey);
+        var parts = [];
+        Array.prototype.forEach.call(sel.options, function (opt) {
+          if (choice.exclude.indexOf(opt.value) !== -1) parts.push("− " + opt.textContent);
+          else if (choice.include.indexOf(opt.value) !== -1) parts.push("✓ " + opt.textContent);
+        });
+        text.textContent = parts.length ? parts.join(", ") : (sel.options[0] ? sel.options[0].textContent : "");
+        text.classList.toggle("muted", !parts.length);
+        btn.setAttribute("aria-label", sel.getAttribute("aria-label") + ": " + text.textContent);
+        if (list) { fillRows(); place(); }
+        return;
+      }
       var opt = sel.selectedOptions[0];
       text.textContent = opt ? opt.textContent : "";
       text.classList.toggle("muted", !opt || opt.value === "");
@@ -1601,6 +1647,11 @@
       }
     }
     function choose(i) {
+      if (filterKey) {
+        cycleFilter(filterKey, sel.options[i].value);
+        btn.focus();
+        return;
+      }
       var changed = sel.selectedIndex !== i;
       sel.selectedIndex = i;
       sync();
@@ -1616,6 +1667,7 @@
       visible = [];
       var rows = rowsEl();
       rows.replaceChildren();
+      var choice = filterKey ? filterChoice(filterKey) : null;
       Array.prototype.forEach.call(sel.options, function (opt, i) {
         if (q && !opt.value) return;
         if (q && opt.textContent.toLowerCase().indexOf(q) === -1) return;
@@ -1624,8 +1676,12 @@
         b.type = "button";
         b.tabIndex = -1;
         b.setAttribute("role", "option");
-        b.setAttribute("aria-selected", i === sel.selectedIndex ? "true" : "false");
-        b.appendChild(el("span", "tick-mark", i === sel.selectedIndex ? "✓" : ""));
+        var excluded = choice && choice.exclude.indexOf(opt.value) !== -1;
+        var selected = choice ? excluded || choice.include.indexOf(opt.value) !== -1 : i === sel.selectedIndex;
+        b.setAttribute("aria-selected", selected ? "true" : "false");
+        if (choice) b.setAttribute("aria-label", opt.textContent + (excluded ? ": excluded" : selected ? ": included" : ": off"));
+        b.classList.toggle("excluded", Boolean(excluded));
+        b.appendChild(el("span", "tick-mark", excluded ? "−" : selected ? "✓" : ""));
         b.appendChild(document.createTextNode(opt.textContent));
         b.addEventListener("mouseenter", function () { active = visible.indexOf(i); highlight(); });
         b.addEventListener("click", function () { choose(i); });
@@ -1664,6 +1720,13 @@
       active = 0;
       list = el("div", "select-list");
       list.setAttribute("role", "listbox");
+      if (filterKey) {
+        list.classList.add("filter-list");
+        list.setAttribute("aria-multiselectable", "true");
+        list.setAttribute("aria-label", sel.getAttribute("aria-label"));
+        list.appendChild(el("div", "empty-row", "Click to cycle: ✓ include → − exclude → off."));
+        list.appendChild(el("div", "select-opts"));
+      }
       if (searchable) {
         list.classList.add("has-search");
         var input = el("input", "field menu-search");
@@ -1787,7 +1850,7 @@
       });
       sel.dataset.key = key;
     }
-    sel.value = value == null ? "" : String(value);
+    sel.value = value == null || sel.hasAttribute("data-filter") ? "" : String(value);
     syncSelect(sel);
   }
   function renderToolbar() {
@@ -5819,9 +5882,6 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(function () { setView({ q: searchEl.value }); }, 150);
   });
-  fLabel.addEventListener("change", function () { setView({ label: fLabel.value }); });
-  fPriority.addEventListener("change", function () { setView({ priority: fPriority.value }); });
-  fAssignee.addEventListener("change", function () { setView({ assignee: fAssignee.value }); });
   fDue.addEventListener("change", function () { setView({ due: fDue.value }); });
   clearFilterBtn.addEventListener("click", function () {
     searchEl.value = "";
