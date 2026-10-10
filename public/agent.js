@@ -513,6 +513,7 @@
         S.threads.set(msg.thread.id, msg.thread);
         for (const view of views()) {
           if (view.threadId === msg.thread.id) view.onThread(msg.thread, prev);
+          else if (msg.thread.helperOf && view.threadId === msg.thread.helperOf) view.onHelper(msg.thread);
         }
         if (dockFollowsThread(msg.thread, prev)) dock.syncThread();
         renderLists();
@@ -527,6 +528,7 @@
         S.composers.delete(msg.id);
         for (const view of views()) {
           if (view.threadId === msg.id) view.setThread(null);
+          else if (view.helpersBusy) view.renderHelperDock();
         }
         if (S.current === msg.id) setCurrent(null);
         forgetDockThread(msg.id);
@@ -1761,6 +1763,7 @@
           else if (this.queueShown) this.stick = false;
         }
         this.updateQueueDock();
+        if (this.helpersBusy) this.renderHelperDock();
       });
       const releaseStick = () => {
         this.stopStickAnim();
@@ -1888,6 +1891,7 @@
       this.threadId = id;
       if (id) this.draft = null;
       this.expanded.clear();
+      this.helpersOpen = false;
       this.loadComposer();
       if (this.variant === "dock") dock.invalidateFeed();
       this.renderAll();
@@ -2019,6 +2023,7 @@
     renderAll() {
       this.renderHeader();
       this.renderTranscript();
+      this.renderHelperDock();
       this.renderComposerBar();
       this.renderContext();
     }
@@ -2249,7 +2254,7 @@
       const row = (g) => ({
         label: g.label,
         detail: "Remove",
-        icon: g.kind === "web" ? "globe" : "shield",
+        icon: g.kind === "web" ? "globe" : g.kind === "helpers" ? "task" : "shield",
         run: () =>
           api("PATCH", `/threads/${encodeURIComponent(t.id)}`, { revokeGrant: g.key })
             .then(() => notice(`Removed: ${g.label}`))
@@ -2257,11 +2262,13 @@
       });
       const web = t.grants.filter((g) => g.kind === "web");
       const threads = t.grants.filter((g) => g.kind === "threads");
+      const helpers = t.grants.filter((g) => g.kind === "helpers");
       openMenu(
         anchor,
         [
           ...(web.length ? [{ header: "Web access" }, ...web.map(row)] : []),
           ...(threads.length ? [{ header: "Can read other threads" }, ...threads.map(row)] : []),
+          ...(helpers.length ? [{ header: "Helper agents" }, ...helpers.map(row)] : []),
         ],
         { width: 320 }
       );
@@ -2885,6 +2892,8 @@
     }
 
     renderTool(it, byParent) {
+      const helper = helperCall(it);
+      if (helper) return this.renderHelperCall(it, helper);
       const key = `t:${it.id}`;
       const task = it.task;
       const node = el("div", `ag-tool k-${it.tool} s-${it.status}${task ? ` has-task ts-${task.status}` : ""}${this.expanded.has(key) ? " open" : ""}`);
@@ -2968,6 +2977,174 @@
       if (body.childElementCount) node.append(body);
       else node.classList.add("bare");
       return node;
+    }
+
+    /**
+     * An agent_run call as a task row: the helper and its model in the head, under it what the helper
+     * is doing now (or how it ended) with a way into its thread, and the brief and report in the body.
+     */
+    renderHelperCall(it, call) {
+      const key = `t:${it.id}`;
+      const h = call.thread;
+      const state = call.state;
+      const node = el("div", `ag-tool ag-helper-call has-task ts-${state === "waiting" ? "running" : state} s-${it.status}${this.expanded.has(key) ? " open" : ""}`);
+      node.dataset.itemId = it.id;
+      if (call.id) node.dataset.helper = call.id;
+      if (call.live) node.dataset.live = "1";
+      const head = button("", "ag-tool-head", () => this.toggle(key, node));
+      head.append(call.live ? el("span", "ag-spin") : state === "error" ? icon("cross", "ag-ico ag-st-err") : icon("task", "ag-ico"));
+      const label = el("span", "ag-tool-label");
+      const task = typeof call.input.task === "string" ? call.input.task.trim() : "";
+      const name = h ? helperName(h) : task.split("\n")[0] || "Helper agent";
+      const title = el("span", "ag-tool-title", name);
+      title.dataset.tooltip = name;
+      label.append(el("span", "ag-tool-verb", "Helper"), title);
+      const model = h ? modelLabel(h.provider, h.model) : [call.input.provider, call.input.model].filter((v) => typeof v === "string" && v).join(" · ");
+      head.append(label);
+      if (model) {
+        const chip = el("span", "ag-muted ag-helper-model");
+        if (h) chip.append(providerIcon(h.provider));
+        chip.append(el("span", null, model));
+        head.append(chip);
+      }
+      head.append(el("span", `ag-task-badge ts-${state}`, { running: "working", waiting: "needs you", done: "done", error: "failed", stopped: "stopped" }[state]));
+      if (it.endedAt && it.startedAt && it.endedAt - it.startedAt > 1500) head.append(el("span", "ag-muted ag-dur", R.duration(it.endedAt - it.startedAt)));
+      head.append(icon("chevron", "ag-ico ag-chev"));
+      node.append(head);
+
+      const line = el("div", "ag-task-line");
+      const files = Array.isArray(call.result?.files) ? call.result.files : [];
+      const what = call.live
+        ? h
+          ? helperStep(h)
+          : "Waiting to start…"
+        : state === "error"
+          ? String(call.result?.error || it.output || "").trim().split("\n")[0]
+          : files.length
+            ? `Changed ${files.length} ${files.length === 1 ? "file" : "files"}`
+            : "";
+      if (what) {
+        const text = el("span", "ag-task-summary", what);
+        text.dataset.tooltip = what;
+        line.append(text);
+      }
+      const tokens = (call.result?.tokens?.input || 0) + (call.result?.tokens?.output || 0);
+      if (tokens) line.append(el("span", "ag-task-usage", `${tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : tokens} tokens`));
+      if (h) {
+        const actions = el("span", "ag-task-actions");
+        actions.append(
+          button("Open thread", "ag-btn tiny", (event) => {
+            event.stopPropagation();
+            this.openThread(h.id);
+          })
+        );
+        if (call.live && h.status !== "idle") {
+          actions.append(
+            button("Stop", "ag-btn tiny", (event) => {
+              event.stopPropagation();
+              event.currentTarget.disabled = true;
+              api("POST", `/threads/${encodeURIComponent(h.id)}/cancel`).catch((err) => notice(err.message));
+            })
+          );
+        }
+        line.append(actions);
+      }
+      if (line.childElementCount) node.append(line);
+
+      const body = el("div", "ag-tool-body");
+      const part = (heading, text) => {
+        const wrap = el("div", "ag-task-brief");
+        wrap.append(el("div", "ag-task-brief-label", heading));
+        const md = el("div", "ag-md small");
+        R.renderMarkdown(md, text, mdCtx);
+        wrap.append(md);
+        body.append(wrap);
+      };
+      if (task) part(typeof call.input.thread === "string" && call.input.thread ? "Follow-up" : "Brief", task);
+      if (typeof call.result?.reply === "string" && call.result.reply) part("Report", call.result.reply);
+      if (files.length) body.append(el("pre", "ag-pre small", files.join("\n")));
+      if (!call.result && it.output) body.append(el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output));
+      if (body.childElementCount) node.append(body);
+      else node.classList.add("bare");
+      return node;
+    }
+
+    /** A helper of this thread changed: bring its rows in the transcript and the strip above the input up to date. */
+    onHelper(helper) {
+      const detail = S.details.get(this.threadId);
+      for (const node of this.transcript.querySelectorAll(".ag-helper-call[data-live]")) {
+        if (node.dataset.helper && node.dataset.helper !== helper.id) continue;
+        const it = detail?.byId.get(node.dataset.itemId);
+        const call = it && helperCall(it);
+        if (call && call.id === helper.id) node.replaceWith(this.renderHelperCall(it, call));
+      }
+      this.renderHelperDock();
+    }
+
+    /** True while a working helper's row in the transcript is in view: the strip above the input then leaves it out. */
+    helperRowInView(id) {
+      const view = this.scroll.getBoundingClientRect();
+      if (!view.height) return false;
+      for (const node of this.transcript.querySelectorAll(".ag-helper-call[data-live]")) {
+        if (node.dataset.helper !== id) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.height && rect.bottom > view.top + 8 && rect.top < view.bottom - 8) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Above the input: this thread's helpers that are working, each with its live step, a click into
+     * its thread and a stop button. Ones whose row in the transcript is in view are left out, and
+     * more than fit fold into one line.
+     */
+    renderHelperDock() {
+      const box = this.helperDock;
+      const busy = this.threadId ? helpersOf(this.threadId).filter((t) => t.status !== "idle" && !t.archived) : [];
+      this.helpersBusy = busy.length;
+      const shown = busy.filter((t) => !this.helperRowInView(t.id));
+      const limit = this.variant === "dock" ? 1 : 3;
+      const fold = shown.length > limit;
+      const open = fold && this.helpersOpen;
+      const key = JSON.stringify([open, shown.map((t) => [t.id, t.status, helperStep(t), t.title])]);
+      if (key === this.helperDockKey) return;
+      this.helperDockKey = key;
+      box.replaceChildren();
+      box.hidden = !shown.length;
+      if (!shown.length) return;
+      if (fold) {
+        const waiting = shown.filter((t) => t.status === "waiting").length;
+        const sum = button("", `ag-helper-row ag-helper-sum${open ? " open" : ""}`, () => {
+          this.helpersOpen = !this.helpersOpen;
+          this.renderHelperDock();
+        }, open ? "Show one line" : "Show each helper");
+        sum.append(
+          waiting ? el("span", "ag-dot s-waiting") : el("span", "ag-spin"),
+          el("span", "ag-helper-name", `${shown.length} helpers working`),
+          el("span", "ag-helper-step", waiting ? `${waiting} ${waiting === 1 ? "needs" : "need"} your answer` : helperStep(shown[shown.length - 1])),
+          icon("chevron", "ag-ico ag-chev")
+        );
+        box.append(sum);
+        if (!open) return;
+      }
+      for (const t of shown) {
+        const item = el("div", "ag-helper-item");
+        const row = button("", "ag-helper-row", () => this.openThread(t.id), "Open the helper's thread");
+        row.append(
+          t.status === "waiting" ? el("span", "ag-dot s-waiting") : el("span", "ag-spin"),
+          providerIcon(t.provider),
+          el("span", "ag-helper-name", helperName(t)),
+          el("span", "ag-helper-step", helperStep(t))
+        );
+        item.append(
+          row,
+          button(icon("stop"), "ag-icon-btn small ag-helper-stop", (event) => {
+            event.stopPropagation();
+            api("POST", `/threads/${encodeURIComponent(t.id)}/cancel`).catch((err) => notice(err.message));
+          }, "Stop this helper")
+        );
+        box.append(item);
+      }
     }
 
     /** A Scribe page write's head: what it did, and the page as a chip that opens it. */
@@ -3450,6 +3627,7 @@
       this.measureUserMessages();
       this.updateQueueDock();
       if (stick) this.scrollToEnd();
+      if (this.helpersBusy) this.renderHelperDock();
     }
 
     /** New rows fade in; a row rebuilt mid-fade carries on from where it was. */
@@ -3579,7 +3757,10 @@
       this.sendSlot = el("div", "ag-send-slot");
       this.forkNote = el("div", "ag-fork-note");
       this.forkNote.hidden = true;
-      box.append(this.slash, this.forkNote, this.ctxRow);
+      // Working helpers of this thread, above the input.
+      this.helperDock = el("div", "ag-helpers");
+      this.helperDock.hidden = true;
+      box.append(this.slash, this.helperDock, this.forkNote, this.ctxRow);
       if (this.variant === "dock") {
         box.append(this.input);
       } else {
@@ -4595,6 +4776,43 @@
     return page;
   }
 
+  /** A thread's helper threads (agent_run), oldest first. */
+  function helpersOf(id) {
+    return [...S.threads.values()].filter((t) => t.helperOf === id).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /** Threads whose earlier helpers the list shows in full. */
+  const helpersShown = new Set();
+
+  /** A helper the thread list shows under the thread that started it (archived together, so they share a list). */
+  function nestsUnder(t) {
+    const parent = t.helperOf ? S.threads.get(t.helperOf) : null;
+    return Boolean(parent && parent.archived === t.archived);
+  }
+
+  /** A helper's name without the "Helper:" its title starts with. */
+  function helperName(t) {
+    return t.title.replace(/^Helper:\s*/, "") || t.title;
+  }
+
+  /** What a working helper is at: the question it waits on, or its live step. */
+  function helperStep(t) {
+    if (t.status === "waiting") return t.asking?.title ? `Needs your answer: ${t.asking.title}` : "Needs your answer";
+    return t.activity?.line || "Starting…";
+  }
+
+  /** An agent_run tool call: its input, its result, and the helper thread it started or sent on (once known). */
+  function helperCall(it) {
+    if (it.kind !== "tool" || !(/agent_run$/.test(it.name || "") || /agent_run$/.test(it.title || ""))) return null;
+    const input = isRecord(it.input) ? it.input : {};
+    const result = parseToolJson(it.output);
+    const id = [it.helper, input.thread, result?.thread].find((v) => typeof v === "string" && v.trim()) || "";
+    const live = it.status === "running" || it.status === "pending";
+    const thread = id ? S.threads.get(id) || null : null;
+    const ended = it.status === "error" || result?.status === "error" ? "error" : result?.status && result.status !== "done" ? "stopped" : "done";
+    return { id, input, result, thread, live, state: live ? (thread?.status === "waiting" ? "waiting" : "running") : ended };
+  }
+
   /** The JSON object a page tool returned; its text may carry a guide or note after it. */
   function parseToolJson(output) {
     const text = String(output || "").trim();
@@ -4955,7 +5173,32 @@
       // Threads with no scope at all group here too, under No workspace.
       if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t) || t.scope.kind === "workspace");
       if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
+      // A helper sits under the thread that started it. A search lists them like any thread.
+      if (!q) threads = threads.filter((t) => !nestsUnder(t));
       threads.sort((a, b) => threadRank(b) - threadRank(a));
+      const open = S.threads.get(currentId);
+      const keepId = !q && open && nestsUnder(open) ? open.helperOf : currentId;
+      const helperRows = (parent) => {
+        const all = q ? [] : helpersOf(parent.id).filter((h) => h.archived === parent.archived);
+        if (!all.length) return;
+        // Working ones and the open one always show; of the rest, the latest two until asked for more.
+        const must = (h) => h.status !== "idle" || h.id === currentId;
+        const latest = all.filter((h) => !must(h)).slice(-2);
+        const keep = helpersShown.has(parent.id) ? all : all.filter((h) => must(h) || latest.includes(h));
+        const box = el("div", "ag-row-helpers");
+        for (const h of keep) box.append(threadRow(h, h.id === currentId, onPick, helperName(h)));
+        const hidden = all.length - keep.length;
+        if (hidden || (helpersShown.has(parent.id) && all.length > 2)) {
+          const more = button("", "ag-list-more", () => {
+            if (hidden) helpersShown.add(parent.id);
+            else helpersShown.delete(parent.id);
+            fill();
+          });
+          more.append(el("span", null, hidden ? `Show ${hidden} earlier ${hidden === 1 ? "helper" : "helpers"}` : "Show fewer helpers"));
+          box.append(more);
+        }
+        list.append(box);
+      };
       if (!threads.length) {
         list.append(
           el(
@@ -4989,7 +5232,7 @@
         const { visible, hidden } = windowGroup(members, {
           extra: S.groupExtra.get(key) || 0,
           now,
-          currentId,
+          currentId: keepId,
           searching: Boolean(q),
           hidePage: S.hidePageThreads,
         });
@@ -5012,7 +5255,10 @@
           head.append(add);
         }
         list.append(head);
-        for (const t of visible) list.append(threadRow(t, t.id === currentId, onPick));
+        for (const t of visible) {
+          list.append(threadRow(t, t.id === currentId, onPick));
+          helperRows(t);
+        }
         if (hidden) {
           const more = button("", "ag-list-more", () => {
             S.groupExtra.set(key, (S.groupExtra.get(key) || 0) + LIST_PAGE);
@@ -5052,7 +5298,7 @@
     const meta = el("span", "ag-row-meta");
     meta.append(providerIcon(t.provider), el("span", null, modelLabel(t.provider, t.model)), el("span", null, "·"), threadWhen(t));
     if (t.fromPage) meta.append(el("span", null, "·"), el("span", null, "page"));
-    if (t.helperOf) meta.append(el("span", null, "·"), el("span", null, "helper"));
+    if (t.helperOf) meta.append(el("span", "ag-row-helper-tag", "· helper"));
     if (t.stats.files) meta.append(el("span", null, "·"), R.counts(t.stats.added, t.stats.removed));
     const wt = openWorktree(t);
     if (wt) {
@@ -5064,7 +5310,8 @@
     return meta;
   }
 
-  function threadRow(t, current, onPick) {
+  /** label: the title to show instead of the thread's own (a helper under its thread drops the "Helper:"). */
+  function threadRow(t, current, onPick, label) {
     const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}`, () => onPick(t.id));
     row.dataset.id = t.id;
     const quiet = t.status === "idle" && !t.background && !(t.unread && !t.fromPage);
@@ -5072,7 +5319,7 @@
     if (t.background) dot.dataset.tooltip = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
-    const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : t.title;
+    const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : label || t.title;
     const title = el("span", "ag-row-title", name);
     if (compactThreads()) main.append(title);
     else main.append(title, threadRowMeta(t));
@@ -8485,6 +8732,7 @@
       web: webMode(data.web, webMode(p.web)),
       cwd: cwd || null,
       useWorktree: folderMode && data.worktree === true,
+      ...(data.helpers === true ? { helpersAllowed: true } : {}),
     };
   }
 

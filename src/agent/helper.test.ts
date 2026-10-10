@@ -194,6 +194,18 @@ test("thread with no task waits for a working helper and returns its report", as
   await assert.rejects(host.runHelper(id, { task: "" }), /task is required/);
 });
 
+test("archiving or deleting a thread takes its helpers along", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent();
+  const { thread } = await host.runHelper(id, { task: "one", provider: "pi" });
+  host.updateThread(id, { archived: true });
+  assert.equal(host.getThread(String(thread))?.archived, true);
+  host.updateThread(id, { archived: false });
+  assert.equal(host.getThread(String(thread))?.archived, false);
+  await host.deleteThread(id);
+  assert.equal(host.getThread(String(thread)), null);
+});
+
 test("stopping the caller stops its helper", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();

@@ -4700,6 +4700,7 @@
       if (w.approval) opts.approval = w.approval;
       if (w.worktree) opts.worktree = true;
     }
+    if (w.helpers) opts.helpers = true;
     return opts;
   }
 
@@ -5814,6 +5815,14 @@
     row("Web", enhanced(workerSelect(webOptions, str(w.web), "Web", function (v) { set({ web: v }); })));
     if (!compact) {
       row("Open chat", enhanced(workerSelect([["", "No, run quietly"], ["dock", "In the floating chat"], ["sidebar", "In the sidebar"]], str(w.show), "Open chat", function (v) { set({ show: v }); })));
+      var hp = el("label", "check");
+      var hpBox = el("input", "switch");
+      hpBox.type = "checkbox";
+      hpBox.checked = Boolean(w.helpers);
+      hpBox.addEventListener("change", function () { set({ helpers: hpBox.checked }); });
+      hp.appendChild(hpBox);
+      hp.appendChild(document.createTextNode("Start helper agents without asking"));
+      row("Helpers", hp, "For a worker whose instructions tell it to hand work to another model. Off, each new helper waits for your OK in the card's chat, unless Approval is Full access. Helper agents must be on in Agent settings.");
     }
     var note = compact ? el("p", "worker-note hidden") : $("workerNote");
     if (compact) {

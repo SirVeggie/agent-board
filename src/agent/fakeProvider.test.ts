@@ -8,7 +8,7 @@ import type { Thread } from "./types.js";
 const WORKER = 'You are the agent worker "Fake" on the Kanban board "Test" (Scribe page id t_abc123). ...\nYour card: #12 Fix login [fake:delay=5, nofinish]';
 
 test("fakePlan reads the worker prompt and directives", () => {
-  assert.deepEqual(fakePlan(WORKER), { delayMs: 5, error: false, hang: false, finish: false, commit: false, limitSec: 0, stream: 0, board: { page: "t_abc123", card: 12 } });
+  assert.deepEqual(fakePlan(WORKER), { delayMs: 5, error: false, hang: false, finish: false, commit: false, limitSec: 0, stream: 0, helpers: 0, board: { page: "t_abc123", card: 12 } });
   const plain = fakePlan("hello [fake:error]", 100);
   assert.equal(plain.delayMs, 100);
   assert.equal(plain.error, true);

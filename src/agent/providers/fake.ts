@@ -18,6 +18,8 @@ import type { AgentProvider, ProviderSession, RunSink, TurnInput, TurnResult } f
  * the session's first turn on a plan usage limit that resets in 30 seconds; the next turn (Scribe's
  * resume) goes on with that card. [fake:stream] (or
  * stream=N steps, default 12) streams thinking, tool calls and text first, to try the transcript's motion.
+ * [fake:helper] (or helper=N, side by side) hands a task to a fake helper agent with agent_run and
+ * waits for it, with Helper agents on in Agent settings; helperdelay=ms is how long each one works.
  */
 
 export const FAKE_AGENTS = process.env.SCRIBE_FAKE_AGENTS === "1";
@@ -34,6 +36,8 @@ export type FakePlan = {
   limitSec: number;
   /** Steps of streamed thinking, tools and text before the wait; 0 for none. */
   stream: number;
+  /** Helper agents to start side by side and wait for; 0 for none. */
+  helpers: number;
   /** The board page and card, when the message is a board worker's prompt. */
   board: { page: string; card: number } | null;
 };
@@ -44,11 +48,13 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
   let delayMs = defaultDelayMs;
   let stream = 0;
   let limitSec = 0;
+  let helpers = 0;
   for (const match of text.matchAll(/\[fake:([^\]]*)\]/gi)) {
     for (const part of match[1].split(/[\s,]+/)) {
       const [name, value] = part.toLowerCase().split("=");
       if (name === "delay" && value && Number.isFinite(Number(value))) delayMs = Math.max(0, Number(value));
       else if (name === "limit") limitSec = value && Number.isFinite(Number(value)) ? Math.max(1, Number(value)) : 30;
+      else if (name === "helper") helpers = value && Number.isFinite(Number(value)) ? Math.max(0, Math.min(4, Math.round(Number(value)))) : 1;
       else if (name === "stream") stream = value && Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 12;
       else if (name) flags.add(name);
     }
@@ -63,6 +69,7 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
     commit: flags.has("commit"),
     limitSec,
     stream,
+    helpers,
     board: page && card ? { page, card: Number(card) } : null,
   };
 }
@@ -70,6 +77,8 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
 export type FakeDeps = {
   runAction(page: string, name: string, args: Record<string, unknown>, caller: ActionCaller): unknown;
   runInfo(threadId: string): ThreadRunInfo;
+  /** agent_run as that thread: start a helper, wait for its turn, return its report. */
+  runHelper?(threadId: string, opts: { task: string; provider: string; signal: AbortSignal }): Promise<Record<string, unknown>>;
   /** Turn delay when the message names none. */
   delayMs?: number;
 };
@@ -132,6 +141,7 @@ class FakeSession implements ProviderSession {
       sink.text(`Fake agent, turn ${this.turns}.`);
       if (plan.board) this.act(sink, "claim", { card: plan.board.card, text: "Fake agent working" }, plan.board.page);
       if (plan.stream) await this.stream(sink, plan.stream, abort.signal);
+      if (plan.helpers) await this.helpers(sink, plan.helpers, /helperdelay=(\d+)/i.exec(input.text)?.[1] ?? "8000", abort.signal);
       if (plan.hang) await wait(abort.signal);
       else await wait(abort.signal, plan.delayMs);
       if (plan.error) return { status: "error", error: "Fake agent error ([fake:error])" };
@@ -163,6 +173,24 @@ class FakeSession implements ProviderSession {
     } catch (err) {
       sink.toolUpdate(toolId, { status: "error", output: (err as Error).message });
     }
+  }
+
+  /** agent_run calls side by side, each shown as the tool call a real agent's would be. */
+  private async helpers(sink: RunSink, count: number, delay: string, signal: AbortSignal): Promise<void> {
+    const runHelper = this.deps.runHelper;
+    if (!runHelper) return;
+    await Promise.all(
+      Array.from({ length: count }, async (_, i) => {
+        const toolId = `fake-helper-${i}-${Date.now().toString(36)}`;
+        const task = `Fake helper task ${i + 1}: rename the widget and run its tests. [fake:stream=6 delay=${delay}]`;
+        sink.toolStart({ toolId, name: "agent_run", tool: "mcp", title: "Scribe: agent_run", input: { task, provider: "pi" }, status: "running" });
+        try {
+          sink.toolUpdate(toolId, { status: "done", output: JSON.stringify(await runHelper(this.thread.id, { task, provider: "pi", signal })) });
+        } catch (err) {
+          sink.toolUpdate(toolId, { status: "error", output: (err as Error).message });
+        }
+      })
+    );
   }
 
   /** Thinking, a few tool calls and a streamed paragraph, step by step, like a real run's transcript. */

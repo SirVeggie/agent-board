@@ -346,6 +346,7 @@ export class AgentHost {
       const deps = {
         runAction: (page: string, name: string, args: Record<string, unknown>, caller: ActionCaller) => store.runAction(page, name, args, caller, (id) => this.runInfo(id)).result,
         runInfo: (id: string) => this.runInfo(id),
+        runHelper: (id: string, opts: { task: string; provider: string; signal: AbortSignal }) => this.runHelper(id, opts),
         delayMs: Number(process.env.SCRIBE_FAKE_AGENT_DELAY) || undefined,
       };
       this.fakes = { claude: new FakeProvider("claude", "Claude", deps), cursor: new FakeProvider("cursor", "Cursor", deps), codex: new FakeProvider("codex", "Codex", deps), pi: new FakeProvider("pi", "Native", deps) };
@@ -1088,6 +1089,12 @@ export class AgentHost {
     this.rememberChoices(next, patch);
     const view = this.view(next);
     this.emit({ type: "agent_thread", thread: view });
+    // Its helpers sit under it in the thread list: they are archived and brought back with it.
+    if (next.archived !== thread.archived) {
+      for (const t of [...this.threads.values()]) {
+        if (t.helperOf === id && t.archived !== next.archived) this.updateThread(t.id, { archived: next.archived });
+      }
+    }
     return view;
   }
 
@@ -1163,6 +1170,10 @@ export class AgentHost {
       log(`Removing the files of ${id} failed: ${(err as Error).message}`);
     }
     this.emit({ type: "agent_thread_deleted", id });
+    // Its helpers go with it.
+    for (const t of [...this.threads.values()]) {
+      if (t.helperOf === id) await this.deleteThread(t.id);
+    }
     this.scheduleUnusedPageCleanup();
   }
 

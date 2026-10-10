@@ -58,7 +58,7 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?, workerInstructions?,    
             workerLog?: [{ id, at, kind, text, worker?, workerId?, card?, thread?,
                            usage?: { turns, inputTokens?, outputTokens? } }],  // the page's; read with logs
             workers?: { [workerId]: { name, color?, instructions?, context?, provider?, model?, effort?, fast?, mode?,
-                                      cwd?, approval?, worktree?, web?, show?,
+                                      cwd?, approval?, worktree?, web?, show?, helpers?,
                                       threadId?, run?, step?, stop?, merge?, error?, fails?, solo? } } }  // run..solo: the page's
 ```
 
