@@ -4376,10 +4376,30 @@ button.space-menu-item.danger {
 
 .newpage.gl .np-canvas {
   opacity: 1;
+  /* A fresh canvas may compile before its first style pass: keyframes also fade that case. */
+  animation: np-reveal 320ms ease-out;
 }
 
 .newpage.gl .newpage-matter {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 320ms ease-out, visibility 0s 320ms;
+}
+
+/* Keep the fallback under the incoming shader, then stop its animation work. */
+.newpage.gl .newpage-matter,
+.newpage.gl .newpage-matter * {
+  animation-play-state: paused;
+}
+
+@keyframes np-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .newpage.gl .np-canvas { animation: none; }
+  .newpage.gl .newpage-matter { transition: none; }
 }
 
 .newpage {
