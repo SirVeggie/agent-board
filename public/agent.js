@@ -16,6 +16,7 @@
     emptyEnter: "scribe.agent.emptyEnter",
     sendKey: "scribe.agent.sendKey",
     tips: "scribe.agent.showTips",
+    presets: "scribe.agent.showPresets",
     hidePage: "scribe.agent.hidePageThreads",
     compact: "scribe.agent.compactThreads",
     fullSide: "scribe.agent.fullSideWidth",
@@ -424,7 +425,11 @@
       S.lastActiveId = active;
       dock.syncThread();
       renderLists();
-      for (const view of views()) view.renderContext();
+      for (const view of views()) {
+        view.renderContext();
+        // The presets name the page in front.
+        if (!view.thread() && view.transcript?.querySelector(".ag-presets")) view.renderTranscript();
+      }
     }
   });
 
@@ -762,6 +767,19 @@
       else byKey.set(key, { path: dir, n: 1 });
     }
     return [...byKey.values()].sort((a, b) => b.n - a.n || a.path.localeCompare(b.path));
+  }
+
+  /** What the presets in an empty chat set (Agent settings turns them off). */
+  const PAGE_PRESET = { mode: "board", web: "on" };
+  const WORKSPACE_PRESET = { mode: "code", approval: "auto", web: "limited", useWorktree: false };
+
+  /** Workspaces offered as presets: last used first, then the other folders threads are attached to. */
+  function presetWorkspaces() {
+    const byKey = new Map();
+    for (const dir of [...(prefs().recentWorkspaces || []), ...threadWorkspaces().map((w) => w.path)]) {
+      if (dir && !byKey.has(dirKey(dir))) byKey.set(dirKey(dir), dir);
+    }
+    return [...byKey.values()].slice(0, 6);
   }
 
   function sameScope(a, b) {
@@ -2288,11 +2306,17 @@
     emptyState() {
       const s = this.settings();
       const box = el("div", "ag-empty");
-      box.append(icon("sparkle", "ag-empty-ico"));
+      const star = el("span", "ag-empty-star");
+      star.append(icon("sparkle", "ag-empty-ico"));
+      // One shader star per view, moved into each new empty state.
+      if (this.starFx === undefined) this.starFx = window.scribeStarFx?.create() || null;
+      this.starFx?.mount(star);
+      box.append(star);
       box.append(el("div", "ag-empty-title", this.variant === "dock" ? "Ask about this page" : "New thread"));
       const meta = el("div", "ag-empty-meta");
       fillScopeDisplay(meta, s.scope, this.thread() ? workspaceDir(this.thread()) : s.cwd);
       box.append(meta);
+      if (this.variant !== "dock" && !this.thread() && localStorage.getItem(LS.presets) !== "0") box.append(this.presetList(s));
       if (localStorage.getItem(LS.tips) === "0") return box;
       const tips =
         s.mode === "board"
@@ -2310,6 +2334,42 @@
       }
       box.append(list);
       return box;
+    }
+
+    /**
+     * Quick settings for a new thread: the page in front in Pages mode, or a workspace in Code mode.
+     * A pick changes the draft in place, so what is already written stays.
+     */
+    presetList(s) {
+      const list = el("div", "ag-presets");
+      const row = (ico, title, detail, tip, on, scope, settings) => {
+        const b = button(null, `ag-preset${on ? " on" : ""}`, () => {
+          this.draft = { scope, settings: { ...(this.draft?.settings || {}), ...settings } };
+          this.renderAll();
+          if (this.variant === "dock") dock.renderTitle();
+          this.focus();
+        }, tip);
+        const text = el("span", "ag-preset-text");
+        text.append(el("b", null, title), el("span", null, detail));
+        b.append(icon(ico), text);
+        b.setAttribute("aria-pressed", String(on));
+        list.append(b);
+      };
+      const tab = activeTab();
+      if (tab) {
+        const scope = { kind: "page", ref: tab.id };
+        const on = sameScope(s.scope, scope) && s.mode === PAGE_PRESET.mode && s.web === PAGE_PRESET.web;
+        row("page", tab.title, "This page", "Pages mode, full web access, scoped to this page", on, scope, PAGE_PRESET);
+      }
+      for (const dir of presetWorkspaces()) {
+        const on =
+          s.scope.kind === "global" &&
+          dirKey(s.cwd) === dirKey(dir) &&
+          !s.useWorktree &&
+          Object.keys(WORKSPACE_PRESET).every((key) => key === "useWorktree" || s[key] === WORKSPACE_PRESET[key]);
+        row("box", R.basename(dir) || dir, "Workspace", `Code mode, Auto review, limited web, no worktree\n${dir}`, on, { kind: "global", ref: null }, { ...WORKSPACE_PRESET, cwd: dir });
+      }
+      return list;
     }
 
     renderGroup(group) {
@@ -7518,6 +7578,20 @@
             }
           ),
           { id: "ag-tips-label" }
+        ),
+        settingRow(
+          "Presets in a new thread",
+          switchControl(
+            () => localStorage.getItem(LS.presets) !== "0",
+            () => {
+              localStorage.setItem(LS.presets, localStorage.getItem(LS.presets) === "0" ? "1" : "0");
+              for (const view of views()) if (!view.thread()) view.renderTranscript();
+            }
+          ),
+          {
+            id: "ag-presets-label",
+            hint: "An empty chat lists the page in front (Pages mode, full web, scoped to that page) and your workspaces (Code mode, Auto review, limited web, no worktree). Picking one sets the new thread up that way.",
+          }
         ),
         settingRow(
           "Compact thread list",
