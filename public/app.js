@@ -88,7 +88,7 @@
   const SIDEBAR_TAB_KEY = "scribe.sidebarTab";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.0.1";
+  const BOARD_VERSION = "3.0.2";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -1168,11 +1168,39 @@
   }
 
   let releaseSettingsTrap = null;
+  const searchSwitch = document.getElementById("search-enabled");
+  const searchPackStatus = document.getElementById("search-pack-status");
+  function renderSearchSettings(result) {
+    searchPackStatus.textContent = result.message;
+    document.getElementById("search-pack-folder").textContent = result.folder;
+    searchSwitch.disabled = result.status !== "ready";
+    searchSwitch.setAttribute("aria-checked", String(result.enabled));
+  }
+  async function searchSettingsRequest(endpoint, body) {
+    const response = await fetch(`/api/search/${endpoint}`, body === undefined ? {} : {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Cannot update search settings");
+    return result;
+  }
+  searchSwitch.addEventListener("click", async () => {
+    const enabled = searchSwitch.getAttribute("aria-checked") !== "true";
+    searchSwitch.disabled = true;
+    try { renderSearchSettings(await searchSettingsRequest("settings", { enabled })); }
+    catch (err) { searchPackStatus.textContent = err.message; searchSwitch.disabled = false; }
+  });
+  document.getElementById("search-open-folder").addEventListener("click", async () => {
+    try { await searchSettingsRequest("open-folder", {}); }
+    catch (err) { searchPackStatus.textContent = err.message; }
+  });
   function openSettings() {
     if (isPaletteOpen()) {
       closePalette();
     }
     settingsEl.hidden = false;
+    searchSwitch.disabled = true;
+    searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     settingsToggle.setAttribute("aria-expanded", "true");
     releaseSettingsTrap?.();
     releaseSettingsTrap = window.scribeFocusTrap?.bind(document.getElementById("settings-panel"));

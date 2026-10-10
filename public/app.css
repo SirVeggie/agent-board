@@ -2780,6 +2780,14 @@ button.pill-toggle[aria-checked="true"]::after {
   color: var(--muted);
 }
 
+.search-pack-location code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  color: var(--muted);
+}
+.search-pack-location button { flex-shrink: 0; }
+.search-help { padding: 0 5px; font-size: 11px; }
 .settings-hint-after {
   margin: 8px 2px 0;
 }

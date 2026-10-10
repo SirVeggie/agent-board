@@ -229,6 +229,18 @@
         <p class="settings-hint settings-hint-after">For links to Scribe pages that don't choose for themselves. Hold <kbd>Ctrl</kbd> to navigate, <kbd>Shift</kbd> to split, or <kbd>Alt</kbd> to peek, on links, in the Library, and in search. Web links open in your browser unless the page or a modifier says otherwise.</p>
       </section>
       <section class="settings-section">
+        <h3>Search <button type="button" class="search-help" data-tooltip="Search by meaning runs locally with an optional search pack. Unzip the pack into the folder shown here, then switch it on." aria-label="About search packs" aria-description="Search by meaning runs locally with an optional search pack. Unzip the pack into the folder shown here, then switch it on.">?</button></h3>
+        <div class="setting-row">
+          <span id="search-enabled-label">Search by meaning</span>
+          <button type="button" class="pill-toggle" id="search-enabled" role="switch" aria-checked="false" aria-labelledby="search-enabled-label" disabled></button>
+        </div>
+        <p id="search-pack-status" class="settings-hint" role="status">Checking search pack…</p>
+        <div class="setting-row search-pack-location">
+          <code id="search-pack-folder"></code>
+          <button type="button" id="search-open-folder">Open folder</button>
+        </div>
+      </section>
+      <section class="settings-section">
         <h3>Palette prefixes</h3>
         <p class="settings-hint">In Ctrl+D search, a prefix switches what you are looking through. Pages have none.</p>
         <div id="palette-prefix-list"></div>

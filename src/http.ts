@@ -48,6 +48,8 @@ import { searchScopedFiles } from "./agent/searchFiles.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
+import { searchRouter } from "./search/routes.js";
+import { searchEmbedder } from "./search/embedder.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
@@ -93,6 +95,7 @@ export async function startHttp(): Promise<http.Server> {
     });
   }
   const flush = () => {
+    searchEmbedder.stop();
     try {
       agentHost?.dispose();
     } catch {
@@ -147,6 +150,7 @@ export async function startHttp(): Promise<http.Server> {
     res.type("application/javascript").send(highlightBundle);
   });
   app.use(express.json({ limit: "6mb" }));
+  app.use("/api/search", searchRouter());
   app.use(noteAgentSession);
   app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));
@@ -1416,6 +1420,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.post("/api/shutdown", (_req, res) => {
+    searchEmbedder.stop();
     res.json({ ok: true });
     try {
       agentHost?.dispose();
@@ -1431,6 +1436,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   const server = http.createServer(app);
+  server.once("close", () => searchEmbedder.stop());
   const contentServer = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
 

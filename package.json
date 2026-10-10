@@ -6,6 +6,7 @@
   "description": "Scribe: a local hub of HTML pages that you and your agents share over MCP",
   "scripts": {
     "build": "tsc",
+    "test:search": "tsx --test src/search/search.test.ts",
     "start": "node dist/index.js --daemon",
     "mcp": "node dist/index.js",
     "dev": "tsx watch src/index.ts --daemon",
