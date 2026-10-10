@@ -59,7 +59,8 @@ after(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   host.dispose();
   store.closeDb();
-  fs.rmSync(dir, { recursive: true, force: true });
+  // Windows can hold the database file a moment after it closes.
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function parent(approval: ApprovalPolicy = "full"): string {
