@@ -6777,6 +6777,8 @@
   /* ---------- agent settings: their own dialog, opened from the chat header or the board's Settings ---------- */
 
   const KEYS = [
+    ["Ctrl+Alt+S / Ctrl+,", "General settings"],
+    ["Ctrl+Alt+Shift+S / Ctrl+Shift+,", "Agent settings"],
     ["Ctrl+L", "Sidebar chat"],
     ["Ctrl+K", "Floating chat"],
     ["Ctrl+Shift+L", "Full window"],
@@ -8009,27 +8011,17 @@
       keys.append(el("h3", null, "Keys"), list);
 
       panel.append(title, providers, cursor, helpers, memory, sources, usage, chat, keys);
+      window.scribeSettingsUI.mount(panel, [
+        { label: "Providers", sections: [providers, cursor, sources, usage] },
+        { label: "Chat", sections: [chat] },
+        { label: "Memory", sections: [memory] },
+        { label: "Helper agents", sections: [helpers] },
+        { label: "Keys", sections: [keys] },
+      ], { close: () => this.close(), before: { label: "← General settings", run: () => app()?.openSettings?.() } });
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
 
-      // The board's Settings keep a short entry that opens this dialog.
-      const boardPanel = document.getElementById("settings-panel");
-      if (boardPanel) {
-        const section = el("section", "settings-section ag-settings");
-        section.append(
-          el("h3", null, "Agent"),
-          settingRow(
-            "Providers, chat and keys",
-            button("Agent settings…", null, () => {
-              app()?.closeSettings?.();
-              this.open();
-            }),
-            { id: "ag-open-settings-label" }
-          )
-        );
-        boardPanel.append(section);
-      }
     },
     renderCycleModes() {
       for (const [id, control] of this.modeButtons || []) {
@@ -8103,7 +8095,7 @@
       }
     },
     isOpen() {
-      return Boolean(this.root && !this.root.hidden);
+      return window.scribeSettingsUI.isOpen(this.root);
     },
     renderUsage() {
       if (!this.usage || !this.isOpen()) return;
@@ -8151,11 +8143,13 @@
     },
     open() {
       if (!this.root) return;
+      app()?.closeSettings?.();
+      if (!this.isOpen()) this.returnFocus = document.activeElement;
       this.renderStatus();
       this.renderCycleModes();
       void this.renderSources();
       this.renderSummarizer();
-      this.root.hidden = false;
+      window.scribeSettingsUI.show(this.root, true);
       this.renderUsage();
       this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });
       this.releaseTrap?.();
@@ -8165,7 +8159,8 @@
       if (!this.isOpen()) return false;
       this.releaseTrap?.();
       this.releaseTrap = null;
-      this.root.hidden = true;
+      window.scribeSettingsUI.show(this.root, false);
+      if (this.returnFocus?.isConnected && !this.returnFocus.closest(".settings")) this.returnFocus.focus({ preventScroll: true });
       hideHoverTip();
       return true;
     },
@@ -9180,7 +9175,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

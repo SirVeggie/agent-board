@@ -1220,8 +1220,16 @@
   }
 
   function isSettingsOpen() {
-    return !settingsEl.hidden;
+    return window.scribeSettingsUI.isOpen(settingsEl);
   }
+
+  const settingsSections = [...document.querySelectorAll("#settings-panel > .settings-section")];
+  const settingsCategories = window.scribeSettingsUI.mount(document.getElementById("settings-panel"), [
+    { label: "Appearance", sections: [settingsSections[0], settingsSections[5]] },
+    { label: "Navigation", sections: [settingsSections[1], settingsSections[2]] },
+    { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
+    { label: "Import / Export", sections: [settingsSections[6]] },
+  ], { close: closeSettings, after: { label: "Agent settings →", run: () => window.scribeChat?.openSettings() } });
 
   let releaseSettingsTrap = null;
   const searchSwitch = document.getElementById("search-enabled");
@@ -1252,10 +1260,11 @@
     catch (err) { searchPackStatus.textContent = err.message; }
   });
   function openSettings() {
+    window.scribeChat?.closeSettings();
     if (isPaletteOpen()) {
       closePalette();
     }
-    settingsEl.hidden = false;
+    window.scribeSettingsUI.show(settingsEl, true);
     searchSwitch.disabled = true;
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     settingsToggle.setAttribute("aria-expanded", "true");
@@ -1269,7 +1278,7 @@
     }
     releaseSettingsTrap?.();
     releaseSettingsTrap = null;
-    settingsEl.hidden = true;
+    window.scribeSettingsUI.show(settingsEl, false);
     settingsToggle.setAttribute("aria-expanded", "false");
     settingsToggle.focus({ preventScroll: true });
   }
@@ -3234,6 +3243,8 @@
     if (document.querySelector("dialog[open]")) {
       return;
     }
+    if (action === "settings") { openSettings(); return; }
+    if (action === "agent-settings") { window.scribeChat?.openSettings(); return; }
     if (action === "palette") {
       togglePalette();
     } else if (action === "download") {
@@ -3277,6 +3288,11 @@
 
   function onBoardShortcut(event) {
     if (document.querySelector("dialog[open]")) {
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && ((event.altKey && event.key.toLowerCase() === "s") || (!event.altKey && (event.code === "Comma" || event.key === "," || event.key === "<")))) {
+      event.preventDefault();
+      runShortcut(event.shiftKey ? "agent-settings" : "settings");
       return;
     }
     if (spaces.onKey(event)) {
@@ -4349,6 +4365,7 @@
     if (tab.kind === "semantic-info") {
       if (tab.settings) {
         closePalette();
+        settingsCategories.select(2);
         openSettings();
       }
       return;
@@ -4446,6 +4463,7 @@
     showNotice,
     confirm: confirmDelete,
     closeSettings,
+    openSettings,
     /** Tell a page's frame (when it has one) about something, e.g. one of its agent threads changing. */
     postToPage: (id, message) => {
       frames.get(id)?.el.contentWindow?.postMessage({ ...message, id }, contentOrigin());
@@ -4464,7 +4482,7 @@
     } else if (event.data?.type === "scribe-palette") {
       togglePalette();
     } else if (event.data?.type === "scribe-shortcut") {
-      if (["spaces", "next-space", "prev-space", "library", "new-page"].includes(event.data.action)) {
+      if (["spaces", "next-space", "prev-space", "library", "new-page", "settings", "agent-settings"].includes(event.data.action)) {
         runShortcut(event.data.action);
       }
     } else if (event.data?.type === "scribe-activity") {

@@ -36,6 +36,7 @@ const VK_TAB: u32 = 0x09;
 const VK_PRIOR: u32 = 0x21;
 const VK_NEXT: u32 = 0x22;
 const VK_OEM_PERIOD: u32 = 0xBE;
+const VK_OEM_COMMA: u32 = 0xBC;
 
 /// The key that types an apostrophe in the current layout (on Nordic layouts the '* key next to
 /// Enter), so the model shortcuts follow the label rather than a US key position.
@@ -44,6 +45,9 @@ fn is_apostrophe(key: u32) -> bool {
 }
 
 fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
+    if ctrl && ((alt && key == u32::from(b'S')) || (!alt && key == VK_OEM_COMMA)) {
+        return Some(Shortcut::Board(if shift { "agent-settings" } else { "settings" }));
+    }
     // Agent chat: Ctrl+' cycles favourite models, Ctrl+Alt+' cycles reasoning, Ctrl+Shift+' cycles the
     // mode. Ctrl+Alt is also AltGr on Windows, which is fine here: AltGr+' types nothing on the
     // layouts this is for.

@@ -1927,6 +1927,11 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
     // Ctrl+. next workspace then none, Ctrl+Shift+. next Scribe access.
     // Pages that use them keep them.
     if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) return;
+    if ((event.altKey && event.key.toLowerCase() === "s") || (!event.altKey && (event.code === "Comma" || event.key === "," || event.key === "<"))) {
+      event.preventDefault();
+      parent.postMessage({ type: "scribe-shortcut", action: event.shiftKey ? "agent-settings" : "settings" }, "*");
+      return;
+    }
     // Spaces: Ctrl+E shows them, Ctrl+Shift+PageUp / PageDown switches to the previous / next one.
     // Library: Ctrl+B shows or hides the sidebar.
     var boardAction = event.altKey ? ""
