@@ -580,8 +580,6 @@ html.spaces-open .chrome-edge {
   flex: 0 0 auto;
   height: 32px;
   border-radius: 9px;
-  border: 1px dashed var(--accent);
-  background: transparent;
   pointer-events: none;
 }
 
@@ -3265,14 +3263,21 @@ html[data-theme="cream"] .peek-card {
   inset: 0;
   z-index: 20;
   cursor: grabbing;
+  border-radius: inherit;
 }
 .pane-drop-overlay[hidden], .pane-drop-preview[hidden] { display: none; }
+/* Shared drop treatment: a soft theme wash and an inset luminous rim that stays inside clips. */
+.tab-drop-slot, .pane-drop-preview, .tabs-wrap.pane-close-drop::after {
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 19%, transparent),
+    color-mix(in srgb, var(--accent) 6%, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+    inset 0 0 24px color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .pane-drop-preview {
   position: absolute;
   box-sizing: border-box;
-  border: 2px solid var(--accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--heading);
   display: grid;
   place-items: center;
@@ -3280,9 +3285,23 @@ html[data-theme="cream"] .peek-card {
   font-weight: 600;
   pointer-events: none;
 }
+.pane-drop-label {
+  padding: 8px 14px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--chrome-solid) 92%, transparent);
+  box-shadow: var(--shadow);
+}
 body.dragging-pane { cursor: grabbing; user-select: none; }
 body.dragging-pane iframe { pointer-events: none; }
-.pane-close-drop { box-shadow: inset 0 0 0 2px var(--accent); }
+.tabs-wrap.pane-close-drop::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 10px;
+  pointer-events: none;
+  opacity: 1;
+  transform: none;
+}
 
 .pane-head .view-title-text {
   font-weight: 500;

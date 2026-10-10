@@ -95,6 +95,8 @@ window.createViews = function createViews(host) {
   mainEl.appendChild(flashEl);
   const dropOverlay = el("div", "pane-drop-overlay");
   const dropPreview = el("div", "pane-drop-preview");
+  const dropLabel = el("span", "pane-drop-label");
+  dropPreview.appendChild(dropLabel);
   dropOverlay.appendChild(dropPreview);
   dropOverlay.hidden = true;
   mainEl.appendChild(dropOverlay);
@@ -822,26 +824,42 @@ window.createViews = function createViews(host) {
   }
 
   function pageDropAt(x, y) {
-    if (!pageDrag || !host.activeId()) return null;
+    if (!pageDrag || !host.activeId() || !Number.isFinite(x) || !Number.isFinite(y)) return null;
     const box = mainEl.getBoundingClientRect();
     if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
     const dx = x - box.left, dy = y - box.top;
-    const edges = [
-      ["left", dx / Math.min(90, box.width * 0.2)],
-      ["right", (box.width - dx) / Math.min(90, box.width * 0.2)],
-      ["top", dy / Math.min(90, box.height * 0.2)],
-      ["bottom", (box.height - dy) / Math.min(90, box.height * 0.2)],
-    ].sort((a, b) => a[1] - b[1]);
     const split = activeSplit();
-    if (edges[0][1] <= 1) {
-      const edge = edges[0][0];
-      const col = edge === "top" || edge === "bottom";
-      if ((col ? box.height < SPLIT_MIN_PANE_HEIGHT * 2 : mainTooNarrow())) return null;
-      return { edge };
+    // Replacement is a deliberate drop at the centre of a pane. Everything around it
+    // arranges a split, even on large displays where a fixed edge band was hard to reach.
+    if (!pageDrag.pane) {
+      for (const pane of split ? PANES : ["a"]) {
+        const rect = dropPaneRect(pane, split);
+        const cx = (rect.left + rect.width / 2) * box.width;
+        const cy = (rect.top + rect.height / 2) * box.height;
+        if (Math.abs(dx - cx) <= Math.min(90, rect.width * box.width * 0.15) &&
+            Math.abs(dy - cy) <= Math.min(60, rect.height * box.height * 0.15)) return { pane };
+      }
     }
-    if (pageDrag.pane) return null;
-    const second = split && (split.dir === "col" ? dy / box.height : dx / box.width) > ratioFor(split);
-    return { pane: second ? "b" : "a" };
+    const edges = [
+      ["left", dx / box.width],
+      ["right", (box.width - dx) / box.width],
+      ["top", dy / box.height],
+      ["bottom", (box.height - dy) / box.height],
+    ].sort((a, b) => a[1] - b[1]);
+    const edge = edges[0][0];
+    const col = edge === "top" || edge === "bottom";
+    if ((col ? box.height < SPLIT_MIN_PANE_HEIGHT * 2 : mainTooNarrow())) return null;
+    return { edge };
+  }
+
+  function dropPaneRect(pane, split) {
+    const rect = { left: 0, top: 0, width: 1, height: 1 };
+    if (split) {
+      const ratio = ratioFor(split), second = pane === "b";
+      if (split.dir === "col") { rect.top = second ? ratio : 0; rect.height = second ? 1 - ratio : ratio; }
+      else { rect.left = second ? ratio : 0; rect.width = second ? 1 - ratio : ratio; }
+    }
+    return rect;
   }
 
   function updatePageDrag(x, y) {
@@ -857,12 +875,21 @@ window.createViews = function createViews(host) {
         height = 0.5; top = drop.edge === "bottom" ? 0.5 : 0;
       }
     } else if (split) {
-      const ratio = ratioFor(split), second = drop.pane === "b";
-      if (split.dir === "col") { top = second ? ratio : 0; height = second ? 1 - ratio : ratio; }
-      else { left = second ? ratio : 0; width = second ? 1 - ratio : ratio; }
+      ({ left, top, width, height } = dropPaneRect(drop.pane, split));
     }
-    Object.assign(dropPreview.style, { left: left * 100 + "%", top: top * 100 + "%", width: width * 100 + "%", height: height * 100 + "%" });
-    dropPreview.textContent = drop.edge ? "Place " + drop.edge : "Replace pane";
+    // Keep the rim inside the rounded page surface. Outer corners follow its curvature;
+    // newly created corners at the split seam get their own smaller radius.
+    const surface = getComputedStyle(mainEl);
+    const radius = (corner, outer) => outer ? Math.max(0, parseFloat(surface[corner]) - 6) + "px" : "10px";
+    Object.assign(dropPreview.style, {
+      left: `calc(${left * 100}% + 6px)`, top: `calc(${top * 100}% + 6px)`,
+      width: `calc(${width * 100}% - 12px)`, height: `calc(${height * 100}% - 12px)`,
+      borderTopLeftRadius: radius("borderTopLeftRadius", left === 0 && top === 0),
+      borderTopRightRadius: radius("borderTopRightRadius", left + width === 1 && top === 0),
+      borderBottomLeftRadius: radius("borderBottomLeftRadius", left === 0 && top + height === 1),
+      borderBottomRightRadius: radius("borderBottomRightRadius", left + width === 1 && top + height === 1),
+    });
+    dropLabel.textContent = drop.edge ? "Place " + drop.edge : "Replace pane";
     return drop;
   }
 

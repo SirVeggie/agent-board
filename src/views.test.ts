@@ -149,10 +149,12 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       await views.dropPage({ pane: "b" }, topDrop);
       observations.dragStack = [panes(), mainEl.classList.contains("split-col")];
       views.beginPageDrag({ id: "d" });
+      observations.expandedSplitTarget = views.updatePageDrag(box.left + box.width / 2, box.top + box.height * 0.12);
       const replace = views.updatePageDrag(box.left + box.width / 2, box.top + box.height / 4);
       await views.dropPage({ id: "d" }, replace);
       views.endPageDrag();
       observations.dragReplace = [panes(), active];
+      observations.compactReplaceTarget = replace;
       await views.dropPage({ id: "d" }, { edge: "right" });
       observations.dragRight = [panes(), mainEl.classList.contains("split-col")];
       views.beginPageDrag({ pane: "a" });
@@ -185,12 +187,13 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       afterReload: ["da", "a"], deletedTarget: "d", deletedSplitNotRestored: "d",
       deletedSpaceRemoved: "{}",
       edgeDrop: { edge: "top" }, overlayVisible: true, dragStack: ["cb", true],
+      expandedSplitTarget: { edge: "top" }, compactReplaceTarget: { pane: "a" },
       dragReplace: ["db", "b"], dragRight: ["bd", false], noDropOutside: null,
       cancelKeepsLayout: "bd", dragToStrip: ["b", true, true], dragTabToSplit: ["cb", "b"],
       dragOnlyTab: ["c,new", true], overlayCleaned: [true, false],
     });
     // Exercise the actual app.js controller with mouse input, including crossing live iframes.
-    await page.setContent('<div id="strip"><div id="tabs"></div></div><main></main>');
+    await page.setContent('<div id="strip" class="tabs-wrap"><div id="tabs"></div></div><main></main>');
     await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") + '\n#strip {height:50px} #tabs {display:flex;height:50px} main {position:relative;width:1100px;height:650px} .tab {width:150px;height:40px} iframe {position:absolute;inset:40px 0 0;width:100%;height:90%}' });
     const appSource = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
     const controller = appSource.slice(appSource.indexOf("  function onTabPointerDown("), appSource.indexOf('  /**\n   * Library row dragged over the strip'));
@@ -231,6 +234,17 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     };
     const area = await page.locator('main').boundingBox();
     assert.ok(area);
+    await page.route('**/api/tabs/*/reorder', route => route.fulfill({ json: { ok: true } }));
+    await moveDrag('.tab[data-id="b"]', 440, area.y + 20);
+    assert.equal(await page.locator('.pane-drop-preview').evaluate(el => (el as HTMLElement).hidden), true);
+    await page.mouse.up();
+    assert.deepEqual(await page.evaluate(() => (window as any).dragTest.state.tabs.map((tab: any) => tab.id)), ['a', 'c', 'b']);
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
+    // Beyond the grace band, the same horizontal position offers a top split.
+    await moveDrag('.tab[data-id="b"]', 440, area.y + 35);
+    assert.equal(await page.locator('.pane-drop-label').textContent(), 'Place top');
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
     await moveDrag('.tab[data-id="b"]', area.x + area.width - 5, area.y + area.height / 2);
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), true);
@@ -241,10 +255,19 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await page.mouse.up();
     assert.equal(await page.evaluate(() => (window as any).dragTest.frames.get('c').el.dataset.pane), 'b');
     await moveDrag('.pane-head[data-pane="b"]', 80, 25);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('#strip')!, '::after').opacity === '1');
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
     assert.equal(await page.locator('.tab').count(), 3);
+    // The preview rim is inset and follows the page surface, including at outer corners.
+    await page.locator('main').evaluate(el => (el as HTMLElement).style.borderRadius = '24px');
     await moveDrag('.tab[data-id="b"]', area.x + 5, area.y + 200);
+    const rim = await page.locator('.pane-drop-preview').evaluate(el => {
+      const box = el.getBoundingClientRect(), surface = el.parentElement!.parentElement!.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return { inset: box.left - surface.left, topRadius: style.borderTopLeftRadius, bottomRadius: style.borderBottomLeftRadius, seamRadius: style.borderTopRightRadius };
+    });
+    assert.deepEqual(rim, { inset: 6, topRadius: '18px', bottomRadius: '18px', seamRadius: '10px' });
     await page.keyboard.press('Escape');
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);

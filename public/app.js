@@ -1626,9 +1626,10 @@
     }
     event.preventDefault();
     positionDraggedTab(event.clientX, event.clientY);
-    drag.pageDrop = views.updatePageDrag(event.clientX, event.clientY);
     const strip = tabsWrap.getBoundingClientRect();
-    const overStrip = event.clientX >= strip.left && event.clientX <= strip.right && event.clientY >= strip.top && event.clientY <= strip.bottom;
+    // Tabs can drift below the strip while reordering; pane headers keep their explicit close target.
+    const overStrip = event.clientX >= strip.left && event.clientX <= strip.right && event.clientY >= strip.top && event.clientY <= strip.bottom + (drag.pane ? 0 : 28);
+    drag.pageDrop = views.updatePageDrag(event.clientX, overStrip ? Number.NaN : event.clientY);
     drag.overStrip = overStrip;
     const closePane = drag.pane && overStrip && views.canCloseDraggedPane(drag.pane);
     tabsWrap.classList.toggle("pane-close-drop", Boolean(closePane));
