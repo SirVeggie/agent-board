@@ -4,6 +4,54 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
+test("Workers panel shows provider quotas, missing reports, and live recovery", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Kanban usage test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    page.setDefaultTimeout(5000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    await page.setContent(`<script>
+      window.scribe = {
+        state: { columns: [{ id: 'todo', title: 'Ready', role: 'agent' }], labels: [], cards: [], nextNum: 1,
+          settings: { workers: { a: { name: 'Sol', provider: 'codex' }, b: { name: 'Luna', provider: 'pi' } } } },
+        local: {}, set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); },
+        onChange(fn) { this.changed = fn; },
+        agent: {
+          options() { return Promise.resolve({ ok: true, providers: [{ id: 'codex', available: true }], models: {} }); },
+          limits() { return Promise.resolve({ ok: true, limits: { codex: { at: Date.now(), ordinaryUsageAllowed: false,
+            windows: [{ id: 'primary', label: '5 hours', utilization: 1, resetsAt: Date.now() - 1000 }] } } }); },
+          onLimits(fn) { this.changedLimits = fn; }, threads() { return Promise.resolve({ ok: true, threads: [] }); }
+        }
+      };
+    </script>${html}`);
+    await page.locator('#workersBtn').click();
+    const usage = page.getByRole('region', { name: 'Usage limits' });
+    await usage.getByText('100% used').waitFor();
+    assert.match(await usage.innerText(), /Reset passed · awaiting update/);
+    assert.match(await usage.innerText(), /Included usage blocked/);
+    assert.match(await usage.innerText(), /Pi\s+Usage limits unavailable/);
+    assert.equal(await usage.locator('progress').getAttribute('value'), '100');
+    await page.evaluate(() => (window as any).scribe.agent.changedLimits({ codex: { at: Date.now(), ordinaryUsageAllowed: true,
+      windows: [{ id: 'primary', label: '5 hours', utilization: 0.25, resetsAt: Date.now() + 3600000 }] } }));
+    await usage.getByText('25% used').waitFor();
+    assert.doesNotMatch(await usage.innerText(), /Included usage blocked|awaiting update/);
+    assert.equal(await usage.locator('progress').getAttribute('value'), '25');
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Kanban filters cycle, combine includes, and give exclusions precedence", async (t) => {
   let browser;
   try {

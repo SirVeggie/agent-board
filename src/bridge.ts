@@ -883,6 +883,14 @@ export const BOARD_BRIDGE_JS = `
           console.error(err);
         }
       });
+    } else if (data.type === "scribe-agent-limits") {
+      agentLimitListeners.slice().forEach(function (fn) {
+        try {
+          fn(data.limits || {});
+        } catch (err) {
+          console.error(err);
+        }
+      });
     } else if (data.type === "scribe-agent-steps") {
       agentStepListeners.slice().forEach(function (fn) {
         try {
@@ -1037,6 +1045,7 @@ export const BOARD_BRIDGE_JS = `
   // so those calls may take as long as the user does.
   var agentListeners = [];
   var agentStepListeners = [];
+  var agentLimitListeners = [];
   var AGENT_ASK_MS = 10 * 60 * 1000;
 
   function agentText(value) {
@@ -1202,6 +1211,17 @@ export const BOARD_BRIDGE_JS = `
     /** What start() can pick from: { ok, providers, models (id, label, efforts, params), modes, approvals, defaults }. */
     options: function () {
       return agentCall({ op: "options" });
+    },
+    /** Provider plan usage: { ok, limits: { [provider]: { at, windows: [{ id, label, utilization, resetsAt? }], availability?, detail?, ordinaryUsageAllowed?, overage? } } }. Missing providers have no report. Also subscribes this page to onLimits updates. */
+    limits: function () {
+      return agentCall({ op: "limits" });
+    },
+    /** fn(limits) after limits() whenever provider usage changes. Returns an unsubscribe function. */
+    onLimits: function (fn) {
+      agentLimitListeners.push(fn);
+      return function () {
+        agentLimitListeners = agentLimitListeners.filter(function (item) { return item !== fn; });
+      };
     },
     /**
      * The template's agent actions for the page's right-click menu, so a page that draws its own menu

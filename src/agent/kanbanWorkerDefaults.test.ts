@@ -6,6 +6,42 @@ import vm from "node:vm";
 const board = fs.readFileSync(new URL("../../templates/builtin/kanban.html", import.meta.url), "utf8");
 const chat = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
 
+test("page usage snapshots and board preserve Codex reports past reset", () => {
+  const now = Date.now();
+  const limits = {
+    codex: { windows: [{ label: "5 hours", utilization: 1, resetsAt: now - 1000 }], ordinaryUsageAllowed: false },
+    claude: { windows: [{ label: "5 hours", utilization: 0.8, resetsAt: now - 1000 }] },
+  };
+  const context = vm.createContext({
+    S: { config: { limits } },
+    clamp: (v: number, min: number, max: number) => Math.min(max, Math.max(min, v)),
+  });
+  vm.runInContext([fn(chat, "liveWindows"), fn(chat, "planLimits"), fn(chat, "pageLimits"), fn(board, "workerQuotaWindow")].join("\n"), context);
+  const snapshot = vm.runInContext("pageLimits()", context);
+  assert.equal(snapshot.codex.windows[0].utilization, 1);
+  assert.equal(snapshot.codex.ordinaryUsageAllowed, false);
+  assert.equal(snapshot.claude.windows[0].utilization, 0);
+  assert.equal(vm.runInContext("workerQuotaWindow('codex', pageLimits().codex.windows[0]).percent", context), 100);
+  assert.match(vm.runInContext("workerQuotaWindow('codex', pageLimits().codex.windows[0]).reset", context), /awaiting update/);
+  assert.equal(vm.runInContext("workerQuotaWindow('claude', pageLimits().claude.windows[0]).percent", context), 0);
+});
+
+test("usage changes reach subscribed pages and forget closed pages", () => {
+  const watch = new Set(["open", "closed"]);
+  const events: Array<{ id: string; message: any }> = [];
+  const context = vm.createContext({
+    pageLimitWatch: watch,
+    pageLimits: () => ({ codex: { windows: [{ utilization: 0.5 }] } }),
+    app: () => ({ tabs: () => [{ id: "open" }], postToPage: (id: string, message: any) => events.push({ id, message }) }),
+  });
+  vm.runInContext(fn(chat, "pageLimitsChanged") + "\npageLimitsChanged();", context);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].id, "open");
+  assert.equal(events[0].message.type, "scribe-agent-limits");
+  assert.equal(events[0].message.limits.codex.windows[0].utilization, 0.5);
+  assert.deepEqual([...watch], ["open"]);
+});
+
 // Execute the shipped board's launch helpers and the chat's settings resolver together.
 function fn(source: string, name: string): string {
   const match = source.match(new RegExp(`^  function ${name}\\([^]*?^  }`, "m"));

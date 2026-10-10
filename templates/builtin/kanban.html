@@ -953,6 +953,12 @@
   .wp-shared { display: flex; align-items: center; gap: 8px; padding: 8px 6px; color: var(--muted); font-size: 12px; }
   .wp-shared .edit { color: var(--accent); padding: 0; }
   .wp-shared .edit:hover { text-decoration: underline; }
+  .wp-usage { padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .wp-usage h3 { margin: 0 0 8px; font-size: 12px; }
+  .wp-quota { margin: 6px 0; }
+  .wp-quota-line { display: flex; justify-content: space-between; gap: 10px; }
+  .wp-quota progress { width: 100%; height: 5px; accent-color: var(--accent); }
+  .wp-quota small { display: block; color: var(--muted); }
   .shared-instructions-box { width: min(800px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; }
   .shared-instructions-box textarea { display: block; width: 100%; min-height: min(240px, 45vh); max-height: 65vh; margin-top: 16px; resize: none; overflow-y: auto; line-height: 1.5; }
   .worker-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px 12px; align-items: center; overflow-y: auto; padding: 10px 2px 2px; }
@@ -5538,6 +5544,7 @@
       panelEditor = null;
     }
     workersPop.classList.remove("hidden");
+    loadWorkerLimits();
     renderWorkersButton();
     renderWorkersPanel();
     placeWorkersPanel();
@@ -5575,6 +5582,7 @@
         : "add an agent column for their cards";
     head.appendChild(el("span", null, inboxLine));
     workersPop.appendChild(head);
+    workersPop.appendChild(buildWorkerLimits());
     if (!hasWorkerApi()) workersPop.appendChild(el("p", "worker-note", "Restart Scribe to run agent workers."));
     var sharedSummary = el("div", "wp-shared");
     var sharedLabel = el("span", null, "Shared instructions");
@@ -5716,6 +5724,82 @@
     clearTimeout(workerSaveTimer);
     if (workerPending && workerPending.id && worker(workerPending.id)) saveWorker(workerPending.id, workerPending.patch);
     workerPending = null;
+  }
+  var workerLimits = {};
+  var workerLimitsLoaded = false;
+  var workerLimitsLoading = false;
+  var workerLimitsError = false;
+  function loadWorkerLimits() {
+    if (workerLimitsLoading || !scribe.agent || typeof scribe.agent.limits !== "function") return;
+    workerLimitsLoading = true;
+    scribe.agent.limits().then(function (r) {
+      workerLimitsLoaded = Boolean(r && r.ok);
+      workerLimitsError = !workerLimitsLoaded;
+      if (workerLimitsLoaded) workerLimits = r.limits || {};
+    }).catch(function () { workerLimitsError = true; }).then(function () {
+      workerLimitsLoading = false;
+      renderWorkersPanel();
+    });
+    loadAgentOptions().then(function () { renderWorkersPanel(); });
+  }
+  function workerQuotaWindow(provider, w) {
+    var expired = w.resetsAt && w.resetsAt <= Date.now();
+    var used = expired && provider !== "codex" ? 0 : Number(w.utilization);
+    var percent = Number.isFinite(used) ? Math.round(clamp(used, 0, 1) * 100) : null;
+    var reset = !w.resetsAt ? "" : expired
+      ? provider === "codex" ? "Reset passed · awaiting update" : "Reset passed"
+      : "Resets " + new Date(w.resetsAt).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    return { percent: percent, reset: reset };
+  }
+  function buildWorkerLimits() {
+    var section = el("section", "wp-usage");
+    section.setAttribute("aria-label", "Usage limits");
+    section.appendChild(el("h3", null, "Usage limits"));
+    var providers = {};
+    workerIds().forEach(function (id) {
+      var provider = str(worker(id).provider) || workerDefaults(agentOptions).provider;
+      if (provider) providers[provider] = true;
+    });
+    var ids = Object.keys(providers);
+    if (!ids.length) { section.appendChild(el("small", null, "Add a worker to see its provider’s limits.")); return section; }
+    ids.forEach(function (provider) {
+      var limits = workerLimits[provider];
+      var name = provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : provider === "cursor" ? "Cursor" : "Pi";
+      var group = el("div", "wp-quota");
+      group.appendChild(el("b", null, name));
+      if (!limits) group.appendChild(el("small", null, !workerLimitsLoaded && !workerLimitsError && scribe.agent && scribe.agent.limits ? "Loading…" : "Usage limits unavailable"));
+      else {
+        if (limits.detail) group.appendChild(el("small", null, limits.detail));
+        else if (limits.availability && limits.availability !== "available") group.appendChild(el("small", null, "Usage limits unavailable"));
+        if (provider === "codex" && limits.ordinaryUsageAllowed === false) group.appendChild(el("small", null, "Included usage blocked · waiting for provider confirmation"));
+        if (limits.overage) group.appendChild(el("small", null, "Extra usage billing active"));
+        (limits.windows || []).forEach(function (w) {
+          var value = workerQuotaWindow(provider, w);
+          var line = el("div", "wp-quota-line");
+          line.appendChild(el("span", null, w.label));
+          line.appendChild(el("span", null, value.percent == null ? "Unavailable" : value.percent + "% used"));
+          group.appendChild(line);
+          if (value.percent != null) {
+            var bar = el("progress");
+            bar.max = 100; bar.value = value.percent;
+            bar.setAttribute("aria-label", name + " · " + w.label + " used");
+            group.appendChild(bar);
+          }
+          if (value.reset) group.appendChild(el("small", null, value.reset));
+        });
+        if (!(limits.windows || []).length && !limits.detail && (!limits.availability || limits.availability === "available")) group.appendChild(el("small", null, "No usage windows reported"));
+      }
+      section.appendChild(group);
+    });
+    return section;
+  }
+  if (scribe.agent && typeof scribe.agent.onLimits === "function") {
+    scribe.agent.onLimits(function (limits) {
+      workerLimits = limits || {};
+      workerLimitsLoaded = true;
+      workerLimitsError = false;
+      renderWorkersPanel();
+    });
   }
   /** Scribe couldn't give the agent options (the board isn't open in Scribe). */
   var optionsFailed = false;

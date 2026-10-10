@@ -443,6 +443,7 @@
     }
     loadMissing();
     armUsageTick();
+    pageLimitsChanged();
     const models = await Promise.all(PROVIDERS.filter(providerAvailable).map(async (provider) => {
       try { return [provider, await api("GET", `/models?provider=${provider}`)]; }
       catch { return [provider, null]; }
@@ -582,6 +583,7 @@
       }
       case "agent_limits": {
         S.config.limits = msg.limits || {};
+        pageLimitsChanged();
         for (const view of views()) view.renderComposerBar();
         agentSettings.renderUsage();
         armUsageTick();
@@ -6770,6 +6772,7 @@
   function refreshUsageUi() {
     for (const view of views()) view.renderComposerBar();
     agentSettings.renderUsage();
+    pageLimitsChanged();
   }
 
   function soonestFutureReset(limits) {
@@ -8459,6 +8462,19 @@
 
   /** Page threads whose live steps a page asked for (board.agent.steps), with a pending push timer. */
   const pageStepWatch = new Map();
+  const pageLimitWatch = new Set();
+
+  function pageLimits() {
+    return Object.fromEntries(Object.keys(S.config.limits || {}).map((provider) => [provider, planLimits(provider)]));
+  }
+
+  function pageLimitsChanged() {
+    const open = new Set((app()?.tabs?.() || []).map((tab) => tab.id));
+    for (const id of pageLimitWatch) {
+      if (!open.has(id)) { pageLimitWatch.delete(id); continue; }
+      app()?.postToPage?.(id, { type: "scribe-agent-limits", limits: pageLimits() });
+    }
+  }
   const PAGE_STEPS = 4;
 
   /** The running turn's last few steps, as the collapsed dock shows them: [{ key, kind, text }]. Empty once it stops. */
@@ -8827,6 +8843,9 @@
         return { ok: true };
       case "options":
         return pageOptions();
+      case "limits":
+        pageLimitWatch.add(tab.id);
+        return { ok: true, limits: pageLimits() };
       case "actions":
         // The template's right-click actions, for a page that draws its own menu (#161).
         return {
