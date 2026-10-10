@@ -60,6 +60,8 @@
   const uiFxToggle = document.getElementById("ui-fx");
   const auroraEdgeToggle = document.getElementById("aurora-edge");
   const auroraIdleToggle = document.getElementById("aurora-idle");
+  const chromeFxTrack = document.getElementById("chrome-fx");
+  const chromeFxWhenTrack = document.getElementById("chrome-fx-when");
   const agentSideTrack = document.getElementById("agent-side");
   const librarySideTrack = document.getElementById("library-side");
   const agentSideLabel = document.getElementById("agent-side-label");
@@ -119,6 +121,20 @@
   /** Also read by aurora.js, which draws the title bar edge. */
   const AURORA_EDGE_KEY = "scribe.auroraEdge";
   const AURORA_IDLE_KEY = "scribe.auroraIdle";
+  /** Also read by chromefx.js, which draws the title bar background. The first entry is the default. */
+  const CHROME_FX_KEY = "scribe.chromeFx";
+  const CHROME_FX_WHEN_KEY = "scribe.chromeFxWhen";
+  const CHROME_FX_STYLES = [
+    { id: "wash", name: "Aurora" },
+    { id: "motes", name: "Motes" },
+    { id: "rise", name: "Rising motes" },
+    { id: "off", name: "Off" },
+  ];
+  const CHROME_FX_WHEN = [
+    { id: "idle-still", name: "While working" },
+    { id: "always", name: "Always" },
+    { id: "busy", name: "Hidden when idle" },
+  ];
   /** Also read by the inline script in index.html so the first paint already places the panes. */
   const AGENT_SIDE_KEY = "scribe.agentSide";
   const LIBRARY_SIDE_KEY = "scribe.librarySide";
@@ -356,6 +372,7 @@
   renderThemeList();
   renderLinkModes();
   renderPaneSides();
+  renderChromeFx();
   renderPalettePrefixSettings();
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
   bindSettingHint(
@@ -363,12 +380,20 @@
     "Shader motion on controls like the floating chat orb whenever it is visible. Off, they hold a still frame. The New page background still moves."
   );
   bindSettingHint(
+    document.getElementById("chrome-fx-label"),
+    "A faint moving texture behind the tabs, in the theme's colours. It gets livelier while any agent chat runs."
+  );
+  bindSettingHint(
+    document.getElementById("chrome-fx-when-label"),
+    "While working: a still frame when idle, moving while an agent chat runs. Always: it also drifts slowly when idle, which keeps the GPU drawing. Hidden when idle: a plain bar until an agent chat runs. It pauses while the window is in the background."
+  );
+  bindSettingHint(
     document.getElementById("aurora-edge-label"),
-    "A thin blue and violet glow drifts along the bottom of the title bar while any agent chat runs, and fades out when they're done. It pauses while the window is in the background."
+    "A thin glow in the theme's colours drifts along the bottom of the title bar while any agent chat runs, and fades out when they're done. It pauses while the window is in the background."
   );
   bindSettingHint(
     document.getElementById("aurora-idle-label"),
-    "A faint, still blue and violet line under the title bar when no agent is working. It doesn't move, so it costs nothing."
+    "A faint, still line in the theme's colours under the title bar when no agent is working. It doesn't move, so it costs nothing."
   );
   bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
@@ -955,6 +980,33 @@
   function renderPaneSides() {
     renderPaneSide(agentSideTrack, "agentSide", AGENT_SIDE_KEY);
     renderPaneSide(librarySideTrack, "librarySide", LIBRARY_SIDE_KEY);
+  }
+
+  /** A track of exclusive choices kept in localStorage; the first option is the default. */
+  function renderChoiceTrack(track, options, key, event) {
+    if (!track) {
+      return;
+    }
+    const stored = localStorage.getItem(key);
+    const current = options.some((item) => item.id === stored) ? stored : options[0].id;
+    track.replaceChildren();
+    for (const item of options) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = item.name;
+      btn.setAttribute("aria-pressed", String(item.id === current));
+      btn.addEventListener("click", () => {
+        localStorage.setItem(key, item.id);
+        renderChoiceTrack(track, options, key, event);
+        window.dispatchEvent(new Event(event));
+      });
+      track.appendChild(btn);
+    }
+  }
+
+  function renderChromeFx() {
+    renderChoiceTrack(chromeFxTrack, CHROME_FX_STYLES, CHROME_FX_KEY, "scribe:chrome-fx");
+    renderChoiceTrack(chromeFxWhenTrack, CHROME_FX_WHEN, CHROME_FX_WHEN_KEY, "scribe:chrome-fx");
   }
 
   function bindSettingHint(el, description) {

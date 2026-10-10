@@ -134,5 +134,25 @@
     };
   }
 
-  window.scribeGL = { create, loop };
+  let colours = null;
+
+  /**
+   * The theme's effect colours (--fx-1..3 in app.css) as uniforms: u_c1 the base, u_c2 and u_c3 its
+   * highlights, and u_light 1 on a light theme, where the colours tint the chrome darker.
+   */
+  function palette() {
+    if (!colours) {
+      const css = getComputedStyle(document.documentElement);
+      const rgb = (name) => css.getPropertyValue(name).split(",").map((v) => (Number(v) || 0) / 255).concat(0, 0, 0).slice(0, 3);
+      colours = { u_c1: rgb("--fx-1"), u_c2: rgb("--fx-2"), u_c3: rgb("--fx-3"), u_light: css.colorScheme === "light" ? 1 : 0 };
+    }
+    return colours;
+  }
+
+  new MutationObserver(() => {
+    colours = null;
+    window.dispatchEvent(new Event("scribe:theme"));
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  window.scribeGL = { create, loop, palette };
 })();

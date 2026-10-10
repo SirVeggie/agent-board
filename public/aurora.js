@@ -1,5 +1,5 @@
 /**
- * The aurora edge: a thin blue/violet line along the bottom of the title bar that drifts while any
+ * The aurora edge: a thin line in the theme's effect colours along the bottom of the title bar that drifts while any
  * agent chat runs, from the same noise as the New page nebula. One small WebGL canvas, at half
  * resolution and about 30 fps, that only draws while an agent runs (and through the fade-out after)
  * with the window visible and focused. Idle, a static CSS tint can stand in, which needs no GPU.
@@ -11,12 +11,12 @@
   const FADE_MS = 1000;
 
   /**
-   * The nebula's domain-warped noise stretched along x so it flows sideways, coloured navy to
-   * indigo, violet and blue. Premultiplied alpha follows brightness, so the dark parts let the
+   * The nebula's domain-warped noise stretched along x so it flows sideways, in the theme's effect
+   * colours (blue and violet on Neutral). Premultiplied alpha follows brightness, so the dark parts let the
    * chrome through instead of laying a dark smudge on light themes.
    */
   const FRAG = `precision mediump float;
-uniform vec2 u_res;uniform float u_time;
+uniform vec2 u_res;uniform float u_time;uniform float u_light;uniform vec3 u_c1,u_c2,u_c3;
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
 return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y);}
@@ -29,11 +29,10 @@ vec2 p=vec2(uv.x*u_res.x/90.,uv.y*1.2);
 vec2 q=vec2(fbm(p+vec2(t,0.)),fbm(p+vec2(5.2,1.3)-t*.7));
 vec2 r=vec2(fbm(p+3.*q+vec2(1.7,9.2)+t*.5),fbm(p+3.*q+vec2(8.3,2.8)-t*.4));
 float f=fbm(p+3.*r);
-vec3 indigo=vec3(.26,.24,.82),violet=vec3(.58,.3,.98),blue=vec3(.32,.64,1.);
-vec3 col=mix(indigo,violet,smoothstep(.45,.95,length(q))*.85);
-col=mix(col,blue,smoothstep(.5,.85,r.y)*.7);
+vec3 col=mix(u_c1,u_c2,smoothstep(.45,.95,length(q))*.85);
+col=mix(col,u_c3,smoothstep(.5,.85,r.y)*.7);
 float lum=smoothstep(.2,.8,f);
-col+=vec3(.78,.7,1.)*pow(smoothstep(.5,.88,f),4.)*.8;
+col+=mix(u_c2,vec3(1.),.5-.5*u_light)*pow(smoothstep(.5,.88,f),4.)*.8;
 float a=clamp(.25+.95*lum,0.,1.);
 gl_FragColor=vec4(col*a,a);}`;
 
@@ -57,7 +56,7 @@ gl_FragColor=vec4(col*a,a);}`;
       return;
     }
     time += dt;
-    fx.draw({ u_time: time });
+    fx.draw({ u_time: time, ...window.scribeGL.palette() });
   });
 
   function glReady() {
@@ -74,9 +73,9 @@ gl_FragColor=vec4(col*a,a);}`;
     if (!anim) return;
     if (still.matches) {
       loop.stop();
-      fx.draw({ u_time: time });
+      fx.draw({ u_time: time, ...window.scribeGL.palette() });
     } else if (focused()) loop.start();
-    else fx.draw({ u_time: time }); // a still frame to fade in on while the window is in the background
+    else fx.draw({ u_time: time, ...window.scribeGL.palette() }); // a still frame to fade in on while the window is in the background
   }
 
   /** Called by the agent UI whenever its thread statuses change. */
@@ -90,6 +89,7 @@ gl_FragColor=vec4(col*a,a);}`;
   window.addEventListener("focus", render);
   document.addEventListener("visibilitychange", render);
   window.addEventListener("scribe:aurora", render);
+  window.addEventListener("scribe:theme", render);
   still.addEventListener?.("change", render);
   render();
 

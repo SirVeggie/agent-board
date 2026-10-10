@@ -23,6 +23,10 @@ html[data-theme="neutral"] {
   --pin-rgb: 226, 190, 140;
   --update-rgb: 240, 150, 70;
   --lift-rgb: 255, 255, 255;
+  /* Shader effect colours (glfx.js palette): a base and two highlights. */
+  --fx-1: 66, 61, 209;
+  --fx-2: 148, 77, 250;
+  --fx-3: 82, 163, 255;
   --control-height: 28px;
   --shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -39,6 +43,9 @@ html[data-theme="ember"] {
   --muted: #968d85;
   --accent: #d0a578;
   --accent-rgb: 208, 165, 120;
+  --fx-1: 176, 96, 52;
+  --fx-2: 222, 150, 84;
+  --fx-3: 236, 200, 146;
   --accent-glow: 0 0 8px rgba(208, 165, 120, 0.35);
   --accent-soft: rgba(208, 165, 120, 0.16);
   --accent-ring: rgba(208, 165, 120, 0.55);
@@ -59,6 +66,9 @@ html[data-theme="spectrum"] {
   --muted: #8e9096;
   --accent: #9db8a4;
   --accent-rgb: 157, 184, 164;
+  --fx-1: 72, 112, 140;
+  --fx-2: 110, 168, 150;
+  --fx-3: 176, 208, 160;
   --accent-glow: 0 0 10px rgba(157, 184, 164, 0.85);
   --accent-soft: rgba(157, 184, 164, 0.16);
   --accent-ring: rgba(157, 184, 164, 0.5);
@@ -80,6 +90,9 @@ html[data-theme="garnet"] {
   --muted: #a3928f;
   --accent: #d56f6c;
   --accent-rgb: 213, 111, 108;
+  --fx-1: 150, 40, 52;
+  --fx-2: 213, 92, 96;
+  --fx-3: 238, 148, 116;
   --accent-glow: 0 0 8px rgba(213, 111, 108, 0.45);
   --accent-soft: rgba(213, 111, 108, 0.14);
   --accent-ring: rgba(213, 111, 108, 0.5);
@@ -103,6 +116,9 @@ html[data-theme="dusk"] {
   --muted: #a19bac;
   --accent: #b7a2dc;
   --accent-rgb: 183, 162, 220;
+  --fx-1: 92, 68, 160;
+  --fx-2: 176, 104, 176;
+  --fx-3: 192, 164, 238;
   --accent-glow: 0 0 8px rgba(183, 162, 220, 0.45);
   --accent-soft: rgba(183, 162, 220, 0.14);
   --accent-ring: rgba(183, 162, 220, 0.5);
@@ -127,6 +143,9 @@ html[data-theme="cream"] {
   --muted: #62564a;
   --accent: #a3461f;
   --accent-rgb: 163, 70, 31;
+  --fx-1: 150, 96, 36;
+  --fx-2: 163, 70, 31;
+  --fx-3: 120, 52, 28;
   --accent-glow: none;
   --accent-soft: rgba(163, 70, 31, 0.14);
   --accent-ring: rgba(163, 70, 31, 0.55);
@@ -284,6 +303,16 @@ body {
   overflow: hidden;
 }
 
+/* Title bar background (chromefx.js): a shader behind the tabs and buttons, over the chrome colour. */
+.chrome-fx {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+}
+
 /* Aurora edge (aurora.js): a line along the bottom of the title bar, with a short glow below it.
    Takes no room: the box sits at the chrome's bottom edge and overhangs the workspace gutter. */
 .chrome-edge {
@@ -308,7 +337,7 @@ body {
 }
 
 .chrome-edge-tint {
-  background: linear-gradient(90deg, rgba(77, 158, 255, 0.35), rgba(143, 66, 245, 0.35) 60%, rgba(77, 158, 255, 0.25));
+  background: linear-gradient(90deg, rgba(var(--fx-3), 0.35), rgba(var(--fx-2), 0.35) 60%, rgba(var(--fx-3), 0.25));
 }
 
 .chrome-edge.tint:not(.on) .chrome-edge-tint {
