@@ -197,6 +197,8 @@
     forkArchiveSeen: new Set(),
     /** threadId -> the thread's open agent browser: { threadId, tabs: [{ tab, url, title, current }] }. */
     browsers: new Map(),
+    /** Workspace folders that are gone: [{ path, threads, found, dismissed }]. found is where a renamed one went. */
+    missing: [],
   };
 
   async function api(method, path, body) {
@@ -222,6 +224,77 @@
     // The toast sits on the floating chat. Skip it when that chat is the one in use.
     if (S.dockShown && !S.fullOpen && (dockFocused() || !S.sideOpen)) return;
     app()?.showNotice?.(text);
+  }
+
+  /* ----- moved workspace folders (#338) ----- */
+
+  let missingAt = 0;
+  async function loadMissing() {
+    missingAt = Date.now();
+    try {
+      const data = await api("GET", "/workspaces/missing");
+      const before = JSON.stringify(S.missing);
+      S.missing = data.missing || [];
+      if (JSON.stringify(S.missing) !== before) renderLists();
+    } catch {
+      /* the next check tries again */
+    }
+  }
+  // A folder is usually renamed in another window: look again when this one is used next.
+  window.addEventListener("focus", () => {
+    if (Date.now() - missingAt > 15000) loadMissing();
+  });
+
+  /** The missing folder dir is, or is inside. */
+  function missingFor(dir) {
+    const key = dirKey(dir);
+    return key ? S.missing.find((m) => key === dirKey(m.path) || key.startsWith(`${dirKey(m.path)}/`)) || null : null;
+  }
+
+  /** Point every thread and setting of the folder `from` at `to`. */
+  async function relocateWorkspace(from, to) {
+    try {
+      const res = await api("POST", "/workspaces/relocate", { from, to });
+      if (res.prefs) S.config.prefs = res.prefs;
+      notice([`${R.basename(from)} is now ${R.basename(to)}: ${res.threads === 1 ? "1 thread" : `${res.threads} threads`} updated.`, ...(res.notes || [])].join(" "));
+    } catch (err) {
+      notice(err.message);
+    }
+    await loadMissing();
+    renderAll();
+  }
+
+  /** Ask where a missing folder went, starting at the folder Scribe found or where it used to be. */
+  async function locateWorkspace(dir) {
+    const entry = missingFor(dir);
+    const from = entry?.path || dir;
+    const to = await pickWorkspace(entry?.found || from.replace(/[\\/][^\\/]+[\\/]?$/, ""), {
+      title: "Where is this folder now?",
+      hint: `${from} is gone. Pick the folder it became: its threads, settings and Claude sessions follow.`,
+      used: false,
+    });
+    if (to) await relocateWorkspace(from, to);
+  }
+
+  /** "Folder renamed" rows for the top of a thread list: one click updates everything that used the old path. */
+  function movedBanners() {
+    return S.missing.filter((m) => m.found && !m.dismissed).map((m) => {
+      const row = el("div", "ag-ws-moved");
+      const text = el("span", "ag-ws-moved-text");
+      const was = el("b", null, R.basename(m.path));
+      was.dataset.tooltip = m.path;
+      const now = el("b", null, R.basename(m.found));
+      now.dataset.tooltip = m.found;
+      text.append(was, " is now ", now);
+      const update = button(m.threads === 1 ? "Update 1 thread" : m.threads ? `Update ${m.threads} threads` : "Update", "ag-btn small primary", () => relocateWorkspace(m.path, m.found), "Threads, settings, worker folders and Claude sessions that used the old path move to the new one");
+      const other = button("Other…", "ag-btn small ghost", () => locateWorkspace(m.path), "Pick a different folder");
+      const no = button("Ignore", "ag-btn small ghost", async () => {
+        await api("POST", "/workspaces/dismiss", { path: m.path }).catch((err) => notice(err.message));
+        loadMissing();
+      }, "Not the same folder. Its threads keep the old path");
+      row.append(text, update, other, no);
+      return row;
+    });
   }
 
   /** "working" / "in background" / "done" / "failed" / "stopped" for a task badge. */
@@ -351,6 +424,7 @@
     } catch {
       return;
     }
+    loadMissing();
     armUsageTick();
     for (const provider of PROVIDERS) {
       if (!providerAvailable(provider)) continue;
@@ -1189,7 +1263,7 @@
 
   /* ---------- workspace picker ---------- */
 
-  function pickWorkspace(initial) {
+  function pickWorkspace(initial, opts = {}) {
     return new Promise((resolve) => {
       const { panel, close: closeModal } = modal("ag-ws");
       let done = false;
@@ -1199,8 +1273,8 @@
         closeModal();
         resolve(value);
       };
-      const title = el("h2", "ag-modal-title", "Workspace folder");
-      const hint = el("p", "ag-modal-hint", "Where the agent reads, edits, and runs commands for this thread.");
+      const title = el("h2", "ag-modal-title", opts.title || "Workspace folder");
+      const hint = el("p", "ag-modal-hint", opts.hint || "Where the agent reads, edits, and runs commands for this thread.");
       const row = el("div", "ag-ws-row");
       const input = el("input", "ag-input");
       input.type = "text";
@@ -1209,12 +1283,13 @@
       const use = button("Use folder", "ag-btn primary", () => finish(input.value.trim() || null));
       row.append(input, use);
       const used = el("div", "ag-ws-used");
-      const withThreads = threadWorkspaces();
+      const withThreads = opts.used === false ? [] : threadWorkspaces();
       if (withThreads.length) {
         used.append(el("div", "ag-ws-used-label", "Workspaces with threads"));
         for (const { path: dir, n } of withThreads) {
           const item = button("", "ag-ws-used-item", () => finish(dir), dir);
           item.append(icon("box"), el("span", "ag-ws-used-name", R.basename(dir)), el("span", "ag-ws-used-count", n === 1 ? "1 thread" : `${n} threads`));
+          if (missingFor(dir)) item.append(el("span", "ag-tag", "missing"));
           used.append(item);
         }
       }
@@ -2705,6 +2780,11 @@
               }
             });
             n.append(document.createTextNode(" "), recovery);
+            const gone = /^Folder not found: (.+)$/.exec(it.text)?.[1];
+            if (gone) {
+              n.append(document.createTextNode(" "), button("Locate moved folder…", "ag-btn small", () => locateWorkspace(gone), "If the folder was renamed or moved: pick where it is now, and every thread and setting that used it follows"));
+              if (Date.now() - missingAt > 2000) loadMissing();
+            }
           }
           return n;
         }
@@ -4863,7 +4943,7 @@
     compact.setAttribute("aria-checked", String(compactThreads()));
     compact.append(el("span", "ag-switch"), el("span", null, "Compact"));
     tools.append(workers, compact);
-    top.append(search, seg, newBtn, tools);
+    top.append(search, seg, newBtn, tools, ...movedBanners());
     const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
     container.append(top, list);
     const fill = () => {

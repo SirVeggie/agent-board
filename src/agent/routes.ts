@@ -533,6 +533,27 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // Workspace folders that are gone, with where each one went when Scribe can tell (#338).
+  router.get("/workspaces/missing", wrap(() => ({ missing: host.missingWorkspaces() })));
+
+  router.post(
+    "/workspaces/relocate",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      if (typeof body.from !== "string" || typeof body.to !== "string") throw new Error("from and to are required");
+      return host.relocateWorkspace(body.from, body.to, { claudeSessions: body.claudeSessions !== false });
+    })
+  );
+
+  router.post(
+    "/workspaces/dismiss",
+    wrap((req) => {
+      if (typeof req.body?.path !== "string") throw new Error("path is required");
+      host.dismissWorkspaceMove(req.body.path);
+      return { ok: true };
+    })
+  );
+
   /** Files under a workspace for the composer's @-mention picker. */
   router.get(
     "/fs/files",

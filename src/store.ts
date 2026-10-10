@@ -1781,6 +1781,39 @@ export class BoardStore extends EventEmitter {
     return this.pagePermissions(tab.id);
   }
 
+  /**
+   * A workspace folder moved (#338): rewrite the paths pages keep to it, which are the folders approved
+   * for a page's agents and the folders of Kanban workers. move returns a path's new place, or null
+   * when it is not in the moved folder. Returns how many pages changed.
+   */
+  moveWorkspacePaths(move: (dir: string) => string | null): number {
+    let pages = 0;
+    for (const tab of this.allTabs()) {
+      let changed = false;
+      if (this.db) {
+        for (const [perm, grant] of this.pagePermissions(tab.id)) {
+          const folders = (grant.folders ?? []).map((folder) => ({ ...folder, path: move(folder.path) ?? folder.path }));
+          if (folders.some((folder, i) => folder.path !== grant.folders![i].path)) {
+            this.setPagePermission(tab.id, perm, grant.value, folders);
+            changed = true;
+          }
+        }
+      }
+      const settings = isPlainObject(tab.state) ? tab.state.settings : undefined;
+      const workers = isPlainObject(settings) && isPlainObject(settings.workers) ? settings.workers : {};
+      const ops = Object.entries(workers).flatMap(([id, worker]) => {
+        const next = isPlainObject(worker) && typeof worker.cwd === "string" ? move(worker.cwd) : null;
+        return next ? [{ op: "set", path: `settings/workers/${id.replaceAll("~", "~0").replaceAll("/", "~1")}/cwd`, value: next }] : [];
+      });
+      if (ops.length) {
+        this.writeState(tab.id, { ops, lenient: true });
+        changed = true;
+      }
+      if (changed) pages += 1;
+    }
+    return pages;
+  }
+
   /** An agent rewrote the page's code: what it was trusted with no longer holds. Returns whether anything was reset. */
   resetRiskyPermissions(idOrKey: string): boolean {
     const tab = this.locate(idOrKey)?.tab;

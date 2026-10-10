@@ -12,7 +12,7 @@ import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
 import { isBlankPage, type PageEvent } from "../types.js";
 import { AgentDb } from "./db.js";
-import { diffPatch, diffTrees, fileAtTree, findRepo, repoRelative, revertTrees, snapshotTree } from "./git.js";
+import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
@@ -46,7 +46,8 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
-import { claudeOwnServers, serversForThread, threadWorkspace } from "./mcpConfig.js";
+import { claudeOwnServers, readMcpFile, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
+import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -283,6 +284,9 @@ export type PageAskResult =
   | { skipped: true; note?: string; page: { id: string; key: string } }
   | { cancelled: true; page: { id: string; key: string } };
 
+/** A workspace folder that is gone, and the folder Scribe thinks it became (same file id), if any. */
+export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
+
 export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe"; card?: CardRef };
 
 export class AgentHost {
@@ -419,6 +423,7 @@ export class AgentHost {
     store.on("tab_closed", this.onPageClosed);
     store.on("tab_upserted", this.onPageUpserted);
     this.scheduleUnusedPageCleanup();
+    this.noteWorkspaces(this.workspaceFolders().values());
   }
 
   private unusedPages = new Set<string>();
@@ -920,6 +925,7 @@ export class AgentHost {
     this.turns.set(thread.id, []);
     this.seq.set(thread.id, 0);
     this.db.saveThread(thread);
+    if (thread.cwd) this.noteWorkspaces([thread.cwd]);
     if (remember) this.rememberChoices(thread, settingPatch(thread));
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
@@ -1052,6 +1058,7 @@ export class AgentHost {
     this.threads.set(id, next);
     this.db.saveThread(next);
     this.sessions.get(id)?.update(next);
+    if (next.cwd && next.cwd !== thread.cwd) this.noteWorkspaces([next.cwd]);
     this.rememberChoices(next, patch);
     const view = this.view(next);
     this.emit({ type: "agent_thread", thread: view });
@@ -2224,6 +2231,7 @@ export class AgentHost {
     }
 
     let setupError = workspaceFolderError(thread);
+    if (thread.cwd && !setupError && !openWorktree(thread)) this.noteWorkspaces([thread.cwd]);
     let reopened = "";
     if (wantsWorktree(thread) && !run.cancelled && !setupError) {
       try {
@@ -2909,6 +2917,170 @@ export class AgentHost {
   private sharers(threadId: string, wt: ThreadWorktree): Thread[] {
     const key = workspaceKey(wt.path);
     return [...this.threads.values()].filter((t) => t.id !== threadId && openWorktree(t) && workspaceKey(openWorktree(t)!.path) === key);
+  }
+
+  // ---------- moved workspace folders (#338) ----------
+
+  /** The folder in the user's checkout a thread belongs to (not its worktree). */
+  private threadFolder(thread: Thread): string | null {
+    return openWorktree(thread)?.home ?? thread.cwd ?? (thread.scope.kind === "workspace" ? thread.scope.ref : null);
+  }
+
+  /** Every folder threads and prefs point at, by workspaceKey. */
+  private workspaceFolders(): Map<string, string> {
+    const prefs = this.prefs();
+    const out = new Map<string, string>();
+    for (const dir of [...[...this.threads.values()].map((t) => this.threadFolder(t)), ...prefs.recentWorkspaces, ...Object.values(prefs.scopeWorkspaces)]) {
+      if (dir && path.isAbsolute(dir) && !out.has(workspaceKey(dir))) out.set(workspaceKey(dir), dir);
+    }
+    return out;
+  }
+
+  /** Save the file id of each of these folders that exists, so it can be found again after a rename. */
+  private noteWorkspaces(dirs: Iterable<string>): void {
+    const known = this.db.getSetting<Record<string, KnownWorkspace>>("workspaceIds", {});
+    let changed = false;
+    for (const dir of dirs) {
+      const id = folderId(dir);
+      const key = workspaceKey(dir);
+      if (!id || (known[key]?.ino === id.ino && known[key]?.dev === id.dev)) continue;
+      known[key] = { path: dir, ...id };
+      changed = true;
+    }
+    if (changed) this.db.setSetting("workspaceIds", known);
+  }
+
+  /**
+   * Workspace folders that are gone. found is the folder with the same file id, when the folder was
+   * renamed or moved on its drive; path and found are then the part of the path that changed, so a
+   * renamed parent of several workspaces is one entry.
+   */
+  missingWorkspaces(): MissingWorkspace[] {
+    const folders = this.workspaceFolders();
+    this.noteWorkspaces(folders.values());
+    const known = this.db.getSetting<Record<string, KnownWorkspace>>("workspaceIds", {});
+    const dismissed = new Set(this.db.getSetting<string[]>("workspaceMovesDismissed", []));
+    const parents = [...new Set([...folders.values()].filter(folderExists).map((dir) => path.dirname(dir)))];
+    const out = new Map<string, MissingWorkspace>();
+    for (const [key, dir] of folders) {
+      if (folderExists(dir)) continue;
+      let from = path.normalize(dir);
+      let found = known[key] ? findMoved(known[key], parents) : null;
+      while (found && path.basename(from) === path.basename(found) && path.dirname(from) !== from && !folderExists(path.dirname(from))) {
+        from = path.dirname(from);
+        found = path.dirname(found);
+      }
+      if (out.has(workspaceKey(from))) continue;
+      const threads = [...this.threads.values()].filter((t) => movePath(this.threadFolder(t) ?? "", from, from) !== null).length;
+      if (!found && !threads) continue;
+      out.set(workspaceKey(from), { path: from, threads, found, dismissed: dismissed.has(workspaceKey(from)) });
+    }
+    return [...out.values()];
+  }
+
+  /** Stop offering the detected new place of a missing folder. */
+  dismissWorkspaceMove(dir: string): void {
+    const list = this.db.getSetting<string[]>("workspaceMovesDismissed", []);
+    if (!list.includes(workspaceKey(dir))) this.db.setSetting("workspaceMovesDismissed", [...list, workspaceKey(dir)].slice(-200));
+  }
+
+  /**
+   * The folder `from` is now `to`: rewrite every path Scribe keeps to it or into it (threads, their
+   * worktrees and grants, prefs, MCP layers, page folder grants, Kanban worker folders), repair the
+   * git links of open worktrees, and move Claude Code's sessions so Claude threads resume.
+   */
+  async relocateWorkspace(fromRaw: string, toRaw: string, opts: { claudeSessions?: boolean } = {}): Promise<{ threads: number; notes: string[]; prefs: Prefs }> {
+    if (!path.isAbsolute(fromRaw) || !path.isAbsolute(toRaw)) throw new Error("from and to must be absolute paths");
+    const from = path.resolve(fromRaw);
+    const to = path.resolve(toRaw);
+    if (workspaceKey(from) === workspaceKey(to)) throw new Error("That is the same folder.");
+    if (!folderExists(to)) throw new Error(`Folder not found: ${to}`);
+    if (folderExists(from)) throw new Error(`${from} still exists, so its threads still work there.`);
+    const move = (dir: string | null | undefined): string | null => (dir ? movePath(dir, from, to) : null);
+    const lower = (dir: string): string => (process.platform === "win32" ? dir.toLowerCase() : dir);
+
+    const changed: Thread[] = [];
+    const claudeDirs = new Map<string, string>([[from, to]]);
+    const repairs = new Map<string, string>();
+    for (const thread of this.threads.values()) {
+      const next: Thread = { ...thread };
+      const cwd = move(thread.cwd);
+      if (cwd) {
+        next.cwd = cwd;
+        if (thread.provider === "claude") claudeDirs.set(thread.cwd!, cwd);
+      }
+      if (thread.scope.kind === "workspace" && move(thread.scope.ref)) next.scope = { ...thread.scope, ref: move(thread.scope.ref) };
+      if (thread.fork && move(thread.fork.cwd)) next.fork = { ...thread.fork, cwd: move(thread.fork.cwd) };
+      const wt = thread.worktree;
+      if (wt && (move(wt.home) || move(wt.repo))) {
+        next.worktree = { ...wt, home: move(wt.home) ?? wt.home, repo: move(wt.repo) ?? wt.repo };
+        if (!wt.closed && move(wt.repo)) repairs.set(wt.path, next.worktree.repo);
+      }
+      if (thread.threadGrants?.some((scope) => scope.kind === "workspace" && move(scope.path))) {
+        next.threadGrants = thread.threadGrants.map((scope) => (scope.kind === "workspace" && move(scope.path) ? { ...scope, path: lower(move(scope.path)!) } : scope));
+      }
+      if (JSON.stringify(next) !== JSON.stringify(thread)) changed.push(next);
+    }
+    const busy = changed.find((t) => this.runs.has(t.id));
+    if (busy) throw new Error(`Stop the running turn in “${busy.title}” first.`);
+
+    const notes: string[] = [];
+    if (opts.claudeSessions !== false) {
+      let moved = 0;
+      for (const [oldDir, newDir] of claudeDirs) {
+        try {
+          moved += moveClaudeProject(oldDir, newDir);
+        } catch (err) {
+          notes.push(`Claude's sessions for ${oldDir} could not be moved: ${(err as Error).message}`);
+        }
+      }
+      if (moved) notes.push(`Moved Claude's sessions and memory (${moved} file${moved === 1 ? "" : "s"}).`);
+    }
+    for (const next of changed) {
+      next.updatedAt = Date.now();
+      this.threads.set(next.id, next);
+      this.db.saveThread(next);
+      this.effectivePermissions.delete(next.id);
+      this.sessions.get(next.id)?.update(next);
+    }
+
+    const prefs = this.prefs();
+    const recent = new Map<string, string>();
+    for (const dir of prefs.recentWorkspaces.map((d) => move(d) ?? d)) if (!recent.has(workspaceKey(dir))) recent.set(workspaceKey(dir), dir);
+    const saved = this.setPrefs({
+      recentWorkspaces: [...recent.values()],
+      scopeWorkspaces: Object.fromEntries(Object.entries(prefs.scopeWorkspaces).map(([k, dir]) => [k, move(dir) ?? dir])),
+      worktrees: Object.fromEntries(Object.entries(prefs.worktrees).map(([k, on]) => [move(k) ? workspaceKey(move(k)!) : k, on])),
+    });
+    const known = this.db.getSetting<Record<string, KnownWorkspace>>("workspaceIds", {});
+    this.db.setSetting("workspaceIds", Object.fromEntries(Object.entries(known).filter(([key]) => !move(key))));
+    this.db.setSetting("workspaceMovesDismissed", this.db.getSetting<string[]>("workspaceMovesDismissed", []).filter((key) => !move(key)));
+    this.noteWorkspaces(this.workspaceFolders().values());
+
+    const { error, ...mcp } = readMcpFile();
+    const layers = Object.values(mcp.workspaces);
+    if (error) {
+      if (layers.length) notes.push(`MCP servers were left alone: the config file does not parse (${error}).`);
+    } else if (layers.some((layer) => move(layer.path))) {
+      const workspaces: typeof mcp.workspaces = {};
+      for (const layer of layers) {
+        const dir = move(layer.path) ?? layer.path;
+        workspaces[workspaceKey(dir)] = { ...layer, path: dir };
+      }
+      writeMcpFile({ mcpServers: mcp.mcpServers, workspaces });
+    }
+    try {
+      store.moveWorkspacePaths(move);
+    } catch (err) {
+      notes.push(`Page folder grants and worker folders were not all updated: ${(err as Error).message}`);
+    }
+    for (const [wtPath, repo] of repairs) {
+      const res = await git(["worktree", "repair", wtPath], repo);
+      if (res.code !== 0) notes.push(`git worktree repair failed for ${wtPath}: ${res.stderr.trim() || "unknown error"}`);
+    }
+    for (const next of changed) this.emitThread(next.id);
+    log(`Workspace ${from} is now ${to}: ${changed.length} thread${changed.length === 1 ? "" : "s"} updated`);
+    return { threads: changed.length, notes, prefs: saved };
   }
 
   // ---------- changes ----------

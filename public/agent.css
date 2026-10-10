@@ -2623,6 +2623,23 @@ button.ag-menu-item.danger {
   flex-shrink: 0;
 }
 
+.ag-ws-moved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: rgba(var(--lift-rgb), 0.06);
+  flex-shrink: 0;
+}
+
+.ag-ws-moved-text {
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
+}
+
 .ag-list-top .ag-new {
   align-self: stretch;
 }
