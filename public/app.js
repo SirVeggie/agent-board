@@ -3821,7 +3821,8 @@
         matchLabel: hit.label && hit.label !== tab.title ? hit.label : "",
         snippet: hit.snippet,
         anchor,
-        thumb: hit.kind === "image" ? hit.image : "",
+        // Page assets are served from the content origin only.
+        thumb: hit.kind === "image" ? contentOrigin() + hit.image : "",
       };
     });
   }

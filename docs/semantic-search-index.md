@@ -70,7 +70,7 @@ The prototype's 24 came from ranking pages by their best single vector. Its own 
 
 ```powershell
 npm run build
-npm run eval:images -- --data "C:\path	o\scribe-data" --pack "C:\path	o\data-with-pack" --verbose
+npm run eval:images -- --data "C:\path\to\scribe-data" --pack "C:\path\to\data-with-pack" --verbose
 ```
 
 Reads the library read-only, indexes only the pages that hold images into a temporary folder, and compares image weights from 1 (image only) to 0 (owner's text only). It runs the prototype's checks (`tools/semantic-search-proto/images.mjs`: the owner's title as the query, plain descriptions), 20 queries reworded to avoid their card's words (`image-queries.json`, written after seeing the titles, so a sanity check and not a benchmark), and an image query: an 80% crop of each image, scaled to 70% and saved as JPEG, should find the original.
