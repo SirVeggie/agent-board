@@ -48,6 +48,9 @@ export function ensurePageAssetSchema(db: DatabaseSync): void {
  */
 function ensureTemplateBuiltinColumns(db: DatabaseSync): void {
   const columns = db.prepare("PRAGMA table_info(templates)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "search")) {
+    db.exec("ALTER TABLE templates ADD COLUMN search TEXT");
+  }
   if (!columns.some((column) => column.name === "builtin_key")) {
     db.exec("ALTER TABLE templates ADD COLUMN builtin_key TEXT");
   }

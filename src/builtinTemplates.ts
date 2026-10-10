@@ -34,6 +34,7 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
         initialState: meta.initialState as Template["initialState"],
         stateVersion: typeof meta.stateVersion === "number" ? meta.stateVersion : undefined,
         agentActions: meta.agentActions,
+        search: meta.search,
       });
       const guidePath = path.join(dir, `${key}.guide.md`);
       const guide = fs.existsSync(guidePath) ? fs.readFileSync(guidePath, "utf8").trim() : "";
@@ -50,6 +51,7 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
         stateVersion: parsed.stateVersion ?? 1,
         ...(guide ? { guide } : {}),
         ...(parsed.agentActions?.length ? { agentActions: parsed.agentActions } : {}),
+        ...(parsed.search ? { search: parsed.search } : {}),
         createdAt: mtime,
         updatedAt: mtime,
       });

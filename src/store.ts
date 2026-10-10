@@ -717,6 +717,11 @@ export class BoardStore extends EventEmitter {
     }
   }
 
+  searchDeclaration(tab: Tab): Template["search"] {
+    const template = tab.templateId ? this.getTemplate(tab.templateId) : undefined;
+    return template?.search ?? (template?.source ? this.findTemplate("builtin:" + template.source.builtin)?.template.search : undefined);
+  }
+
   /** The user's own templates only. findTemplate also looks at built-ins. */
   getTemplate(idOrKey: string): Template | undefined {
     return this.locateTemplate(idOrKey);
@@ -792,6 +797,7 @@ export class BoardStore extends EventEmitter {
           delete existing.guide;
         }
       }
+      if (input.search !== undefined) existing.search = parsed.search;
       if (parsed.agentActions !== undefined) {
         if (parsed.agentActions.length) {
           existing.agentActions = parsed.agentActions;
@@ -826,6 +832,7 @@ export class BoardStore extends EventEmitter {
       stateVersion: parsed.stateVersion ?? 1,
       ...(parsed.guide ? { guide: parsed.guide } : {}),
       ...(parsed.agentActions?.length ? { agentActions: parsed.agentActions } : {}),
+      ...(parsed.search ? { search: parsed.search } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -3363,6 +3370,7 @@ export class BoardStore extends EventEmitter {
       copy.fields = structuredClone(builtin.fields);
       copy.titleTemplate = builtin.titleTemplate;
       copy.initialState = structuredClone(builtin.initialState);
+      copy.search = structuredClone(builtin.search);
       copy.source = { builtin: builtin.key, fingerprint: latest };
       copy.updatedAt = Date.now();
       this.markTemplateDirty(copy.id);

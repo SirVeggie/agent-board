@@ -70,5 +70,23 @@
     "cards": [],
     "nextNum": 1
   },
-  "stateVersion": 1
+  "stateVersion": 1,
+  "search": {
+    "records": [
+      {
+        "path": "cards",
+        "skip": {
+          "archived": true
+        },
+        "title": "title",
+        "text": [
+          "description",
+          "checklist[].text",
+          "comments[].text"
+        ],
+        "anchor": "num",
+        "label": "#{num} {title}"
+      }
+    ]
+  }
 }

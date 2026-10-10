@@ -72,5 +72,20 @@
     "todos": [],
     "columnTitles": []
   },
-  "stateVersion": 1
+  "stateVersion": 1,
+  "search": {
+    "records": [
+      {
+        "path": "todos",
+        "context": "page",
+        "title": "text",
+        "text": [
+          "text",
+          "description"
+        ],
+        "anchor": "id",
+        "label": "{text}"
+      }
+    ]
+  }
 }

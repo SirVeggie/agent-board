@@ -262,6 +262,7 @@ function templateFromExport(raw: unknown, index: number): Template {
       stateVersion: raw.stateVersion === undefined ? undefined : (raw.stateVersion as number),
       guide: typeof raw.guide === "string" ? raw.guide : undefined,
       agentActions: raw.agentActions,
+      search: raw.search,
     });
   } catch (err) {
     throw new Error(`templates[${index}]: ${(err as Error).message}`);
@@ -282,6 +283,7 @@ function templateFromExport(raw: unknown, index: number): Template {
     stateVersion: normalized.stateVersion ?? 1,
     ...(normalized.guide ? { guide: normalized.guide } : {}),
     ...(normalized.agentActions?.length ? { agentActions: normalized.agentActions } : {}),
+    ...(normalized.search ? { search: normalized.search } : {}),
     createdAt: finiteNumber(raw.createdAt) ?? now,
     updatedAt: finiteNumber(raw.updatedAt) ?? now,
     ...(source ? { source } : {}),

@@ -1,3 +1,4 @@
+import type { SearchDeclaration } from "./search/chunker.js";
 import type { SpacesView } from "./spaces.js";
 import { embedUrlFromHtml } from "./embed.js";
 import type { SkippedOp, StateOp } from "./stateOps.js";
@@ -72,6 +73,7 @@ export type Template = {
   guide?: string;
   /** Agent prompts the user can run on a page made from this template (page menu, palette, chat slash menu). */
   agentActions?: AgentAction[];
+  search?: SearchDeclaration;
 };
 
 export const AGENT_ACTION_PLACES = ["menu", "palette", "slash"] as const;
@@ -488,6 +490,7 @@ export function toTemplateMeta(
     ...(builtinUpdate ? { builtinUpdate: true } : {}),
     ...(template.guide ? { hasGuide: true } : {}),
     ...(agentActions?.length ? { agentActions } : {}),
+    ...(template.search ? { search: template.search } : {}),
   };
 }
 

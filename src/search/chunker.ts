@@ -1,0 +1,114 @@
+import { createHash } from "node:crypto";
+import { htmlToText } from "../librarySearch.js";
+import type { Tab } from "../types.js";
+
+export const CHUNKER_VERSION = "1";
+export type SearchDeclaration = { records: SearchRecord[] };
+export type SearchRecord = { path: string; skip?: Record<string, unknown>; title: string; text: string[]; anchor: string; label?: string; context?: "page" | "record" };
+export type TextChunk = { key: string; kind: "page" | "section" | "record"; anchor: string | null; headingId?: string; label: string; title: string; text: string; snippet: string; hash: string };
+
+export function parseSearchDeclaration(raw: unknown): SearchDeclaration | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const value = raw as SearchDeclaration;
+  const field = /^[a-zA-Z_][\w]*(?:\[\])?(?:\.[a-zA-Z_][\w]*(?:\[\])?)*$/;
+  if (!value || !Array.isArray(value.records) || value.records.length > 32) throw new Error("search.records must be an array (max 32)");
+  for (const record of value.records) {
+    if (!record || ![record.path, record.title, record.anchor, ...record.text ?? []].every(p => typeof p === "string" && field.test(p)) || !Array.isArray(record.text)) throw new Error("Invalid search record fields");
+    if (record.label !== undefined && typeof record.label !== "string") throw new Error("search record label must be a string");
+    if (record.context !== undefined && record.context !== "page" && record.context !== "record") throw new Error("search record context must be page or record");
+    if (record.skip !== undefined && (!record.skip || typeof record.skip !== "object" || Array.isArray(record.skip))) throw new Error("search record skip must be an object");
+  }
+  return structuredClone(value);
+}
+
+function values(value: unknown, path: string): unknown[] {
+  let current = [value];
+  for (const segment of path.split(".")) {
+    const array = segment.endsWith("[]");
+    const key = segment.replace(/\[\]$/, "");
+    current = current.flatMap(v => {
+      const item = v && typeof v === "object" ? (v as Record<string, unknown>)[key] : undefined;
+      return array ? Array.isArray(item) ? item : [] : [item];
+    });
+  }
+  return current;
+}
+const ignored = /^(?:id|num|col|color|colour|settings|workerLog|images|assets|claim|thread|usage|status|blockedBy|from|cover|createdAt|updatedAt|movedAt|doneAt)$/i;
+function words(value: unknown): string {
+  if (typeof value === "string") return /^(?:asset|data|https?):|^#[\da-f]{3,8}$|^[a-z]{1,4}_[a-z0-9]+$/i.test(value) ? "" : value.replace(/https?:\/\/\S+/g, "").trim();
+  if (Array.isArray(value)) return value.map(words).filter(Boolean).join("\n");
+  if (value && typeof value === "object") return Object.entries(value).filter(([key]) => !ignored.test(key)).map(([, v]) => words(v)).filter(Boolean).join("\n");
+  return "";
+}
+
+/** Sentence-aware bounded inputs. Only length splits repeat the last sentence. */
+export function splitText(text: string): string[] {
+  let rest = text.trim();
+  const parts: string[] = [];
+  while (rest.length > 2000) {
+    const ends = [...rest.slice(0, 2000).matchAll(/[.!?](?:\s+|$)/g)].map(m => m.index! + m[0].trimEnd().length).filter(n => n >= 700);
+    let end = ends.sort((a, b) => Math.abs(a - 1400) - Math.abs(b - 1400))[0];
+    if (!end) end = rest.lastIndexOf(" ", 1400) > 700 ? rest.lastIndexOf(" ", 1400) : 1400;
+    const part = rest.slice(0, end).trim();
+    parts.push(part);
+    const sentences = part.match(/[^.!?]+[.!?](?:\s+|$)/g);
+    const overlap = sentences?.at(-1)?.trim() ?? "";
+    rest = (overlap.length <= 400 ? overlap + " " : "") + rest.slice(end).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+export function chunkPage(tab: Pick<Tab, "title" | "html" | "state">, folder: string | null = null, declaration?: SearchDeclaration): TextChunk[] {
+  const out: TextChunk[] = [];
+  const add = (kind: TextChunk["kind"], key: string, anchor: string | null, label: string, title: string, text: string, headingId?: string) => {
+    if (!text.trim()) return;
+    out.push({ kind, key, anchor, label, title, text, headingId, snippet: text.replace(/\s+/g, " ").slice(0, 200), hash: createHash("sha256").update(JSON.stringify([title, text])).digest("hex") });
+  };
+  const records: { path: string; value: Record<string, unknown>; spec: SearchRecord }[] = [];
+  if (declaration) {
+    for (const spec of declaration.records) for (const list of values(tab.state, spec.path)) if (Array.isArray(list)) for (const value of list) {
+      if (value && typeof value === "object" && !Object.entries(spec.skip ?? {}).some(([key, wanted]) => values(value, key)[0] === wanted)) records.push({ path: spec.path, value, spec });
+    }
+  } else {
+    const walk = (value: unknown, path: string) => {
+      if (Array.isArray(value)) {
+        for (const item of value) if (item && typeof item === "object" && typeof item.id === "string") records.push({ path, value: item, spec: { path, title: typeof item.title === "string" ? "title" : "text", text: [], anchor: "id" } });
+      } else if (value && typeof value === "object") for (const [key, item] of Object.entries(value)) if (!ignored.test(key)) walk(item, path ? `${path}.${key}` : key);
+    };
+    walk(tab.state, "");
+  }
+  const html = tab.html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const visible = htmlToText(html);
+  const titles = records.map(r => words(values(r.value, r.spec.title)[0])).filter(Boolean).join("\n");
+  const pageText = declaration ? titles : [visible, words(tab.state)].filter(Boolean).join("\n");
+  if (pageText.length < 40 && records.every(r => words(r.value).length < 40)) return [];
+  add("page", "page", null, tab.title, tab.title, `Folder: ${folder ?? "/"}.\n${pageText.slice(0, 3000)}`);
+  for (const { path, value, spec } of records) {
+    const anchor = String(values(value, spec.anchor)[0] ?? "");
+    if (!anchor) continue;
+    const title = words(values(value, spec.title)[0]);
+    const label = spec.label?.replace(/\{([\w.]+)\}/g, (_, key) => String(values(value, key)[0] ?? "")) ?? title;
+    const text = spec.text.length ? spec.text.flatMap(p => values(value, p)).map(words).filter(Boolean).join("\n") : words(value);
+    const context = title && spec.context !== "page" ? `${tab.title} › ${title}` : tab.title;
+    // Description/checklist and comments split independently so editing comments preserves the description vector.
+    const groups = text.length > 2000 && spec.text.includes("comments[].text")
+      ? [spec.text.filter(p => p !== "comments[].text").flatMap(p => values(value, p)).map(words).join("\n"), values(value, "comments[].text").map(words).join("\n")]
+      : [text || title];
+    groups.forEach((group, g) => splitText(group).forEach((part, i) => add("record", `record:${path}:${anchor}:${g}:${i}`, anchor, label, context, part)));
+  }
+  if (!declaration) {
+    const headings = [...html.matchAll(/<h([1-4])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)];
+    const sections = [{ text: htmlToText(html.slice(0, headings[0]?.index ?? html.length)), label: tab.title, anchor: "0", headingId: undefined as string | undefined }, ...headings.map((m, i) => ({ text: htmlToText(html.slice(m.index! + m[0].length, headings[i + 1]?.index ?? html.length)), label: htmlToText(m[3]), anchor: String(i + 1), headingId: m[2].match(/\bid\s*=\s*["']([^"']+)["']/i)?.[1] }))].filter(s => s.text);
+    for (let i = 0; i < sections.length; i++) {
+      if (sections[i].text.length >= 200) continue;
+      const j = i + 1 < sections.length ? i + 1 : i - 1;
+      const small = (sections[i].label !== tab.title ? sections[i].label + ": " : "") + sections[i].text;
+      if (j < 0 || small.length + sections[j].text.length + 1 > 1400) continue;
+      sections[j].text = i < j ? small + " " + sections[j].text : sections[j].text + " " + small;
+      sections.splice(i, 1); i--;
+    }
+    for (const s of sections) splitText(s.text).forEach((part, i) => add("section", `section:${s.anchor}:${i}`, s.anchor, s.label, `${tab.title} › ${s.label}`, part, s.headingId));
+  }
+  return out;
+}

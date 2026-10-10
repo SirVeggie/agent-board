@@ -1,3 +1,4 @@
+import { parseSearchDeclaration, type SearchDeclaration } from "./search/chunker.js";
 import { AGENT_ACTION_PLACES, isPlainObject, type AgentAction, type AgentActionThread, type BoardState, type Template, type TemplateField, type TemplateFieldType, type TemplateValues } from "./types.js";
 
 export const TEMPLATE_FIELD_TYPES = ["text", "textarea", "number", "select", "checkbox"] as const;
@@ -24,6 +25,7 @@ export type TemplateUpsertInput = {
   guide?: string;
   /** Omit to keep an existing template's agent actions; an empty array removes them. */
   agentActions?: unknown;
+  search?: unknown;
   /** On a built-in's local copy: the built-in's latest changes are merged, so clear builtinUpdate. */
   syncedWithBuiltin?: boolean;
 };
@@ -99,6 +101,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
   stateVersion?: number;
   guide?: string;
   agentActions?: AgentAction[];
+  search?: SearchDeclaration;
 } {
   const title = input.title.trim();
   if (!title) {
@@ -149,6 +152,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
     ...(stateVersion !== undefined ? { stateVersion } : {}),
     ...(guide !== undefined ? { guide } : {}),
     ...(agentActions !== undefined ? { agentActions } : {}),
+    ...(input.search !== undefined ? { search: parseSearchDeclaration(input.search) } : {}),
   };
 }
 
@@ -350,7 +354,7 @@ export function renderAgentActionText(source: string, values: Record<string, str
 
 /** Same content means the same template, regardless of id, key, or timestamps. */
 export function templateFingerprint(
-  template: Pick<Template, "title" | "description" | "html" | "fields" | "titleTemplate" | "initialState" | "stateVersion">
+  template: Pick<Template, "title" | "description" | "html" | "fields" | "titleTemplate" | "initialState" | "stateVersion" | "search">
 ): string {
   return stableJson({
     title: template.title,
@@ -360,6 +364,7 @@ export function templateFingerprint(
     titleTemplate: template.titleTemplate ?? null,
     initialState: template.initialState ?? null,
     stateVersion: template.stateVersion,
+    ...(template.search ? { search: template.search } : {}),
   });
 }
 

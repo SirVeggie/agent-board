@@ -4,6 +4,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
 import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { parseSearchDeclaration } from "./search/chunker.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
@@ -62,6 +63,7 @@ type TemplateRow = {
   builtin_fingerprint: string | null;
   guide: string | null;
   agent_actions: string | null;
+  search: string | null;
 };
 
 type PageAssetRow = {
@@ -145,7 +147,8 @@ CREATE TABLE IF NOT EXISTS templates (
   builtin_key TEXT,
   builtin_fingerprint TEXT,
   guide TEXT,
-  agent_actions TEXT
+  agent_actions TEXT,
+  search TEXT
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -205,8 +208,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 const UPSERT_TEMPLATE_SQL = `
 INSERT INTO templates (
   id, key, title, description, html, fields, title_template, initial_state,
-  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide, agent_actions
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide, agent_actions, search
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
   title = excluded.title,
@@ -221,7 +224,8 @@ ON CONFLICT(id) DO UPDATE SET
   builtin_key = excluded.builtin_key,
   builtin_fingerprint = excluded.builtin_fingerprint,
   guide = excluded.guide,
-  agent_actions = excluded.agent_actions
+  agent_actions = excluded.agent_actions,
+  search = excluded.search
 `;
 
 const UPSERT_BINDING_SQL = `
@@ -921,6 +925,7 @@ function templateToParams(template: Template): SQLInputValue[] {
     template.source?.fingerprint ?? null,
     template.guide ?? null,
     template.agentActions ? JSON.stringify(template.agentActions) : null,
+    template.search ? JSON.stringify(template.search) : null,
   ];
 }
 
@@ -955,6 +960,9 @@ function rowToTemplate(row: TemplateRow): Template {
     initialState = undefined;
   }
   let agentActions: Template["agentActions"];
+  let search: Template["search"];
+  try { search = row.search ? parseSearchDeclaration(JSON.parse(row.search)) : undefined; }
+  catch { search = undefined; }
   try {
     const parsed = row.agent_actions ? (JSON.parse(row.agent_actions) as unknown) : undefined;
     if (Array.isArray(parsed) && parsed.length) {
@@ -978,6 +986,7 @@ function rowToTemplate(row: TemplateRow): Template {
     ...(row.builtin_key ? { source: { builtin: row.builtin_key, fingerprint: row.builtin_fingerprint ?? "" } } : {}),
     ...(row.guide ? { guide: row.guide } : {}),
     ...(agentActions ? { agentActions } : {}),
+    ...(search ? { search } : {}),
   };
 }
 
