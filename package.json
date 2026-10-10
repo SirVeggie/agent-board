@@ -8,6 +8,7 @@
     "build": "tsc",
     "test:search": "tsx --test src/search/*.test.ts",
     "eval:search": "node tools/eval-semantic-search.mjs",
+    "eval:images": "node tools/eval-image-search.mjs",
     "test:newpage": "node --experimental-strip-types --test --test-isolation=none src/newpage.test.ts",
     "start": "node dist/index.js --daemon",
     "mcp": "node dist/index.js",

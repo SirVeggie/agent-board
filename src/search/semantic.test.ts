@@ -238,7 +238,7 @@ test("images are embedded after the text, score with their owner's text, and lea
     assert.deepEqual([f.index.status().images, f.index.status().chunks, f.index.status().pendingImagePages, f.index.status().imageError], [3, 3, 0, null]);
     assert.equal((await f.index.query("shot", "chunks", () => true, 8, false)).some(h => h.kind === "image"), false);
     // Query: 0.6 along the image axis of #2's first picture, 0.8 along the text axis of card #1.
-    const only = await f.index.queryImages("shot", () => true, 8, false, false);
+    const only = await f.index.queryImages("shot", () => true, 8, false, 1);
     assert.deepEqual(only.map(h => [h.anchor, +h.score.toFixed(2)]), [[PA(2), 0.6], [PA(1), 0], [PA(4), 0]]);
     const blended = await f.index.queryImages("shot", () => true, 8, false);
     assert.deepEqual(blended.map(h => [h.anchor, +h.score.toFixed(2), h.label, h.ownerRow?.anchor]), [[PA(1), 0.4, "#1 Shot card", "1"], [PA(2), 0.3, "#2 Other card", "2"], [PA(4), 0, "#2 Other card", "2"]]);

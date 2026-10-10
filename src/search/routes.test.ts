@@ -29,10 +29,12 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
       export const AutoConfig = { from_pretrained: async () => ({}) };
       export const AutoTokenizer = { from_pretrained: async () => async input => ({ input_ids: { dims: [Array.isArray(input) ? input.length : 1, 10] } }) };
       export const AutoModel = { from_pretrained: async () => async encoded => {
-        const n = encoded.input_ids.dims[0], data = new Float32Array(n * 768);
+        const n = encoded.input_ids?.dims[0] ?? 1, data = new Float32Array(n * 768);
         for (let i = 0; i < n; i++) data[i * 768] = 1;
         return { sentence_embedding: { dims: [n, 768], data } };
       } };
+      export const AutoProcessor = { from_pretrained: async () => async () => ({}) };
+      export const RawImage = { fromBlob: async () => ({}) };
     `;
     const files: Record<string, string> = {};
     for (const name of [SEARCH_RUNTIME, ...["config.json", "tokenizer.json", "tokenizer_config.json", "preprocessor_config.json", "processor_config.json", "onnx/model_quantized.onnx", "onnx/vision_encoder_quantized.onnx"].map(n => `models/${SEARCH_MODEL}/${n}`)]) {
@@ -44,6 +46,8 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
     store.load();
     const board = store.openFromTemplate("builtin:kanban", { title: "Board" }).tab;
     store.writeState(board.id, { ops: [{ op: "set", path: "cards", value: [{ num: 12, title: "Deep card", description: "Searchable card description for the route fixture" }] }] });
+    const shot = store.savePageAsset(board.id, { name: "shot.png", mimeType: "image/png", data: Buffer.from([1, 2, 3]) }).asset;
+    store.writeState(board.id, { ops: [{ op: "set", path: "cards/num=12/images", value: [{ id: "im_a", name: "shot.png", data: `/blob/${shot.id}` }] }] });
     const hidden = store.upsert({ title: "Hidden", html: "<h1>Hidden</h1><p>" + "Hidden information. ".repeat(20) + "</p>" }).tab;
     store.setAgentHidden(hidden.id, true);
     const enable = await fetch(`${url}/settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true }) });
@@ -57,6 +61,13 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
     const card = agent.hits.find((h: { id: string }) => h.id === board.id);
     assert.equal(card.anchor, "12"); assert.equal(card.kind, "record"); assert.equal(card.label, "#12 Deep card");
     assert.equal(card.score, undefined); assert.equal(card.hash, undefined); assert.equal(card.vec, undefined);
+    // Image rows carry the image's URL and the card it sits on, for a text query and for an image as the query.
+    assert.equal(status.images, 1);
+    const wanted = [{ id: board.id, key: board.key, title: "Board", folder: null, kind: "image", anchor: shot.id, headingId: null, label: "#12 Deep card", snippet: "shot.png", image: `/blob/${shot.id}`, owner: { kind: "record", anchor: "12", headingId: null } }];
+    assert.deepEqual((await (await fetch(`${url}/semantic?q=hello&scope=images`)).json()).hits, wanted);
+    const similar = await fetch(`${url}/semantic/image`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: Uint8Array.of(9, 9) });
+    assert.deepEqual((await similar.json()).hits, wanted);
+    assert.equal((await fetch(`${url}/semantic/image`, { method: "POST" })).status, 400);
     const queriesBefore = searchEmbedder.peakRssBytes; assert.ok(queriesBefore > 0);
     store.deleteMany([board.id]);
     assert.equal((await searchIndex.query("hello", "chunks", () => true)).some(h => h.tab_id === board.id), false);

@@ -1,0 +1,22 @@
+[
+  { "q": "put the comparison of edits on the other edge of the window", "want": "scribe:agent-todo", "card": 47 },
+  { "q": "redirecting the assistant while it is running behaves oddly", "want": "scribe:agent-todo", "card": 70 },
+  { "q": "gradient at the end of the page bar clashes with the moving wallpaper", "want": "scribe:agent-todo", "card": 380 },
+  { "q": "strange failure message on opening a fresh conversation", "want": "scribe:agent-todo", "card": 211 },
+  { "q": "blank message box shows a scroll track it does not need", "want": "scribe:agent-todo", "card": 106 },
+  { "q": "too much padding after expanding the reasoning section", "want": "scribe:agent-todo", "card": 196 },
+  { "q": "design variations for the detached conversation bubble", "want": "scribe:agent-todo", "card": 128 },
+  { "q": "the list of edited files shows the wrong thing", "want": "scribe:agent-todo", "card": 110 },
+  { "q": "incorrect tooltips in the plan or code picker", "want": "scribe:agent-todo", "card": 209 },
+  { "q": "rearrange the header of the assistant panel", "want": "scribe:agent-todo", "card": 267 },
+  { "q": "the assistant's preferences dialog is confusing to use", "want": "scribe:agent-todo", "card": 238 },
+  { "q": "progress bullet occasionally has the wrong hue", "want": "scribe:agent-todo", "card": 222 },
+  { "q": "popups shown on mouse-over should be better", "want": "scribe:agent-todo", "card": 202 },
+  { "q": "the same page gets included again and again in a message", "want": "scribe:agent-todo", "card": 46 },
+  { "q": "assistant keeps changing directory in every shell command", "want": "scribe:agent-todo", "card": 94 },
+  { "q": "token consumption numbers are incorrect", "want": "scribe:agent-todo", "card": 293 },
+  { "q": "nicer look for opened reasoning text", "want": "scribe:agent-todo", "card": 254 },
+  { "q": "starred models appear in a jumbled order", "want": "scribe:agent-todo", "card": 375 },
+  { "q": "the badge for the incoming column is not as big as the in-progress one", "want": "scribe:agent-todo", "card": 250 },
+  { "q": "take away the keyboard shortcut reminder on the board", "want": "scribe:agent-todo", "card": 87 }
+]

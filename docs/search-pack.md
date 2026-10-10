@@ -1,6 +1,6 @@
 # Optional search pack
 
-Scribe has no model/runtime dependency. Without a pack, search by meaning is off and no embedder process starts. This first stage provides the runtime; indexing and search results follow in #371 and #372.
+Scribe has no model/runtime dependency. Without a pack, search by meaning is off and no embedder process starts. Indexing and search are described in `docs/semantic-search-index.md`.
 
 Build on the OS and architecture that will use the pack (Windows, macOS or Linux; x64 or arm64):
 

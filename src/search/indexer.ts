@@ -15,6 +15,7 @@ export type ScoredHit = IndexedChunk & { score: number };
 export type ImageHit = ScoredHit & { ownerRow: IndexedChunk | null };
 const WIDTH = 768;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const BLENDED_CUTOFF = 0.04;
 
 export function rankVectors(rows: IndexedChunk[], vectors: Float32Array, query: Float32Array, scope: "pages" | "chunks", visible: (id: string) => boolean, limit = 8, cutoff = true): ScoredHit[] {
   const groups = new Map<string, ScoredHit[]>();
@@ -41,11 +42,11 @@ export function rankVectors(rows: IndexedChunk[], vectors: Float32Array, query: 
 }
 
 /**
- * Image rows. With `blend`, an image scores `0.5 image + 0.5 owner's text chunk` (the page's vector when the
- * owner has none): for a text query the words around a screenshot say more than its pixels. An image query
- * compares pixels only.
+ * Image rows. An image scores `weight × image + (1 − weight) × owner's text chunk` (the page's vector when the
+ * owner has none). Text queries use 0.5: the words around a screenshot say more than its pixels. An image
+ * query uses 1 and compares pictures only. Blended scores sit close together, so their cut-off is narrower.
  */
-export function rankImages(rows: IndexedChunk[], vectors: Float32Array, query: Float32Array, blend: boolean, visible: (id: string) => boolean, limit = 8, cutoff = true): ImageHit[] {
+export function rankImages(rows: IndexedChunk[], vectors: Float32Array, query: Float32Array, weight: number, visible: (id: string) => boolean, limit = 8, cutoff = true): ImageHit[] {
   const dot = (index: number) => { let score = 0; for (let d = 0; d < WIDTH; d++) score += vectors[index * WIDTH + d] * query[d]; return score; };
   const text = new Map<string, number>();
   rows.forEach((row, index) => { if (row.kind !== "image") text.set(`${row.tab_id}\n${row.chunk_key}`, index); });
@@ -54,11 +55,11 @@ export function rankImages(rows: IndexedChunk[], vectors: Float32Array, query: F
     if (row.kind !== "image" || !visible(row.tab_id)) return;
     const owner = text.get(`${row.tab_id}\n${row.owner}`) ?? text.get(`${row.tab_id}\npage`);
     const image = dot(index);
-    const score = blend && owner !== undefined ? 0.5 * image + 0.5 * dot(owner) : image;
+    const score = weight < 1 && owner !== undefined ? weight * image + (1 - weight) * dot(owner) : image;
     if (Number.isFinite(score)) hits.push({ ...row, score, ownerRow: owner === undefined ? null : rows[owner] });
   });
   hits.sort((a, b) => b.score - a.score || a.tab_id.localeCompare(b.tab_id) || a.chunk_key.localeCompare(b.chunk_key));
-  return hits.filter(hit => !cutoff || hit.score >= hits[0].score - 0.08).slice(0, limit);
+  return hits.filter(hit => !cutoff || hit.score >= hits[0].score - (weight < 1 ? BLENDED_CUTOFF : 0.08)).slice(0, limit);
 }
 
 /** Derived storage and a single worker: never retain a library's text or embeddings in a batch. */
@@ -269,10 +270,10 @@ export class SearchIndex {
     const vec = await this.queryVector(q);
     return rankVectors(this.rows, this.vectors, vec, scope, visible, limit, cutoff);
   }
-  /** Images for a text query (blended with their owner's text unless `blend` is false) or like the given image's bytes. */
-  async queryImages(q: string | Uint8Array, visible: (id: string) => boolean, limit = 8, cutoff = true, blend = typeof q === "string"): Promise<ImageHit[]> {
+  /** Images for a text query (half image, half their owner's text) or like the given image's bytes (image only). */
+  async queryImages(q: string | Uint8Array, visible: (id: string) => boolean, limit = 8, cutoff = true, weight = typeof q === "string" ? 0.5 : 1): Promise<ImageHit[]> {
     const vec = await this.queryVector(q);
-    return rankImages(this.rows, this.vectors, vec, blend, visible, limit, cutoff);
+    return rankImages(this.rows, this.vectors, vec, weight, visible, limit, cutoff);
   }
   status() {
     const pages = this.source.pages();
