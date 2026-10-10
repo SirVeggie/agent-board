@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { Router } from "express";
+import express, { Router } from "express";
 import { detectSearchPack, searchEnabled, searchPackDir, setSearchEnabled } from "./pack.js";
 import { searchEmbedder } from "./embedder.js";
 import { refreshSearchIndex, searchIndex } from "./service.js";
 import { store } from "../store.js";
 import { AGENT_CLIENT, CLIENT_HEADER } from "../config.js";
+import { assetUrl } from "../assets.js";
+import { pageAssetUrl } from "../pageAssets.js";
+import type { ImageHit, ScoredHit } from "./indexer.js";
+
+const MAX_QUERY_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export function searchRouter(): Router {
   const router = Router();
@@ -13,6 +18,16 @@ export function searchRouter(): Router {
     const pack = detectSearchPack();
     const { pack: manifest, ...view } = pack;
     return { ...view, version: manifest?.version, model: manifest?.model, dtype: manifest?.dtype, enabled: searchEnabled() && pack.status === "ready" };
+  };
+  const viewerOf = (req: express.Request) => req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" as const : "user" as const;
+  /** A hit as the palette and agents see it. An image hit carries its URL and the card, item or section it sits on. */
+  const hitView = (hit: ScoredHit | ImageHit, viewer: "agent" | "user") => {
+    const tab = store.get(hit.tab_id, viewer);
+    if (!tab) return [];
+    const view = { id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId), kind: hit.kind, anchor: hit.anchor, headingId: hit.heading_id, label: hit.label, snippet: hit.snippet };
+    if (!("ownerRow" in hit) || !hit.anchor) return [view];
+    const owner = hit.ownerRow;
+    return [{ ...view, image: hit.anchor.startsWith("asset:") ? assetUrl(tab.id, hit.anchor.slice(6)) : pageAssetUrl(hit.anchor), owner: owner && owner.kind !== "page" ? { kind: owner.kind, anchor: owner.anchor, headingId: owner.heading_id } : null }];
   };
   router.get("/status", (_req, res) => res.json(status()));
   router.get("/index/status", (_req, res) => {
@@ -23,18 +38,30 @@ export function searchRouter(): Router {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const scope = req.query.scope ?? "pages";
     const limit = req.query.limit === undefined ? 8 : Number(req.query.limit);
-    if (!q || q.length > 500 || !["pages", "chunks"].includes(String(scope)) || !Number.isInteger(limit) || limit < 1 || limit > 8) {
-      res.status(400).json({ error: "Use q (1–500 characters), scope=pages|chunks and limit=1–8" }); return;
+    if (!q || q.length > 500 || !["pages", "chunks", "images"].includes(String(scope)) || !Number.isInteger(limit) || limit < 1 || limit > 8) {
+      res.status(400).json({ error: "Use q (1–500 characters), scope=pages|chunks|images and limit=1–8" }); return;
     }
     try {
       refreshSearchIndex();
       if (!searchIndex.status().enabled) { res.status(503).json({ error: "Semantic search is unavailable", ...status() }); return; }
-      const viewer = req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" : "user";
-      const hits = await searchIndex.query(q, scope as "pages" | "chunks", id => !!store.get(id, viewer), limit);
-      res.json({ hits: hits.flatMap(hit => {
-        const tab = store.get(hit.tab_id, viewer);
-        return tab ? [{ id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId), kind: hit.kind, anchor: hit.anchor, headingId: hit.heading_id, label: hit.label, snippet: hit.snippet }] : [];
-      }), index: searchIndex.status() });
+      const viewer = viewerOf(req);
+      const visible = (id: string) => !!store.get(id, viewer);
+      const hits = scope === "images" ? await searchIndex.queryImages(q, visible, limit) : await searchIndex.query(q, scope as "pages" | "chunks", visible, limit);
+      res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() });
+    } catch (err) { res.status(503).json({ error: (err as Error).message }); }
+  });
+  /** An image as the query: the body is its bytes. Returns the indexed images that look most like it. */
+  router.post("/semantic/image", express.raw({ type: () => true, limit: MAX_QUERY_IMAGE_BYTES }), async (req, res) => {
+    const limit = req.query.limit === undefined ? 8 : Number(req.query.limit);
+    if (!Buffer.isBuffer(req.body) || !req.body.length || !Number.isInteger(limit) || limit < 1 || limit > 8) {
+      res.status(400).json({ error: "Send the image bytes as the body, and limit=1–8" }); return;
+    }
+    try {
+      refreshSearchIndex();
+      if (!searchIndex.status().enabled) { res.status(503).json({ error: "Semantic search is unavailable", ...status() }); return; }
+      const viewer = viewerOf(req);
+      const hits = await searchIndex.queryImages(req.body, id => !!store.get(id, viewer), limit);
+      res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() });
     } catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   router.post("/settings", (req, res) => {

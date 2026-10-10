@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
-import { chunkPage, parseSearchDeclaration, splitText, type SearchDeclaration } from "./chunker.js";
-import { SearchIndex, rankVectors, type IndexedChunk } from "./indexer.js";
+import { analyzePage, chunkPage, parseSearchDeclaration, splitText, type SearchDeclaration } from "./chunker.js";
+import { SearchIndex, rankVectors, type ImageAsset, type IndexedChunk, type IndexSource } from "./indexer.js";
 import { loadBuiltinTemplates } from "../builtinTemplates.js";
 import { BoardStore } from "../store.js";
 import { parseImport, serializeExport } from "../boardExport.js";
@@ -30,8 +30,8 @@ class StubEmbedder implements Embedder {
 function fixture(pages: Tab[], declaration?: SearchDeclaration, embedder = new StubEmbedder()) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-semantic-"));
   const tabs = new Map(pages.map(p => [p.id, p]));
-  const source = { pages: () => [...tabs.values()], get: (id: string) => tabs.get(id), folder: () => "Apps", declaration: () => declaration };
-  const index = new SearchIndex(root, source, embedder, 10);
+  const source: IndexSource = { pages: () => [...tabs.values()], get: (id: string) => tabs.get(id), folder: () => "Apps", declaration: () => declaration };
+  const index = new SearchIndex(root, source, embedder, 10, 0);
   const cleanup = async () => { await index.close(); fs.rmSync(root, { recursive: true, force: true }); };
   return { root, tabs, source, index, embedder, cleanup };
 }
@@ -161,7 +161,7 @@ test("deleted or changed pages cannot commit stale embeddings", async () => {
 test("ranking blends page and best two chunks, limits content per page and applies cutoff after viewer filtering", () => {
   const rows: IndexedChunk[] = [];
   const vs: number[] = [];
-  const add = (tab: string, kind: string, score: number) => { rows.push({ tab_id: tab, kind, chunk_key: `${tab}:${rows.length}`, anchor: null, heading_id: null, label: kind, snippet: "text", hash: "hash" }); vs.push(...vector(score)); };
+  const add = (tab: string, kind: string, score: number) => { rows.push({ tab_id: tab, kind, chunk_key: `${tab}:${rows.length}`, anchor: null, heading_id: null, label: kind, snippet: "text", hash: "hash", owner: null }); vs.push(...vector(score)); };
   add("hidden", "page", 1); add("A", "page", 0.8); add("A", "section", 0.9); add("A", "record", 0.7); add("A", "section", 0.65); add("A", "section", 0.64);
   add("B", "page", 0.83); add("B", "record", 0.85); add("C", "page", 0.4);
   const ranked = rankVectors(rows, Float32Array.from(vs), vector(), "pages", id => id !== "hidden");
@@ -189,4 +189,89 @@ test("custom template search persists, exports, imports and falls back to a buil
     store.closeDb(); reopened.load();
     assert.deepEqual(reopened.getTemplate(template.id)!.search, kanban);
   } finally { store.closeDb(); reopened.closeDb(); if (prev === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = prev; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+const PA = (n: number) => `pa_${String(n).padStart(24, "0")}`;
+/** A stub whose vectors point along one axis per input, so scores are easy to predict. */
+class AxisEmbedder extends StubEmbedder {
+  images: number[] = [];
+  async embedDocuments(items: EmbedDocument[]) { this.calls.push(items); return items.map(i => axis(/shot/i.test(i.title ?? "") ? 1 : 2)); }
+  async embedQuery(q: string) { const v = axis(0, 0.6); v[1] = 0.8; return q === "shot" ? v : axis(2); }
+  async embedImage(bytes: Uint8Array) { this.images.push(bytes[0]); if (bytes[0] === 99) throw new Error("Cannot decode"); return axis(bytes[0] < 10 ? 0 : 3); }
+}
+const axis = (d: number, value = 1) => { const v = new Float32Array(768); v[d] = value; return v; };
+
+test("images belong to the card, item or section that shows them, else to the page", () => {
+  const board = analyzePage(page("Board", { cards: [
+    { num: 1, title: "With shot", description: "Has a picture", images: [{ id: "im_a", data: `/blob/${PA(1)}` }] },
+    { num: 2, title: "", description: "", images: [{ data: `/blob/${PA(2)}` }] },
+  ], banner: `/blob/${PA(3)}` }), "Apps", kanban);
+  assert.deepEqual(board.images, [
+    { ref: PA(1), owner: "record:cards:1:0:0", label: "#1 With shot" },
+    { ref: PA(2), owner: "page", label: "Board" },
+    { ref: PA(3), owner: "page", label: "Board" },
+  ]);
+  const doc = analyzePage(page("Doc", {}, `<p><img src="asset:top.png"></p><h2>Setup</h2><p>${"Install the thing. ".repeat(20)}<img src="asset:setup.png"></p><h2>Tiny</h2><p>Short.<img src="/blob/${PA(4)}"></p>`));
+  assert.deepEqual(doc.images.map(i => [i.ref, i.owner, i.label]), [[PA(4), "section:1:0", "Setup"], ["asset:setup.png", "section:1:0", "Setup"], ["asset:top.png", "page", "Doc"]]);
+  // A page with no text still reports its images, so they can be found by how they look.
+  assert.deepEqual(analyzePage(page("Empty", {}, `<img src="asset:a.png">`)), { chunks: [], images: [{ ref: "asset:a.png", owner: "page", label: "Empty" }] });
+});
+
+test("images are embedded after the text, score with their owner's text, and leave the index with their asset", async () => {
+  const p = page("Board", { cards: [
+    { num: 1, title: "Shot card", description: "First", images: [{ data: `/blob/${PA(1)}` }] },
+    { num: 2, title: "Other card", description: "Second", images: [{ data: `/blob/${PA(2)}` }, { data: `/blob/${PA(3)}` }, { data: `/blob/${PA(4)}` }] },
+  ] });
+  const embedder = new AxisEmbedder();
+  const f = fixture([p], kanban, embedder);
+  const bytes: Record<string, number> = { [PA(1)]: 20, [PA(2)]: 1, [PA(3)]: 99, [PA(4)]: 21 };
+  const order: string[] = [];
+  const documents = embedder.embedDocuments.bind(embedder), image = embedder.embedImage.bind(embedder);
+  embedder.embedDocuments = async items => { order.push("text"); return documents(items); };
+  embedder.embedImage = async b => { order.push("image"); return image(b); };
+  const assets = (): ImageAsset[] => Object.keys(bytes).map(ref => ({ ref, name: `${ref.slice(-1)}.png`, hash: ref, read: () => Uint8Array.of(bytes[ref]) }));
+  f.source.assets = assets;
+  try {
+    f.index.start("model", "q8"); await f.index.idle();
+    assert.deepEqual(order, ["text", "image", "image", "image", "image"]);
+    // The image that fails to decode is skipped; the others are indexed and text counts stay text only.
+    assert.deepEqual([f.index.status().images, f.index.status().chunks, f.index.status().pendingImagePages, f.index.status().imageError], [3, 3, 0, null]);
+    assert.equal((await f.index.query("shot", "chunks", () => true, 8, false)).some(h => h.kind === "image"), false);
+    // Query: 0.6 along the image axis of #2's first picture, 0.8 along the text axis of card #1.
+    const only = await f.index.queryImages("shot", () => true, 8, false, false);
+    assert.deepEqual(only.map(h => [h.anchor, +h.score.toFixed(2)]), [[PA(2), 0.6], [PA(1), 0], [PA(4), 0]]);
+    const blended = await f.index.queryImages("shot", () => true, 8, false);
+    assert.deepEqual(blended.map(h => [h.anchor, +h.score.toFixed(2), h.label, h.ownerRow?.anchor]), [[PA(1), 0.4, "#1 Shot card", "1"], [PA(2), 0.3, "#2 Other card", "2"], [PA(4), 0, "#2 Other card", "2"]]);
+    assert.deepEqual((await f.index.queryImages("shot", () => true)).map(h => h.anchor), [PA(1)]);
+    assert.equal((await f.index.queryImages("shot", () => false)).length, 0);
+    // An image as the query compares pictures only.
+    assert.deepEqual((await f.index.queryImages(Uint8Array.of(22), () => true)).map(h => h.anchor), [PA(1), PA(4)]);
+    // Retitling the card moves the label without embedding the image again.
+    const cards = p.state.cards as { title: string; images: unknown[] }[];
+    cards[0].title = "Renamed shot"; order.length = 0;
+    f.index.schedule(p.id); await delay(25); await f.index.idle();
+    assert.deepEqual(order, ["text"]);
+    assert.equal((await f.index.queryImages(Uint8Array.of(22), () => true))[0].label, "#1 Renamed shot");
+    // Taking the image off its card removes its vector, and so does deleting the asset itself.
+    cards[0].images = []; f.index.schedule(p.id); await delay(25); await f.index.idle();
+    assert.deepEqual((await f.index.queryImages(Uint8Array.of(22), () => true)).map(h => h.anchor), [PA(4)]);
+    delete bytes[PA(4)]; f.index.schedule(p.id); await delay(25); await f.index.idle();
+    assert.equal(f.index.status().images, 1);
+    f.tabs.delete(p.id); f.index.remove(p.id);
+    assert.equal(f.index.status().images, 0);
+  } finally { await f.cleanup(); }
+});
+
+test("an index from before images gains the owner column and keeps its vectors", async () => {
+  const p = page("Doc", {}, `<h1>Heading</h1><p>${"Useful visible information. ".repeat(20)}<img src="asset:a.png"></p>`);
+  const f = fixture([p]);
+  try {
+    const db = new DatabaseSync(path.join(f.root, "search.sqlite"));
+    db.exec("CREATE TABLE chunks (id INTEGER PRIMARY KEY, tab_id TEXT NOT NULL, chunk_key TEXT NOT NULL, kind TEXT NOT NULL, anchor TEXT, heading_id TEXT, label TEXT NOT NULL, snippet TEXT NOT NULL, hash TEXT NOT NULL, vec BLOB NOT NULL, UNIQUE(tab_id, chunk_key))");
+    db.close();
+    f.source.assets = () => [{ ref: "asset:a.png", name: "a.png", hash: "h1", read: () => Uint8Array.of(1) }];
+    f.index.start("model", "q8"); await f.index.idle();
+    const hit = (await f.index.queryImages("anything", () => true))[0];
+    assert.deepEqual([hit.kind, hit.anchor, hit.owner, hit.snippet, hit.ownerRow?.kind], ["image", "asset:a.png", "section:1:0", "a.png", "section"]);
+  } finally { await f.cleanup(); }
 });

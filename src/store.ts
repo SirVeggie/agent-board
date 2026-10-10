@@ -2495,6 +2495,7 @@ export class BoardStore extends EventEmitter {
       throw new Error(`asset not found: ${assetId}`);
     }
     this.refreshPageAssetTotal(tab.id);
+    this.emit("page_assets_removed", tab.id);
     return this.pageAssetUsageOf(tab.id);
   }
 
@@ -3794,6 +3795,7 @@ export class BoardStore extends EventEmitter {
         const result = this.db.reconcilePageAssets(id, refs, now, PAGE_ASSET_ORPHAN_GRACE_MS);
         if (result.deleted) {
           this.refreshPageAssetTotal(id);
+          this.emit("page_assets_removed", id);
         }
         if (result.nextExpiry !== null) {
           next = Math.min(next ?? Infinity, result.nextExpiry);

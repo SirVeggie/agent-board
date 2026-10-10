@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import { htmlToText } from "../librarySearch.js";
+import { collectPageAssetRefs } from "../pageAssets.js";
 import type { Tab } from "../types.js";
 
 export const CHUNKER_VERSION = "2";
 export type SearchDeclaration = { records: SearchRecord[] };
 export type SearchRecord = { path: string; skip?: Record<string, unknown>; title: string; text: string[]; anchor: string; label?: string; context?: "page" | "record" };
+/** An asset a page shows: a page asset id (`pa_…`) or `asset:<name>`, with the key of the text chunk it sits on. */
+export type ImageRef = { ref: string; owner: string; label: string };
 export type TextChunk = { key: string; kind: "page" | "section" | "record"; anchor: string | null; headingId?: string; label: string; title: string; text: string; snippet: string; hash: string };
 
 export function parseSearchDeclaration(raw: unknown): SearchDeclaration | undefined {
@@ -59,8 +62,19 @@ export function splitText(text: string): string[] {
   return parts;
 }
 
+const assetRefs = (text: string): string[] => [...collectPageAssetRefs(text), ...new Set([...text.matchAll(/\basset:[A-Za-z0-9._-]+/g)].map(m => m[0]))];
+
 export function chunkPage(tab: Pick<Tab, "title" | "html" | "state">, folder: string | null = null, declaration?: SearchDeclaration): TextChunk[] {
+  return analyzePage(tab, folder, declaration).chunks;
+}
+
+/** A page's text chunks, and the assets it refers to with the chunk each one belongs to (its card, item or section). */
+export function analyzePage(tab: Pick<Tab, "title" | "html" | "state">, folder: string | null = null, declaration?: SearchDeclaration): { chunks: TextChunk[]; images: ImageRef[] } {
   const out: TextChunk[] = [];
+  const images = new Map<string, ImageRef>();
+  const own = (text: string, owner: string | undefined, label: string) => {
+    for (const ref of assetRefs(text)) if (!images.has(ref)) images.set(ref, owner ? { ref, owner, label } : { ref, owner: "page", label: tab.title });
+  };
   const add = (kind: TextChunk["kind"], key: string, anchor: string | null, label: string, title: string, text: string, headingId?: string) => {
     if (!text.trim()) return;
     out.push({ kind, key, anchor, label, title, text, headingId, snippet: text.replace(/\s+/g, " ").slice(0, 200), hash: createHash("sha256").update(JSON.stringify([title, text])).digest("hex") });
@@ -83,11 +97,12 @@ export function chunkPage(tab: Pick<Tab, "title" | "html" | "state">, folder: st
   const titles = records.map(r => words(values(r.value, r.spec.title)[0])).filter(Boolean).join("\n");
   const pageText = declaration ? titles : [visible, words(tab.state)].filter(Boolean).join("\n");
   // Empty pages rank for everything, so they are skipped. A declared list with one short item is still a page.
-  if (declaration ? !records.some(r => words(r.value)) : pageText.length < 40 && records.every(r => words(r.value).length < 40)) return [];
+  const empty = declaration ? !records.some(r => words(r.value)) : pageText.length < 40 && records.every(r => words(r.value).length < 40);
   add("page", "page", null, tab.title, tab.title, `Folder: ${folder ?? "/"}.\n${pageText.slice(0, 3000)}`);
   for (const { path, value, spec } of records) {
     const anchor = String(values(value, spec.anchor)[0] ?? "");
     if (!anchor) continue;
+    const first = out.length;
     const title = words(values(value, spec.title)[0]);
     const label = spec.label?.replace(/\{([\w.]+)\}/g, (_, key) => String(values(value, key)[0] ?? "")) ?? title;
     const text = spec.text.length ? spec.text.flatMap(p => values(value, p)).map(words).filter(Boolean).join("\n") : words(value);
@@ -97,19 +112,27 @@ export function chunkPage(tab: Pick<Tab, "title" | "html" | "state">, folder: st
       ? [spec.text.filter(p => p !== "comments[].text").flatMap(p => values(value, p)).map(words).join("\n"), values(value, "comments[].text").map(words).join("\n")]
       : [text || title];
     groups.forEach((group, g) => splitText(group).forEach((part, i) => add("record", `record:${path}:${anchor}:${g}:${i}`, anchor, label, context, part)));
+    own(JSON.stringify(value), out[first]?.key, label);
   }
   if (!declaration) {
     const headings = [...html.matchAll(/<h([1-4])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)];
-    const sections = [{ text: htmlToText(html.slice(0, headings[0]?.index ?? html.length)), label: tab.title, anchor: "0", headingId: undefined as string | undefined }, ...headings.map((m, i) => ({ text: htmlToText(html.slice(m.index! + m[0].length, headings[i + 1]?.index ?? html.length)), label: htmlToText(m[3]), anchor: String(i + 1), headingId: m[2].match(/\bid\s*=\s*["']([^"']+)["']/i)?.[1] }))].filter(s => s.text);
+    const slice = (from: number, to: number | undefined) => { const part = html.slice(from, to ?? html.length); return { text: htmlToText(part), refs: assetRefs(part) }; };
+    const sections = [{ ...slice(0, headings[0]?.index), label: tab.title, anchor: "0", headingId: undefined as string | undefined }, ...headings.map((m, i) => ({ ...slice(m.index! + m[0].length, headings[i + 1]?.index), label: htmlToText(m[3]), anchor: String(i + 1), headingId: m[2].match(/\bid\s*=\s*["']([^"']+)["']/i)?.[1] }))].filter(s => s.text);
     for (let i = 0; i < sections.length; i++) {
       if (sections[i].text.length >= 200) continue;
       const j = i + 1 < sections.length ? i + 1 : i - 1;
       const small = (sections[i].label !== tab.title ? sections[i].label + ": " : "") + sections[i].text;
       if (j < 0 || small.length + sections[j].text.length + 1 > 1400) continue;
       sections[j].text = i < j ? small + " " + sections[j].text : sections[j].text + " " + small;
+      sections[j].refs.push(...sections[i].refs);
       sections.splice(i, 1); i--;
     }
-    for (const s of sections) splitText(s.text).forEach((part, i) => add("section", `section:${s.anchor}:${i}`, s.anchor, s.label, `${tab.title} › ${s.label}`, part, s.headingId));
+    for (const s of sections) {
+      splitText(s.text).forEach((part, i) => add("section", `section:${s.anchor}:${i}`, s.anchor, s.label, `${tab.title} › ${s.label}`, part, s.headingId));
+      own(s.refs.join(" "), `section:${s.anchor}:0`, s.label);
+    }
   }
-  return out;
+  // Anything else the page shows (its own markup, state outside the records) belongs to the page.
+  own(tab.html + JSON.stringify(tab.state ?? null), undefined, tab.title);
+  return { chunks: empty ? [] : out, images: [...images.values()] };
 }

@@ -1,20 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { CHUNKER_VERSION, chunkPage, type SearchDeclaration, type TextChunk } from "./chunker.js";
+import { CHUNKER_VERSION, analyzePage, type ImageRef, type SearchDeclaration, type TextChunk } from "./chunker.js";
 import type { Embedder } from "./embedder.js";
 import type { Tab } from "../types.js";
 
-export type IndexedChunk = { tab_id: string; chunk_key: string; kind: string; anchor: string | null; heading_id: string | null; label: string; snippet: string; hash: string };
+export type IndexedChunk = { tab_id: string; chunk_key: string; kind: string; anchor: string | null; heading_id: string | null; label: string; snippet: string; hash: string; owner: string | null };
 type Row = IndexedChunk & { vec: Uint8Array };
-export type IndexSource = { pages(): Tab[]; get(id: string): Tab | undefined; folder(tab: Tab): string | null; declaration(tab: Tab): SearchDeclaration | undefined };
+/** An image a page holds. `ref` is what the page writes to show it (`pa_…` or `asset:<name>`); `hash` changes with the bytes. */
+export type ImageAsset = { ref: string; name: string; hash: string; read(): Uint8Array | undefined };
+export type IndexSource = { pages(): Tab[]; get(id: string): Tab | undefined; folder(tab: Tab): string | null; declaration(tab: Tab): SearchDeclaration | undefined; assets?(tab: Tab): ImageAsset[] };
 export type ScoredHit = IndexedChunk & { score: number };
+/** An image row, with the text chunk it sits on (its card, item or section) when that is indexed. */
+export type ImageHit = ScoredHit & { ownerRow: IndexedChunk | null };
 const WIDTH = 768;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export function rankVectors(rows: IndexedChunk[], vectors: Float32Array, query: Float32Array, scope: "pages" | "chunks", visible: (id: string) => boolean, limit = 8, cutoff = true): ScoredHit[] {
   const groups = new Map<string, ScoredHit[]>();
   rows.forEach((row, index) => {
-    if (!visible(row.tab_id)) return;
+    if (row.kind === "image" || !visible(row.tab_id)) return;
     let score = 0;
     for (let d = 0; d < WIDTH; d++) score += vectors[index * WIDTH + d] * query[d];
     if (!Number.isFinite(score)) return;
@@ -35,6 +40,27 @@ export function rankVectors(rows: IndexedChunk[], vectors: Float32Array, query: 
   return hits.filter(hit => !cutoff || hit.score >= (hits[0]?.score ?? 0) - 0.08).slice(0, limit);
 }
 
+/**
+ * Image rows. With `blend`, an image scores `0.5 image + 0.5 owner's text chunk` (the page's vector when the
+ * owner has none): for a text query the words around a screenshot say more than its pixels. An image query
+ * compares pixels only.
+ */
+export function rankImages(rows: IndexedChunk[], vectors: Float32Array, query: Float32Array, blend: boolean, visible: (id: string) => boolean, limit = 8, cutoff = true): ImageHit[] {
+  const dot = (index: number) => { let score = 0; for (let d = 0; d < WIDTH; d++) score += vectors[index * WIDTH + d] * query[d]; return score; };
+  const text = new Map<string, number>();
+  rows.forEach((row, index) => { if (row.kind !== "image") text.set(`${row.tab_id}\n${row.chunk_key}`, index); });
+  const hits: ImageHit[] = [];
+  rows.forEach((row, index) => {
+    if (row.kind !== "image" || !visible(row.tab_id)) return;
+    const owner = text.get(`${row.tab_id}\n${row.owner}`) ?? text.get(`${row.tab_id}\npage`);
+    const image = dot(index);
+    const score = blend && owner !== undefined ? 0.5 * image + 0.5 * dot(owner) : image;
+    if (Number.isFinite(score)) hits.push({ ...row, score, ownerRow: owner === undefined ? null : rows[owner] });
+  });
+  hits.sort((a, b) => b.score - a.score || a.tab_id.localeCompare(b.tab_id) || a.chunk_key.localeCompare(b.chunk_key));
+  return hits.filter(hit => !cutoff || hit.score >= hits[0].score - 0.08).slice(0, limit);
+}
+
 /** Derived storage and a single worker: never retain a library's text or embeddings in a batch. */
 export class SearchIndex {
   private db?: DatabaseSync;
@@ -49,7 +75,14 @@ export class SearchIndex {
   private dirty = true;
   private queries = new Map<string, Float32Array>();
   private error: string | null = null;
-  constructor(private root: string | (() => string), private source: IndexSource, private embedder: Embedder, private debounceMs = 5000) {}
+  /** Pages with images still to embed. They wait for the page queue, and for searches to stop. */
+  private imagePages = new Set<string>();
+  /** Images that could not be read or embedded. Not tried again until search is switched on again. */
+  private imageSkips = new Set<string>();
+  private imageFails = 0;
+  private imageError: string | null = null;
+  private lastQuery = 0;
+  constructor(private root: string | (() => string), private source: IndexSource, private embedder: Embedder, private debounceMs = 5000, private imageIdleMs = 3000) {}
   start(model: string, dtype: string): void {
     if (this.stopped) return;
     if (!this.db) {
@@ -60,6 +93,8 @@ export class SearchIndex {
         CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, tab_id TEXT NOT NULL, chunk_key TEXT NOT NULL, kind TEXT NOT NULL, anchor TEXT, heading_id TEXT, label TEXT NOT NULL, snippet TEXT NOT NULL, hash TEXT NOT NULL, vec BLOB NOT NULL, UNIQUE(tab_id, chunk_key));
         CREATE INDEX IF NOT EXISTS idx_chunks_tab ON chunks(tab_id);
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+      // An image row names the text chunk it sits on. Indexes from before images have no such column.
+      if (!(this.db.prepare("PRAGMA table_info(chunks)").all() as { name: string }[]).some(c => c.name === "owner")) this.db.exec("ALTER TABLE chunks ADD COLUMN owner TEXT");
     }
     const signature = JSON.stringify([model, dtype, CHUNKER_VERSION]);
     const prior = this.db.prepare("SELECT value FROM meta WHERE key='signature'").get() as { value: string } | undefined;
@@ -70,6 +105,7 @@ export class SearchIndex {
     }
     const wasEnabled = this.enabled; this.enabled = true;
     if (!wasEnabled || prior?.value !== signature) {
+      this.imageSkips.clear(); this.imageFails = 0; this.imageError = null;
       const pages = this.source.pages().sort((a, b) => Math.max(b.updatedAt, b.stateUpdatedAt) - Math.max(a.updatedAt, a.stateUpdatedAt));
       const ids = new Set(pages.map(p => p.id));
       for (const row of this.db.prepare("SELECT DISTINCT tab_id FROM chunks").all() as { tab_id: string }[]) if (!ids.has(row.tab_id)) this.remove(row.tab_id);
@@ -85,35 +121,90 @@ export class SearchIndex {
     timer.unref(); this.timers.set(id, timer);
   }
   remove(id: string): void {
-    clearTimeout(this.timers.get(id)); this.timers.delete(id); this.queue.delete(id);
+    clearTimeout(this.timers.get(id)); this.timers.delete(id); this.queue.delete(id); this.imagePages.delete(id);
     this.db?.prepare("DELETE FROM chunks WHERE tab_id=?").run(id); this.dirty = true;
     this.db?.prepare("DELETE FROM meta WHERE key=?").run(`page:${id}`);
   }
   private kick(): void {
     if (this.running || !this.enabled || this.stopped) return;
-    this.running = this.drain().finally(() => { this.running = undefined; if (this.queue.size && this.enabled && !this.stopped && !this.error) this.kick(); });
+    this.running = this.drain().finally(() => { this.running = undefined; if ((this.queue.size || this.imagesWaiting()) && this.enabled && !this.stopped && !this.error) this.kick(); });
   }
   private async drain(): Promise<void> {
     this.error = null;
-    while (this.enabled && !this.stopped && this.queue.size) {
-      const id = this.queue.values().next().value!; this.queue.delete(id);
-      try { await this.indexPage(id); }
-      catch (err) { this.error = (err as Error).message; this.queue.add(id); break; }
+    while (this.enabled && !this.stopped) {
+      if (this.queue.size) {
+        const id = this.queue.values().next().value!; this.queue.delete(id);
+        try { await this.indexPage(id); }
+        catch (err) { this.error = (err as Error).message; this.queue.add(id); break; }
+      } else if (this.imagesWaiting()) await this.indexImage(this.imagePages.values().next().value!);
+      else break;
       await new Promise<void>(resolve => setImmediate(resolve));
     }
   }
+  private imagesWaiting(): boolean { return this.imagePages.size > 0 && this.imageFails < 3; }
+  /** The page's image assets that its text refers to, each with the chunk that owns it. */
+  private images(tab: Tab, refs: ImageRef[]): (ImageAsset & ImageRef)[] {
+    const assets = refs.length ? this.source.assets?.(tab) ?? [] : [];
+    const byRef = new Map(refs.map(r => [r.ref, r]));
+    return assets.flatMap(asset => { const ref = byRef.get(asset.ref); return ref ? [{ ...asset, ...ref }] : []; });
+  }
+  /** Drops vectors of images the page no longer shows, follows a moved owner, and queues what is not embedded yet. */
+  private syncImages(id: string, wanted: (ImageAsset & ImageRef)[]): void {
+    const db = this.db!;
+    const byKey = new Map(wanted.map(w => [`image:${w.ref}`, w]));
+    const have = new Set<string>();
+    for (const row of db.prepare("SELECT chunk_key,hash,owner,label,snippet FROM chunks WHERE tab_id=? AND kind='image'").all(id) as { chunk_key: string; hash: string; owner: string | null; label: string; snippet: string }[]) {
+      const w = byKey.get(row.chunk_key);
+      if (!w || w.hash !== row.hash) { db.prepare("DELETE FROM chunks WHERE tab_id=? AND chunk_key=?").run(id, row.chunk_key); this.dirty = true; continue; }
+      have.add(row.chunk_key);
+      if (w.owner !== row.owner || w.label !== row.label || w.name !== row.snippet) {
+        db.prepare("UPDATE chunks SET owner=?,label=?,snippet=? WHERE tab_id=? AND chunk_key=?").run(w.owner, w.label, w.name, id, row.chunk_key); this.dirty = true;
+      }
+    }
+    if (wanted.some(w => !have.has(`image:${w.ref}`) && !this.imageSkips.has(`${id}\n${w.ref}\n${w.hash}`))) this.imagePages.add(id);
+    else this.imagePages.delete(id);
+  }
+  /** One image per step, so a page change or a search never waits behind more than one. */
+  private async indexImage(id: string): Promise<void> {
+    const tab = this.source.get(id);
+    if (!tab) { this.remove(id); return; }
+    const generation = this.generation;
+    const have = new Set((this.db!.prepare("SELECT chunk_key FROM chunks WHERE tab_id=? AND kind='image'").all(id) as { chunk_key: string }[]).map(r => r.chunk_key));
+    const skip = (w: ImageAsset) => `${id}\n${w.ref}\n${w.hash}`;
+    const next = this.images(tab, analyzePage(tab, this.source.folder(tab), this.source.declaration(tab)).images).find(w => !have.has(`image:${w.ref}`) && !this.imageSkips.has(skip(w)));
+    if (!next) { this.imagePages.delete(id); return; }
+    while (Date.now() - this.lastQuery < this.imageIdleMs) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(250, this.imageIdleMs)));
+      if (!this.enabled || this.stopped || this.queue.size) return;
+    }
+    try {
+      const bytes = next.read();
+      if (!bytes?.byteLength || bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("Image is missing or too large");
+      const vec = await this.embedder.embedImage(bytes);
+      if (vec.length !== WIDTH || !vec.every(Number.isFinite)) throw new Error("Invalid image vector");
+      if (!this.enabled || this.stopped || generation !== this.generation || !this.source.get(id)) return;
+      this.db!.prepare("INSERT OR REPLACE INTO chunks(tab_id,chunk_key,kind,anchor,heading_id,label,snippet,hash,vec,owner) VALUES (?,?,'image',?,NULL,?,?,?,?,?)")
+        .run(id, `image:${next.ref}`, next.ref, next.label, next.name, next.hash, Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength), next.owner);
+      this.dirty = true; this.imageFails = 0; this.imageError = null;
+    } catch (err) {
+      if (!this.enabled || this.stopped || generation !== this.generation) return;
+      // One unreadable image is skipped; several failures in a row mean the encoder itself is not working.
+      this.imageSkips.add(skip(next)); this.imageFails++; this.imageError = (err as Error).message;
+    }
+  }
   async idle(): Promise<void> { while (this.running) await this.running; }
-  private chunks(tab: Tab): TextChunk[] { return chunkPage(tab, this.source.folder(tab), this.source.declaration(tab)); }
+  private chunks(tab: Tab): TextChunk[] { return analyzePage(tab, this.source.folder(tab), this.source.declaration(tab)).chunks; }
   private async indexPage(id: string): Promise<void> {
     const tab = this.source.get(id);
     if (!tab) { this.remove(id); return; }
     const generation = this.generation;
-    const chunks = this.chunks(tab);
+    const { chunks, images } = analyzePage(tab, this.source.folder(tab), this.source.declaration(tab));
+    this.syncImages(id, this.images(tab, images));
     const identity = (cs: TextChunk[]) => JSON.stringify(cs.map(c => [c.key, c.hash, c.label, c.headingId]));
     const snapshot = identity(chunks);
     const prior = this.db!.prepare("SELECT value FROM meta WHERE key=?").get(`page:${id}`) as { value: string } | undefined;
     if (prior?.value === snapshot) return;
-    const old = new Map((this.db!.prepare("SELECT chunk_key,hash FROM chunks WHERE tab_id=?").all(id) as { chunk_key: string; hash: string }[]).map(r => [r.chunk_key, r.hash]));
+    const old = new Map((this.db!.prepare("SELECT chunk_key,hash FROM chunks WHERE tab_id=? AND kind<>'image'").all(id) as { chunk_key: string; hash: string }[]).map(r => [r.chunk_key, r.hash]));
     const changed = chunks.filter(c => old.get(c.key) !== c.hash);
     // IPC batches are bounded; temporary vectors cover only this page's changed chunks.
     const pending = new Map<string, Float32Array>();
@@ -155,25 +246,39 @@ export class SearchIndex {
     }
     this.rows = rows; this.vectors = vectors; this.dirty = false;
   }
-  async query(q: string, scope: "pages" | "chunks", visible: (id: string) => boolean, limit = 8, cutoff = true): Promise<ScoredHit[]> {
+  /** The query's vector: text through the 50-entry cache, an image through the vision encoder. */
+  private async queryVector(q: string | Uint8Array): Promise<Float32Array> {
     if (!this.enabled || this.stopped) throw new Error("Semantic search is unavailable");
     const generation = this.generation;
-    let vec = this.queries.get(q);
+    this.lastQuery = Date.now();
+    let vec = typeof q === "string" ? this.queries.get(q) : undefined;
     if (!vec) {
-      vec = await this.embedder.embedQuery(q);
+      vec = typeof q === "string" ? await this.embedder.embedQuery(q) : await this.embedder.embedImage(q);
       if (vec.length !== WIDTH || !vec.every(Number.isFinite)) throw new Error("Invalid query vector");
       if (!this.enabled || this.stopped || generation !== this.generation) throw new Error("Search settings changed");
     }
-    this.queries.delete(q); this.queries.set(q, vec);
-    if (this.queries.size > 50) this.queries.delete(this.queries.keys().next().value!);
+    this.lastQuery = Date.now();
+    if (typeof q === "string") {
+      this.queries.delete(q); this.queries.set(q, vec);
+      if (this.queries.size > 50) this.queries.delete(this.queries.keys().next().value!);
+    }
     this.loadVectors();
+    return vec;
+  }
+  async query(q: string, scope: "pages" | "chunks", visible: (id: string) => boolean, limit = 8, cutoff = true): Promise<ScoredHit[]> {
+    const vec = await this.queryVector(q);
     return rankVectors(this.rows, this.vectors, vec, scope, visible, limit, cutoff);
+  }
+  /** Images for a text query (blended with their owner's text unless `blend` is false) or like the given image's bytes. */
+  async queryImages(q: string | Uint8Array, visible: (id: string) => boolean, limit = 8, cutoff = true, blend = typeof q === "string"): Promise<ImageHit[]> {
+    const vec = await this.queryVector(q);
+    return rankImages(this.rows, this.vectors, vec, blend, visible, limit, cutoff);
   }
   status() {
     const pages = this.source.pages();
     const indexed = this.db ? (this.db.prepare("SELECT COUNT(*) AS n FROM meta WHERE key LIKE 'page:%'").get() as { n: number }).n : 0;
-    const chunks = this.db ? (this.db.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n : 0;
-    return { enabled: this.enabled, indexing: !!this.running, indexedPages: indexed, totalPages: pages.length, chunks, pendingPages: this.queue.size + this.timers.size, error: this.error };
+    const count = (where: string) => this.db ? (this.db.prepare(`SELECT COUNT(*) AS n FROM chunks WHERE ${where}`).get() as { n: number }).n : 0;
+    return { enabled: this.enabled, indexing: !!this.running, indexedPages: indexed, totalPages: pages.length, chunks: count("kind<>'image'"), pendingPages: this.queue.size + this.timers.size, error: this.error, images: count("kind='image'"), pendingImagePages: this.imagePages.size, imageError: this.imageError };
   }
   fail(error: unknown): void { this.pause(); this.error = error instanceof Error ? error.message : String(error); }
   async close(): Promise<void> { this.pause(); this.stopped = true; await this.idle(); this.db?.close(); this.db = undefined; }

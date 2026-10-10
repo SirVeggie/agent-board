@@ -226,6 +226,8 @@
   let relatedTimer = 0;
   /** "indexing 40 of 116 pages" while the index is building, else "". */
   let semanticProgress = "";
+  /** The image pasted or dropped into the palette as the query: { url } of its preview. */
+  let paletteImage = null;
   /** @type {Array<any>} */
   let paletteHits = [];
   let paletteIndex = 0;
@@ -3665,6 +3667,7 @@
     releasePaletteTrap?.();
     releasePaletteTrap = null;
     paletteEl.hidden = true;
+    clearPaletteImage();
     clearTimeout(paletteTimer);
     clearTimeout(relatedTimer);
     paletteReq += 1;
@@ -3777,9 +3780,9 @@
     return semanticStatusReq;
   }
 
-  async function fetchSemantic(query, scope) {
+  async function fetchSemantic(query, scope, limit = 8) {
     try {
-      const res = await fetch(`/api/search/semantic?q=${encodeURIComponent(query.slice(0, 500))}&scope=${scope}&limit=8`);
+      const res = await fetch(`/api/search/semantic?q=${encodeURIComponent(query.slice(0, 500))}&scope=${scope}&limit=${limit}`);
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         return data;
@@ -3800,13 +3803,17 @@
       : "";
   }
 
-  /** Palette rows for semantic hits: the page, with what matched (section heading or "#335 Card title") and a snippet. */
+  /**
+   * Palette rows for semantic hits: the page, with what matched (section heading or "#335 Card title") and a snippet.
+   * An image hit shows its thumbnail and the card, item or section it sits on.
+   */
   function semanticRows(hits) {
     return hits.map((hit) => {
       const tab = findAnyTab(hit.id) || { id: hit.id, title: hit.title, folderPath: hit.folder };
       // A section opens at its heading: by id when it has one, else by its place among the page's h1 to h4.
+      const at = hit.kind === "image" ? hit.owner || {} : hit;
       const anchor =
-        hit.kind === "section" ? hit.headingId || (Number(hit.anchor) > 0 ? `scribe-section:${hit.anchor}` : "") : "";
+        at.kind === "section" ? at.headingId || (Number(at.anchor) > 0 ? `scribe-section:${at.anchor}` : "") : "";
       return {
         ...tab,
         open: state.tabs.some((item) => item.id === hit.id),
@@ -3814,6 +3821,7 @@
         matchLabel: hit.label && hit.label !== tab.title ? hit.label : "",
         snippet: hit.snippet,
         anchor,
+        thumb: hit.kind === "image" ? hit.image : "",
       };
     });
   }
@@ -3892,7 +3900,11 @@
         applyPaletteHits([{ ...semanticInfoRow("Searching by meaning…", "The first search loads the model, which takes a few seconds."), busy: true }]);
       }
     }, 400);
-    const [pages, chunks] = await Promise.all([fetchSemantic(query, "pages"), fetchSemantic(query, "chunks")]);
+    const [pages, chunks, images] = await Promise.all([
+      fetchSemantic(query, "pages"),
+      fetchSemantic(query, "chunks"),
+      fetchSemantic(query, "images", 4),
+    ]);
     clearTimeout(busy);
     if (stale()) {
       return;
@@ -3914,7 +3926,86 @@
     if (chunkRows.length) {
       chunkRows[0].section = "Sections and cards";
     }
-    applyPaletteHits([...pageRows, ...chunkRows]);
+    const imageRows = semanticRows(images.hits || []);
+    if (imageRows.length) {
+      imageRows[0].section = "Images";
+    }
+    applyPaletteHits([...pageRows, ...chunkRows, ...imageRows]);
+  }
+
+  function clearPaletteImage() {
+    if (paletteImage) {
+      URL.revokeObjectURL(paletteImage.url);
+      paletteImage = null;
+    }
+  }
+
+  /** The first image file of a paste or drop, if it carries one. */
+  function imageFileOf(transfer) {
+    return [...(transfer?.files || [])].find((file) => /^image\/(png|jpeg|gif|webp|avif)$/.test(file.type)) || null;
+  }
+
+  /**
+   * An image as the query (#373): pasted or dropped into the palette, it lists the indexed images that
+   * look most like it, each with the card, item or section it sits on. Typing goes back to text search.
+   */
+  async function runImagePaletteSearch(file) {
+    const req = ++paletteReq;
+    const stale = () => req !== paletteReq || !isPaletteOpen();
+    clearTimeout(paletteTimer);
+    clearTimeout(relatedTimer);
+    clearPaletteImage();
+    paletteImage = { url: URL.createObjectURL(file) };
+    paletteInput.value = "";
+    updatePaletteChrome({ id: "semantic", query: "" });
+    paletteInput.placeholder = "Similar images. Type to search by text";
+    const queryRow = (title, snippet, extra = {}) => ({ ...semanticInfoRow(title, snippet), thumb: paletteImage?.url, ...extra });
+    paletteIndex = 0;
+    if (!semanticStatus) {
+      await (semanticStatusReq || loadSemanticStatus());
+      if (stale()) {
+        return;
+      }
+    }
+    if (!semanticStatus?.enabled) {
+      applyPaletteHits([semanticOffRow()]);
+      return;
+    }
+    applyPaletteHits([queryRow("Looking for similar images…", "The first image search loads the vision model, which takes a few seconds.", { busy: true })]);
+    let data;
+    try {
+      const res = await fetch("/api/search/semantic/image?limit=8", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data.status) {
+          semanticStatus = data;
+        }
+        data = { error: data.error || `HTTP ${res.status}` };
+      }
+    } catch (err) {
+      data = { error: err.message || String(err) };
+    }
+    if (stale()) {
+      return;
+    }
+    if (!data.hits) {
+      applyPaletteHits([semanticStatus?.enabled ? queryRow("Image search failed", data.error) : semanticOffRow()]);
+      return;
+    }
+    const rows = semanticRows(data.hits);
+    const pending = data.index?.pendingImagePages > 0 ? " Images are still being indexed." : "";
+    if (!rows.length) {
+      applyPaletteHits([queryRow("No similar images", `No indexed image looks like this one.${pending}`)]);
+      return;
+    }
+    rows[0].section = "Similar images";
+    // The query's own row leads; the selection starts on the best match.
+    paletteIndex = 1;
+    applyPaletteHits([queryRow("Images like this one", `${file.name || "Pasted image"}.${pending}`), ...rows]);
   }
 
   /**
@@ -4084,7 +4175,7 @@
         : paletteKind === "ai"
           ? "Type a question about your pages and press Enter"
           : semantic
-            ? "Describe what you are looking for. Pages, sections and cards are matched by meaning, not by their words."
+            ? "Describe what you are looking for. Pages, sections, cards and images are matched by meaning, not by their words. Paste or drop an image to find similar ones."
             : "No pages yet";
     if (semantic && semanticProgress) {
       paletteEmpty.textContent += ` Still ${semanticProgress}.`;
@@ -4110,6 +4201,19 @@
         activatePaletteHit(tab, views.modeFromEvent(event));
       });
 
+      // A row with a thumbnail keeps its text in a column beside it.
+      let body = el;
+      if (tab.thumb) {
+        el.classList.add("with-thumb");
+        const thumb = document.createElement("img");
+        thumb.className = "palette-thumb";
+        thumb.src = tab.thumb;
+        thumb.alt = "";
+        thumb.loading = "lazy";
+        body = document.createElement("div");
+        body.className = "palette-row-text";
+        el.append(thumb, body);
+      }
       const main = document.createElement("div");
       main.className = "palette-row-main";
       const title = document.createElement("span");
@@ -4143,7 +4247,7 @@
       if (chips.childElementCount) {
         main.appendChild(chips);
       }
-      el.appendChild(main);
+      body.appendChild(main);
 
       if (tab.snippet || tab.matchLabel) {
         const snippet = document.createElement("div");
@@ -4155,7 +4259,7 @@
           snippet.appendChild(label);
         }
         snippet.append(tab.snippet || "");
-        el.appendChild(snippet);
+        body.appendChild(snippet);
       }
       paletteList.appendChild(el);
     }
@@ -4483,7 +4587,22 @@
     event.preventDefault();
     closePalette();
   });
+  paletteInput.addEventListener("paste", (event) => {
+    const file = imageFileOf(event.clipboardData);
+    if (file) {
+      event.preventDefault();
+      void runImagePaletteSearch(file);
+    }
+  });
+  paletteEl.addEventListener("drop", (event) => {
+    const file = imageFileOf(event.dataTransfer);
+    if (file) {
+      event.preventDefault();
+      void runImagePaletteSearch(file);
+    }
+  });
   paletteInput.addEventListener("input", () => {
+    clearPaletteImage();
     const query = paletteInput.value.trim();
     if (!query) {
       showLocalPaletteRows();
