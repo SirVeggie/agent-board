@@ -1779,6 +1779,8 @@
       this.stickY = 0;
       this.stickV = 0;
       this.queueShown = true;
+      this.transcriptThreadId = null;
+      this.transcriptHadContent = false;
       this.entering = new Map();
       this.scroll.addEventListener("scroll", () => {
         this.updateScrollFade();
@@ -1923,10 +1925,11 @@
       if (this.variant === "dock") dock.invalidateFeed();
       this.renderAll();
       if (id) {
+        const had = S.details.has(id);
         ensureDetail(id).then(() => {
           if (this.threadId === id) {
             this.stick = true;
-            this.renderAll();
+            if (!had) this.renderAll();
             if (this.variant === "dock") dock.bindFeed();
             const t = S.threads.get(id);
             if (t?.unread && this.visible()) api("POST", `/threads/${encodeURIComponent(id)}/read`).catch(() => undefined);
@@ -2042,7 +2045,7 @@
     }
 
     focus() {
-      this.input?.focus();
+      this.input?.focus({ preventScroll: true });
     }
 
     /* ----- rendering ----- */
@@ -2385,21 +2388,30 @@
     }
 
     renderTranscript() {
+      const id = this.threadId;
+      const keepPlace = this.transcriptThreadId === id && this.transcriptHadContent && !this.stick;
+      const savedTop = keepPlace ? this.scroll.scrollTop : 0;
       this.transcript.replaceChildren();
       this.queueList.replaceChildren();
       this.queueShown = true;
       const t = this.thread();
       if (!t) {
         this.transcript.append(this.emptyState());
+        this.transcriptThreadId = id;
+        this.transcriptHadContent = false;
         return;
       }
       const detail = S.details.get(t.id);
       if (!detail) {
         this.transcript.append(el("div", "ag-loading", "Loading…"));
+        this.transcriptThreadId = id;
+        this.transcriptHadContent = false;
         return;
       }
       if (!detail.items.length) {
         this.transcript.append(this.emptyState());
+        this.transcriptThreadId = id;
+        this.transcriptHadContent = false;
         return;
       }
       if (this.variant === "dock") {
@@ -2420,7 +2432,10 @@
       this.markLatest();
       this.measureUserMessages();
       this.updateQueueDock();
-      this.scrollToEnd(true);
+      this.transcriptThreadId = id;
+      this.transcriptHadContent = true;
+      if (keepPlace) this.scroll.scrollTop = savedTop;
+      else this.scrollToEnd(true);
     }
 
     /** Queued messages render into the dock below the scroll; every other turn into the transcript. */
@@ -4121,8 +4136,12 @@
         const status = t?.status || "idle";
         const start = status !== "idle" ? [...(S.details.get(t.id)?.turns.values() || [])].find((x) => x.status === "running")?.startedAt : null;
         this.status.className = `dock-status s-${status}`;
-        this.status.replaceChildren(el("span", "dock-dot"));
-        if (start) this.status.append(setClock(el("span", "ag-clock"), start));
+        const sig = `${status}:${start || ""}`;
+        if (this.status._sig !== sig) {
+          this.status._sig = sig;
+          this.status.replaceChildren(el("span", "dock-dot"));
+          if (start) this.status.append(setClock(el("span", "ag-clock"), start));
+        }
       }
       if (t?.queued) tail.append(el("span", "ag-tag", `${t.queued} queued`));
       if (t?.background) tail.append(el("span", "ag-tag", `${t.background} in background`));
@@ -4756,8 +4775,9 @@
   }
 
   function lastLine(text) {
-    const lines = String(text || "").trim().split(/\n+/);
-    return plain(lines[lines.length - 1] || "").slice(0, 160);
+    const s = String(text || "").trimEnd();
+    const i = s.lastIndexOf("\n");
+    return plain(i < 0 ? s : s.slice(i + 1)).slice(0, 160);
   }
 
   /** One live step as the collapsed dock and pages' step feeds show it: { kind, text }, or null. */
@@ -5425,18 +5445,38 @@
         document.body.classList.add("resizing-side");
         const startX = event.clientX;
         const startW = pane.getBoundingClientRect().width;
-        const move = (e) => {
+        let latestX = event.clientX;
+        let frame = 0;
+        let active = true;
+        const apply = (clientX) => {
           const dir = document.documentElement.dataset.agentSide === "left" ? 1 : -1;
-          applyWidth(startW + dir * (e.clientX - startX));
+          applyWidth(startW + dir * (clientX - startX));
+        };
+        const move = (e) => {
+          latestX = e.clientX;
+          if (frame) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            apply(latestX);
+          });
         };
         const up = () => {
+          if (!active) return;
+          active = false;
+          if (frame) cancelAnimationFrame(frame);
+          frame = 0;
+          apply(latestX);
           document.body.classList.remove("resizing-side");
           resizer.removeEventListener("pointermove", move);
           resizer.removeEventListener("pointerup", up);
+          resizer.removeEventListener("pointercancel", up);
+          resizer.removeEventListener("lostpointercapture", up);
           localStorage.setItem(LS.width, String(Math.round(pane.getBoundingClientRect().width)));
         };
         resizer.addEventListener("pointermove", move);
         resizer.addEventListener("pointerup", up);
+        resizer.addEventListener("pointercancel", up);
+        resizer.addEventListener("lostpointercapture", up);
       });
       this.apply();
     },
@@ -5531,15 +5571,35 @@
         document.body.classList.add("resizing-side");
         const startX = event.clientX;
         const startW = side.getBoundingClientRect().width;
-        const move = (e) => setWidth(startW + (e.clientX - startX));
+        let latestX = event.clientX;
+        let frame = 0;
+        let active = true;
+        const apply = (clientX) => setWidth(startW + (clientX - startX));
+        const move = (e) => {
+          latestX = e.clientX;
+          if (frame) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            apply(latestX);
+          });
+        };
         const up = () => {
+          if (!active) return;
+          active = false;
+          if (frame) cancelAnimationFrame(frame);
+          frame = 0;
+          apply(latestX);
           document.body.classList.remove("resizing-side");
           resizer.removeEventListener("pointermove", move);
           resizer.removeEventListener("pointerup", up);
+          resizer.removeEventListener("pointercancel", up);
+          resizer.removeEventListener("lostpointercapture", up);
           localStorage.setItem(LS.fullSide, String(Math.round(side.getBoundingClientRect().width)));
         };
         resizer.addEventListener("pointermove", move);
         resizer.addEventListener("pointerup", up);
+        resizer.addEventListener("pointercancel", up);
+        resizer.addEventListener("lostpointercapture", up);
       });
       resizer.addEventListener("dblclick", () => {
         root.style.removeProperty("--ag-full-side");
@@ -5783,8 +5843,12 @@
       setClock(this.handleClock, status === "running" ? start : null);
       // Status dot and run time at the start of the bar.
       this.status.className = `dock-status s-${status}`;
-      this.status.replaceChildren(el("span", "dock-dot"));
-      if (start) this.status.append(setClock(el("span", "ag-clock"), start));
+      const sig = `${status}:${start || ""}`;
+      if (this.status._sig !== sig) {
+        this.status._sig = sig;
+        this.status.replaceChildren(el("span", "dock-dot"));
+        if (start) this.status.append(setClock(el("span", "ag-clock"), start));
+      }
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
       else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
