@@ -1755,6 +1755,7 @@
       this.queueShown = true;
       this.entering = new Map();
       this.scroll.addEventListener("scroll", () => {
+        this.updateScrollFade();
         if (!(this.stickLock || this.stickAnim)) {
           const dist = this.bottomDist();
           // Pin from distance alone. Coupling this to the dock hiding left the view unpinned
@@ -3653,6 +3654,10 @@
       return el.scrollHeight - el.scrollTop - el.clientHeight;
     }
 
+    updateScrollFade() {
+      if (this.variant === "dock") this.scroll.classList.toggle("scrolled", this.scroll.scrollTop > 0);
+    }
+
     /** The queue dock slides away while you read further up, and comes back at the bottom. */
     updateQueueDock() {
       const dock = this.queueDock;
@@ -3716,6 +3721,7 @@
     jumpScroll(top) {
       this.stickLock = true;
       this.scroll.scrollTop = top;
+      this.updateScrollFade();
       this.stickLock = false;
     }
 
