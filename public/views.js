@@ -1270,6 +1270,18 @@ window.createViews = function createViews(host) {
     },
     true
   );
+  // A pane's header shows its buttons while the pointer is in that pane. Everything in a pane carries
+  // data-pane; a frame swallows the moves inside it, so the pane stays marked until the pointer is elsewhere.
+  function hoverPane(pane) {
+    for (const id of PANES) {
+      paneEls[id].head.classList.toggle("pointer-in", id === pane);
+    }
+  }
+  mainEl.addEventListener("pointerover", (event) => {
+    const paneEl = event.target instanceof Element ? event.target.closest("[data-pane]") : null;
+    hoverPane(paneEl ? paneEl.dataset.pane : "");
+  });
+  mainEl.addEventListener("pointerleave", () => hoverPane(""));
   // Sites and embedded pages have no bridge to report a press: the frame taking focus says it.
   window.addEventListener("blur", () => {
     setTimeout(() => {

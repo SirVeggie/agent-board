@@ -3247,7 +3247,7 @@ html[data-theme="cream"] .peek-card {
 }
 
 /* A pane's header is part of the chrome, like the tab strip: the focused pane's title is bold and
- * full colour, the other pane's is muted. */
+ * in the accent colour, the other pane's is muted. */
 .pane-head {
   position: absolute;
   top: var(--pane-y);
@@ -3292,7 +3292,7 @@ body.dragging-pane iframe { pointer-events: none; }
 
 .pane-head.focused .view-title-text {
   font-weight: 600;
-  color: var(--heading);
+  color: var(--accent);
 }
 
 .pane-head.blank .view-title-text {
@@ -3300,15 +3300,15 @@ body.dragging-pane iframe { pointer-events: none; }
   color: var(--muted);
 }
 
+/* The buttons show while the pointer is in the pane (views.js marks it), so a pane at rest is its title alone. */
 .pane-head .view-btn {
-  opacity: 0.55;
   transition: opacity 0.15s ease;
 }
 
-.pane-head:hover .view-btn,
-.pane-head.focused .view-btn,
-.pane-head .view-btn:focus-visible {
-  opacity: 1;
+@media (hover: hover) {
+  .pane-head:not(.pointer-in):not(:hover) .view-btn:not(:focus-visible) {
+    opacity: 0;
+  }
 }
 
 /* The other pane's tab: still on screen, so it is marked, but quieter than the active one. */
