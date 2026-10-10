@@ -1421,10 +1421,15 @@
     return origin || firstRole("agent");
   }
   function cardsIn(colId) {
-    var first = columns()[0];
-    return liveCards().filter(function (c) {
-      return c.col === colId || (!column(c.col) && first && first.id === colId);
+    if (renderCache && renderCache.cardsIn.has(colId)) return renderCache.cardsIn.get(colId);
+    var cols = columns();
+    var first = cols[0];
+    var colIds = renderCache ? renderCache.colIds : new Set(cols.map(function (c) { return c.id; }));
+    var out = liveCards().filter(function (c) {
+      return c.col === colId || (!colIds.has(c.col) && first && first.id === colId);
     });
+    if (renderCache) renderCache.cardsIn.set(colId, out);
+    return out;
   }
   function byNum(num) {
     var cards = allCards();
@@ -1956,21 +1961,56 @@
   }
 
   // ---------- board rendering ----------
-  function render() {
-    if (drag) return;
+  var renderCache = null;
+  var renderedView = null;
+  var paintFrame = null, paintTimer = null;
+  function cancelPaint() {
+    if (paintFrame !== null) cancelAnimationFrame(paintFrame);
+    if (paintTimer !== null) clearTimeout(paintTimer);
+    paintFrame = paintTimer = null;
+  }
+  function renderBookkeeping() {
     refreshWorkerThreads();
     sweepUnmerged();
     scheduleWorkers();
-    renderToolbar();
-    renderWorkersButton();
-    renderBoard();
-    renderWorkersPanel();
-    if (openId) renderModal();
-    if (!archiveEl.classList.contains("hidden")) renderArchive();
-    if (!settingsBack.classList.contains("hidden")) renderSettings();
+  }
+  function render() {
+    cancelPaint();
+    if (drag) return;
+    renderBookkeeping();
+    renderDom();
+  }
+  function renderLater() {
+    if (drag) return;
+    renderBookkeeping();
+    if (paintTimer !== null) return;
+    var paint = function () {
+      cancelPaint();
+      if (!drag) renderDom();
+    };
+    paintFrame = requestAnimationFrame(paint);
+    // Background iframes may never get an animation frame; worker bookkeeping stays immediate.
+    paintTimer = setTimeout(paint, 150);
+  }
+  function renderDom() {
+    renderedView = JSON.stringify(view());
+    renderCache = { colIds: new Set(columns().map(function (c) { return c.id; })), cardsIn: new Map(), workerCards: new Map(), nextCard: new Map(), labels: {} };
+    try {
+      renderToolbar();
+      renderWorkersButton();
+      renderBoard();
+      renderWorkersPanel();
+      if (openId) renderModal();
+      if (!archiveEl.classList.contains("hidden")) renderArchive();
+      if (!settingsBack.classList.contains("hidden")) renderSettings();
+    } finally {
+      renderCache = null;
+    }
   }
 
   function renderBoard() {
+    var labelMap = renderCache.labels;
+    labels().forEach(function (l) { labelMap[l.id] = l; });
     var scrollLeft = boardEl.scrollLeft;
     var listScroll = {};
     boardEl.querySelectorAll(".cards").forEach(function (list) { listScroll[list.dataset.col] = list.scrollTop; });
@@ -2043,7 +2083,7 @@
       var cardNodes = [];
       ul.dataset.col = col.id;
       visible.forEach(function (c) {
-        cardNodes.push(renderCard(c, col));
+        cardNodes.push(renderCard(c, col, labelMap));
       });
       window.scribeSyncChildren(ul, cardNodes);
       ul.querySelectorAll(".card").forEach(function (node) {
@@ -2103,7 +2143,7 @@
     }
   }
 
-  function renderCard(c, col) {
+  function renderCard(c, col, labelMap) {
     var li = el("li", "card p" + c.priority);
     li.dataset.id = c.id;
     var done = col && col.role === "done";
@@ -2119,8 +2159,6 @@
       }
       li.appendChild(cover.cloneNode(true));
     }
-    var labelMap = {};
-    labels().forEach(function (l) { labelMap[l.id] = l; });
     var chosen = c.labels.map(function (id) { return labelMap[id]; }).filter(Boolean);
     var chips = el("div", "chips");
     chosen.forEach(function (l) {
@@ -2479,6 +2517,23 @@
   function offscreen(box) {
     return box.bottom < 0 || box.top > window.innerHeight || box.right < 0 || box.left > window.innerWidth;
   }
+  function beginSlide(node) {
+    if (node._slide) node._slide.finish();
+    var token = {};
+    token.finish = function (e) {
+      if (e && (e.target !== node || e.propertyName !== "transform")) return;
+      if (node._slide !== token) return;
+      clearTimeout(token.timer);
+      node.removeEventListener("transitionend", token.finish);
+      node.style.transition = "";
+      node.style.transform = "";
+      if (!node.style.length) node.removeAttribute("style");
+      delete node._slide;
+    };
+    node._slide = token;
+    token.timer = setTimeout(token.finish, 500);
+    return token;
+  }
   /** FLIP: whatever `mutate` moves slides from its old spot instead of jumping. */
   function slide(nodes, mutate) {
     var before = nodes.map(function (n) { return layoutBox(n); });
@@ -2497,12 +2552,17 @@
     });
     if (!moved.length) return;
     moved.forEach(function (m) {
+      m.slide = beginSlide(m.node);
       m.node.style.transition = "none";
       m.node.style.transform = "translate(" + m.dx + "px, " + m.dy + "px)";
     });
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
         moved.forEach(function (m) {
+          if (m.node._slide !== m.slide) return;
+          clearTimeout(m.slide.timer);
+          m.slide.timer = setTimeout(m.slide.finish, 240);
+          m.node.addEventListener("transitionend", m.slide.finish);
           m.node.style.transition = SLIDE;
           m.node.style.transform = "";
         });
@@ -4271,6 +4331,7 @@
   function isPausedCol(col) { return Boolean(col && col.paused); }
   /** The worker's cards in the agent (ready) columns, in board order. Paused inboxes are skipped. */
   function workerCards(id) {
+    if (renderCache && renderCache.workerCards.has(id)) return renderCache.workerCards.get(id);
     var w = worker(id);
     if (!workerName(w)) return [];
     var out = [];
@@ -4278,6 +4339,7 @@
       if (!isReadyCol(col) || isPausedCol(col)) return;
       cardsIn(col.id).forEach(function (c) { if (sameName(c.assignee, w.name)) out.push(c); });
     });
+    if (renderCache) renderCache.workerCards.set(id, out);
     return out;
   }
   function maxWorkers() { return clamp(Math.floor(Number(settings().maxWorkers) || 0), 0, 99); }
@@ -4602,7 +4664,7 @@
         scribe.agent.get(tid).then(function (r) {
           if (r && r.ok && r.thread) threadStatus[tid] = threadState(r.thread);
           else if (r && r.error === "not_found") threadStatus[tid] = { status: "idle", queued: 0, run: null, gone: true };
-          render();
+          renderLater();
         });
       });
     });
@@ -4611,7 +4673,7 @@
     scribe.agent.onChange(function (t) {
       threadStatus[t.id] = threadState(t);
       if (t.status === "idle") adoptUnmerged(t);
-      render();
+      renderLater();
     });
   }
   function threadState(t) {
@@ -4696,7 +4758,7 @@
     threadSteps[tid] = steps;
     // Starting or ending a feed swaps the dialog's status box and feed: a full render.
     if (!had !== !steps.length) {
-      render();
+      renderLater();
       return;
     }
     allCards().forEach(function (c) {
@@ -4804,7 +4866,10 @@
   }
   /** The worker's next card: its first takeable one in the ready columns. */
   function nextCard(id) {
-    return workerCards(id).filter(cardTakeable)[0] || null;
+    if (renderCache && renderCache.nextCard.has(id)) return renderCache.nextCard.get(id);
+    var next = workerCards(id).filter(cardTakeable)[0] || null;
+    if (renderCache) renderCache.nextCard.set(id, next);
+    return next;
   }
   function workerOpts(w, c) {
     var mode = workerMode(w);
@@ -4876,7 +4941,7 @@
       delete handing[threadId];
       if (r && r.ok) {
         if (r.thread) threadStatus[threadId] = threadState(r.thread);
-        render();
+        renderLater();
         return true;
       }
       if (r && r.error === "not_found") {
@@ -4919,7 +4984,7 @@
     ).then(function () {
       delete advancing[id];
       delete launching[id];
-      render();
+      renderLater();
     });
   }
 
@@ -5264,7 +5329,7 @@
         function () { /* another window, or the agent isn't done */ }
       ).then(function () {
         delete soloMerging[tid];
-        render();
+        renderLater();
       });
     });
   }
@@ -6245,7 +6310,9 @@
 
   scribe.onChange(function () {
     ensureShape();
-    render();
+    // Viewer-local filter changes still paint immediately, including ones restored by the host.
+    if (JSON.stringify(view()) !== renderedView) render();
+    else renderLater();
   });
   ensureShape();
   render();

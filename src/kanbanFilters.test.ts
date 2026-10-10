@@ -193,12 +193,16 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
     // Retained rows reflect renamed options and choose their current index after reordering.
     await filter("fLabel").click();
     await option("Alpha: off").hover();
-    assert.deepEqual(await page.evaluate(() => {
+    // Off the list, so the reordered rows don't put another one under the pointer before the read.
+    await page.mouse.move(0, 0);
+    assert.deepEqual(await page.evaluate(async () => {
       const scribe = (window as any).scribe;
       const alpha = document.querySelector('[role="option"][aria-label="Alpha: off"]')!;
       const beta = document.querySelector('[role="option"][aria-label="Beta: off"]')!;
       scribe.state.labels = [{ id: "c", name: "Gamma" }, { id: "a", name: "Renamed Alpha" }];
       scribe.changed();
+      // A remote change paints on the next frame (or the fallback timer), not in the same task.
+      await new Promise((resolve) => setTimeout(resolve, 250));
       return [alpha.isConnected, beta.isConnected, alpha.getAttribute("aria-label"), alpha.classList.contains("active")];
     }), [true, false, "Renamed Alpha: off", true]);
     await option("Renamed Alpha: off").click();
