@@ -4021,6 +4021,49 @@ button.ag-help:focus-visible {
   min-width: 160px;
 }
 
+/* Memories dialog */
+.ag-mem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.ag-perm-set .ag-mem-form {
+  margin: 8px 0;
+}
+
+.ag-mem-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 52px;
+}
+
+.ag-mem-form-row,
+.ag-mem-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ag-mem {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.ag-mem-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ag-mem-meta {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 /* Agent settings: the key list. */
 .ag-keys {
   display: grid;
