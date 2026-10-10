@@ -3100,7 +3100,9 @@ main.has-split .newpage[data-pane],
   height: calc(var(--pane-h) - var(--view-head));
 }
 
-main.has-split #frames iframe[data-pane] {
+/* Over the pane's own body, which only backs a site while it loads. */
+main.has-split #frames iframe[data-pane],
+main.has-split .newpage[data-pane] {
   z-index: 2;
 }
 

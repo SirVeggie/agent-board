@@ -205,7 +205,7 @@ Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall bac
 
 ## Linking pages
 
-Pages can link to other Scribe pages and to websites. The user opens a link as a tab (navigate), a **peek** (a fixed card over the page, for a quick look without opening a tab), or a **split** (a pane beside the current tab). Links keep related pages connected instead of one page trying to hold everything.
+Pages can link to other Scribe pages and to websites. The user opens a link as a tab (navigate), a **peek** (a fixed card over the page, for a quick look without opening a tab), or a **split** (a second pane beside the one the link is in; both panes are tabs). Links keep related pages connected instead of one page trying to hold everything.
 
 ```html
 <a data-scribe-open="scribe:clims-12345-analysis">Analysis</a>                              <!-- no mode: the user's Settings (Navigate by default) -->

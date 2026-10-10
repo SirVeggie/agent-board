@@ -176,7 +176,7 @@ Interactive pages should use this instead of `localStorage` — all tab pages sh
 
 ### Page links
 
-Pages can open other Scribe pages and websites as a tab, a **peek** (a fixed card over the page area), or a **split** (a second pane tied to the current tab):
+Pages can open other Scribe pages and websites as a tab, a **peek** (a fixed card over the page area), or a **split** (two equal panes side by side, each a tab in the strip; the strip and the floating chat follow the pane with focus):
 
 ```html
 <a data-scribe-open="release-notes">Release notes</a>                      <!-- Settings default (Navigate) -->
