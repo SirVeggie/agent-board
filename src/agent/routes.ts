@@ -257,6 +257,8 @@ export function agentRouter(host: AgentHost): express.Router {
           {
             ...threadPatch(body),
             ...(body.scope ? { scope: parseScope(body.scope) } : {}),
+            // A board worker the user set to use helpers without asking.
+            ...(body.helpersAllowed === true ? { helpersAllowed: true } : {}),
           },
           { remember: body.remember !== false }
         ),

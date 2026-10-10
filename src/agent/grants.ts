@@ -5,9 +5,9 @@ import type { Thread } from "./types.js";
  * What the user granted a thread while it ran (web requests, thread access), as rows the chat
  * can list and take back one by one. key names the grant for a revoke.
  */
-export type GrantRow = { kind: "web" | "threads"; key: string; label: string };
+export type GrantRow = { kind: "web" | "threads" | "helpers"; key: string; label: string };
 
-type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants">;
+type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed">;
 
 function scopeKey(scope: AccessScope): string {
   if (scope.kind === "all") return "threads:all";
@@ -15,7 +15,7 @@ function scopeKey(scope: AccessScope): string {
   return `threads:${scope.kind}:${scope.id}`;
 }
 
-/** The thread's grants that are in effect: web first (any site, then domains), then readable thread scopes. */
+/** The thread's grants that are in effect: web first (any site, then domains), then readable thread scopes, then helper agents. */
 export function grantRows(thread: GrantThread, lookup?: ScopeLookup): GrantRow[] {
   const rows: GrantRow[] = [];
   if (thread.webGrants?.all) rows.push({ kind: "web", key: "web:*", label: "Any website" });
@@ -24,11 +24,15 @@ export function grantRows(thread: GrantThread, lookup?: ScopeLookup): GrantRow[]
     const label = scopeLabel(scope, lookup);
     rows.push({ kind: "threads", key: scopeKey(scope), label: label.charAt(0).toUpperCase() + label.slice(1) });
   }
+  if (thread.helpersAllowed) rows.push({ kind: "helpers", key: "helpers", label: "Start helpers without asking" });
   return rows;
 }
 
 /** The thread's grant fields without the one key names; null when nothing matches. */
-export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants"> | null {
+export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed"> | null {
+  if (key === "helpers") {
+    return thread.helpersAllowed ? { webGrants: thread.webGrants, threadGrants: thread.threadGrants, helpersAllowed: false } : null;
+  }
   if (key === "web:*" && thread.webGrants?.all) {
     return { webGrants: { ...thread.webGrants, all: false }, threadGrants: thread.threadGrants };
   }

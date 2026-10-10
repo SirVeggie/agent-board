@@ -60,7 +60,7 @@ export type Thread = {
   threadGrants?: ThreadGrants;
   /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
   helperOf?: string;
-  /** The user let this thread's agent start helpers (agent_run) without asking again. */
+  /** The user let this thread's agent start helpers (agent_run) without asking again: Allow for this thread, or a board worker set to use helpers unasked. */
   helpersAllowed?: boolean;
   scope: ThreadScope;
   /** Working directory for file and shell tools. While the thread has an open worktree, a folder inside it. */
@@ -355,6 +355,8 @@ export type ItemBody =
       parentToolId?: string;
       /** A subagent or background command this tool started; it can outlive the tool call and the turn. */
       task?: TaskInfo;
+      /** An agent_run call: the helper thread it started or sent on, so the chat can show that thread's progress on the call. */
+      helper?: string;
       startedAt: number;
       endedAt?: number;
     }

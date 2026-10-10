@@ -195,6 +195,12 @@ function interruptedRun(turns: Turn[]): number {
   return n;
 }
 
+/** Added to the note of a thread whose helpers were cut off with it: the agent_run calls that waited for them are gone. */
+function helperResumeNote(helpers: Thread[]): string {
+  const list = helpers.map((t) => `${t.id} (${t.title})`).join(", ");
+  return ` The agent_run ${helpers.length === 1 ? "call" : "calls"} you were waiting on ${helpers.length === 1 ? "is" : "are"} gone too, but ${helpers.length === 1 ? "that helper was" : "those helpers were"} sent on with ${helpers.length === 1 ? "its" : "their"} task: ${list}. To get a helper's report, call agent_run with its thread and no task: it waits for the helper to finish and returns what it did. Do not start a new helper for the same work.`;
+}
+
 const RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (a question, an approval, a background command) is gone. Check where you left off (files, git status, the pages or card you were working on) and go on from there to finish the task. If you were waiting for the user's answer, ask again.";
 
@@ -848,12 +854,18 @@ export class AgentHost {
    */
   resumeInterrupted(): string[] {
     const resumed: string[] = [];
-    for (const threadId of [...this.resuming]) {
+    const all = [...this.resuming];
+    for (const threadId of all) {
       this.resuming.delete(threadId);
       if (!this.threads.has(threadId) || this.runs.has(threadId)) continue;
       const leftovers = this.loadItems(threadId).filter((item): item is Item & { kind: "user" } => item.kind === "user" && item.turnId === null && !item.dropped);
       try {
-        this.send(threadId, { text: RESUME_NOTE, from: "scribe" });
+        // Its helpers that were cut off with it go on too; it can ask for their reports again.
+        const helpers = all.flatMap((id) => {
+          const t = this.threads.get(id);
+          return t && t.helperOf === threadId && !t.archived ? [t] : [];
+        });
+        this.send(threadId, { text: RESUME_NOTE + (helpers.length ? helperResumeNote(helpers) : ""), from: "scribe" });
       } catch (err) {
         log(`Could not resume thread ${threadId} after the restart: ${(err as Error).message}`);
         this.addItem(threadId, null, { kind: "notice", level: "error", text: `Scribe restarted during this thread's turn and could not send it on: ${(err as Error).message}` });
@@ -931,6 +943,7 @@ export class AgentHost {
     // createSession also refuses that spare: its MCP still reports this id.
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     if (input.draft) thread.draft = input.draft;
+    if (input.helpersAllowed) thread.helpersAllowed = true;
     // A New page becomes a real page once it has a thread, even one that has not sent anything.
     if (thread.scope.kind === "page" && thread.scope.ref) store.promoteDraft(thread.scope.ref);
     this.threads.set(thread.id, thread);
@@ -1092,13 +1105,14 @@ export class AgentHost {
     return true;
   }
 
-  /** Take back a permission the user granted the thread (a web domain, any website, or a readable thread scope). key comes from the view's grants. */
+  /** Take back a permission the user granted the thread (a web domain, any website, a readable thread scope, or starting helpers unasked). key comes from the view's grants. */
   revokeGrant(id: string, key: string): ThreadView {
     const thread = this.requireThread(id);
     const next = revokeGrant(thread, key);
     if (!next) throw new Error("This thread has no such permission.");
     thread.webGrants = next.webGrants;
     thread.threadGrants = next.threadGrants;
+    if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
     this.sessions.get(id)?.update(thread);
     const view = this.view(thread);
@@ -2257,7 +2271,8 @@ export class AgentHost {
    * agent_run from a thread's MCP: hand a task to a helper thread on another provider or model, wait
    * for its turn to end and return its final reply. The helper works in the caller's folder (an open
    * worktree is shared) with its mode, approval and web setting. thread sends a follow-up to a helper
-   * this thread started earlier.
+   * this thread started earlier; with no task it only waits for that helper's turn (one a restart cut
+   * off and sent on) and returns its report.
    */
   async runHelper(
     threadId: string,
@@ -2265,12 +2280,14 @@ export class AgentHost {
   ): Promise<Record<string, unknown>> {
     const parent = this.helperParent(threadId);
     const task = opts.task.trim();
-    if (!task) throw new Error("task is required: a brief the helper can work from on its own.");
+    if (!task && !opts.thread) throw new Error("task is required: a brief the helper can work from on its own.");
     let helper: Thread;
     if (opts.thread) {
       const existing = this.threads.get(opts.thread);
       if (!existing || existing.helperOf !== threadId) throw new Error(`No helper ${opts.thread} of this thread. Leave thread out to start a new one.`);
-      if (this.runs.has(existing.id) || this.queues.get(existing.id)?.length) throw new Error("That helper is still working on its last task.");
+      const working = this.runs.has(existing.id) || Boolean(this.queues.get(existing.id)?.length) || this.resuming.has(existing.id);
+      if (working && task) throw new Error("That helper is still working on its last task. Pass thread with no task to wait for its report.");
+      if (!task && !this.loadTurns(existing.id).length) throw new Error("That helper has not run yet. Pass a task.");
       if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
       helper = existing;
     } else {
@@ -2312,18 +2329,22 @@ export class AgentHost {
       helper = draft;
     }
     if (opts.signal?.aborted) throw new Error("cancelled");
-    const done = new Promise<void>((resolve) => {
-      const list = this.turnWaiters.get(helper.id) ?? [];
-      list.push(resolve);
-      this.turnWaiters.set(helper.id, list);
-    });
-    const onAbort = () => void this.cancel(helper.id);
-    opts.signal?.addEventListener("abort", onAbort);
-    try {
-      this.send(helper.id, { text: task, from: "agent" });
-      await done;
-    } finally {
-      opts.signal?.removeEventListener("abort", onAbort);
+    this.linkHelperCall(threadId, helper.id, task);
+    // With no task the helper's last turn is the report: wait only while it is still at it.
+    if (task || this.runs.has(helper.id) || this.queues.get(helper.id)?.length || this.resuming.has(helper.id)) {
+      const done = new Promise<void>((resolve) => {
+        const list = this.turnWaiters.get(helper.id) ?? [];
+        list.push(resolve);
+        this.turnWaiters.set(helper.id, list);
+      });
+      const onAbort = () => void this.cancel(helper.id);
+      opts.signal?.addEventListener("abort", onAbort);
+      try {
+        if (task) this.send(helper.id, { text: task, from: "agent" });
+        await done;
+      } finally {
+        opts.signal?.removeEventListener("abort", onAbort);
+      }
     }
     const turn = this.loadTurns(helper.id).at(-1);
     if (!turn) throw new Error("The helper did not run.");
@@ -2341,6 +2362,28 @@ export class AgentHost {
       ...(turn.usage?.inputTokens !== undefined || turn.usage?.outputTokens !== undefined ? { tokens: { input: turn.usage.inputTokens ?? 0, output: turn.usage.outputTokens ?? 0 } } : {}),
       note: "Check this work yourself before you rely on it. To send the same helper a follow-up, pass thread.",
     };
+  }
+
+  /**
+   * Note the helper thread on the caller's agent_run tool call, so the chat shows the helper's
+   * progress on that call. The call reaches Scribe over HTTP without its tool id: it is the caller's
+   * oldest agent_run still running with this task (or naming this thread) and no helper yet.
+   */
+  private linkHelperCall(threadId: string, helperId: string, task: string): void {
+    const turnId = this.runs.get(threadId)?.turn.id;
+    if (!turnId) return;
+    const open = this.loadItems(threadId).filter(
+      (item): item is Item & { kind: "tool" } =>
+        item.kind === "tool" && item.turnId === turnId && !item.helper && (item.status === "running" || item.status === "pending") && (/agent_run$/.test(item.name) || /agent_run$/.test(item.title))
+    );
+    const input = (item: Item & { kind: "tool" }) => (item.input && typeof item.input === "object" ? (item.input as Record<string, unknown>) : {});
+    const call =
+      open.find((item) => input(item).thread === helperId) ??
+      open.find((item) => task && typeof input(item).task === "string" && (input(item).task as string).trim() === task) ??
+      (open.length === 1 ? open[0] : undefined);
+    if (!call) return;
+    call.helper = helperId;
+    this.touch(call);
   }
 
   /** Use up an "Allow once" pass from web_request that covers this call. */

@@ -143,6 +143,55 @@ test("without full access the user is asked first, and Allow for this thread sti
   assert.equal((await host.runHelper(id, { task: "x", provider: "pi" })).status, "done");
   assert.equal(host.getThread(id)?.helpersAllowed, true);
   assert.equal((await host.runHelper(id, { task: "y", provider: "pi" })).status, "done");
+  // The permissions list takes it back.
+  assert.deepEqual(host.listThreads().find((t) => t.id === id)?.grants, [{ kind: "helpers", key: "helpers", label: "Start helpers without asking" }]);
+  assert.equal(host.revokeGrant(id, "helpers").grants, undefined);
+  assert.equal(host.getThread(id)?.helpersAllowed, undefined);
+});
+
+test("a thread made with helpers allowed (a board worker) is not asked", async () => {
+  host.setPrefs({ helpers: true });
+  const id = host.createThread({ provider: "codex", mode: "ask", approval: "ask", cwd: null, scope: { kind: "global", ref: null }, helpersAllowed: true }).id;
+  assert.equal((await host.runHelper(id, { task: "x", provider: "pi" })).status, "done");
+});
+
+test("the caller's agent_run call names its helper thread", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent();
+  running(id);
+  const internals = host as unknown as Internals & { addItem: (thread: string, turn: string, body: unknown) => { helper?: string } };
+  const call = (task: string) => internals.addItem(id, `tu_${id}`, { kind: "tool", toolId: `c_${task}`, name: "mcp__scribe__agent_run", tool: "mcp", title: "Scribe: agent_run", input: { task, provider: "pi" }, status: "running", startedAt: Date.now() });
+  const one = call("one");
+  const two = call("two");
+  const second = await host.runHelper(id, { task: "two", provider: "pi" });
+  assert.equal(two.helper, second.thread);
+  assert.equal(one.helper, undefined);
+  const first = await host.runHelper(id, { task: "one", provider: "pi" });
+  assert.equal(one.helper, first.thread);
+  internals.runs.delete(id);
+});
+
+test("thread with no task waits for a working helper and returns its report", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent();
+  const { thread } = await host.runHelper(id, { task: "one", provider: "pi" });
+  // Idle: its last report again.
+  assert.equal((await host.runHelper(id, { thread: String(thread), task: "" })).reply, "did: one");
+  hanging = true;
+  try {
+    const first = host.runHelper(id, { task: "long", thread: String(thread) });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await assert.rejects(host.runHelper(id, { task: "more", thread: String(thread) }), /no task to wait for its report/);
+    const waiting = host.runHelper(id, { thread: String(thread), task: "" });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await host.cancel(String(thread));
+    assert.equal((await first).status, "cancelled");
+    assert.equal((await waiting).status, "cancelled");
+  } finally {
+    hanging = false;
+    hang = null;
+  }
+  await assert.rejects(host.runHelper(id, { task: "" }), /task is required/);
 });
 
 test("stopping the caller stops its helper", async () => {
