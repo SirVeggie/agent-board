@@ -1968,6 +1968,7 @@ kbd {
   grid-template-rows: auto minmax(0, 1fr);
   width: min(960px, 100%);
   height: min(700px, 100%);
+  transition: height 220ms ease;
   overflow: hidden;
   padding: 0;
 }
@@ -1980,6 +1981,8 @@ kbd {
   padding: 20px 24px 16px;
   border-bottom: 1px solid var(--border);
 }
+.settings-view { display: contents; }
+.settings-view[hidden] { display: none; }
 .settings-header .settings-title { margin: 0; }
 .settings-close { font-size: 22px; padding: 0 10px; background: transparent; }
 .settings-nav {
@@ -1990,13 +1993,14 @@ kbd {
   overflow-y: auto;
   border-right: 1px solid var(--border);
 }
-.settings-nav-link {
+.settings-nav .settings-nav-link {
   flex-shrink: 0;
   text-align: left;
   height: auto;
   padding: 10px 12px;
   background: transparent;
   border: 0;
+  box-shadow: none;
   border-radius: 8px;
   color: var(--muted);
 }
@@ -2006,9 +2010,13 @@ kbd {
   color: var(--text);
 }
 .settings-nav-bottom { margin-top: auto; }
+.settings-nav-separator { width: 100%; margin: 8px 0; border: 0; border-top: 1px solid var(--border); }
 .settings-content { min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
 .settings-category[hidden] { display: none; }
 .settings-closing { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-categorized { transition: none; }
+}
 @media (max-width: 560px) {
   .settings-categorized { grid-template-columns: 125px minmax(0, 1fr); border-radius: 14px; }
   .settings-nav { padding: 10px 6px; }

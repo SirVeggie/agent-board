@@ -1238,7 +1238,7 @@
   }
 
   function isSettingsOpen() {
-    return window.scribeSettingsUI.isOpen(settingsEl);
+    return settingsCategories.isOpen();
   }
 
   const settingsSections = [...document.querySelectorAll("#settings-panel > .settings-section")];
@@ -1249,7 +1249,6 @@
     { label: "Import / Export", sections: [settingsSections[6]] },
   ], { close: closeSettings, after: { label: "Agent settings →", run: () => window.scribeChat?.openSettings() } });
 
-  let releaseSettingsTrap = null;
   const searchSwitch = document.getElementById("search-enabled");
   const searchPackStatus = document.getElementById("search-pack-status");
   function renderSearchSettings(result) {
@@ -1278,27 +1277,16 @@
     catch (err) { searchPackStatus.textContent = err.message; }
   });
   function openSettings() {
-    window.scribeChat?.closeSettings();
     if (isPaletteOpen()) {
       closePalette();
     }
-    window.scribeSettingsUI.show(settingsEl, true);
+    settingsCategories.open();
     searchSwitch.disabled = true;
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
-    settingsToggle.setAttribute("aria-expanded", "true");
-    releaseSettingsTrap?.();
-    releaseSettingsTrap = window.scribeFocusTrap?.bind(document.getElementById("settings-panel"));
   }
 
   function closeSettings() {
-    if (!isSettingsOpen()) {
-      return;
-    }
-    releaseSettingsTrap?.();
-    releaseSettingsTrap = null;
-    window.scribeSettingsUI.show(settingsEl, false);
-    settingsToggle.setAttribute("aria-expanded", "false");
-    settingsToggle.focus({ preventScroll: true });
+    window.scribeSettingsUI.close();
   }
 
   function toggleSettings() {

@@ -1,5 +1,31 @@
 (() => {
   const transitions = new WeakMap();
+  let host, active, releaseTrap, returnFocus;
+  let resizeFrame;
+  const isOpen = () => Boolean(host && !host.root.hidden && !host.root.classList.contains("settings-closing"));
+  function resize() {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => {
+      if (!isOpen() || !active) return;
+      const rootStyle = getComputedStyle(host.root);
+      const contentStyle = getComputedStyle(active.content);
+      const available = host.root.clientHeight - parseFloat(rootStyle.paddingTop) - parseFloat(rootStyle.paddingBottom);
+      const natural = active.header.offsetHeight + active.body().scrollHeight + parseFloat(contentStyle.paddingTop) + parseFloat(contentStyle.paddingBottom);
+      host.panel.style.height = `${Math.min(available, 960, Math.max(700, natural))}px`;
+    });
+  }
+  window.addEventListener("resize", resize);
+
+  function close() {
+    if (!isOpen()) return false;
+    releaseTrap?.();
+    releaseTrap = null;
+    show(host.root, false);
+    document.getElementById("settings-toggle")?.setAttribute("aria-expanded", "false");
+    const target = returnFocus?.isConnected && !host.root.contains(returnFocus) ? returnFocus : document.getElementById("settings-toggle");
+    target?.focus({ preventScroll: true });
+    return true;
+  }
   function show(root, visible) {
     const previous = transitions.get(root);
     previous?.forEach(animation => animation.cancel());
@@ -28,7 +54,7 @@
     }).catch(() => {});
   }
 
-  function mount(panel, categories, { close, before, after } = {}) {
+  function mount(panel, categories, { close: onClose, before, after } = {}) {
     panel.classList.add("settings-categorized");
     const title = panel.querySelector(".settings-title");
     const header = document.createElement("div");
@@ -40,7 +66,7 @@
     closeButton.textContent = "×";
     closeButton.setAttribute("aria-label", "Close settings");
     closeButton.dataset.tooltip = "Close settings (Esc)";
-    closeButton.addEventListener("click", close);
+    closeButton.addEventListener("click", onClose);
     header.append(closeButton);
     const nav = document.createElement("nav");
     nav.className = "settings-nav";
@@ -57,13 +83,21 @@
       nav.append(button);
       return button;
     };
-    if (before) link(before);
+    if (before) {
+      link(before);
+      const separator = document.createElement("hr");
+      separator.className = "settings-nav-separator";
+      nav.append(separator);
+    }
+    let selected = 0;
     const select = (index) => {
+      selected = index;
       entries.forEach((entry, i) => {
         entry.body.hidden = i !== index;
         entry.button.setAttribute("aria-pressed", String(i === index));
       });
       content.scrollTop = 0;
+      resize();
     };
     categories.forEach((category, index) => {
       const body = document.createElement("div");
@@ -88,9 +122,41 @@
       const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
       buttons[index].focus();
     });
-    panel.append(header, nav, content);
+    if (!host) host = { panel, root: panel.parentElement };
+    const element = document.createElement("div");
+    element.className = "settings-view";
+    element.hidden = Boolean(active);
+    element.append(header, nav, content);
+    host.panel.append(element);
+    const view = {
+      element, header, content,
+      body: () => entries[selected].body,
+      select,
+      isOpen: () => active === view && isOpen(),
+      close: () => active === view && close(),
+      open() {
+        const opening = !isOpen();
+        if (opening) returnFocus = document.activeElement;
+        if (active !== view) {
+          if (active) active.element.hidden = true;
+          element.hidden = false;
+          host.panel.setAttribute("aria-labelledby", title.id);
+          host.root.classList.toggle("ag-settings-dialog", Boolean(before));
+          active = view;
+        }
+        if (opening) show(host.root, true);
+        document.getElementById("settings-toggle")?.setAttribute("aria-expanded", "true");
+        releaseTrap?.();
+        releaseTrap = window.scribeFocusTrap?.bind(host.panel);
+        resize();
+      },
+    };
+    if (!active) active = view;
+    const observer = new ResizeObserver(() => { if (active === view) resize(); });
+    entries.forEach(entry => observer.observe(entry.body));
+    observer.observe(header);
     select(0);
-    return { select };
+    return view;
   }
-  window.scribeSettingsUI = { mount, show, isOpen: root => Boolean(root && !root.hidden && !root.classList.contains("settings-closing")) };
+  window.scribeSettingsUI = { mount, close, isOpen };
 })();

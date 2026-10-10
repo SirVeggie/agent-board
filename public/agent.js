@@ -7750,16 +7750,9 @@
   };
 
   const agentSettings = {
-    root: null,
+    categories: null,
     status: null,
     mount() {
-      const root = el("div", "settings ag-settings-dialog");
-      root.hidden = true;
-      const backdrop = el("div", "settings-backdrop");
-      backdrop.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        this.close();
-      });
       const panel = el("div", "settings-panel");
       panel.setAttribute("role", "dialog");
       panel.setAttribute("aria-modal", "true");
@@ -8011,16 +8004,13 @@
       keys.append(el("h3", null, "Keys"), list);
 
       panel.append(title, providers, cursor, helpers, memory, sources, usage, chat, keys);
-      window.scribeSettingsUI.mount(panel, [
+      this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Memory", sections: [memory] },
         { label: "Helper agents", sections: [helpers] },
         { label: "Keys", sections: [keys] },
       ], { close: () => this.close(), before: { label: "← General settings", run: () => app()?.openSettings?.() } });
-      root.append(backdrop, panel);
-      document.body.append(root);
-      this.root = root;
 
     },
     renderCycleModes() {
@@ -8095,7 +8085,7 @@
       }
     },
     isOpen() {
-      return window.scribeSettingsUI.isOpen(this.root);
+      return Boolean(this.categories?.isOpen());
     },
     renderUsage() {
       if (!this.usage || !this.isOpen()) return;
@@ -8142,25 +8132,17 @@
       this.summarizer.append(providerIcon(cur.provider), el("span", null, modelInfo(cur.provider, cur.model)?.label || cur.model));
     },
     open() {
-      if (!this.root) return;
-      app()?.closeSettings?.();
-      if (!this.isOpen()) this.returnFocus = document.activeElement;
+      if (!this.categories) return;
       this.renderStatus();
       this.renderCycleModes();
       void this.renderSources();
       this.renderSummarizer();
-      window.scribeSettingsUI.show(this.root, true);
+      this.categories.open();
       this.renderUsage();
-      this.root.querySelector(".settings-panel button")?.focus({ preventScroll: true });
-      this.releaseTrap?.();
-      this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"));
     },
     close() {
       if (!this.isOpen()) return false;
-      this.releaseTrap?.();
-      this.releaseTrap = null;
-      window.scribeSettingsUI.show(this.root, false);
-      if (this.returnFocus?.isConnected && !this.returnFocus.closest(".settings")) this.returnFocus.focus({ preventScroll: true });
+      this.categories.close();
       hideHoverTip();
       return true;
     },
