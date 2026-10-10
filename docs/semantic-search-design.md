@@ -1,10 +1,24 @@
 # Semantic search with EmbeddingGemma 2
 
-Design for #350, 10 October 2026. No runtime code yet. Everything under "Proposed" is a Scribe interface to build, not an existing feature. The measurements come from a prototype run against the live library (read-only); the scripts are in `tools/semantic-search-proto/`.
+Design for #350, 10 October 2026, with the decisions of the same day. No runtime code yet. Everything under "Proposed" is a Scribe interface to build, not an existing feature. The measurements come from a prototype run against the live library (read-only); the scripts are in `tools/semantic-search-proto/`.
 
-## Recommendation
+## Decisions
 
-Run EmbeddingGemma 2 inside Scribe through transformers.js, in a child process the daemon starts on demand. Index every page as one page vector plus one vector per section, kanban card and list item. Rank pages by a blend of the page vector and its two best chunks. Show semantic hits in the normal palette search below the word matches, each with the section or card that matched. Images come in a later phase: the model can embed them, but on this library's screenshots text-to-image retrieval was weak.
+Answered on the card on 10 October 2026:
+
+| Question | Decision |
+|---|---|
+| Where the model runs | Built into Scribe through transformers.js, as an **optional pack**. Scribe stays a light install without it. |
+| How the pack arrives | First pass: the user downloads a zip and unzips it into the data folder. Downloading from inside the app comes later. |
+| Palette | Both: semantic hits under a "Related" divider in normal search, and a prefix for semantic-only search. |
+| First build | Pages, sections, kanban cards and images. |
+| GPU | CPU only. |
+| Agents | `library_search` gets a semantic mode, after the first build. |
+| Chat threads | Later, as their own phase. |
+
+In short: index every page as one page vector plus one vector per section, kanban card and list item. Rank pages by a blend of the page vector and its two best chunks. Images are indexed too, scored together with the text of the card or item that owns them, because on this library's screenshots text-to-image retrieval alone was weak.
+
+Build cards: #370 pack and embedder, #371 chunker and index, #372 palette, #373 images, #374 agents and Ask AI.
 
 ## The model
 
@@ -79,14 +93,37 @@ App screenshots look alike, and a card title describes a problem more than a pic
 
 ## Design
 
+### Search pack (proposed)
+
+Scribe gets no new dependencies. The runtime and the model ship as a pack, and all search code is inert until one is installed.
+
+A pack is a zip named `scribe-search-pack-<version>-<platform>-<arch>.zip`:
+
+```text
+pack.json                       api, version, platform, arch, model id, dtype, sha256 of each file
+node_modules/                   @huggingface/transformers, onnxruntime-node for one platform, sharp
+models/onnx-community/embeddinggemma-2-ONNX/
+  config.json, tokenizer.json, processor configs
+  onnx/model_quantized.onnx(+_data)            text, q8, 314 MB
+  onnx/vision_encoder_quantized.onnx(+_data)   vision, q8, 195 MB
+```
+
+- It unzips to `<data dir>/packs/search/`. Settings → Search shows that folder with an Open folder button, the pack's status (not installed, ready, wrong version) and the on/off switch.
+- `pack.json` carries an `api` number. Scribe refuses a pack whose `api` it does not know, and says which pack version it needs.
+- The index records the pack's model and dtype. A pack with another model rebuilds the index.
+- Removing search is deleting the folder and `search.sqlite`.
+- `tools/build-search-pack.mjs` builds it: install transformers.js in a temp folder, drop `onnxruntime-web` and the other platforms' binaries, fetch the model files, write `pack.json`, zip. Where the zip is published is open (a GitHub release asset would do).
+- Later: a Download button in Settings that fetches and unpacks the zip, and a text-only pack (about 435 MB) if the vision encoder turns out not to be worth 195 MB.
+
+Verified with a hand-built pack on Windows: 630 MB unpacked (114 MB runtime, 517 MB model files). A script outside any project imported transformers.js from the pack by file URL and embedded a query with remote models turned off. `onnxruntime-node` is an N-API addon, so the pack is not tied to one Node version. The desktop app's bundled runtime was not tested.
+
 ### Runtime (proposed)
 
-- `src/search/embedder.ts`: a child process the daemon spawns on first use and stops after 10 minutes idle. It loads transformers.js, takes batches over IPC and returns Float32Arrays. A child process keeps about 500 MB of model memory and any native crash out of the daemon.
-- Text model `q8` on CPU by default. Vision encoder loaded only when images are indexed or an image is the query.
-- Optional: bulk indexing on `dml` with `fp16`. Queries stay on CPU, which measured faster for single short inputs.
-- Model files download on opt-in (Settings → Search), 314 MB for text, into `<data dir>/models`. Nothing else leaves the machine.
-- Interface `Embedder { embedDocuments(items), embedQuery(text), embedImage(bytes) }`, so an HTTP backend (LM Studio, Ollama, llama.cpp) can replace the built-in one later. The built-in one comes first because it gives control over prefixes, encoders and batching with no extra install.
-- Cost: `@huggingface/transformers` pulls `onnxruntime-node`, `onnxruntime-web` and `sharp`: about 400 MB in `node_modules` in the prototype, with native binaries. Check the desktop build before committing to it.
+- `src/search/embedderChild.ts`: a child process the daemon spawns on first use and stops after 10 minutes idle. It imports transformers.js from the pack (`import(pathToFileURL(...))`), sets `env.allowRemoteModels = false` and `env.localModelPath` to the pack's `models` folder, takes batches over IPC and returns Float32Arrays. A child process keeps about 500 MB of model memory and any native crash out of the daemon.
+- Text model `q8` on CPU. The vision encoder loads only when images are indexed or an image is the query.
+- No GPU path in the first build. DirectML with `fp16` indexed 7 times faster in the prototype and can be added if the library outgrows CPU.
+- Nothing leaves the machine: the pack is offline, and search makes no network calls.
+- Interface `Embedder { embedDocuments(items), embedQuery(text), embedImage(bytes) }`, so an HTTP backend (LM Studio, Ollama, llama.cpp) can be added later.
 
 ### What gets indexed
 
@@ -168,34 +205,29 @@ The weights and the cut-off are first guesses from 28 queries. Keep the query se
 
 ### Where it shows up
 
-- **Palette (Ctrl+D).** Word matches appear at once, as now. About 150 ms later, semantic hits fill in under a "Related" divider. Enter on a section or card hit opens the page at that section or card.
+- **Palette (Ctrl+D).** Word matches appear at once, as now. About 150 ms later, semantic hits fill in under a "Related" divider. Enter on a section or card hit opens the page at that section or card. A prefix (default `~`, configurable like `=` and `?`) searches by meaning only.
 - **Ask AI (`?`).** Today it sends the first 300 characters of up to 600 pages. Send the top 30 chunks instead: a smaller prompt that sees content deep in a page.
 - **MCP.** `library_search` takes `mode: "semantic"` and returns chunk hits with their anchors, so an agent can find a card on any board by meaning. With no word match, the result points to it.
 - **Page API.** Not in the first phases (as in `docs/classification-api-design.md`).
 
-### Images (phase 3)
+### Images
 
 - Index image page assets and `page_show` assets with the vision encoder: 1.3 s each on CPU, on idle.
 - An image's score is `0.5 × image vector + 0.5 × its owner's text chunk`, since the text around a screenshot was the better signal here.
 - An image as the query (paste a screenshot into the palette) finds similar images and their cards. This needs no text-to-image alignment and should work better than text queries; untested.
 - A mixed input (`{card text} <|image|>` in one vector) is supported by the model and untested here.
 
-## Phases
+## Build order
 
-1. **Engine and pages.** Embedder process, chunker, `search.sqlite`, incremental indexing, palette "Related" rows, Settings opt-in with download and progress, eval fixture.
-2. **Deep results.** Open a page at a section or card, template `search` declaration, `library_search` semantic mode, Ask AI over retrieved chunks.
-3. **Images.** Vision encoder, image rows with thumbnails, image as the query.
-4. **Later.** Chat threads in the index, duplicate-card hints, related pages on a page's hover card.
+1. **#370 Pack and embedder.** Pack build script, pack detection, embedder process, Settings → Search.
+2. **#371 Chunker and index.** Chunker, template `search` declaration, `search.sqlite`, incremental indexing, ranking, HTTP endpoints, eval script.
+3. **#372 Palette.** "Related" rows, the semantic prefix, progress and off states.
+4. **#373 Images.** Vision encoder, blended image score, image rows, image as the query.
+5. **#374 Agents and Ask AI.** `library_search` semantic mode, Ask AI over retrieved chunks.
+
+#372, #373 and #374 each need #371 and are independent of each other. Later: chat threads in the index, duplicate-card hints, related pages on a page's hover card, in-app pack download.
 
 ## Gaps in Scribe this depends on
 
 - #355: a link can scroll a page to an element id, but nothing opens a kanban card or list item from outside the page. Card hits need a way to open the page focused on one record.
 - #356: `searchLibrary` and `searchPages` strip the HTML and stringify the state of every page on every query. The chunker's extracted text would give them a cache.
-
-## Open questions
-
-- Built-in runtime, or an HTTP backend the user already runs?
-- Semantic rows inside normal palette search, or behind their own prefix?
-- How much goes in phase 1?
-- GPU for bulk indexing?
-- Index chat threads?
