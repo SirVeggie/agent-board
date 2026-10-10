@@ -311,6 +311,51 @@ return glow(c,e);}`;
     /** The page shown and what was drawn for it, so a re-render with nothing new keeps focus and scroll. */
     let shown = null;
     let drawn = "";
+    let replacement = null;
+
+    function cancelReplacement() {
+      if (!replacement) return;
+      replacement.frame.removeEventListener("load", replacement.reveal);
+      clearTimeout(replacement.timer);
+      replacement.animations.forEach((animation) => animation.cancel());
+      replacement = null;
+      root.inert = false;
+    }
+
+    /** Hold the waiting screen until its own page loads, then dissolve it over the page. */
+    function replace(tab, frame) {
+      if (replacement?.id === tab.id) return;
+      if (!frame || current?.id !== tab.id) {
+        render(null);
+        return;
+      }
+      const pending = { id: tab.id, frame, animations: [], timer: 0, reveal: null };
+      replacement = pending;
+      root.inert = true;
+      pending.reveal = () => {
+        if (replacement !== pending) return;
+        frame.removeEventListener("load", pending.reveal);
+        clearTimeout(pending.timer);
+        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          render(null);
+          return;
+        }
+        const timing = { duration: 420, easing: "ease-in-out", fill: "both" };
+        pending.animations = [
+          root.animate([{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing),
+          frame.animate([{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing),
+        ];
+        Promise.all(pending.animations.map((animation) => animation.finished)).then(() => {
+          if (replacement === pending) render(null);
+        }).catch(() => { /* Switching pages cancels the animations. */ });
+      };
+      if (frame.dataset.loaded) pending.reveal();
+      else {
+        frame.addEventListener("load", pending.reveal);
+        // A slow or failed frame must not leave the waiting screen covering the page forever.
+        pending.timer = setTimeout(pending.reveal, 4000);
+      }
+    }
 
     function card(template, builtin) {
       const btn = el("button", "newpage-card");
@@ -346,6 +391,7 @@ return glow(c,e);}`;
     }
 
     function render(tab) {
+      cancelReplacement();
       root.hidden = !tab;
       current = tab || null;
       updateBackdrop();
@@ -380,6 +426,7 @@ return glow(c,e);}`;
 
     return {
       render,
+      replace,
       /** Focus the first template, or the chat button once the templates are gone. */
       focus() {
         (grid.querySelector("button") || askBtn).focus({ preventScroll: true });

@@ -2559,8 +2559,9 @@
     document.title = tab ? tab.title + " · Scribe" : "Scribe";
     const blank = isBlank(tab);
     mainEl.classList.toggle("blank-page", blank);
-    newPageView.render(blank ? tab : null);
     views.layout();
+    if (tab && !blank) newPageView.replace(tab, frames.get(tab.id)?.el);
+    else newPageView.render(blank ? tab : null);
   }
 
   /** Clear the unread blips of a page that is on screen in a peek or split. */

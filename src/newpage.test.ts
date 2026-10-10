@@ -23,6 +23,8 @@ function screen(webgl = true) {
   const css: Record<string, string> = {};
   const draws: { u_time: number; u_motionTime: number; u_work: number }[] = [];
   const shaders: string[] = [];
+  const animations: { finished: Promise<void>; finish: () => void; cancelled: boolean; cancel: () => void }[] = [];
+  const timers = new Map<number, () => void>();
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChange = fn; } };
   const node = () => ({
     hidden: false, textContent: "", innerHTML: "",
@@ -30,6 +32,12 @@ function screen(webgl = true) {
     cloneNode: () => node(), replaceWith() {}, querySelector: (_: string): any => node(),
   });
   const root = node();
+  (root as any).animate = () => {
+    let finish!: () => void;
+    const animation = { finished: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish(), cancelled: false, cancel() { this.cancelled = true; } };
+    animations.push(animation);
+    return animation;
+  };
   root.classList.toggle = (name: string, on: boolean) => { if (on) classes.add(name); else classes.delete(name); };
   (root as any).style = { setProperty: (name: string, value: string) => { css[name] = value; } };
   const parts = new Map<string, ReturnType<typeof node>>();
@@ -38,6 +46,7 @@ function screen(webgl = true) {
     return parts.get(key)!;
   };
   const win: any = {
+    matchMedia: () => motion,
     addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     scribeOrb: { colors: (p: string) => palettes[p] },
     scribeGL: {
@@ -58,6 +67,8 @@ function screen(webgl = true) {
     localStorage: { getItem: (key: string) => key === "scribe.newPageProviderColors" ? providerColors : selected }, matchMedia: () => motion,
     getComputedStyle: () => ({ backgroundColor: "rgb(17, 18, 24)" }),
     MutationObserver: Observer, ResizeObserver: Observer,
+    setTimeout: (fn: () => void) => { const id = timers.size + 1; timers.set(id, fn); return id; },
+    clearTimeout: (id: number) => timers.delete(id),
   });
   const page = win.createNewPage({
     templates: () => [], builtins: () => [], threads: () => 1, working: () => working,
@@ -65,7 +76,14 @@ function screen(webgl = true) {
     provider: () => provider,
   });
   return {
-    page, draws, shaders, motion, uniforms, classes, css,
+    page, draws, shaders, motion, uniforms, classes, css, root, animations, timers,
+    frame: () => {
+      const listeners = new Set<() => void>();
+      return { dataset: {} as Record<string, string>, animate: (root as any).animate,
+        addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+        removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+        load: () => [...listeners].forEach((fn) => fn()), listeners };
+    },
     provider: (p: string) => { provider = p; events["scribe:dock-provider"]({ detail: { provider: p } }); },
     tint: (value: boolean) => { providerColors = value ? "1" : "0"; events["scribe:newpage-bg"](); },
     customize: () => { palettes.codex[1] = "#12ab34"; events["scribe:orb-appearance"](); },
@@ -76,6 +94,41 @@ function screen(webgl = true) {
     running: () => running,
   };
 }
+
+test("replacement waits for load, survives rerenders and stops the backdrop after fading", async () => {
+  const s = screen();
+  const frame = s.frame();
+  s.page.render({ id: "draft" });
+  s.page.replace({ id: "draft" }, frame);
+  s.page.replace({ id: "draft" }, frame);
+  assert.equal(s.root.hidden, false);
+  assert.equal(frame.listeners.size, 1);
+  assert.equal(s.animations.length, 0);
+  frame.load();
+  assert.equal(s.animations.length, 2);
+  assert.equal(s.timers.size, 0);
+  s.animations.forEach((animation) => animation.finish());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(s.root.hidden, true);
+  assert.equal(s.running(), false);
+});
+
+test("switching pages cancels a pending replacement and reduced motion skips the fade", () => {
+  const s = screen();
+  const frame = s.frame();
+  s.page.render({ id: "draft" });
+  s.page.replace({ id: "draft" }, frame);
+  s.page.render({ id: "other" });
+  assert.equal(frame.listeners.size, 0);
+  assert.equal(s.timers.size, 0);
+  frame.load();
+  assert.equal(s.animations.length, 0);
+  s.reduce(true);
+  frame.dataset.loaded = "1";
+  s.page.replace({ id: "other" }, frame);
+  assert.equal(s.root.hidden, true);
+  assert.equal(s.animations.length, 0);
+});
 
 test("working intensity eases in and out while drift keeps its pace and hidden screens stop", () => {
   const s = screen();
