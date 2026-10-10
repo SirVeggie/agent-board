@@ -21,7 +21,7 @@
    * goes over the theme's panel colour. On a light theme both tint the panel instead of lighting it.
    */
   const HEAD = `precision highp float;
-uniform vec2 u_res;uniform float u_time;uniform vec3 u_bg;uniform float u_light;uniform float u_work;
+uniform vec2 u_res;uniform float u_time;uniform float u_motionTime;uniform vec3 u_bg;uniform float u_light;uniform float u_work;
 uniform float u_tint;uniform vec3 u_c0;uniform vec3 u_c1;uniform vec3 u_c2;uniform vec3 u_c3;
 vec3 tint(vec3 col){if(u_tint<.5)return col;
 float m=max(col.r,max(col.g,col.b)),t=clamp(m,0.,1.)*3.;
@@ -73,11 +73,11 @@ return glow(c,u_work*vig(uv)*(vec3(.38,.28,.8)*wave*(.09+.32*l)+vec3(.48,.42,1.)
   /** A slow working sweep lights sparkles in place, preserving their idle drift and twinkle. */
   const STARDUST = `vec3 shade(vec2 uv,float T){float l;vec3 c=nebula(uv,T*.04,l);vec3 e=vec3(0.);
 for(int i=0;i<3;i++){float fi=float(i);float s=9.+fi*8.;
-float sweep=pow(.5+.5*sin(uv.x*3.+uv.y*2.-T*.3+fi*.6),8.);
+float sweep=pow(.5+.5*sin(uv.x*3.+uv.y*2.-T*.3+fi*.6),6.);
 vec2 g=uv*s+vec2(T*.02*(fi+1.),T*.035);vec2 id=floor(g);vec2 h=hash2(id+fi*17.);
 vec2 d=fract(g)-.5-(h-.5)*.6;float r=length(d);
 float tw=pow(.5+.5*sin(T*(.8+h.x*2.5)+h.y*6.283),6.);
-tw=mix(tw,max(tw,sweep*.8),u_work);
+tw=mix(tw,max(tw,sweep*1.05),u_work);
 float g1=pow(smoothstep(.3,0.,r),4.)*.5+smoothstep(.05,0.,r);
 float sp=max(0.,1.-abs(d.x)*28.)*max(0.,1.-abs(d.y)*4.5)+max(0.,1.-abs(d.y)*28.)*max(0.,1.-abs(d.x)*4.5);
 e+=mix(vec3(.75,.85,1.),vec3(.95,.8,1.),h.y)*(g1+sp*.45)*tw*step(h.x,.5)*(.15+1.6*l)*(1.-fi*.25);}
@@ -95,15 +95,23 @@ c+=col*band*streak*(.6-fi*.08)*(1.+u_work*wave*1.4);}
 c+=vec3(.25,.22,.8)*.1*fbm(uv*2.+t);
 return glow(u_bg,c*vig(uv));}`;
 
-  /** Light through moving water: the classic iterated caustic net, kept faint over a deep blue haze. */
+  /** A faint caustic net over deep blue haze; three broad submerged highlights bloom while working. */
   const CAUSTICS = `vec3 shade(vec2 uv,float T){vec2 p=uv*4.5-vec2(250.);vec2 i=p;float c=1.;
 for(int n=0;n<5;n++){float t=T*.16*(1.-3.5/float(n+1));
 i=p+vec2(cos(t-i.x)+sin(t+i.y),sin(t-i.y)+cos(t+i.x));
 c+=1./length(vec2(p.x/(sin(i.x+t)/.005),p.y/(cos(i.y+t)/.005)));}
 c/=5.;c=1.17-pow(c,1.4);float k=pow(abs(c),8.);
 float depth=fbm(uv*1.5+T*.02);
-vec3 e=vec3(.1,.09,.34)*depth*.5+vec3(.42,.6,1.)*k*.3*(.35+depth)+vec3(.62,.36,1.)*k*k*.1;
-return glow(u_bg,e*vig(uv)*.2);}`;
+vec3 e=(vec3(.1,.09,.34)*depth*.5+vec3(.42,.6,1.)*k*.3*(.35+depth)+vec3(.62,.36,1.)*k*k*.1)*.2;
+for(int b=0;b<3;b++){float slot=float(b);float clock=T*.13+slot/3.;
+float cycle=floor(clock),phase=fract(clock);vec2 seed=vec2(cycle,slot+27.);
+vec2 centre=(hash2(seed)-.5)*vec2(1.7,1.);
+centre.y+=sin(phase*3.14159)*.08;
+float bloom=pow(sin(phase*3.14159),2.);
+float radius=.16+.1*hash(seed+9.)+.06*bloom;
+vec2 d=uv-centre;float blob=exp(-dot(d,d)/(radius*radius));
+e+=mix(vec3(.3,.45,1.),vec3(.6,.35,1.),hash(seed+5.))*blob*bloom*u_work*(.18+k*.12);}
+return glow(u_bg,e*vig(uv));}`;
 
   /** Height lines of a smooth, shifting terrain, one pixel wide whatever the slope; every fourth is brighter. */
   const CONTOURS = `float f3(vec2 p){return noise(p)*.6+noise(p*2.1+7.)*.28+noise(p*4.3+3.)*.12;}
@@ -120,20 +128,37 @@ float wave=pow(.5+.5*cos(length(uv)*17.-T*1.25),10.);
 c+=vec3(.55,.7,1.)*line*wave*u_work*.65;
 return glow(u_bg,c*vig(uv));}`;
 
-  /** The nebula sampled once per cell of a tilted grid and printed as dots sized by its brightness. */
+  /** Nebula dots on a tilted grid, with sparse blue colour droplets while working. */
   const HALFTONE = `vec3 shade(vec2 uv,float T){float m=min(u_res.x,u_res.y);float cells=m/9.;
 vec2 g=mat2(.866,-.5,.5,.866)*uv*cells;vec2 id=floor(g)+.5;vec2 f=fract(g)-.5;
 vec2 cuv=mat2(.866,.5,-.5,.866)*id/cells;float l;vec3 col=neb(cuv,T*.05,l);float v=vig(cuv);
+float seed=hash(id);float cycle=floor(T*.22+seed*13.);
+float phase=fract(T*.22+seed*13.);float blink=pow(sin(phase*3.14159),4.)*step(.982,hash(id+cycle*17.))*u_work;
+col=mix(col,vec3(.4,.65,1.),blink*.35);
+l+=blink*.07;
 float rad=.5*sqrt(clamp(l*v*1.6+.06*v,0.,1.));float aa=cells/m;
 float a=(1.-smoothstep(rad-aa,rad+aa,length(f)))*step(.03,rad);
 return cover(col*1.3+.04,a,a*.6);}`;
 
-  /** Out-of-focus discs with a brighter rim, drifting at three depths over a dimmed nebula. */
-  const BOKEH = `vec3 shade(vec2 uv,float T){float l;vec3 c=mix(u_bg,nebula(uv,T*.04,l),.5);vec3 e=vec3(0.);
+  /** Working discs morph into gently spinning polygons and stars; drift uses an integrated clock. */
+  const BOKEH = `float cross2(vec2 a,vec2 b){return a.x*b.y-a.y*b.x;}
+float shapeRadius(float a,float kind){
+if(kind<3.){float n=kind+3.;float sector=6.283185/n;
+return cos(3.141593/n)/cos(mod(a+sector*.5,sector)-sector*.5);}
+float sector=.6283185;float k=floor(mod(a,6.283185)/sector);
+float a0=k*sector,a1=a0+sector;
+float r0=mod(k,2.)<.5?1.:.45;float r1=1.45-r0;
+vec2 v0=vec2(cos(a0),sin(a0))*r0,v1=vec2(cos(a1),sin(a1))*r1;
+return cross2(v0,v1)/cross2(vec2(cos(a),sin(a)),v1-v0);}
+vec3 shade(vec2 uv,float T){float l;vec3 c=mix(u_bg,nebula(uv,T*.04,l),.5);vec3 e=vec3(0.);
 for(int i=0;i<3;i++){float fi=float(i);float s=2.4+fi*1.9;
-vec2 g=uv*s+vec2(T*.018*(fi+1.),-T*.03*(1.+fi*.5))+fi*5.3;
+vec2 g=uv*s+vec2(u_motionTime*.018*(fi+1.),-u_motionTime*.03*(1.+fi*.5))+fi*5.3;
 vec2 id=floor(g);vec2 h=hash2(id+fi*31.);vec2 d=fract(g)-.5-(h-.5)*.45;
 float rr=.16+.14*h.y,r=length(d);
+float spin=(.035+.055*hash(id+fi*31.+7.))*(h.x<.25?-1.:1.);
+float angle=atan(d.y,d.x)+T*spin+h.y*6.283185;
+float boundary=shapeRadius(angle,floor(hash(id+fi*31.+13.)*4.));
+r/=mix(1.,boundary,u_work);
 float disc=smoothstep(rr,rr-.035,r);float ring=smoothstep(.035,0.,abs(r-rr+.03));
 vec3 bc=mix(vec3(.32,.56,1.),vec3(.68,.36,1.),h.y);
 e+=bc*(disc*.17+ring*.1)*step(h.x,.5)*(.55+.45*sin(T*.5+h.x*20.))*(1.-fi*.22)*vig(uv);}
@@ -186,6 +211,7 @@ return glow(c,e);}`;
     let style = null;
     // Starts somewhere along the drift, so each new page doesn't open on the same frame.
     let time = Math.random() * 400;
+    let motionTime = time;
     let running = false;
     let work = 0;
     let target = 0;
@@ -222,10 +248,11 @@ return glow(c,e);}`;
       ])) });
     }
 
-    const draw = () => fx?.draw({ u_time: time, u_work: work });
+    const draw = () => fx?.draw({ u_time: time, u_motionTime: motionTime, u_work: work });
     const loop = GL.loop((dt) => {
       work += (target - work) * Math.min(1, dt * 2);
       time += dt;
+      motionTime += dt * (1 + .1 * work);
       draw();
     });
 

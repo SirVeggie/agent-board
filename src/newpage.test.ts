@@ -21,7 +21,7 @@ function screen(webgl = true) {
   const uniforms: Record<string, any> = {};
   const classes = new Set<string>();
   const css: Record<string, string> = {};
-  const draws: { u_time: number; u_work: number }[] = [];
+  const draws: { u_time: number; u_motionTime: number; u_work: number }[] = [];
   const shaders: string[] = [];
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChange = fn; } };
   const node = () => ({
@@ -123,6 +123,35 @@ test("provider palettes update live, preserve the shader and restore defaults wh
   s.tint(true);
   assert.equal(s.uniforms.u_tint, 1);
   assert.equal(s.css["--np-c1"], "168,50,26");
+});
+
+test("Bokeh drift speeds up gently without jumping on working changes, and freezes with reduced motion", () => {
+  const s = screen();
+  s.choose("bokeh");
+  s.page.render({ id: "draft" });
+  s.tick(.1);
+  const idle = s.draws.at(-1)!;
+  s.busy(true);
+  s.page.render({ id: "draft" });
+  s.tick(.1);
+  const entering = s.draws.at(-1)!;
+  assert.ok(entering.u_motionTime - idle.u_motionTime > .1);
+  assert.ok(entering.u_motionTime - idle.u_motionTime < .11);
+  s.tick(1);
+  const busy = s.draws.at(-1)!;
+  assert.ok(Math.abs(busy.u_motionTime - entering.u_motionTime - 1.1) < 1e-10);
+  s.busy(false);
+  s.page.render({ id: "draft" });
+  s.tick(.1);
+  const leaving = s.draws.at(-1)!;
+  assert.ok(leaving.u_motionTime - busy.u_motionTime > .1);
+  assert.ok(leaving.u_motionTime - busy.u_motionTime < .11);
+  s.reduce(true);
+  s.busy(true);
+  s.page.render({ id: "draft" });
+  s.tick(1);
+  assert.equal(s.draws.at(-1)!.u_motionTime, leaving.u_motionTime);
+  assert.equal(s.draws.at(-1)!.u_work, 1);
 });
 
 test("CSS fallback follows providers and the setting without WebGL", () => {
