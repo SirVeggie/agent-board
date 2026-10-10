@@ -3206,6 +3206,46 @@ html[data-theme="cream"] .peek-card {
   border-bottom: 1px solid var(--border);
 }
 
+.peek-card > .view-head {
+  gap: 4px;
+  padding: 0 8px 0 14px;
+  background: var(--chrome-solid);
+  box-shadow: inset 0 2px 0 var(--accent-soft);
+}
+
+.peek-card .view-title {
+  margin-right: 8px;
+}
+
+.peek-card .view-title-text {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.peek-card .view-title-sub {
+  max-width: 40%;
+}
+
+.peek-card .view-btn {
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.peek-card .view-btn:hover {
+  background: var(--accent-soft);
+  color: var(--heading);
+}
+
+.peek-card .view-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.peek-card .view-btn:last-child {
+  margin-left: 4px;
+}
+
 /* A pane's header is part of the chrome, like the tab strip: the focused pane's title reads like the
  * active tab's, and carries its accent line. */
 .pane-head {
