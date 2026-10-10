@@ -963,6 +963,8 @@ export async function startHttp(): Promise<http.Server> {
           model: str(body.model, 200),
           effort: str(body.effort, 40),
           thread: str(body.thread, 60),
+          background: body.background === true,
+          stop: body.stop === true,
           signal: abort.signal,
         });
       }

@@ -15,8 +15,8 @@ const { AgentHost } = await import("./host.js");
 let host: InstanceType<typeof AgentHost>;
 /** What the stub provider's sessions were asked, and how the next turn ends. */
 const asked: Array<{ thread: Thread; input: TurnInput }> = [];
-let hang: (() => void) | null = null;
 let hanging = false;
+const helperWaits = new Map<string, () => void>();
 
 type Internals = { providers: Record<string, unknown>; runs: Map<string, unknown>; turns: Map<string, unknown[]>; pending: Map<string, { itemId: string }> };
 
@@ -40,11 +40,12 @@ before(() => {
       update: () => {},
       commands: async () => [],
       dispose: () => {},
-      cancel: async () => hang?.(),
+      cancel: async () => helperWaits.get(thread.id)?.(),
       run: async (input: TurnInput, sink: RunSink): Promise<TurnResult> => {
         asked.push({ thread, input });
         if (hanging) {
-          await new Promise<void>((resolve) => (hang = resolve));
+          await new Promise<void>((resolve) => { helperWaits.set(thread.id, resolve); });
+          helperWaits.delete(thread.id);
           return { status: "cancelled" };
         }
         sink.text(`did: ${input.text.split("\n").at(-1)}`);
@@ -189,7 +190,6 @@ test("thread with no task waits for a working helper and returns its report", as
     assert.equal((await waiting).status, "cancelled");
   } finally {
     hanging = false;
-    hang = null;
   }
   await assert.rejects(host.runHelper(id, { task: "" }), /task is required/);
 });
@@ -217,6 +217,42 @@ test("stopping the caller stops its helper", async () => {
     assert.equal((await call).status, "cancelled");
   } finally {
     hanging = false;
-    hang = null;
+  }
+});
+
+test("background launches overlap and steering or an aborted wait keeps helpers running", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent();
+  hanging = true;
+  const helpers: string[] = [];
+  try {
+    // Sequential launch calls must return even though none of the helpers has finished.
+    for (const task of ["alpha", "beta", "gamma"]) {
+      const result = await host.runHelper(id, { task, provider: "pi", background: true });
+      assert.equal(result.status, "running");
+      helpers.push(String(result.thread));
+    }
+    for (let i = 0; i < 100 && !helpers.every((helper) => helperWaits.has(helper)); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(helpers.every((helper) => helperWaits.has(helper)), "all three sessions run concurrently");
+    await host.cancel(id, { keepQueue: true });
+    assert.ok(helpers.every((helper) => helperWaits.has(helper)));
+    const abort = new AbortController();
+    const waiting = host.runHelper(id, { task: "", thread: helpers[0], signal: abort.signal });
+    const rejected = assert.rejects(waiting, /cancelled/);
+    abort.abort();
+    await rejected;
+    assert.ok(helpers.every((helper) => helperWaits.has(helper)), "disconnect only cancels the caller's wait");
+    await assert.rejects(host.runHelper(parent(), { task: "", thread: helpers[0], stop: true }), /No helper/);
+    const stopped = await host.runHelper(id, { task: "", thread: helpers[0], stop: true });
+    assert.equal(stopped.status, "cancelled");
+    assert.ok(helpers.slice(1).every((helper) => helperWaits.has(helper)), "stopping one helper leaves the others working");
+    const reports = helpers.map((thread) => host.runHelper(id, { thread, task: "" }));
+    await host.cancel(id);
+    assert.deepEqual((await Promise.all(reports)).map((report) => report.status), ["cancelled", "cancelled", "cancelled"]);
+  } finally {
+    for (const helper of helpers) await host.cancel(helper);
+    hanging = false;
   }
 });

@@ -2287,15 +2287,18 @@ export class AgentHost {
    */
   async runHelper(
     threadId: string,
-    opts: { task: string; provider?: string; model?: string; effort?: string; thread?: string; signal?: AbortSignal }
+    opts: { task: string; provider?: string; model?: string; effort?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
     const parent = this.helperParent(threadId);
     const task = opts.task.trim();
+    if (opts.signal?.aborted) throw new Error("cancelled");
+    if (opts.stop && (!opts.thread || task)) throw new Error("Stopping a helper requires thread and no task.");
     if (!task && !opts.thread) throw new Error("task is required: a brief the helper can work from on its own.");
     let helper: Thread;
     if (opts.thread) {
       const existing = this.threads.get(opts.thread);
       if (!existing || existing.helperOf !== threadId) throw new Error(`No helper ${opts.thread} of this thread. Leave thread out to start a new one.`);
+      if (opts.stop) await this.cancel(existing.id);
       const working = this.runs.has(existing.id) || Boolean(this.queues.get(existing.id)?.length) || this.resuming.has(existing.id);
       if (working && task) throw new Error("That helper is still working on its last task. Pass thread with no task to wait for its report.");
       if (!task && !this.loadTurns(existing.id).length) throw new Error("That helper has not run yet. Pass a task.");
@@ -2313,6 +2316,11 @@ export class AgentHost {
       const busy = [...this.threads.values()].filter((t) => t.helperOf === threadId && this.runs.has(t.id)).length;
       if (busy >= MAX_HELPERS) throw new Error(`This thread already has ${busy} helpers working. Wait for one to finish.`);
       await this.approveHelper(parent, `${status.label}${model ? ` (${model.label})` : ""}`, task, opts.signal);
+      if (opts.signal?.aborted) throw new Error("cancelled");
+      // Other calls can have started while this one waited for approval.
+      if ([...this.threads.values()].filter((t) => t.helperOf === threadId && (this.runs.has(t.id) || this.queues.get(t.id)?.length || this.resuming.has(t.id))).length >= MAX_HELPERS) {
+        throw new Error(`This thread already has ${MAX_HELPERS} helpers working. Wait for one to finish.`);
+      }
       // The folder can have changed while the user was asked (a worktree made or closed).
       const now = this.requireThread(threadId);
       const wt = openWorktree(now);
@@ -2341,20 +2349,33 @@ export class AgentHost {
     }
     if (opts.signal?.aborted) throw new Error("cancelled");
     this.linkHelperCall(threadId, helper.id, task);
+    if (task && opts.background) {
+      this.send(helper.id, { text: task, from: "agent" });
+      return { thread: helper.id, provider: helper.provider, model: helper.model, status: "running", note: "The helper is working in the background. Continue other work or start independent helpers. Call agent_run with this thread and no task to wait for its report before using its work." };
+    }
     // With no task the helper's last turn is the report: wait only while it is still at it.
     if (task || this.runs.has(helper.id) || this.queues.get(helper.id)?.length || this.resuming.has(helper.id)) {
-      const done = new Promise<void>((resolve) => {
+      let finish!: () => void;
+      let abortWait!: () => void;
+      const done = new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        abortWait = () => reject(new Error("cancelled"));
         const list = this.turnWaiters.get(helper.id) ?? [];
         list.push(resolve);
         this.turnWaiters.set(helper.id, list);
       });
-      const onAbort = () => void this.cancel(helper.id);
-      opts.signal?.addEventListener("abort", onAbort);
+      // A tool connection going away (including message steering) ends only the wait.
+      // Explicit Stop cancels helpers through cancel(parent), independently of this signal.
+      opts.signal?.addEventListener("abort", abortWait);
       try {
         if (task) this.send(helper.id, { text: task, from: "agent" });
+        if (opts.signal?.aborted) abortWait();
         await done;
       } finally {
-        opts.signal?.removeEventListener("abort", onAbort);
+        opts.signal?.removeEventListener("abort", abortWait);
+        const remaining = (this.turnWaiters.get(helper.id) ?? []).filter((waiter) => waiter !== finish);
+        if (remaining.length) this.turnWaiters.set(helper.id, remaining);
+        else this.turnWaiters.delete(helper.id);
       }
     }
     const turn = this.loadTurns(helper.id).at(-1);
@@ -2489,9 +2510,11 @@ export class AgentHost {
       }
       this.emitThread(threadId);
     }
-    // Its helpers stop with it: nobody is left to read their reports.
-    for (const t of this.threads.values()) {
-      if (t.helperOf === threadId && this.runs.has(t.id)) void this.cancel(t.id);
+    // Steering starts another parent turn; helpers keep working for that turn.
+    if (!keepQueue) {
+      for (const t of this.threads.values()) {
+        if (t.helperOf === threadId && (this.runs.has(t.id) || this.queues.get(t.id)?.length || this.resuming.has(t.id))) void this.cancel(t.id);
+      }
     }
     if (!run) return;
     run.cancelled = true;
