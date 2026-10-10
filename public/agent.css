@@ -3650,9 +3650,10 @@ button.dock-scope:hover {
   display: none;
 }
 
-/* A faint divider that fades out at both ends separates turns. */
+/* A faint divider that fades out at both ends separates turns and user messages from agent replies. */
 .ag-transcript .ag-turn + .ag-turn::before,
-.ag-transcript.ag-queue > .ag-turn:first-child::before {
+.ag-transcript.ag-queue > .ag-turn:first-child::before,
+.ag-transcript .ag-turn > .ag-user + .ag-turn-body::before {
   content: "";
   display: block;
   width: 50%;
