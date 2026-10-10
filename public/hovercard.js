@@ -253,7 +253,12 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
     return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
-  window.addEventListener("scribe-tooltip-show", hide);
+  window.addEventListener("scribe-tooltip-show", (event) => {
+    // A tip on a thread button belongs to this card; keep the button clickable.
+    if (!card.contains(event.detail?.anchor)) {
+      hide();
+    }
+  });
   window.addEventListener("scroll", hide, true);
   window.addEventListener("wheel", hide, { passive: true, capture: true });
   window.addEventListener("blur", hide);

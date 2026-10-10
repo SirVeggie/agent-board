@@ -41,7 +41,7 @@
 
   function show() {
     if (!anchor?.isConnected || !anchor.dataset.tooltip || anchor.hasAttribute("data-rich-tooltip")) return hide();
-    window.dispatchEvent(new Event("scribe-tooltip-show"));
+    window.dispatchEvent(new CustomEvent("scribe-tooltip-show", { detail: { anchor } }));
     tip.textContent = anchor.dataset.tooltip;
     tip.hidden = false;
     if (tip.showPopover && !tip.matches(":popover-open")) tip.showPopover();
