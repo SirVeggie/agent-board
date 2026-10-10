@@ -414,6 +414,23 @@
     return S.config.models[provider] || [];
   }
 
+  /** Keep Native models together by source, in the source list's original order. */
+  function modelMenuItems(provider, models, row, suffix = "") {
+    const header = `${PROVIDER_LABEL[provider]}${suffix}`;
+    if (provider !== "pi" || !models.length) return [{ header, provider }, ...models.map(row)];
+    const sources = new Map();
+    for (const model of models) {
+      // Native ids start with the source/provider id; the model itself may contain slashes.
+      const source = model.id.split("/")[0];
+      if (!sources.has(source)) sources.set(source, { name: model.description || source, models: [] });
+      sources.get(source).models.push(model);
+    }
+    return [...sources].flatMap(([source, group]) => [
+      { header, provider, sourceName: group.name, suffix },
+      ...group.models.map((model) => ({ ...row(model), nativeSource: source })),
+    ]);
+  }
+
   function modelInfo(provider, id) {
     return modelsOf(provider).find((m) => m.id === id) || null;
   }
@@ -1058,6 +1075,7 @@
         `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q));
       let count = 0;
       const visible = matches.filter((item) => item.header || item.separator || item.fixed || ++count <= visibleLimit);
+      const nativeSources = new Set(visible.map((item) => item.nativeSource).filter(Boolean));
       if (count > visibleLimit) visible.push({
         label: "Show more",
         more: true,
@@ -1067,7 +1085,9 @@
       let lastHeader = null;
       for (const item of visible) {
         if (item.header) {
-          lastHeader = el("div", "ag-menu-head", item.header);
+          const heading = item.sourceName && nativeSources.size > 1
+            ? `Native (${item.sourceName})${item.suffix || ""}` : item.header;
+          lastHeader = el("div", "ag-menu-head", heading);
           if (item.provider) lastHeader.prepend(providerIcon(item.provider));
           continue;
         }
@@ -4163,22 +4183,20 @@
         const status = S.config.providers.find((p) => p.id === provider);
         const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (s.provider === provider && s.model === m.id));
         if (!showAll && !models.length) continue;
-        items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
         if (!models.length) {
+          items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
           items.push({ label: status?.available ? "Loading models…" : status?.detail || "Not available", disabled: true });
           continue;
         }
-        for (const m of models) {
-          items.push({
-            label: m.label,
-            detail: m.id !== m.label ? m.id : m.description,
-            search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
-            checked: s.provider === provider && s.model === m.id,
-            disabled: !status?.available,
-            star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
-            run: () => this.updateSettings(provider === s.provider ? { model: m.id } : { provider, model: m.id }),
-          });
-        }
+        items.push(...modelMenuItems(provider, models, (m) => ({
+          label: m.label,
+          detail: m.id !== m.label ? m.id : m.description,
+          search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
+          checked: s.provider === provider && s.model === m.id,
+          disabled: !status?.available,
+          star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
+          run: () => this.updateSettings(provider === s.provider ? { model: m.id } : { provider, model: m.id }),
+        }), status && !status.available ? " — unavailable" : ""));
       }
       if (!showAll) {
         items.push({ separator: true }, { label: "Show all models", icon: "more", run: () => this.modelMenu(anchor, { all: true }) });
@@ -8379,23 +8397,20 @@
         const items = [];
         for (const provider of PROVIDERS) {
           if (!providerAvailable(provider)) continue;
-          items.push({ header: PROVIDER_LABEL[provider] });
-          for (const m of modelsOf(provider)) {
-            items.push({
-              label: m.label,
-              detail: m.id !== m.label ? m.id : m.description,
-              search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
-              checked: cur.provider === provider && cur.model === m.id,
-              run: async () => {
-                try {
-                  S.config.prefs = await api("PUT", "/prefs", { summarizer: { provider, model: m.id } });
-                  this.renderSummarizer();
-                } catch (err) {
-                  notice(err.message);
-                }
-              },
-            });
-          }
+          items.push(...modelMenuItems(provider, modelsOf(provider), (m) => ({
+            label: m.label,
+            detail: m.id !== m.label ? m.id : m.description,
+            search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
+            checked: cur.provider === provider && cur.model === m.id,
+            run: async () => {
+              try {
+                S.config.prefs = await api("PUT", "/prefs", { summarizer: { provider, model: m.id } });
+                this.renderSummarizer();
+              } catch (err) {
+                notice(err.message);
+              }
+            },
+          })));
         }
         openMenu(b, items, { search: true, width: 300, placeholder: "Search models" });
       });
