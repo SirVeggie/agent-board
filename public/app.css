@@ -3246,8 +3246,8 @@ html[data-theme="cream"] .peek-card {
   margin-left: 4px;
 }
 
-/* A pane's header is part of the chrome, like the tab strip: the focused pane's title reads like the
- * active tab's, and carries its accent line. */
+/* A pane's header is part of the chrome, like the tab strip: the focused pane's title is bold and
+ * full colour, the other pane's is muted. */
 .pane-head {
   position: absolute;
   top: var(--pane-y);
@@ -3291,24 +3291,13 @@ body.dragging-pane iframe { pointer-events: none; }
 }
 
 .pane-head.focused .view-title-text {
+  font-weight: 600;
   color: var(--heading);
 }
 
-.pane-head::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--accent);
-  box-shadow: var(--accent-glow);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.pane-head.focused::after {
-  opacity: 0.7;
+.pane-head.blank .view-title-text {
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .pane-head .view-btn {
@@ -3524,6 +3513,30 @@ main.split-col .split-tools {
 body.resizing-split .split-tools {
   opacity: 0;
   pointer-events: none;
+}
+
+/* While the divider is dragged, the split's sizes stand where the pill was. */
+.split-ratio {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: var(--chrome-solid);
+  box-shadow: 0 0 0 1px var(--border), 0 6px 18px rgba(0, 0, 0, 0.4);
+  color: var(--heading);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+body.resizing-split .split-ratio {
+  opacity: 1;
 }
 
 .split-tools .view-btn {

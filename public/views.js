@@ -138,7 +138,10 @@ window.createViews = function createViews(host) {
   for (const type of ["pointerdown", "dblclick", "keydown"]) {
     tools.addEventListener(type, (event) => event.stopPropagation());
   }
-  divider.appendChild(tools);
+  // The split's sizes, shown on the divider while it is dragged.
+  const ratioEl = el("div", "split-ratio");
+  ratioEl.setAttribute("aria-hidden", "true");
+  divider.append(tools, ratioEl);
 
   /* ---------- storage ---------- */
 
@@ -594,20 +597,23 @@ window.createViews = function createViews(host) {
     head.classList.toggle("focused", focused);
     // A site has no tab to fall back to, so the page beside it can't be closed out of the split.
     const closable = target.kind === "url" || split.other.kind === "page";
-    const key = JSON.stringify([frameIdOf(target), titleOf(target), closable, target.kind === "url" && blocked.has(target.href)]);
+    // A New page is no page yet: its title is a placeholder, and there is nothing to peek at.
+    const blank = target.kind === "page" && host.isBlank(metaFor(target));
+    const key = JSON.stringify([frameIdOf(target), titleOf(target), closable, blank, target.kind === "url" && blocked.has(target.href)]);
     if (paneEls[pane].drawn === key) {
       return;
     }
     paneEls[pane].drawn = key;
+    head.classList.toggle("blank", blank);
     const parts = [headTitle(target)];
     if (target.kind === "url") {
       parts.push(iconButton(ICONS.browser, "Open in browser", () => openBrowser(target.href)));
     }
+    if (closable && !blank) {
+      parts.push(iconButton(ICONS.peek, "Show as peek", () => paneToPeek(pane)));
+    }
     if (closable) {
-      parts.push(
-        iconButton(ICONS.peek, "Show as peek", () => paneToPeek(pane)),
-        iconButton(ICONS.close, "Close pane", () => closePane(pane), false)
-      );
+      parts.push(iconButton(ICONS.close, "Close pane", () => closePane(pane), false));
     }
     head.replaceChildren(...parts);
     renderBody(body, target);
@@ -1289,7 +1295,9 @@ window.createViews = function createViews(host) {
     split.ratio = next;
     const shown = ratioFor(split);
     mainEl.style.setProperty("--split", String(shown));
-    divider.setAttribute("aria-valuenow", String(Math.round(shown * 100)));
+    const percent = Math.round(shown * 100);
+    divider.setAttribute("aria-valuenow", String(percent));
+    ratioEl.textContent = `${percent} / ${100 - percent}`;
   }
 
   function commitRatio() {
@@ -1324,6 +1332,8 @@ window.createViews = function createViews(host) {
     let raf = 0;
     let latest = 0;
     resizing = { pointerId: event.pointerId };
+    const startPercent = Math.round(ratioFor(activeSplit()) * 100);
+    ratioEl.textContent = `${startPercent} / ${100 - startPercent}`;
     function onMove(move) {
       if (move.pointerId !== event.pointerId) {
         return;
