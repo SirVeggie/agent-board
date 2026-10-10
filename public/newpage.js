@@ -70,12 +70,14 @@ float r=length(uv);float wave=pow(.5+.5*cos(r*13.+T*1.1),5.);
 float core=exp(-r*6.)*(.6+.4*sin(T*.9));
 return glow(c,u_work*vig(uv)*(vec3(.38,.28,.8)*wave*(.09+.32*l)+vec3(.48,.42,1.)*core*.17));}`;
 
-  /** The nebula with three layers of twinkling four-point sparkles, brighter where the matter is dense. */
+  /** A slow working sweep lights sparkles in place, preserving their idle drift and twinkle. */
   const STARDUST = `vec3 shade(vec2 uv,float T){float l;vec3 c=nebula(uv,T*.04,l);vec3 e=vec3(0.);
 for(int i=0;i<3;i++){float fi=float(i);float s=9.+fi*8.;
+float sweep=pow(.5+.5*sin(uv.x*3.+uv.y*2.-T*.3+fi*.6),8.);
 vec2 g=uv*s+vec2(T*.02*(fi+1.),T*.035);vec2 id=floor(g);vec2 h=hash2(id+fi*17.);
 vec2 d=fract(g)-.5-(h-.5)*.6;float r=length(d);
 float tw=pow(.5+.5*sin(T*(.8+h.x*2.5)+h.y*6.283),6.);
+tw=mix(tw,max(tw,sweep*.8),u_work);
 float g1=pow(smoothstep(.3,0.,r),4.)*.5+smoothstep(.05,0.,r);
 float sp=max(0.,1.-abs(d.x)*28.)*max(0.,1.-abs(d.y)*4.5)+max(0.,1.-abs(d.y)*28.)*max(0.,1.-abs(d.x)*4.5);
 e+=mix(vec3(.75,.85,1.),vec3(.95,.8,1.),h.y)*(g1+sp*.45)*tw*step(h.x,.5)*(.15+1.6*l)*(1.-fi*.25);}

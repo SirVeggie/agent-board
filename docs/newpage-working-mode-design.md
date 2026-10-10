@@ -28,6 +28,14 @@ The seven-background prerequisite was present as commit `549fc1c` on the previou
 
 Unselected modes have fresh proposals in [Revised working-mode ideas](scribe:newpage-working-mode-revised): a constellation sweep for Stardust, a dim wandering underwater lens for Caustics, a broad diagonal wave or random colour droplets for Halftone, and independent focus blooms for Bokeh. Card #383 holds the pending selections in Needs input, and the page's form replies there. The original mockup remains available as the record of the first selections.
 
+## Revised selection (#383)
+
+The user selected Stardust's constellation sweep. Its exact preview shader now ships in `public/newpage.js`: a slow diagonal band raises the existing twinkle in place, without changing particle positions or the idle clock. It uses the existing eased working uniform and provider tint support.
+
+The remaining ideas were revised from the user's notes in the same [selection page](scribe:newpage-working-mode-revised). Caustics keeps its dim idle net and adds three broad, staggered highlights that bloom underneath it. Halftone's diagonal wave now changes brightness and dot size more visibly; the colour-droplet alternative is unchanged. Bokeh now uses a narrow passing displacement wave; discs return to their ordinary drifting paths behind it. These are previews only. Follow-up #387 is in Needs input, and the page's Build this choices and fresh freeform feedback reply there. Stardust is marked Built and excluded from new selections.
+
+Validation: JavaScript syntax, the four existing New page lifecycle tests and whitespace checks pass. Scribe captures confirm the revised shaders render; animation feel remains for the user to judge in the live previews.
+
 Validation after implementation: `npm run build`, `npm run test:newpage` (two lifecycle tests), `node --check public/newpage.js` and `git diff --check` passed. The lifecycle tests cover eased working transitions without speeding the clock, stopping while hidden, reduced-motion changes, and preserving working state across Settings changes. Scribe screenshots confirmed that all three exact production shaders and all five revised proposals draw. These screenshots establish rendering, not a full browser animation or form-submission test.
 
 While creating this page, `page_read(toFile: true)` returned a temporary HTML checkout that Scribe `read_file` refused as outside its allowed roots. Reported separately as #379 in design; page_read line windows/full HTML remain a usable workaround.
