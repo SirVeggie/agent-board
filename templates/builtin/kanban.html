@@ -1870,7 +1870,7 @@
       var count = el("span", "col-count", col.wip ? list.length + " / " + col.wip : String(visible.length));
       if (col.wip && list.length === col.wip) count.classList.add("at");
       if (col.wip && list.length > col.wip) count.classList.add("over");
-      if (col.wip) count.title = "Work-in-progress limit " + col.wip;
+      if (col.wip) count.dataset.tooltip = "Work-in-progress limit " + col.wip;
       head.appendChild(count);
       var menuBtn = el("button", "col-menu-btn", "⋯");
       menuBtn.type = "button";
@@ -1947,7 +1947,7 @@
     chosen.forEach(function (l) {
       var bar = el("span", "chip-bar");
       bar.style.background = l.color;
-      bar.title = l.name;
+      bar.dataset.tooltip = l.name;
       chips.appendChild(bar);
     });
     // The assignee: name in the top-right corner; a worker's name in its color.
@@ -1957,7 +1957,7 @@
       var head = el("div", "card-head");
       head.appendChild(chips);
       var nameEl = el("span", "who-name" + (wid ? "" : " person"), isAgent(who) ? "🤖 agent" : who);
-      nameEl.title = (wid ? "Worker: " : "Assigned to ") + who;
+      nameEl.dataset.tooltip = (wid ? "Worker: " : "Assigned to ") + who;
       if (wid) nameEl.style.setProperty("--who", workerColor(wid));
       head.appendChild(nameEl);
       li.appendChild(head);
@@ -1989,7 +1989,7 @@
       var ck = el("span", "badge");
       ck.innerHTML = CHECK_ICON;
       ck.appendChild(document.createTextNode(n + "/" + c.checklist.length));
-      ck.title = n === c.checklist.length ? "Checklist complete" : n + " of " + c.checklist.length + " done";
+      ck.dataset.tooltip = n === c.checklist.length ? "Checklist complete" : n + " of " + c.checklist.length + " done";
       if (n === c.checklist.length) ck.classList.add("full");
       badges.appendChild(ck);
     }
@@ -2005,7 +2005,7 @@
     var usageText = formatUsage(c.usage);
     if (usageText) {
       var tok = el("span", "badge" + (usageHeavy(c.usage) ? " heavy" : ""), usageText);
-      tok.title = usageTip(c.usage);
+      tok.dataset.tooltip = usageTip(c.usage);
       badges.appendChild(tok);
     }
     var blockers = openBlockers(c);
@@ -2258,7 +2258,7 @@
     var tag = el("button", "role agent" + (paused ? " paused" : ""));
     tag.type = "button";
     tag.setAttribute("aria-pressed", paused ? "true" : "false");
-    tag.title = paused
+    tag.dataset.tooltip = paused
       ? "Paused — workers skip this column. Click to resume."
       : "Workers pick cards here. Click to pause.";
     tag.appendChild(document.createTextNode(ROLE_TAG.agent));
@@ -3421,7 +3421,7 @@
           if (!r || !r.ok) setHint("Couldn't run " + a.label + (r && r.error ? " (" + r.error.replace(/_/g, " ") + ")" : "") + ".");
         });
       });
-      if (a.description) b.title = a.description;
+      if (a.description) b.dataset.tooltip = a.description;
     });
     loadTemplateActions();
     if (cardActions.length) menuEl.appendChild(el("div", "sep"));
@@ -3849,7 +3849,8 @@
         var used = liveCards().filter(function (c) { return c.labels.indexOf(l.id) !== -1; }).length;
         var rm = el("button", "ghost", "×");
         rm.type = "button";
-        rm.title = used ? "Delete (removes it from " + used + " card" + (used === 1 ? "" : "s") + ")" : "Delete";
+        rm.dataset.tooltip = used ? "Delete (removes it from " + used + " card" + (used === 1 ? "" : "s") + ")" : "Delete";
+        rm.setAttribute("aria-label", "Delete");
         rm.addEventListener("click", function (ev) {
           ev.stopPropagation();
           saveLabels(labels().filter(function (x) { return x.id !== l.id; }));
@@ -5331,7 +5332,7 @@
     workersBtn.appendChild(document.createTextNode(running.length ? "Workers · " + running.length + " running" : "Workers"));
     var failed = workerIds().some(function (id) { return workerErrors[id] || str(worker(id).error); });
     if (failed) workersBtn.appendChild(el("span", "w-alert"));
-    workersBtn.title = failed ? "A worker paused with an error" : "Agent workers: they take the ready cards assigned to them";
+    workersBtn.dataset.tooltip = failed ? "A worker paused with an error" : "Agent workers: they take the ready cards assigned to them";
     workersBtn.classList.toggle("on", !workersPop.classList.contains("hidden"));
   }
   function openWorkersPanel(id) {
@@ -5413,7 +5414,7 @@
       tog.setAttribute("role", "switch");
       tog.setAttribute("aria-checked", workerOn(w) ? "true" : "false");
       tog.setAttribute("aria-label", (workerOn(w) ? "Stop " : "Start ") + (workerName(w) || "worker"));
-      tog.title = !workerReady(w) ? "Set it up first: " + workerState(id) : workerOn(w) ? "Running. Click to stop." : "Stopped. Click to start.";
+      tog.dataset.tooltip = !workerReady(w) ? "Set it up first: " + workerState(id) : workerOn(w) ? "Running. Click to stop." : "Stopped. Click to start.";
       tog.disabled = Boolean(launching[id]);
       tog.addEventListener("click", function (e) { e.stopPropagation(); toggleWorker(id); });
       row.appendChild(tog);

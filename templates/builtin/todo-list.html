@@ -849,7 +849,8 @@
   function iconBtn(text, title, disabled, onClick) {
     var el = document.createElement("button");
     el.type = "button";
-    el.title = title;
+    el.dataset.tooltip = title;
+    el.setAttribute("aria-label", title);
     el.className = "icon";
     el.textContent = text;
     el.disabled = disabled;
