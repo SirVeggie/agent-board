@@ -4397,6 +4397,10 @@ button.space-menu-item.danger {
   to { opacity: 1; }
 }
 
+/* A prepared shader is already drawable on entry; the fallback is only for cold loads. */
+.newpage.gl-warm .np-canvas { animation: none; }
+.newpage.gl-warm .newpage-matter { transition: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .newpage.gl .np-canvas { animation: none; }
   .newpage.gl .newpage-matter { transition: none; }

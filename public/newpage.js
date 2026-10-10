@@ -188,12 +188,13 @@ return glow(c,e);}`;
 
   let bag = [];
   let lastPick = null;
+  let reserved = null;
 
   /**
    * The next background, drawn from a bag of the chosen ones that refills when it runs out, so
    * each shows equally often. A refill doesn't start with the one just shown.
    */
-  function pick() {
+  function drawPick() {
     const ids = chosen();
     bag = bag.filter((id) => ids.includes(id));
     if (!bag.length) bag = [...ids];
@@ -201,6 +202,17 @@ return glow(c,e);}`;
     lastPick = pool[Math.floor(Math.random() * pool.length)];
     bag.splice(bag.indexOf(lastPick), 1);
     return lastPick;
+  }
+
+  function nextPick() {
+    if (!chosen().includes(reserved)) reserved = drawPick();
+    return reserved;
+  }
+
+  function pick() {
+    const id = nextPick();
+    reserved = null;
+    return id;
   }
 
   /** The shader behind the New page screen; null when WebGL isn't there (the CSS blobs show then). */
@@ -218,27 +230,86 @@ return glow(c,e);}`;
     let work = 0;
     let target = 0;
     let palette = null;
+    let warm = null;
+    let warmTimer = 0;
 
-    function build(id) {
+    function build(id, surface = canvas) {
       const { frag, sharp, derivatives } = STYLES[id];
-      return GL.lazy(canvas, (derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "") + HEAD + frag + TAIL, {
+      return GL.lazy(surface, (derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "") + HEAD + frag + TAIL, {
         scale: sharp ? () => Math.min(2, devicePixelRatio || 1) : 0.5,
         extensions: derivatives ? ["OES_standard_derivatives"] : [],
-        onReady: () => root.classList.add("gl"),
+        onReady: () => {
+          if (surface === canvas && running) root.classList.add("gl");
+        },
         onError: () => {
+          surface.dataset.failed = "1";
+          if (surface !== canvas) return;
           loop.stop(); root.classList.remove("gl");
           if (id !== "nebula" && running) { use("nebula"); start(); }
         },
       });
     }
 
+    function discardWarm() {
+      warm?.fx.destroy();
+      warm?.canvas.remove();
+      warm = null;
+    }
+
+    /** One spare context, with one tiny first draw and no animation loop. */
+    function scheduleWarm(delay = 1200) {
+      if (warmTimer || document.hidden || document.documentElement.hasAttribute("data-restoring")) return;
+      warmTimer = setTimeout(() => {
+        warmTimer = 0;
+        if (document.hidden || document.documentElement.hasAttribute("data-restoring")) return;
+        const id = nextPick();
+        if (warm?.id === id) return;
+        discardWarm();
+        // With a single selected effect, the current context already serves the next page.
+        if (style === id && fx) return;
+        const surface = canvas.cloneNode(false);
+        delete surface.dataset.ready;
+        delete surface.dataset.failed;
+        // A measurable offscreen box lets the existing lazy loader compile and draw it.
+        surface.style.cssText = "position:fixed;left:-10000px;top:0;width:64px;height:64px;visibility:hidden";
+        document.body.appendChild(surface);
+        const effect = build(id, surface);
+        if (!effect) { surface.remove(); return; }
+        warm = { id, canvas: surface, fx: effect };
+        effect.draw({ u_time: time, u_motionTime: motionTime, u_work: 0 });
+      }, delay);
+    }
+
+    window.addEventListener("scribe:restored", () => scheduleWarm());
+    document.addEventListener("visibilitychange", () => scheduleWarm());
+    scheduleWarm();
+
     /** One shader per WebGL context, so another background gets a fresh canvas. The nebula stands in for one that won't compile. */
     function use(id) {
-      if (fx && id === style) return true;
+      if (fx && id === style) {
+        if (canvas.dataset.ready) root.classList.add("gl", "gl-warm");
+        return true;
+      }
       root.classList.remove("gl");
+      root.classList.remove("gl-warm");
+      if (warm?.id === id && !warm.canvas.dataset.failed) {
+        fx?.destroy();
+        const prepared = warm;
+        warm = null;
+        prepared.canvas.removeAttribute("style");
+        canvas.replaceWith(prepared.canvas);
+        canvas = prepared.canvas;
+        fx = prepared.fx;
+        style = id;
+        if (canvas.dataset.ready) root.classList.add("gl", "gl-warm");
+        return true;
+      }
+      if (warm?.canvas.dataset.failed) discardWarm();
       if (fx) {
         fx.destroy();
         const next = canvas.cloneNode();
+        delete next.dataset.ready;
+        delete next.dataset.failed;
         canvas.replaceWith(next);
         canvas = next;
       }
@@ -267,7 +338,7 @@ return glow(c,e);}`;
       draw();
     }, { element: root });
 
-    function start() {
+    function start(immediate = false) {
       theme();
       if (still.matches) {
         loop.stop();
@@ -275,6 +346,8 @@ return glow(c,e);}`;
         draw();
         return;
       }
+      // Draw the prepared context at the pane's size before the first visible paint.
+      if (immediate) draw();
       loop.start();
     }
 
@@ -285,11 +358,13 @@ return glow(c,e);}`;
     return {
       /** Run with this background while the screen is shown. */
       set(on, id, working = false, colors = null) {
+        const immediate = on && (!running || style !== id);
         palette = colors;
         target = working ? 1 : 0;
         running = Boolean(on && use(id));
-        if (running) start();
+        if (running) start(immediate);
         else loop.stop();
+        scheduleWarm(250);
       },
     };
   }

@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 
 const source = readFileSync(new URL("../public/newpage.js", import.meta.url), "utf8");
 
-function screen(webgl = true) {
+function screen(webgl = true, restoring = false) {
   let selected = "nebula";
   let working = false;
   let step: (dt: number) => void = () => {};
@@ -26,9 +26,15 @@ function screen(webgl = true) {
   const shaders: string[] = [];
   const animations: { finished: Promise<void>; finish: () => void; cancelled: boolean; cancel: () => void }[] = [];
   const timers = new Map<number, () => void>();
+  const warmTimers = new Map<number, () => void>();
+  let timerId = 0;
+  let hidden = false;
+  const effects: { canvas: any; destroyed: boolean; ready: () => void; fail: () => void }[] = [];
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChange = fn; } };
   const node = () => ({
     hidden: false, textContent: "", innerHTML: "",
+    dataset: {} as Record<string, string>, style: { cssText: "" },
+    removeAttribute() {}, remove() {},
     classList: { toggle(_name: string, _on: boolean) {}, add(_name: string) {}, remove(_name: string) {} }, addEventListener() {}, replaceChildren() {},
     cloneNode: () => node(), replaceWith() {}, querySelector: (_: string): any => node(),
   });
@@ -40,7 +46,7 @@ function screen(webgl = true) {
     return animation;
   };
   root.classList.toggle = (name: string, on: boolean) => { if (on) classes.add(name); else classes.delete(name); };
-  root.classList.add = name => { classes.add(name); };
+  root.classList.add = (...names: string[]) => { names.forEach(name => classes.add(name)); };
   root.classList.remove = name => { classes.delete(name); };
   (root as any).style = {
     setProperty: (name: string, value: string) => { css[name] = value; },
@@ -56,9 +62,11 @@ function screen(webgl = true) {
     addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     scribeOrb: { colors: (p: string) => palettes[p] },
     scribeGL: {
-      lazy: (_: unknown, shader: string) => {
+      lazy: (canvas: any, shader: string, opts: any) => {
         shaders.push(shader);
-        return { set: (values: any) => Object.assign(uniforms, values), destroy() {}, draw: (values: any) => draws.push(values) };
+        const effect = { canvas, destroyed: false, ready: () => { canvas.dataset.ready = "1"; opts.onReady(); }, fail: () => opts.onError() };
+        effects.push(effect);
+        return { set: (values: any) => Object.assign(uniforms, values), destroy() { effect.destroyed = true; }, draw: (values: any) => draws.push(values) };
       },
       loop: (fn: (dt: number) => void) => {
         step = fn;
@@ -69,15 +77,19 @@ function screen(webgl = true) {
   if (!webgl) delete win.scribeGL;
   class Observer { observe() {} }
   runInNewContext(source, {
-    window: win, document: { getElementById: () => root, documentElement: {} },
+    window: win, document: {
+      getElementById: () => root, documentElement: { hasAttribute: () => restoring },
+      body: { appendChild() {} }, get hidden() { return hidden; },
+      addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
+    },
     localStorage: { getItem: (key: string) => key === "scribe.newPageProviderColors" ? providerColors : selected }, matchMedia: () => motion,
     getComputedStyle: () => ({
       backgroundColor: "rgb(8, 8, 10)",
       getPropertyValue: (name: string) => themeColors[name] || "",
     }),
     MutationObserver: Observer, ResizeObserver: Observer,
-    setTimeout: (fn: () => void) => { const id = timers.size + 1; timers.set(id, fn); return id; },
-    clearTimeout: (id: number) => timers.delete(id),
+    setTimeout: (fn: () => void, delay: number) => { const id = ++timerId; (delay === 1200 || delay === 250 ? warmTimers : timers).set(id, fn); return id; },
+    clearTimeout: (id: number) => { timers.delete(id); warmTimers.delete(id); },
   });
   const page = win.createNewPage({
     templates: () => [], builtins: () => [], threads: () => 1, working: () => working,
@@ -101,8 +113,82 @@ function screen(webgl = true) {
     choose: (id: string) => { selected = id; events["scribe:newpage-bg"](); },
     reduce: (value: boolean) => { motion.matches = value; motionChange(); },
     running: () => running,
+    effects, warmTimers,
+    warm: () => { for (const [id, fn] of [...warmTimers]) { warmTimers.delete(id); fn(); } },
+    restored: () => { restoring = false; events["scribe:restored"](); },
+    visibility: (value: boolean) => { hidden = value; events.visibilitychange(); },
   };
 }
+
+test("warmup waits for restoration, reuses one prepared effect and replenishes without animating it", () => {
+  const s = screen(true, true);
+  assert.equal(s.warmTimers.size, 0);
+  assert.equal(s.shaders.length, 0);
+  s.choose("nebula,aurora");
+  s.restored();
+  assert.equal(s.warmTimers.size, 1);
+  assert.equal(s.shaders.length, 0);
+  s.warm();
+  assert.equal(s.shaders.length, 1);
+  assert.equal(s.draws.length, 1);
+  assert.equal(s.running(), false);
+  const first = s.effects[0];
+  first.ready();
+  assert.equal(s.classes.has("gl"), false);
+  s.page.render({ id: "first" });
+  assert.equal(s.shaders.length, 1);
+  assert.equal(s.classes.has("gl-warm"), true);
+  assert.equal(first.destroyed, false);
+  const firstShader = s.shaders[0];
+  s.warm();
+  assert.equal(s.shaders.length, 2);
+  assert.notEqual(s.shaders[1], firstShader);
+  s.effects[1].ready();
+  s.page.render({ id: "second" });
+  assert.equal(s.shaders.length, 2);
+  assert.equal(first.destroyed, true);
+  assert.equal(s.classes.has("gl-warm"), true);
+  s.page.render(null);
+  assert.equal(s.running(), false);
+  s.warm();
+  assert.equal(s.shaders.length, 3);
+  assert.ok(s.effects.filter(effect => !effect.destroyed).length <= 2);
+});
+
+test("warmup defers while hidden, discards disabled effects and reuses a single selected style", () => {
+  const s = screen();
+  s.visibility(true);
+  s.warm();
+  assert.equal(s.shaders.length, 0);
+  s.visibility(false);
+  s.warm();
+  const stale = s.effects[0];
+  s.choose("aurora");
+  s.warm();
+  assert.equal(stale.destroyed, true);
+  assert.equal(s.shaders.length, 2);
+  s.effects[1].ready();
+  s.page.render({ id: "first" });
+  s.warm();
+  s.page.render({ id: "second" });
+  s.warm();
+  assert.equal(s.shaders.length, 2);
+});
+
+test("failed warmups keep the fallback and a cold shader completed while hidden is ready on return", () => {
+  const s = screen();
+  s.warm();
+  s.effects[0].fail();
+  s.page.render({ id: "draft" });
+  assert.equal(s.effects[0].destroyed, true);
+  assert.equal(s.classes.has("gl"), false);
+  s.page.render(null);
+  s.effects[1].ready();
+  assert.equal(s.classes.has("gl"), false);
+  s.page.render({ id: "draft" });
+  assert.equal(s.shaders.length, 2);
+  assert.equal(s.classes.has("gl-warm"), true);
+});
 
 test("replacement waits for load, survives rerenders and stops the backdrop after fading", async () => {
   const s = screen();

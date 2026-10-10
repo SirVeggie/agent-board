@@ -4,6 +4,61 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
+test("New page warms one real shader after restoration and shows it immediately on use", async () => {
+  const browser = process.env.SCRIBE_TEST_CHROMIUM
+    ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+    : await launchChromium({ headless: true, args: [], purpose: "New page warmup test" });
+  try {
+    const page = await browser.newPage();
+    const shell = fs.readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+    const screen = shell.slice(shell.indexOf('<div id="newpage"'), shell.indexOf('<div id="frames"'));
+    await page.route("http://warmup.test/", route => route.fulfill({ contentType: "text/html", body: `<html data-restoring><body><main style="width:900px;height:600px">${screen}</main></body></html>` }));
+    await page.goto("http://warmup.test/");
+    await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") });
+    await page.addScriptTag({ content: "window.__name = value => value; localStorage.setItem('scribe.newPageBackgrounds', 'aurora,caustics');" });
+    for (const name of ["glfx.js", "newpage.js"]) {
+      await page.addScriptTag({ content: fs.readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8") });
+    }
+    await page.evaluate(() => {
+      const w = window as any;
+      const create = w.scribeGL.create;
+      w.created = 0;
+      w.scribeGL.create = (...args: any[]) => { w.created++; return create(...args); };
+      w.newPage = w.createNewPage({ templates: () => [], builtins: () => [], threads: () => 0, working: () => false, openChat() {} });
+    });
+    assert.equal(await page.evaluate(() => (window as any).created), 0);
+    await page.evaluate(() => { document.documentElement.removeAttribute("data-restoring"); dispatchEvent(new Event("scribe:restored")); });
+    await page.waitForFunction(() => document.querySelector('body > canvas[data-ready="1"]'));
+    const first = await page.evaluate(() => {
+      const w = window as any;
+      w.prepared = document.querySelector("body > canvas");
+      w.newPage.render({ id: "first" });
+      const root = document.querySelector("#newpage")!;
+      const canvas = root.querySelector("canvas")!;
+      return { reused: canvas === w.prepared, created: w.created, width: canvas.width, opacity: getComputedStyle(canvas).opacity, animation: getComputedStyle(canvas).animationName };
+    });
+    assert.equal(first.reused, true);
+    assert.equal(first.created, 1);
+    assert.ok(first.width > 64, "first visible draw resizes the prepared shader");
+    assert.equal(first.opacity, "1");
+    assert.equal(first.animation, "none");
+    await page.waitForFunction(() => document.querySelector('body > canvas[data-ready="1"]'));
+    assert.equal(await page.evaluate(() => {
+      const w = window as any;
+      const prepared = document.querySelector("body > canvas");
+      w.newPage.render({ id: "second" });
+      return document.querySelector("#newpage canvas") === prepared && w.created === 2 && document.querySelectorAll("canvas").length === 1;
+    }), true);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await page.evaluate(() => {
+      const w = window as any;
+      w.newPage.render(null);
+      w.newPage.render({ id: "second" });
+      return getComputedStyle(document.querySelector("#newpage canvas")!).opacity;
+    }), "1");
+  } finally { await browser.close(); }
+});
+
 test("effects wait for visible restored UI, cancel queued work, and keep fallback on failure", async () => {
   const browser = process.env.SCRIBE_TEST_CHROMIUM
     ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
