@@ -2616,6 +2616,20 @@
         case "notice": {
           const n = el("div", `ag-notice ${it.level}`);
           n.append(el("span", null, it.text));
+          if (it.level === "error" && /^(Folder not found|Not a folder|Cannot access folder): /.test(it.text)) {
+            const recovery = button("Choose folder", "ag-btn small", async () => {
+              try {
+                if (openWorktree(this.thread())) {
+                  await this.finishWorktree("leave");
+                  if (openWorktree(this.thread())) return;
+                }
+                await this.pickOtherWorkspace();
+              } catch (err) {
+                notice(err.message);
+              }
+            });
+            n.append(document.createTextNode(" "), recovery);
+          }
           return n;
         }
         default:

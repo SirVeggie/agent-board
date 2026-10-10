@@ -111,6 +111,19 @@ function wantsWorktree(thread: Thread): boolean {
   return Boolean(thread.useWorktree && thread.cwd && (thread.mode === "code" || thread.mode === "plan") && !openWorktree(thread));
 }
 
+/** Pages mode and folderless threads run in Scribe's scratch folder. */
+function workspaceFolderError(thread: Thread): string | null {
+  if (thread.mode === "board" || !thread.cwd) return null;
+  try {
+    if (!fs.statSync(thread.cwd).isDirectory()) return `Not a folder: ${thread.cwd}`;
+    return null;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return `Folder not found: ${thread.cwd}`;
+    return `Cannot access folder: ${thread.cwd}: ${(err as Error).message}`;
+  }
+}
+
 type Pending =
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
   | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
@@ -816,6 +829,7 @@ export class AgentHost {
   async warm(id: string): Promise<void> {
     const thread = this.requireThread(id);
     if (this.runs.has(id) || thread.archived) return;
+    if (workspaceFolderError(thread)) return;
     // Its session is set up on the first turn, from the thread it was forked from.
     if (thread.fork) return;
     // The session would start in the main checkout and restart once the worktree is made.
@@ -828,6 +842,7 @@ export class AgentHost {
   /** Warm a spare session for a thread the user is about to start with these settings. */
   warmDraft(input: Partial<Thread> & { scope?: ThreadScope }): void {
     const draft = this.draftThread(input);
+    if (workspaceFolderError(draft)) return;
     if (wantsWorktree(draft)) return;
     this.agent(draft.provider).prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
   }
@@ -2144,14 +2159,15 @@ export class AgentHost {
       this.db.setSetting(`checkpoint:${turn.id}`, { html: pageTab.html, revision: pageTab.revision });
     }
 
-    let setupError: string | null = null;
+    let setupError = workspaceFolderError(thread);
     let reopened = "";
-    if (wantsWorktree(thread) && !run.cancelled) {
+    if (wantsWorktree(thread) && !run.cancelled && !setupError) {
       try {
         ({ thread, reopened } = await this.makeWorktree(threadId, turn.id));
       } catch (err) {
         setupError = `Could not make the worktree: ${(err as Error).message}`;
       }
+      setupError ??= workspaceFolderError(thread);
     }
 
     const worktree = openWorktree(thread);
@@ -2259,11 +2275,11 @@ export class AgentHost {
     turn.status = result.status;
     turn.endedAt = Date.now();
     const rewound = this.threads.get(threadId);
-    if (rewound?.rewind && result.status !== "cancelled") {
+    if (rewound?.rewind && result.status !== "cancelled" && !setupError) {
       delete rewound.rewind;
       this.db.saveThread(rewound);
     }
-    if (rewound?.fork && result.status !== "cancelled") {
+    if (rewound?.fork && result.status !== "cancelled" && !setupError) {
       delete rewound.fork;
       this.db.deleteSetting(`fork:${threadId}`);
       this.db.saveThread(rewound);
