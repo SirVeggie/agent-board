@@ -119,3 +119,53 @@ The desktop app was not profiled. Initial HTTP interception experiments could
 not connect WebSocket; their timings were excluded from the final dataset.
 Browser and contexts are closed on exit; content-origin authorization was not
 bypassed. No production behavior changes were made.
+
+## Implementation after approval
+
+The user requested the recommended fixes on #418. Implemented:
+
+- Graphics handles are lazy: hidden canvases open no WebGL contexts. Shown
+  effects wait until the snapshot is applied and the restored shell can paint.
+  CSS visuals remain until the shader is ready. Closing an effect cancels queued
+  initialization and releases any compilation already underway.
+- Visible shaders use `KHR_parallel_shader_compile` where supported, polling
+  completion before reading link status. Unsupported browsers retain synchronous
+  compilation, limited to effects actually shown after restoration. See the
+  [Khronos extension specification](https://registry.khronos.org/webgl/extensions/KHR_parallel_shader_compile/).
+- The initial view says “Restoring your pages…” until saved tabs arrive. A slow
+  or unavailable connection retries automatically and offers Retry connection.
+  The empty page appears only after a successful snapshot confirms no selection.
+- Boot and connection share agent startup data. Model requests still run in
+  parallel, but their results trigger one render rather than one per provider.
+- Shell asset URLs receive content hashes. Matching versions are cached as
+  immutable; unversioned/old versions revalidate. HTML stays no-store so changed
+  bytes produce new URLs. JS/CSS and vendor bundles are gzip-compressed.
+- Google Fonts CSS is preloaded and applied after download rather than blocking
+  the shell's first render. Existing font selection and fallback remain.
+
+Final six-sample probe against an isolated, sanitized copy of the live data:
+
+| Tab DOM restoration | Normal | WebGL skipped |
+| --- | ---: | ---: |
+| Initial navigation | 201 ms | 175 ms |
+| Reload 1 | 69 ms | 87 ms |
+| Reload 2 | 54 ms | 53 ms |
+
+The initial normal sample initialized four visible effects and no hidden ones.
+Its only observed long task was 63 ms. Orb shaders took approximately 1.5 seconds
+to become ready asynchronously, with initialization calls themselves taking
+10–12 ms. Initial context creation for the title bar still took 59 ms. GPU work
+is reduced and no longer synchronously awaited where the extension is supported;
+GPU contention with video and desktop WebView2 remain to be measured.
+
+Raw data: `startup-profile-418-after.jsonl`. The copied database was newer than
+the original investigation's dataset and both runs share browser-process caches;
+these observations are not a controlled benchmark or guaranteed speedup.
+The selected page again returned 403 in a fresh profile, so reported times remain
+tab DOM restoration rather than page-content readiness.
+
+Validation: TypeScript build, lazy/cancelled/failed graphics browser tests, restoring
+screen timeout and retry recovery, static caching/version invalidation/compression,
+orb animation/settings/fallback lifecycle, New page transitions/palettes/reduced
+motion, and split/peek pane regression tests passed. New page was also opened in
+the scratch browser and its shader and template choices appeared correctly.

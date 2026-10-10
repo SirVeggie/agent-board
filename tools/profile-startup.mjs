@@ -29,7 +29,9 @@ function instrument(mode) {
     value.create = function(canvas, ...args) {
       const start = performance.now();
       const result = mode === 'no-webgl' ? null : original.call(this, canvas, ...args);
-      p.gl.push({ canvas: canvas.className, start, ms: performance.now() - start, ok: Boolean(result), hidden: !canvas.clientWidth || !canvas.clientHeight });
+      const record = { canvas: canvas.className, start, ms: performance.now() - start, ok: Boolean(result), hidden: !canvas.clientWidth || !canvas.clientHeight, async: Boolean(result?.then) };
+      p.gl.push(record);
+      Promise.resolve(result).then(fx => { record.readyMs = performance.now() - start; record.ok = Boolean(fx); });
       return result;
     };
   } });
@@ -73,6 +75,7 @@ try {
         throw error;
       });
       await page.waitForTimeout(750);
+      await page.waitForFunction(() => window.startupProfile.gl.every(effect => effect.readyMs !== undefined), null, { timeout: 10000 });
       const result = await page.evaluate(() => {
         const p = window.startupProfile;
         const nav = performance.getEntriesByType('navigation')[0];
