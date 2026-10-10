@@ -20,16 +20,22 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     page.on("pageerror", error => errors.push(error.message));
     await page.route("http://orb.local/**", route => route.fulfill({ contentType: "text/html", body: '<button id="dock-appearance">Customize</button>' }));
     await page.goto("http://orb.local/");
+    // Saved settings from the earlier experiment must migrate without losing palettes.
+    await page.evaluate(() => localStorage.setItem("scribe.dock-appearance.v1", JSON.stringify({
+      cursor: { style: "flares", bleed: "dye", colors: ["#061a33", "#0b5e8a", "#22b8cf", "#d6f6ff"] },
+      pi: { style: "ring", bleed: "circuit" },
+    })));
     for (const name of ["app.css", "agent.css", "orb.css"]) await page.addStyleTag({ content: fs.readFileSync(new URL("../public/" + name, import.meta.url), "utf8") });
     await page.addScriptTag({ content: `
       window.draws = 0; window.shaderErrors = []; window.pixelChecks = [];
       const draw = WebGLRenderingContext.prototype.drawArrays;
       WebGLRenderingContext.prototype.drawArrays = function(...args) {
         window.draws++; draw.apply(this, args);
-        if (this.canvas.className === "dock-orb-canvas") {
+        if (this.canvas.className === "dock-orb-canvas" || this.canvas.className === "dock-orb-surface") {
           const pixels = new Uint8Array(this.drawingBufferWidth * this.drawingBufferHeight * 4);
           this.readPixels(0, 0, this.drawingBufferWidth, this.drawingBufferHeight, this.RGBA, this.UNSIGNED_BYTE, pixels);
-          window.pixelChecks.push(pixels.some(v => v > 0));
+          this.canvas.lastPixels = Array.from(pixels);
+          if (this.canvas.className === "dock-orb-canvas") window.pixelChecks.push(pixels.some(v => v > 0));
         }
       };
       const compile = WebGLRenderingContext.prototype.compileShader;
@@ -40,11 +46,21 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     assert.equal(await page.locator(".dock-orb").evaluate(n => n.classList.contains("gl")), true);
     if (process.env.SCRIBE_ORB_SCREENSHOT) await page.screenshot({ path: process.env.SCRIBE_ORB_SCREENSHOT });
     const selects = page.locator("dialog select");
-    for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone", "flares", "galaxy"]) {
+    assert.equal(await selects.nth(1).locator('option[value="flares"]').count(), 0);
+    assert.equal(await selects.nth(3).locator('option[value="circuit"]').count(), 0);
+    await selects.nth(0).selectOption("cursor");
+    assert.equal(await selects.nth(1).inputValue(), "mesh");
+    assert.equal(await selects.nth(3).inputValue(), "flares");
+    await selects.nth(0).selectOption("pi");
+    assert.equal(await selects.nth(3).inputValue(), "none");
+    await selects.nth(0).selectOption("claude");
+    for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone", "galaxy"]) {
       await selects.nth(1).selectOption(shape);
       for (const symbol of ["none", "glow", "traced", "crt", "dots"]) await selects.nth(2).selectOption(symbol);
     }
-    for (const effect of ["none", "dye", "flares", "galaxy", "circuit"]) await selects.nth(3).selectOption(effect);
+    for (const effect of ["none", "dye", "flares", "galaxy", "glow", "breathing", "waveDots", "pulse", "motes"]) {
+      await selects.nth(3).selectOption(effect);
+    }
     assert.deepEqual(await page.evaluate(() => (window as any).shaderErrors), []);
     assert.ok(await page.evaluate(() => (window as any).pixelChecks.every(Boolean)));
     // Idle motion continues with the pointer away; hiding the chat stops all drawing.
@@ -76,6 +92,52 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     const off = await page.evaluate(() => (window as any).draws);
     await page.waitForTimeout(120);
     assert.equal(await page.evaluate(() => (window as any).draws), off);
+    // Icon colour and size are independent of the shape and survive changing its style.
+    for (const palette of ["white", "amber", "ink"]) await page.getByLabel("Icon palette", { exact: true }).selectOption(palette);
+    await page.getByLabel("Icon palette", { exact: true }).selectOption("ice");
+    const sizeControl = page.getByRole("slider", { name: "Icon size" });
+    await sizeControl.focus();
+    await sizeControl.press("End");
+    await sizeControl.press("ArrowLeft");
+    await sizeControl.press("ArrowLeft");
+    await selects.nth(2).selectOption("glow");
+    await selects.nth(1).selectOption("mesh");
+    const capture = async (): Promise<number[]> => page.locator(".dock-orb-canvas").evaluate(canvas => (canvas as any).lastPixels);
+    // Every shape has translucent pixels outside its 30px silhouette for a soft edge.
+    for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone", "galaxy"]) {
+      await selects.nth(1).selectOption(shape);
+      const pixels = await capture();
+      assert.ok(pixels[(38 * 76 + 69) * 4 + 3] > 0, shape + " edge glow");
+    }
+    await selects.nth(1).selectOption("mesh");
+    const meshIcon = await capture();
+    await selects.nth(1).selectOption("galaxy");
+    const galaxyIcon = await capture();
+    // Bright white icon pixels keep the same footprint on the larger galaxy coordinate domain.
+    const bright = (pixels: number[]) => pixels.reduce((n, v, i) => n + (i % 4 === 0 && v > 200 && pixels[i+1] > 200 && pixels[i+2] > 200 ? 1 : 0), 0);
+    assert.ok(bright(galaxyIcon) > 10);
+    assert.ok(Math.abs(bright(meshIcon) - bright(galaxyIcon)) < 20);
+    // Surface pixels verify a steady glow and genuinely moving waves, gradients and motes.
+    for (const effect of ["glow", "breathing", "waveDots", "pulse", "motes"]) {
+      await selects.nth(3).selectOption(effect);
+      const before: number[] = await page.locator(".dock-orb-surface").evaluate(canvas => (canvas as any).lastPixels);
+      assert.ok(before.some(v => v > 0), effect + " renders");
+      await page.evaluate(() => { document.documentElement.classList.remove("no-ui-fx"); window.dispatchEvent(new Event("scribe:ui-fx")); });
+      await page.waitForTimeout(160);
+      await page.evaluate(() => { document.documentElement.classList.add("no-ui-fx"); window.dispatchEvent(new Event("scribe:ui-fx")); });
+      const after: number[] = await page.locator(".dock-orb-surface").evaluate(canvas => (canvas as any).lastPixels);
+      if (effect === "glow") assert.deepEqual(after, before);
+      else assert.notDeepEqual(after, before, effect + " animates");
+    }
+    if (process.env.SCRIBE_ORB_SCREENSHOT) {
+      await selects.nth(1).selectOption("mesh");
+      await selects.nth(4).selectOption("ocean");
+      for (const effect of ["flares", "glow", "breathing", "waveDots", "pulse", "motes"]) {
+        await selects.nth(3).selectOption(effect);
+        await page.screenshot({ path: process.env.SCRIBE_ORB_SCREENSHOT.replace(/\.png$/, "-" + effect + ".png") });
+      }
+      await selects.nth(1).selectOption("galaxy");
+    }
     await selects.nth(0).selectOption("codex");
     await selects.nth(1).selectOption("ring");
     await selects.nth(4).selectOption("ember");
@@ -84,9 +146,17 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     assert.equal(saved.codex.style, "ring");
     assert.equal(saved.codex.colors[1], "#a8321a");
     assert.equal(saved.claude.style, "galaxy");
+    assert.equal(saved.claude.iconSize, 1);
+    assert.deepEqual(saved.claude.iconColors, ["#7ee7ff", "#ffffff"]);
+    assert.equal(saved.cursor.bleed, "flares");
+    assert.equal(saved.pi.bleed, "none");
     await page.getByRole("button", { name: "Customize", exact: true }).click();
     await selects.nth(0).selectOption("codex");
     assert.equal(await selects.nth(1).inputValue(), "ring");
+    await selects.nth(0).selectOption("claude");
+    assert.equal(await page.getByRole("slider", { name: "Icon size" }).inputValue(), "100");
+    assert.equal(await page.getByLabel("Icon palette", { exact: true }).inputValue(), "ice");
+    await selects.nth(0).selectOption("codex");
     await selects.nth(1).selectOption("plasma");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("scribe.dock-appearance.v1")!).codex.style), "ring");

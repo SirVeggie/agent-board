@@ -1,4 +1,10 @@
 /* Isolated appearance experiment: surface effects stay behind all composer controls. */
+.dock-orb.gl .dock-orb-canvas {
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  border-radius: 0;
+}
 .dock-orb-surface {
   position: absolute;
   left: 0;
@@ -39,6 +45,9 @@
 }
 .orb-settings-colors { display: flex; gap: 6px; }
 .orb-settings-colors input { width: 36px; height: 30px; padding: 2px; cursor: pointer; }
+.orb-settings-size { display: flex; align-items: center; gap: 8px; }
+.orb-settings-size input { width: 120px; }
+.orb-settings-size output { min-width: 42px; font-size: 12px; text-align: right; }
 .orb-settings-preview { margin: 18px 0 8px; background: var(--dock-surface, var(--bg)); }
 .orb-preview-text { color: var(--muted); align-self: center; font-size: 13px; }
 .orb-settings-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
