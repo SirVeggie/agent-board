@@ -4073,6 +4073,7 @@ button.ag-help:focus-visible {
 button.dock-handle {
   pointer-events: auto;
   position: absolute;
+  overflow: hidden;
   left: 50%;
   bottom: 0;
   transform: translate(-50%, 0);
@@ -4144,11 +4145,12 @@ button.dock-handle.busy .dock-handle-sep {
 }
 
 /* One line at a time; lines stack in one cell so a new step can slide the old one out.
+   Clip at the rounded handle, leaving room around the text for its slide and blur.
    Tight 12px travel. Incoming stays opaque. Outgoing opacity eases out (fades early)
    with a 4px smear — pick b4-out from the blur × opacity matrix. */
 .dock-handle-text {
   display: grid;
-  overflow: hidden;
+  overflow: visible;
   align-items: center;
   min-width: 0;
   height: 20px;
