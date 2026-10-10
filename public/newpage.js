@@ -300,6 +300,7 @@ return glow(c,e);}`;
    */
   window.createNewPage = (host) => {
     const root = document.getElementById("newpage");
+    const body = root.querySelector(".newpage-body");
     const lede = root.querySelector(".newpage-lede");
     const askBtn = root.querySelector(".newpage-ask");
     const grid = root.querySelector(".newpage-templates");
@@ -413,12 +414,10 @@ return glow(c,e);}`;
       drawn = key;
       root.classList.toggle("has-thread", threads > 0);
       root.classList.toggle("working", Boolean(working));
-      lede.textContent = threads
-        ? working
-          ? "The agent is working on it. What it makes takes this page's place."
-          : "Ask the agent in the chat. The page it makes takes this page's place."
-        : "Start from a template, or ask the agent to make something here.";
-      askBtn.querySelector("span").textContent = threads ? "Open the chat" : "Ask the agent";
+      body.inert = threads > 0;
+      // Keep the existing text and template cards in place while they fade away.
+      if (threads > 0) return;
+      lede.textContent = "Start from a template, or ask the agent to make something here.";
       gridHead.hidden = !list.length;
       grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
     }
@@ -431,8 +430,9 @@ return glow(c,e);}`;
     return {
       render,
       replace,
-      /** Focus the first template, or the chat button once the templates are gone. */
+      /** Focus a starting control only while the page has no thread. */
       focus() {
+        if (!current || host.threads(current.id) > 0) return;
         (grid.querySelector("button") || askBtn).focus({ preventScroll: true });
       },
     };

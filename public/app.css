@@ -4387,10 +4387,25 @@ main.blank-page #frames iframe:not(.inactive) {
   flex-direction: column;
   align-items: center;
   text-align: center;
+  opacity: 1;
+  filter: blur(0);
+  visibility: visible;
+  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s;
 }
 
 .newpage.has-thread .newpage-body {
-  display: none;
+  opacity: 0;
+  filter: blur(12px);
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s 420ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .newpage .newpage-body,
+  .newpage.has-thread .newpage-body {
+    transition: none;
+  }
 }
 
 .newpage-title {
