@@ -22,7 +22,7 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
   try {
     assert.equal((await fetch(`${url}/semantic?q=hello`)).status, 503);
     assert.equal(fs.existsSync(path.join(root, "search.sqlite")), false);
-    for (const query of ["q=", "q=hello&scope=wrong", "q=hello&limit=0", "q=hello&limit=9", "q=hello&limit=NaN", "q=" + "x".repeat(501)]) assert.equal((await fetch(`${url}/semantic?${query}`)).status, 400);
+    for (const query of ["q=", "q=hello&scope=wrong", "q=hello&limit=0", "q=hello&limit=31", "q=hello&limit=NaN", "q=" + "x".repeat(501)]) assert.equal((await fetch(`${url}/semantic?${query}`)).status, 400);
     const folder = searchPackDir(root);
     const runtime = `
       export const env = {};
@@ -60,6 +60,10 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
     assert.ok(agent.hits.every((h: { id: string }) => h.id !== hidden.id));
     const card = agent.hits.find((h: { id: string }) => h.id === board.id);
     assert.equal(card.anchor, "12"); assert.equal(card.kind, "record"); assert.equal(card.label, "#12 Deep card");
+    // A folder limits the hits to the pages in it; the hidden page stays out for the agent.
+    const inRoot = await fetch(`${url}/semantic?q=hello&scope=chunks&limit=30&folder=${encodeURIComponent("/")}`, { headers: { [CLIENT_HEADER]: AGENT_CLIENT } });
+    assert.deepEqual([...new Set((await inRoot.json()).hits.map((h: { id: string }) => h.id))], [board.id]);
+    assert.equal((await fetch(`${url}/semantic?q=hello&folder=Nowhere`)).status, 404);
     assert.equal(card.score, undefined); assert.equal(card.hash, undefined); assert.equal(card.vec, undefined);
     // Image rows carry the image's URL and the card it sits on, for a text query and for an image as the query.
     assert.equal(status.images, 1);

@@ -14,7 +14,42 @@ import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey } from "./prefs.js";
 import { store } from "../store.js";
-import { AI_QUERY_MAX, aiSearchPrompt, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
+import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
+import { refreshSearchIndex, searchIndex } from "../search/service.js";
+import { chunkPage } from "../search/chunker.js";
+
+type AiPassage = { id: string; digest: string; kind: string; anchor: string | null; headingId: string | null; label: string };
+
+/**
+ * The passages closest to the question, for the palette's `?` search. Null when semantic search is off, has
+ * failed, finds nothing, or has indexed too little of the Library to stand in for every page.
+ */
+async function aiPassages(query: string): Promise<AiPassage[] | null> {
+  try {
+    refreshSearchIndex();
+    const index = searchIndex.status();
+    if (!index.enabled || index.indexedPages < index.totalPages * 0.9) return null;
+    const hits = await searchIndex.query(query, "chunks", (id) => !!store.get(id, "agent"), AI_CHUNKS, false);
+    // The index keeps a 200-character snippet; the chunker gives the passage's own text again.
+    const texts = new Map<string, Map<string, string>>();
+    const passages: AiPassage[] = [];
+    for (const hit of hits) {
+      const tab = store.get(hit.tab_id, "agent");
+      if (!tab) continue;
+      const folder = store.folderPath(tab.folderId);
+      let byKey = texts.get(tab.id);
+      if (!byKey) {
+        byKey = new Map(chunkPage(tab, folder, store.searchDeclaration(tab)).map((chunk) => [chunk.key, chunk.text]));
+        texts.set(tab.id, byKey);
+      }
+      const digest = chunkDigest({ title: tab.title || tab.key, folder }, { kind: hit.kind, label: hit.label, text: byKey.get(hit.chunk_key) ?? hit.snippet });
+      passages.push({ id: tab.id, digest, kind: hit.kind, anchor: hit.anchor, headingId: hit.heading_id, label: hit.label });
+    }
+    return passages.length ? passages : null;
+  } catch {
+    return null;
+  }
+}
 
 function mcpView() {
   const { error, ...file } = readMcpFile();
@@ -60,21 +95,32 @@ export function agentRouter(host: AgentHost): express.Router {
     }))
   );
 
-  // The palette's `?` search (#245): one summarizer call over a digest of every page the agent may see.
+  // The palette's `?` search (#245): one summarizer call over the passages closest to the question (#374), or,
+  // with semantic search off, over a digest of every page the agent may see.
   router.post(
     "/palette-search",
     wrap(async (req, res) => {
       const query = typeof req.body?.query === "string" ? req.body.query.trim().slice(0, AI_QUERY_MAX) : "";
       if (!query) throw new Error("query is required");
-      const pages = digestPages([...store.listOpenTabs("agent"), ...store.listClosedTabs("agent")]);
       const abort = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) abort.abort();
       });
       const started = Date.now();
+      const passages = await aiPassages(query);
+      if (passages) {
+        const { text, model } = await host.summarize(aiChunkPrompt(query, passages.map((p) => p.digest)), abort.signal);
+        const hits = parseAiHits(text, passages.map((p) => p.id)).map(({ id, reason, index }) => {
+          const { kind, anchor, headingId, label } = passages[index];
+          return { id, reason, kind, anchor, headingId, label };
+        });
+        return { hits, model, pages: new Set(passages.map((p) => p.id)).size, chunks: passages.length, ms: Date.now() - started };
+      }
+      const pages = digestPages([...store.listOpenTabs("agent"), ...store.listClosedTabs("agent")]);
       const prompt = aiSearchPrompt(query, pages.map((tab) => pageDigest(tab, store.folderPath(tab.folderId))));
       const { text, model } = await host.summarize(prompt, abort.signal);
-      return { hits: parseAiHits(text, pages.map((tab) => tab.id)), model, pages: pages.length, ms: Date.now() - started };
+      const hits = parseAiHits(text, pages.map((tab) => tab.id)).map(({ id, reason }) => ({ id, reason }));
+      return { hits, model, pages: pages.length, ms: Date.now() - started };
     })
   );
 

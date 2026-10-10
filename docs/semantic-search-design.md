@@ -206,8 +206,8 @@ The weights and the cut-off are first guesses from 28 queries. Keep the query se
 ### Where it shows up
 
 - **Palette (Ctrl+D).** Word matches appear at once, as now. About 150 ms later, semantic hits fill in under a "Related" divider. Enter on a section or card hit opens the page at that section or card. A prefix (default `~`, configurable like `=` and `?`) searches by meaning only.
-- **Ask AI (`?`).** Today it sends the first 300 characters of up to 600 pages. Send the top 30 chunks instead: a smaller prompt that sees content deep in a page.
-- **MCP.** `library_search` takes `mode: "semantic"` and returns chunk hits with their anchors, so an agent can find a card on any board by meaning. With no word match, the result points to it.
+- **Ask AI (`?`).** It sends the 30 chunks closest to the question, each with up to 500 characters of its text: a smaller prompt that sees content deep in a page. A result names the section or card the model picked. With search off, failed, or less than 90% of the pages indexed, it sends the first 300 characters of up to 600 pages, as before (`src/aiSearch.ts`).
+- **MCP.** `library_search` takes `mode: "semantic"` and returns chunk hits with their anchors, so an agent can find a card on any board by meaning. `folder` and `limit` (default 10, at most 30) apply. With no word match and search on, the word search's note points to it.
 - **Page API.** Not in the first phases (as in `docs/classification-api-design.md`).
 
 ### Images

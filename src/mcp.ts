@@ -518,8 +518,12 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "library_search",
-    "Page or search the Library: every page in Scribe, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context.",
+    "Page or search the Library: every page in Scribe, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context. Pass mode: \"semantic\" with a query to search by meaning instead (needs the user's semantic search to be on): describe what you are looking for in a phrase or sentence. It returns hits, best first: the passages (kanban cards, list items, page sections) that fit, each with its page (id, key, title, folder), kind (record, section, or page), label, and snippet. A record's anchor is its id in the page: on a kanban board the card number, for page_action get. A section's headingId is its heading's element id, when it has one. Use it to find a card on any board, or when the words to search for are not known.",
     {
+      mode: z
+        .enum(["words", "semantic"])
+        .optional()
+        .describe("words (default): every word must match. semantic: rank cards, items, and sections by meaning; needs query, ignores offset, limit at most 30 (default 10)."),
       query: z
         .string()
         .optional()
@@ -537,7 +541,51 @@ export async function startMcp(): Promise<void> {
         .describe("Page size. Default 20, maximum 50."),
     },
     { readOnlyHint: true },
-    async ({ query, folder, offset, limit }) => {
+    async ({ mode, query, folder, offset, limit }) => {
+      if (mode === "semantic") {
+        if (!query?.trim()) {
+          return errorResult("mode: \"semantic\" needs a query: describe what you are looking for.");
+        }
+        const max = Math.min(30, Math.max(1, Math.floor(Number(limit) || 10)));
+        const semantic = new URLSearchParams({ q: query.trim().slice(0, 500), scope: "chunks", limit: String(max) });
+        if (folder?.trim()) {
+          semantic.set("folder", folder.trim());
+        }
+        const found = await api("GET", `/api/search/semantic?${semantic.toString()}`);
+        if (found.status === 503) {
+          return errorResult(
+            `Semantic search is not available (${(found.data as ApiError).error || "off"}). The user turns it on under Settings → Search. Use the word search (leave mode out) instead.`
+          );
+        }
+        if (found.status >= 400) {
+          return errorResult((found.data as ApiError).error || `HTTP ${found.status}`);
+        }
+        const result = found.data as {
+          hits: Array<{ id: string; key: string; title: string; folder: string | null; kind: string; anchor: string | null; headingId: string | null; label: string; snippet: string }>;
+          index?: { indexedPages: number; totalPages: number };
+        };
+        const hits = (result.hits ?? []).map((hit) => ({
+          id: hit.id,
+          key: hit.key,
+          title: hit.title,
+          folder: hit.folder,
+          kind: hit.kind,
+          ...(hit.kind === "page" ? {} : { label: hit.label }),
+          ...(hit.kind === "record" && hit.anchor ? { anchor: hit.anchor } : {}),
+          ...(hit.headingId ? { headingId: hit.headingId } : {}),
+          snippet: hit.snippet,
+        }));
+        const index = result.index;
+        const partial = index && index.indexedPages < index.totalPages ? ` The index is still being built (${index.indexedPages} of ${index.totalPages} pages), so pages may be missing.` : "";
+        return jsonResult({
+          hits,
+          returned: hits.length,
+          note:
+            (hits.length
+              ? "Ranked by meaning, best first; only hits close to the best one are listed, at most three per page. A record's anchor is its id in the page (the card number on a kanban board)."
+              : "Nothing fits by meaning.") + partial,
+        });
+      }
       const page = clampLibraryPage(offset, limit);
       const params = new URLSearchParams();
       if (query?.trim()) {
@@ -560,6 +608,14 @@ export async function startMcp(): Promise<void> {
         total: number;
       };
       const searched = Boolean(query?.trim());
+      // No word match: say so when the search by meaning could find it.
+      let semanticHint = "";
+      if (searched && payload.matchCount === 0) {
+        const search = await api("GET", "/api/search/status").catch(() => null);
+        if (search && search.status < 400 && (search.data as { enabled?: boolean }).enabled) {
+          semanticHint = " No page has all of these words. Pass mode: \"semantic\" to search by meaning: it finds cards, items, and sections that fit a description.";
+        }
+      }
       return jsonResult({
         tabs: (payload.tabs ?? []).map((tab) => {
           const dates = withAgentDates(tab);
@@ -570,9 +626,9 @@ export async function startMcp(): Promise<void> {
         matchCount: payload.matchCount,
         total: payload.total,
         note:
-          payload.matchCount === payload.total
+          (payload.matchCount === payload.total
             ? `Returned ${payload.returned} of ${payload.total} pages; ${payload.remaining} after this page.`
-            : `Returned ${payload.returned} of ${payload.matchCount} matches (${payload.total} pages); ${payload.remaining} matches after this page.`,
+            : `Returned ${payload.returned} of ${payload.matchCount} matches (${payload.total} pages); ${payload.remaining} matches after this page.`) + semanticHint,
       });
     }
   );

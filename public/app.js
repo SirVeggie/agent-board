@@ -4055,7 +4055,11 @@
     for (const hit of ask.hits || []) {
       const tab = findAnyTab(hit.id);
       if (tab) {
-        rows.push({ ...tab, open: state.tabs.some((item) => item.id === tab.id), snippet: hit.reason });
+        // With semantic search on, a hit names the section or card the model picked.
+        const anchor =
+          hit.kind === "section" ? hit.headingId || (Number(hit.anchor) > 0 ? `scribe-section:${hit.anchor}` : "") : "";
+        const matchLabel = hit.label && hit.label !== tab.title ? hit.label : "";
+        rows.push({ ...tab, open: state.tabs.some((item) => item.id === tab.id), snippet: hit.reason, matchLabel, anchor });
       }
     }
     const took = ask.ms ? ` · ${(ask.ms / 1000).toFixed(1)} s` : "";

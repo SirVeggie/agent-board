@@ -11,6 +11,8 @@ import { pageAssetUrl } from "../pageAssets.js";
 import type { ImageHit, ScoredHit } from "./indexer.js";
 
 const MAX_QUERY_IMAGE_BYTES = 20 * 1024 * 1024;
+/** The palette asks for 8; an agent's library_search may ask for more. */
+const MAX_HITS = 30;
 
 export function searchRouter(): Router {
   const router = Router();
@@ -38,14 +40,21 @@ export function searchRouter(): Router {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const scope = req.query.scope ?? "pages";
     const limit = req.query.limit === undefined ? 8 : Number(req.query.limit);
-    if (!q || q.length > 500 || !["pages", "chunks", "images"].includes(String(scope)) || !Number.isInteger(limit) || limit < 1 || limit > 8) {
-      res.status(400).json({ error: "Use q (1–500 characters), scope=pages|chunks|images and limit=1–8" }); return;
+    const folderPath = typeof req.query.folder === "string" ? req.query.folder.trim() : "";
+    if (!q || q.length > 500 || !["pages", "chunks", "images"].includes(String(scope)) || !Number.isInteger(limit) || limit < 1 || limit > MAX_HITS) {
+      res.status(400).json({ error: `Use q (1–500 characters), scope=pages|chunks|images and limit=1–${MAX_HITS}` }); return;
     }
     try {
       refreshSearchIndex();
       if (!searchIndex.status().enabled) { res.status(503).json({ error: "Semantic search is unavailable", ...status() }); return; }
       const viewer = viewerOf(req);
-      const visible = (id: string) => !!store.get(id, viewer);
+      let visible = (id: string) => !!store.get(id, viewer);
+      if (folderPath) {
+        const folderId = folderPath === "/" ? null : store.findFolderPath(folderPath);
+        if (folderId === undefined) { res.status(404).json({ error: `folder not found: ${folderPath}` }); return; }
+        const inFolder = new Set(store.searchLibrary("", { folderId, viewer, limit: Number.MAX_SAFE_INTEGER }).hits.map(hit => hit.tab.id));
+        visible = id => inFolder.has(id);
+      }
       const hits = scope === "images" ? await searchIndex.queryImages(q, visible, limit) : await searchIndex.query(q, scope as "pages" | "chunks", visible, limit);
       res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() });
     } catch (err) { res.status(503).json({ error: (err as Error).message }); }
