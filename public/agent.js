@@ -953,7 +953,7 @@
    * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
    * Opening again from the anchor whose menu is already open closes it instead.
    */
-  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search" } = {}) {
+  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity } = {}) {
     // A re-render can swap the menu's button for a new one of the same kind while the menu stays open.
     if (openMenuEl && (openMenuAnchor === anchor || (!openMenuAnchor?.isConnected && openMenuAnchor?.className === anchor.className))) {
       closeMenu();
@@ -964,6 +964,7 @@
     menu.style.width = `${width}px`;
     const list = el("div", "ag-menu-list");
     let filter = "";
+    let visibleLimit = pageSize;
     let active = 0;
     let lastPointer = { x: -1, y: -1 };
     const rows = () => [...list.querySelectorAll(".ag-menu-item:not(:disabled)")];
@@ -977,20 +978,28 @@
     const renderItems = () => {
       list.replaceChildren();
       const q = filter.trim().toLowerCase();
+      const matches = items.filter((item) => item.header || item.separator || !q ||
+        `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q));
+      let count = 0;
+      const visible = matches.filter((item) => item.header || item.separator || item.fixed || ++count <= visibleLimit);
+      if (count > visibleLimit) visible.push({
+        label: "Show more",
+        more: true,
+        keep: true,
+        run: () => { visibleLimit += pageSize; },
+      });
       let lastHeader = null;
-      for (const item of items) {
+      for (const item of visible) {
         if (item.header) {
           lastHeader = el("div", "ag-menu-head", item.header);
           if (item.provider) lastHeader.prepend(providerIcon(item.provider));
-          if (!q) list.append(lastHeader);
           continue;
         }
         if (item.separator) {
           if (!q) list.append(el("div", "ag-menu-sep"));
           continue;
         }
-        if (q && !`${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q)) continue;
-        if (q && lastHeader && !lastHeader.isConnected) list.append(lastHeader);
+        if (!item.more && lastHeader && !lastHeader.isConnected) list.append(lastHeader);
         const row = el("button", `ag-menu-item${item.checked ? " on" : ""}${item.danger ? " danger" : ""}`);
         row.type = "button";
         row.disabled = Boolean(item.disabled);
@@ -1054,6 +1063,7 @@
         active = 0;
         highlight();
       }
+      if (menu.isConnected) positionMenu();
     };
     if (search) {
       const input = el("input", "ag-menu-search");
@@ -1061,6 +1071,7 @@
       input.placeholder = placeholder;
       input.addEventListener("input", () => {
         filter = input.value;
+        visibleLimit = pageSize;
         renderItems();
       });
       input.addEventListener("keydown", (event) => {
@@ -1084,14 +1095,17 @@
     menu.append(list);
     renderItems();
     document.body.append(menu);
-    const rect = anchor.getBoundingClientRect();
-    const mh = Math.min(menu.offsetHeight, window.innerHeight - 24);
-    let top = rect.bottom + 6;
-    if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
-    let left = Math.min(rect.left, window.innerWidth - width - 8);
-    menu.style.top = `${Math.max(8, top)}px`;
-    menu.style.left = `${Math.max(8, left)}px`;
-    menu.style.maxHeight = `${window.innerHeight - 24}px`;
+    function positionMenu() {
+      menu.style.maxHeight = `${window.innerHeight - 24}px`;
+      const rect = anchor.getBoundingClientRect();
+      const mh = Math.min(menu.offsetHeight, window.innerHeight - 24);
+      let top = rect.bottom + 6;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
+      const left = Math.min(rect.left, window.innerWidth - width - 8);
+      menu.style.top = `${Math.max(8, top)}px`;
+      menu.style.left = `${Math.max(8, left)}px`;
+    }
+    positionMenu();
     openMenuEl = menu;
     openMenuAnchor = anchor;
     setTimeout(() => document.addEventListener("mousedown", onMenuOutside, true), 0);
@@ -5441,14 +5455,14 @@
       const tab = activeTab();
       const threads = [...S.threads.values()].filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
       const pageThreads = tab ? threads.filter((t) => t.scope.kind === "page" && t.scope.ref === tab.id) : [];
-      const others = threads.filter((t) => !pageThreads.includes(t)).slice(0, 12);
+      const others = threads.filter((t) => !pageThreads.includes(t));
       const items = [];
-      items.push({ label: "New thread", icon: "plus", run: () => { if (tab) clearDockPick(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
+      items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) clearDockPick(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
       for (const t of pageThreads) items.push({ label: t.title, detail: threadWhenText(t), checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
       if (others.length) items.push({ header: "Recent" });
       for (const t of others) items.push({ label: t.title, detail: `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`, checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
-      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search threads" });
+      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10 });
     },
     pick(id) {
       this.remember(id);
