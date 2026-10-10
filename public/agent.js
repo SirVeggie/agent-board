@@ -2349,9 +2349,7 @@
           if (this.variant === "dock") dock.renderTitle();
           this.focus();
         }, tip);
-        const text = el("span", "ag-preset-text");
-        text.append(el("b", null, title), el("span", null, detail));
-        b.append(icon(ico), text);
+        b.append(icon(ico), el("b", null, title), el("span", "ag-preset-detail", detail));
         b.setAttribute("aria-pressed", String(on));
         list.append(b);
       };
@@ -2359,15 +2357,17 @@
       if (tab) {
         const scope = { kind: "page", ref: tab.id };
         const on = sameScope(s.scope, scope) && s.mode === PAGE_PRESET.mode && s.web === PAGE_PRESET.web;
-        row("page", tab.title, "This page", "Pages mode, full web access, scoped to this page", on, scope, PAGE_PRESET);
+        row("page", tab.title, "Pages · full web", "This page: Pages mode, full web access, scoped to this page", on, scope, PAGE_PRESET);
       }
-      for (const dir of presetWorkspaces()) {
+      const dirs = presetWorkspaces();
+      if (dirs.length) list.append(el("div", "ag-preset-sep", "Workspaces"));
+      for (const dir of dirs) {
         const on =
           s.scope.kind === "global" &&
           dirKey(s.cwd) === dirKey(dir) &&
           !s.useWorktree &&
           Object.keys(WORKSPACE_PRESET).every((key) => key === "useWorktree" || s[key] === WORKSPACE_PRESET[key]);
-        row("box", R.basename(dir) || dir, "Workspace", `Code mode, Auto review, limited web, no worktree\n${dir}`, on, { kind: "global", ref: null }, { ...WORKSPACE_PRESET, cwd: dir });
+        row("box", R.basename(dir) || dir, "Code · auto review", `Code mode, Auto review, limited web, no worktree\n${dir}`, on, { kind: "global", ref: null }, { ...WORKSPACE_PRESET, cwd: dir });
       }
       return list;
     }

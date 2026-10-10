@@ -506,49 +506,96 @@ button.ag-stat-chip:hover {
 
 .ag-presets {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 1px;
   margin-top: 14px;
   width: 100%;
   max-width: 340px;
 }
 
+/* Plain list rows: no card, only a soft fill on hover and the accent on the one in use. */
 button.ag-preset {
+  position: relative;
   height: auto;
-  min-height: 34px;
-  max-width: 100%;
-  padding: 5px 10px;
-  gap: 7px;
+  min-height: 30px;
+  padding: 5px 10px 5px 12px;
+  gap: 8px;
+  justify-content: flex-start;
   text-align: left;
-  color: var(--text);
-  background: var(--ag-card);
-  box-shadow: inset 0 0 0 1px var(--ag-card-border);
-}
-
-button.ag-preset.on {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent-ring);
-}
-
-.ag-preset-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: 1.25;
-}
-
-.ag-preset-text b {
-  font-weight: 600;
   font-size: 12.5px;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  border-radius: 7px;
+}
+
+button.ag-preset:hover,
+button.ag-preset:focus-visible {
+  background: rgba(var(--lift-rgb), 0.06);
+}
+
+button.ag-preset .ag-ico {
+  color: var(--muted);
+}
+
+button.ag-preset b {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.5;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ag-preset-text span {
+.ag-preset-detail {
+  flex: none;
   font-size: 11px;
   color: var(--muted);
+  opacity: 0.75;
+}
+
+button.ag-preset.on b,
+button.ag-preset.on .ag-ico {
+  color: var(--accent);
+}
+
+button.ag-preset.on::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  transform: translateY(-50%);
+  background: var(--accent);
+  box-shadow: var(--accent-glow);
+}
+
+/* The label sits in a rule that fades out to both sides. */
+.ag-preset-sep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ag-preset-sep::before,
+.ag-preset-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(var(--lift-rgb), 0.16));
+}
+
+.ag-preset-sep::after {
+  transform: scaleX(-1);
 }
 
 .ag-tips {
