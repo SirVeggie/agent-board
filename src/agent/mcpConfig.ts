@@ -17,6 +17,8 @@ import { isPlainRecord } from "./types.js";
  * A workspace entry replaces the global server of the same name; { "enabled": false } alone turns a
  * global one off there. Scribe's own fields on a server: enabled, modes (which thread modes get it;
  * Code, Plan and Ask unless set) and approve ("ask" each call, the default, or "auto").
+ * Code threads also inherit Keeper from Claude Code when Scribe has no Keeper entry, so the
+ * user's Keeper skill can supervise test servers. An explicit Scribe entry takes precedence.
  */
 
 export type McpApprove = "ask" | "auto";
@@ -231,8 +233,15 @@ export function resolveServer(name: string, layer: string, server: McpServer): R
 }
 
 /** The servers a thread gets: enabled, allowed in its mode, from the global list and its workspace's. */
-export function serversForThread(thread: Pick<Thread, "cwd" | "worktree" | "mode">, file: McpFile = readMcpFile()): ResolvedMcpServer[] {
-  return mergedServers(file, threadWorkspace(thread))
+export function serversForThread(thread: Pick<Thread, "cwd" | "worktree" | "mode">, file: McpFile = readMcpFile(), home: string | null = os.homedir()): ResolvedMcpServer[] {
+  const workspace = threadWorkspace(thread);
+  const servers = mergedServers(file, workspace);
+  const keeperConfigured = [file, ...layersFor(file, workspace)].some((layer) => Object.hasOwn(layer.mcpServers, "keeper"));
+  if (thread.mode === "code" && !keeperConfigured && home) {
+    const keeper = claudeKeeper(workspace, home);
+    if (keeper) servers.push(keeper);
+  }
+  return servers
     .filter(({ server }) => server.enabled !== false && serverModes(server).includes(thread.mode))
     .flatMap(({ name, layer, server }) => resolveServer(name, layer, server) ?? []);
 }
@@ -324,22 +333,44 @@ export function importCandidates(workspaces: string[], current: McpFile = readMc
 
 let claudeCache: { file: string; mtime: number; value: unknown } | null = null;
 
-/**
- * Names of the servers Claude Code itself would load in a workspace (~/.claude.json, its entry for the
- * folder, the folder's .mcp.json). Claude threads get Scribe's list in their place, so a skill written
- * for one of these finds its tools missing unless the user imported it.
- */
-export function claudeOwnServers(workspace: string | null, home = os.homedir()): string[] {
+function readClaudeConfig(home: string): unknown {
   const file = path.join(home, ".claude.json");
-  let claude: unknown = null;
   try {
     // Claude Code rewrites this file often and it grows large: parse it again only when it changed.
     const mtime = fs.statSync(file).mtimeMs;
     if (claudeCache?.file !== file || claudeCache.mtime !== mtime) claudeCache = { file, mtime, value: readJson(file) };
-    claude = claudeCache.value;
+    return claudeCache.value;
   } catch {
-    /* no Claude Code config */
+    return null;
   }
+}
+
+/** Only Keeper is inherited; unrelated servers still require an import into Scribe's list. */
+function claudeKeeper(workspace: string | null, home: string): { name: string; layer: string; server: McpServer } | null {
+  const claude = readClaudeConfig(home);
+  let server = cleanLayer(claude).mcpServers.keeper;
+  let layer = path.join(home, ".claude.json");
+  if (workspace) {
+    const projects = isPlainRecord(claude) && isPlainRecord(claude.projects) ? claude.projects : {};
+    const key = workspaceKey(workspace);
+    for (const [dir, project] of Object.entries(projects)) {
+      if (workspaceKey(dir) === key) server = cleanLayer(project).mcpServers.keeper ?? server;
+    }
+    const file = path.join(workspace, ".mcp.json");
+    const shared = cleanLayer(readJson(file)).mcpServers.keeper;
+    if (shared) { server = shared; layer = file; }
+  }
+  // Do not inherit automatic approval from another app's config.
+  return server ? { name: "keeper", layer, server: { ...server, approve: "ask" } } : null;
+}
+
+/**
+ * Names of the servers Claude Code itself would load in a workspace (~/.claude.json, its entry for the
+ * folder, the folder's .mcp.json). Claude threads get Scribe's list in their place, so a skill written
+ * for one of these finds its tools missing unless the user imported it (or it is Code-mode Keeper).
+ */
+export function claudeOwnServers(workspace: string | null, home = os.homedir()): string[] {
+  const claude = readClaudeConfig(home);
   const names = new Set(Object.keys(cleanLayer(claude).mcpServers));
   if (workspace) {
     const key = workspaceKey(workspace);

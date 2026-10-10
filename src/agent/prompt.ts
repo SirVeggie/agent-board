@@ -113,7 +113,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     // The user's skills still load, and one written for such a server (keeper) otherwise sends the agent looking for tools that are not there (#346).
     const names = scope.mcpLeftOut.map((n) => `\`${n}\``).join(", ");
     lines.push(
-      `MCP servers: this thread gets the servers in Scribe's own MCP list, not the ones in your Claude Code config. Not available here, even where a skill says to use one: ${names}. Do not search for their tools. Do what you can without them, and say in your reply what you could not do or check because of it; the user can add a server under Agent settings, MCP servers.`
+      `MCP servers: this thread gets the servers in Scribe's own MCP list; Code chats also inherit Keeper from Claude Code when Scribe has no Keeper entry. Not available here, even where a skill says to use one: ${names}. Do not search for their tools. Do what you can without them, and say in your reply what you could not do or check because of it; the user can add a server under Agent settings, MCP servers.`
     );
   }
   lines.push(

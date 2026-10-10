@@ -656,7 +656,8 @@ class ClaudeSession implements ProviderSession {
         ...Object.fromEntries(userServers.map((s) => [s.name, claudeServerConfig(s) as McpServerConfig])),
         [BOARD_SERVER]: { type: "stdio", command, args, env },
       },
-      // Scribe's MCP list (Agent settings) is the one source: no servers from ~/.claude.json, .mcp.json or plugins.
+      // The host resolves Scribe's list and the Code-mode Keeper fallback. Do not load other servers
+      // from ~/.claude.json, .mcp.json or plugins alongside them.
       strictMcpConfig: true,
       settingSources: board ? ["user"] : ["user", "project", "local"],
       // Hooks from settings files and plugins are written for the user's own Claude Code sessions; a

@@ -28,21 +28,62 @@ test("servers reach threads by mode, enabled, and workspace layer", () => {
       "S:\\Proj": { mcpServers: { shared: { command: "local" }, docs: { enabled: false }, db: { command: "db", approve: "auto" } } },
     },
   });
-  const names = (mode: "code" | "ask" | "plan" | "board", cwd: string | null) => serversForThread(thread(mode, cwd), file).map((s) => s.name).sort();
+  const names = (mode: "code" | "ask" | "plan" | "board", cwd: string | null) => serversForThread(thread(mode, cwd), file, null).map((s) => s.name).sort();
   assert.deepEqual(names("code", null), ["board", "docs", "shared"]);
   assert.deepEqual(names("board", null), ["board"]);
   assert.deepEqual(names("code", "s:/proj/sub"), ["board", "db", "shared"]);
   assert.deepEqual(names("code", "S:\\Projector"), ["board", "docs", "shared"]);
-  const shared = serversForThread(thread("ask", "S:\\Proj"), file).find((s) => s.name === "shared");
+  const shared = serversForThread(thread("ask", "S:\\Proj"), file, null).find((s) => s.name === "shared");
   assert.equal(shared?.command, "local");
   assert.equal(shared?.layer, "S:\\Proj");
-  assert.equal(serversForThread(thread("code", "S:\\Proj"), file).find((s) => s.name === "db")?.approve, "auto");
+  assert.equal(serversForThread(thread("code", "S:\\Proj"), file, null).find((s) => s.name === "db")?.approve, "auto");
 });
 
 test("a worktree thread gets its home workspace's servers", () => {
   const file = cleanFile({ workspaces: { "S:\\Proj": { mcpServers: { db: { command: "db" } } } } });
   const wt = { mode: "code" as const, cwd: "C:\\wt\\x", worktree: { home: "S:\\Proj", repo: "S:\\Proj", path: "C:\\wt\\x", branch: "b", base: "master", baseCommit: "", links: [], createdAt: 0 } };
-  assert.deepEqual(serversForThread(wt, file).map((s) => s.name), ["db"]);
+  assert.deepEqual(serversForThread(wt, file, null).map((s) => s.name), ["db"]);
+});
+
+test("Code chats inherit only Keeper, using the home workspace for worker worktrees", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-keeper-"));
+  const ws = path.join(home, "proj");
+  const sharedWs = path.join(home, "shared");
+  fs.mkdirSync(ws);
+  fs.mkdirSync(sharedWs);
+  try {
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({
+      mcpServers: { keeper: { command: "global", approve: "auto" }, unrelated: { command: "other" } },
+      projects: { [ws]: { mcpServers: { keeper: { command: "project" } } } },
+    }));
+    fs.writeFileSync(path.join(sharedWs, ".mcp.json"), JSON.stringify({ mcpServers: { keeper: { url: "http://localhost/mcp" } } }));
+    const empty = cleanFile({});
+    const global = serversForThread(thread("code"), empty, home);
+    assert.deepEqual(global.map((s) => s.name), ["keeper"]);
+    assert.equal(global[0].command, "global");
+    assert.equal(global[0].approve, "ask");
+    for (const mode of ["ask", "plan", "board"] as const) {
+      assert.deepEqual(serversForThread(thread(mode, ws), empty, home), []);
+    }
+    const wt = { ...thread("code", path.join(home, "worktree")), worktree: { home: ws, repo: ws, path: path.join(home, "worktree"), branch: "worker", base: "master", baseCommit: "", links: [], createdAt: 0 } };
+    assert.equal(serversForThread(wt, empty, home)[0].command, "project");
+    assert.equal(serversForThread(thread("code", sharedWs), empty, home)[0].url, "http://localhost/mcp");
+
+    const custom = cleanFile({ mcpServers: { keeper: { command: "scribe", approve: "auto" } } });
+    assert.equal(serversForThread(wt, custom, home)[0].command, "scribe");
+    assert.equal(serversForThread(wt, custom, home)[0].approve, "auto");
+    for (const keeper of [{ enabled: false }, { command: "scribe", modes: ["ask"] }]) {
+      assert.deepEqual(serversForThread(wt, cleanFile({ mcpServers: { keeper } }), home), []);
+      assert.deepEqual(serversForThread(wt, cleanFile({ workspaces: { [ws]: { mcpServers: { keeper } } } }), home), []);
+    }
+    const disabledWs = path.join(home, "disabled");
+    fs.mkdirSync(disabledWs);
+    fs.writeFileSync(path.join(disabledWs, ".mcp.json"), JSON.stringify({ mcpServers: { keeper: { disabled: true } } }));
+    assert.deepEqual(serversForThread(thread("code", disabledWs), empty, home), []);
+    assert.deepEqual(serversForThread(thread("code"), empty, path.join(home, "absent")), []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("reserved and odd names are dropped", () => {
