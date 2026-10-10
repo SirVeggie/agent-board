@@ -13,6 +13,7 @@ import { detectSearchPack, searchPackDir, searchEnabled, setSearchEnabled, SEARC
 import { tokenBatches } from "./batches.js";
 import { SearchEmbedder } from "./embedder.js";
 import { searchRouter } from "./routes.js";
+import { searchIndex } from "./service.js";
 
 // Exercise the real child and IPC, substituting only the optional model/runtime files.
 const fakeRuntime = `
@@ -144,6 +145,7 @@ test("Settings API reports no pack and persists on/off without loading a child",
     const absent = await (await fetch(url + "/status")).json(); assert.equal(absent.status, "not-installed"); assert.equal(absent.enabled, false);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
+    await searchIndex.close();
     if (oldHome === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = oldHome;
     f.cleanup();
   }

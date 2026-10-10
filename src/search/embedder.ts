@@ -15,8 +15,11 @@ export class SearchEmbedder implements Embedder {
   private idle: NodeJS.Timeout | null = null;
   private nextId = 0;
   private disposed = false;
+  private peakRss = 0;
   constructor(private options: { root?: string; idleMs?: number; requestMs?: number; childUrl?: URL } = {}) {}
   get running(): boolean { return this.child !== null; }
+  /** Native process high-water mark, used by the pack-dependent retrieval eval. */
+  get peakRssBytes(): number { return this.peakRss; }
   embedQuery(text: string): Promise<Float32Array> { return this.request("embedQuery", text).then(v => v[0]); }
   embedDocuments(items: EmbedDocument[]): Promise<Float32Array[]> {
     return items.length ? this.request("embedDocuments", items) : Promise.resolve([]);
@@ -38,9 +41,10 @@ export class SearchEmbedder implements Embedder {
         const child = fork(childUrl, [status.folder], options);
         this.child = child;
         child.on("message", (raw: unknown) => {
-          const msg = raw as { id: number; vectors?: Float32Array[]; error?: string };
+          const msg = raw as { id: number; vectors?: Float32Array[]; error?: string; peakRssBytes?: number };
           const pending = this.pending.get(msg.id);
           if (!pending || this.child !== child) return;
+          if (typeof msg.peakRssBytes === "number" && Number.isFinite(msg.peakRssBytes)) this.peakRss = Math.max(this.peakRss, msg.peakRssBytes);
           this.pending.delete(msg.id); clearTimeout(pending.timer);
           if (msg.error) pending.reject(new Error(msg.error));
           else if (!Array.isArray(msg.vectors) || msg.vectors.some(v => !(v instanceof Float32Array))) pending.reject(new Error("Invalid embedder response"));

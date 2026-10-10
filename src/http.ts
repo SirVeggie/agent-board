@@ -50,6 +50,7 @@ import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 import { searchRouter } from "./search/routes.js";
 import { searchEmbedder } from "./search/embedder.js";
+import { refreshSearchIndex, searchIndex } from "./search/service.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
@@ -86,6 +87,7 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
+  refreshSearchIndex();
   if (builtinWatchEnabled()) {
     watchBuiltinTemplates(() => {
       const changed = store.reloadBuiltins();
@@ -96,6 +98,7 @@ export async function startHttp(): Promise<http.Server> {
   }
   const flush = () => {
     searchEmbedder.stop();
+    void searchIndex.close();
     try {
       agentHost?.dispose();
     } catch {
@@ -1258,6 +1261,7 @@ export async function startHttp(): Promise<http.Server> {
         stateVersion: typeof req.body?.stateVersion === "number" ? req.body.stateVersion : undefined,
         guide: typeof req.body?.guide === "string" ? req.body.guide : undefined,
         agentActions: req.body?.agentActions,
+        search: req.body?.search,
         syncedWithBuiltin: req.body?.syncedWithBuiltin === true,
       });
       if (!created && viewerOf(req) === "agent") {
@@ -1432,11 +1436,11 @@ export async function startHttp(): Promise<http.Server> {
     } catch {
       /* already logged */
     }
-    void Promise.all([closeScreenshotBrowser(), closeAgentBrowser()]).finally(() => process.exit(0));
+    void Promise.all([searchIndex.close(), closeScreenshotBrowser(), closeAgentBrowser()]).finally(() => process.exit(0));
   });
 
   const server = http.createServer(app);
-  server.once("close", () => searchEmbedder.stop());
+  server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
   const contentServer = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
 

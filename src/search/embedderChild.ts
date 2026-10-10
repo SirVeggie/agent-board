@@ -67,7 +67,7 @@ process.on("message", (raw: unknown) => {
       else if (method === "embedDocuments") vectors = await embedTexts((input as EmbedDocument[]).map(item => `title: ${item.title || "none"} | text: ${item.text}`));
       else if (method === "embedImage") vectors = await embedImage(input);
       else throw new Error("Unknown embedding method");
-      if (process.connected) process.send?.({ id, vectors });
+      if (process.connected) process.send?.({ id, vectors, peakRssBytes: process.resourceUsage().maxRSS * 1024 });
     } catch (err) { if (process.connected) process.send?.({ id, error: (err as Error).message }); }
   });
 });
