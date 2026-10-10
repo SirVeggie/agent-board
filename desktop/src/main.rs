@@ -84,6 +84,7 @@ async fn set_desktop_setting(
             tray::set_enabled(window.app_handle(), value);
         }
         "launchAtStartup" => startup::set_enabled(value)?,
+        "reducedMotion" => layout::set_reduced_motion(&window, value),
         _ => return Err(format!("Unknown desktop setting: {name}")),
     }
     Ok(layout::desktop_state(&window))
@@ -262,6 +263,8 @@ fn main() {
             let layout = layout::load(app.handle());
             let close_to_tray = layout.close_to_tray();
             app.manage(layout);
+            #[cfg(windows)]
+            app.manage(embeds::FrameTargets::default());
             tray::set_enabled(app.handle(), close_to_tray);
             startup::refresh();
 

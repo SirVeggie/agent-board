@@ -9,7 +9,9 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::{json, Value};
-use tauri::WebviewWindow;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use tauri::{Manager, WebviewWindow};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2DevToolsProtocolEventReceivedEventArgs,
     ICoreWebView2DevToolsProtocolEventReceivedEventArgs2, ICoreWebView2_11,
@@ -17,16 +19,57 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use webview2_com::{take_pwstr, CallDevToolsProtocolMethodCompletedHandler, DevToolsProtocolEventReceivedEventHandler};
 use windows::core::{Interface, HSTRING, PWSTR};
 
+/// Frame targets have separate media emulation; remember live sessions for each window.
+#[derive(Default)]
+pub struct FrameTargets(Mutex<HashMap<String, HashSet<String>>>);
+
+pub fn forget_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str) {
+    if let Some(targets) = app.try_state::<FrameTargets>() {
+        targets.0.lock().unwrap().remove(label);
+    }
+}
+
+pub fn set_reduced_motion(window: &WebviewWindow, on: bool) {
+    let sessions = window.state::<FrameTargets>().0.lock().unwrap()
+        .get(window.label()).cloned().unwrap_or_default();
+    let _ = window.with_webview(move |webview| unsafe {
+        if let Ok(core) = webview.controller().CoreWebView2() {
+            if let Ok(cdp) = core.cast::<ICoreWebView2_11>() {
+                apply_motion(&cdp, "", on);
+                for session in sessions {
+                    apply_motion(&cdp, &session, on);
+                }
+            }
+        }
+    });
+}
+
+fn motion_features(on: bool) -> Value {
+    if on {
+        json!({ "features": [{ "name": "prefers-reduced-motion", "value": "reduce" }] })
+    } else {
+        // Removing the override restores the OS preference, including OS-level reduce.
+        json!({ "features": [] })
+    }
+}
+
+unsafe fn apply_motion(cdp: &ICoreWebView2_11, session: &str, on: bool) {
+    send(cdp, session, "Emulation.setEmulatedMedia", motion_features(on));
+}
+
 pub fn install(window: &WebviewWindow, board_port: u16) {
+    let app = window.app_handle().clone();
+    let label = window.label().to_owned();
+    app.state::<FrameTargets>().0.lock().unwrap().insert(label.clone(), HashSet::new());
     let _ = window.with_webview(move |webview| unsafe {
         let Ok(core) = webview.controller().CoreWebView2() else {
             return;
         };
-        let _ = intercept(&core, board_port);
+        let _ = intercept(&core, board_port, &app, &label);
     });
 }
 
-unsafe fn intercept(core: &ICoreWebView2, board_port: u16) -> windows::core::Result<()> {
+unsafe fn intercept(core: &ICoreWebView2, board_port: u16, app: &tauri::AppHandle, label: &str) -> windows::core::Result<()> {
     let cdp = core.cast::<ICoreWebView2_11>()?;
 
     let for_paused = cdp.clone();
@@ -41,13 +84,18 @@ unsafe fn intercept(core: &ICoreWebView2, board_port: u16) -> windows::core::Res
         .add_DevToolsProtocolEventReceived(&paused, &mut token)?;
 
     let for_attached = cdp.clone();
+    let for_motion = app.clone();
+    let window_label = label.to_owned();
     let attached = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
         let child = args.as_ref().and_then(|args| unsafe { event(args) }).and_then(|(_, params)| {
             params.get("sessionId").and_then(Value::as_str).map(str::to_owned)
         });
         if let Some(child) = child {
+            for_motion.state::<FrameTargets>().0.lock().unwrap()
+                .entry(window_label.clone()).or_default().insert(child.clone());
             unsafe {
                 watch(&for_attached, &child);
+                apply_motion(&for_attached, &child, for_motion.state::<crate::layout::LayoutState>().reduced_motion());
                 send(&for_attached, &child, "Runtime.runIfWaitingForDebugger", json!({}));
             }
         }
@@ -56,7 +104,23 @@ unsafe fn intercept(core: &ICoreWebView2, board_port: u16) -> windows::core::Res
     core.GetDevToolsProtocolEventReceiver(&HSTRING::from("Target.attachedToTarget"))?
         .add_DevToolsProtocolEventReceived(&attached, &mut token)?;
 
+    let for_detached = app.clone();
+    let window_label = label.to_owned();
+    let detached = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+        if let Some((_, params)) = args.as_ref().and_then(|args| unsafe { event(args) }) {
+            if let Some(session) = params.get("sessionId").and_then(Value::as_str) {
+                if let Some(sessions) = for_detached.state::<FrameTargets>().0.lock().unwrap().get_mut(&window_label) {
+                    sessions.remove(session);
+                }
+            }
+        }
+        Ok(())
+    }));
+    core.GetDevToolsProtocolEventReceiver(&HSTRING::from("Target.detachedFromTarget"))?
+        .add_DevToolsProtocolEventReceived(&detached, &mut token)?;
+
     watch(&cdp, "");
+    apply_motion(&cdp, "", app.state::<crate::layout::LayoutState>().reduced_motion());
     Ok(())
 }
 

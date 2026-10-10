@@ -32,6 +32,7 @@ struct Layout {
     compact_mode: bool,
     compact_on_top: bool,
     close_to_tray: bool,
+    reduced_motion: bool,
 }
 
 impl Default for Layout {
@@ -43,7 +44,25 @@ impl Default for Layout {
             compact_mode: false,
             compact_on_top: true,
             close_to_tray: false,
+            reduced_motion: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_layouts_follow_system_motion_and_new_choice_survives_reload() {
+        let mut layout: Layout = serde_json::from_str(r#"{"compactOnTop":false}"#).unwrap();
+        assert!(!layout.reduced_motion);
+        assert!(!layout.compact_on_top);
+        layout.reduced_motion = true;
+        let saved = serde_json::to_string(&layout).unwrap();
+        let restored: Layout = serde_json::from_str(&saved).unwrap();
+        assert!(restored.reduced_motion);
+        assert!(!restored.compact_on_top);
     }
 }
 
@@ -62,6 +81,7 @@ pub struct DesktopState {
     compact_on_top: bool,
     open_from_agents: bool,
     close_to_tray: bool,
+    reduced_motion: bool,
     launch_at_startup: bool,
     /// Hidden in the tray. The page tells the daemon, so agents open the window again.
     hidden: bool,
@@ -87,6 +107,10 @@ pub fn load<R: Runtime>(app: &tauri::AppHandle<R>) -> LayoutState {
 impl LayoutState {
     pub fn close_to_tray(&self) -> bool {
         self.layout.lock().unwrap().close_to_tray
+    }
+
+    pub fn reduced_motion(&self) -> bool {
+        self.layout.lock().unwrap().reduced_motion
     }
 }
 
@@ -189,6 +213,19 @@ pub fn set_close_to_tray<R: Runtime>(window: &WebviewWindow<R>, on: bool) {
     save(&state, &layout);
 }
 
+pub fn set_reduced_motion(window: &WebviewWindow, on: bool) {
+    let state = state(window);
+    let mut layout = state.layout.lock().unwrap();
+    layout.reduced_motion = on;
+    save(&state, &layout);
+    drop(layout);
+    for (_, window) in window.webview_windows() {
+        #[cfg(windows)]
+        crate::embeds::set_reduced_motion(&window, on);
+        push_state(&window);
+    }
+}
+
 pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
     let state = state(window);
     let layout = state.layout.lock().unwrap();
@@ -198,6 +235,7 @@ pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
         compact_on_top: layout.compact_on_top,
         open_from_agents: board::read_registration().is_none_or(|registration| registration.open_from_agents),
         close_to_tray: layout.close_to_tray,
+        reduced_motion: layout.reduced_motion,
         launch_at_startup: startup::is_enabled(),
         hidden: !window.is_visible().unwrap_or(true),
     }
@@ -214,6 +252,10 @@ pub fn push_state<R: Runtime>(window: &WebviewWindow<R>) {
 }
 
 pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    #[cfg(windows)]
+    if matches!(event, WindowEvent::Destroyed) {
+        crate::embeds::forget_window(window.app_handle(), window.label());
+    }
     if window.label() != MAIN {
         // A child window (a page on its own) keeps no layout. The main window marks its tab, so tell it.
         if matches!(event, WindowEvent::Destroyed) {

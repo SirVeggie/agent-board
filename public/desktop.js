@@ -40,6 +40,7 @@
     openFromAgents: true,
     closeToTray: false,
     launchAtStartup: false,
+    reducedMotion: false,
     hidden: false,
   };
 
@@ -240,7 +241,14 @@
   const hint = document.createElement("p");
   hint.className = "settings-hint settings-hint-after";
   hint.innerHTML = "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
-  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, hint);
+  const motionRow = settingRow("desktop-reduced-motion", "Reduce motion", desktop.reducedMotion, (on) =>
+    saveSetting("reducedMotion", on)
+  );
+  const motionHint = "Reduces animations, moving effects, and smooth scrolling in Scribe and pages that support reduced motion. When off, your system’s motion preference applies.";
+  const motionLabel = motionRow.row.querySelector("span");
+  motionLabel.dataset.tooltip = motionHint;
+  motionLabel.setAttribute("aria-description", motionHint);
+  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, hint);
   document.getElementById("import-page")?.closest(".settings-section")?.before(section);
 
   /** One row of connected icon toggles, one per title bar button, in strip order. */
@@ -328,6 +336,7 @@
     openRow.toggle.setAttribute("aria-checked", String(desktop.openFromAgents));
     trayRow.toggle.setAttribute("aria-checked", String(desktop.closeToTray));
     startupRow.toggle.setAttribute("aria-checked", String(desktop.launchAtStartup));
+    motionRow.toggle.setAttribute("aria-checked", String(desktop.reducedMotion));
   }
 
   function setState(state) {
