@@ -87,7 +87,8 @@ export function searchRouter(): Router {
       const folder = searchPackDir();
       fs.mkdirSync(folder, { recursive: true });
       const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-      const child = spawn(command, [folder], { stdio: "ignore", detached: true, windowsHide: true });
+      // This is a user-requested folder window; hiding Explorer hides the window too.
+      const child = spawn(command, [folder], { stdio: "ignore", detached: true, windowsHide: false });
       child.once("error", err => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
       child.once("spawn", () => { child.unref(); res.json({ ok: true }); });
     } catch (err) { res.status(500).json({ error: (err as Error).message }); }
