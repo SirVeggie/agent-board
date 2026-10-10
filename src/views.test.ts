@@ -294,6 +294,38 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
     assert.equal(await page.locator('.tab').count(), 3);
+    // Sample the real opening animation at fixed times, without timing-sensitive sleeps.
+    const motion = await page.evaluate(async () => {
+      const { views, frames, state } = (window as any).dragTest;
+      const pool = document.createElement('div');
+      pool.id = 'frames';
+      document.querySelector('main')!.append(pool);
+      for (const { el } of frames.values()) pool.append(el);
+      const original = frames.get(state.activeId).el;
+      const width = original.getBoundingClientRect().width;
+      const target = state.tabs.find((tab: any) => tab.id !== state.activeId).id;
+      await views.open(target, 'split');
+      const animation = original.getAnimations()[0];
+      animation.pause();
+      const samples = [0, 120, 240].map(time => {
+        animation.currentTime = time;
+        return original.getBoundingClientRect().width;
+      });
+      const entering = frames.get(target).el.getAnimations().length > 0;
+      views.closeSplit();
+      return { width, samples, entering, cancelled: original.getAnimations().length === 0 };
+    });
+    assert.ok(Math.abs(motion.samples[0] - motion.width) < 1);
+    assert.ok(motion.samples[0] > motion.samples[1] && motion.samples[1] > motion.samples[2]);
+    assert.ok(Math.abs(motion.samples[2] - area.width / 2) < 1);
+    assert.equal(motion.entering, true);
+    assert.equal(motion.cancelled, true);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await page.evaluate(async () => {
+      const { views, frames, state } = (window as any).dragTest;
+      await views.open(state.tabs.find((tab: any) => tab.id !== state.activeId).id, 'split');
+      return [...frames.values()].some((frame: any) => frame.el.getAnimations().length > 0);
+    }), false);
   } finally {
     await browser.close();
   }

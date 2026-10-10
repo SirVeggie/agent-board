@@ -59,6 +59,8 @@ window.createViews = function createViews(host) {
   let hoverTimer = 0;
   let resizing = null;
   let pageDrag = null;
+  let splitAnimations = [];
+  let splitLayoutKey = "";
 
   /* ---------- DOM ---------- */
 
@@ -495,6 +497,34 @@ window.createViews = function createViews(host) {
 
   /* ---------- layout ---------- */
 
+  function stopSplitAnimation() {
+    for (const animation of splitAnimations) animation.cancel();
+    splitAnimations = [];
+  }
+
+  /** Resize the existing page in place; moving pooled iframes would reload them. */
+  function animateSplitOpening(previousBoxes, split) {
+    const options = { duration: 240, easing: getComputedStyle(mainEl).getPropertyValue("--ease").trim() || "ease" };
+    for (const node of mainEl.querySelectorAll("[data-pane], .split-divider")) {
+      if (node.hidden || node.classList.contains("inactive")) continue;
+      const before = previousBoxes.get(node);
+      const after = node.getBoundingClientRect();
+      if (before) {
+        const style = getComputedStyle(node);
+        splitAnimations.push(node.animate([
+          { left: `${parseFloat(style.left) + before.left - after.left}px`, top: `${parseFloat(style.top) + before.top - after.top}px`, width: `${before.width}px`, height: `${before.height}px` },
+          { left: style.left, top: style.top, width: style.width, height: style.height },
+        ], options));
+      } else {
+        const offset = split.dir === "col" ? "translateY(16px)" : "translateX(16px)";
+        splitAnimations.push(node.animate([
+          { opacity: 0, transform: offset },
+          { opacity: getComputedStyle(node).opacity, transform: "none" },
+        ], options));
+      }
+    }
+  }
+
   function ratioFor(split) {
     const col = split.dir === "col";
     const size = (col ? mainEl.clientHeight : mainEl.clientWidth) || 1;
@@ -508,6 +538,19 @@ window.createViews = function createViews(host) {
   function layout() {
     const active = host.activeTab();
     const split = active ? activeSplit() : null;
+    const layoutKey = split ? JSON.stringify([host.spaceId(), split.dir, ratioFor(split), ...PANES.map((_, side) => side === split.side ? active.id : frameIdOf(split.other))]) : "";
+    if (layoutKey !== splitLayoutKey) stopSplitAnimation();
+    const openingSplit = split && !mainEl.classList.contains("has-split") && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const previousBoxes = new Map();
+    if (openingSplit) {
+      for (const id of host.frameIds()) {
+        const node = host.frame(id).el;
+        if (node.dataset.role === "primary" && !node.classList.contains("inactive")) previousBoxes.set(node, node.getBoundingClientRect());
+      }
+      const draft = mainEl.querySelector(".newpage:not([hidden])");
+      if (draft) previousBoxes.set(draft, draft.getBoundingClientRect());
+    }
+    splitLayoutKey = layoutKey;
     if (split && sameTarget(peekTarget(), split.other)) {
       setPeek(null);
     }
@@ -566,6 +609,12 @@ window.createViews = function createViews(host) {
     renderPeekChrome(top);
     dropUnusedUrlFrames();
     deliverAnchor();
+    if (openingSplit) {
+      // app.js assigns the New page's pane immediately after layout returns.
+      queueMicrotask(() => {
+        if (splitLayoutKey === layoutKey) animateSplitOpening(previousBoxes, split);
+      });
+    }
   }
 
   function renderSplitChrome(split, active) {
@@ -1363,6 +1412,7 @@ window.createViews = function createViews(host) {
       return;
     }
     event.preventDefault();
+    stopSplitAnimation();
     divider.setPointerCapture(event.pointerId);
     document.body.classList.add("resizing-split");
     document.body.classList.toggle("resizing-col", activeSplit()?.dir === "col");
