@@ -5713,10 +5713,10 @@
       this.orb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
       this.renderHandle();
     },
-    /** Match the running accent to the provider's shape palette, including custom colours. */
+    /** Use the provider's midtones for the running accent, omitting the brightest highlight. */
     renderSweep() {
       const colors = window.scribeOrb?.colors(this.view.settings().provider);
-      if (colors) this.root.style.setProperty("--dock-sweep-palette", `${colors[1]} 30%, ${colors[2]} 50%, ${colors[3]} 70%`);
+      if (colors) this.root.style.setProperty("--dock-sweep-palette", `${colors[1]} 30%, ${colors[2]} 70%`);
       else this.root.style.removeProperty("--dock-sweep-palette");
     },
     /** With both a Scribe scope and a workspace, show only the workspace once either name would be cut off. */
