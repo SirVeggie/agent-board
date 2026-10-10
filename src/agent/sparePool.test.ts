@@ -116,7 +116,7 @@ test("Cursor createSession leaves the spare when a different thread sends first"
   const sessionCtx = ctx();
   const spare = new FakeSession("th_a");
   const a = thread({ id: "th_a", provider: "cursor" });
-  const key = JSON.stringify([`board:${sessionCtx.scratchDir}`, a.mode, a.web, a.approval, false]);
+  const key = JSON.stringify([`board:${sessionCtx.scratchDir}`, a.mode, a.web, a.approval, false, sessionCtx.webSearchUrl?.() ?? ""]);
   poolOf(provider).put(key, spare);
   const other = provider.createSession(thread({ id: "th_b", provider: "cursor" }), sessionCtx);
   assert.notEqual(other, spare);
