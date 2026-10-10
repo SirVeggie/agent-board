@@ -3891,8 +3891,8 @@ button.space-menu-item.danger {
 }
 
 /* ---------- New page (Ctrl+T) ----------
-   Matter that has not taken shape yet: a blue and violet nebula drawn by a WebGL shader (newpage.js,
-   .np-canvas). Without WebGL, the fallback below: soft blue and violet blobs drift on their own paths
+   Matter that has not taken shape yet: a nebula drawn by a WebGL shader (newpage.js,
+   .np-canvas). Without WebGL, the fallback below: soft coloured blobs drift on their own paths
    inside a layer that turns slowly the other way, so they swirl and merge; a faint grain shimmers on top. */
 
 .np-canvas {
@@ -3913,12 +3913,37 @@ button.space-menu-item.danger {
 }
 
 .newpage {
+  --np-c1: var(--fx-1);
+  --np-c2: var(--fx-2);
+  --np-c3: var(--fx-3);
   position: absolute;
   inset: 0;
   z-index: 1;
   overflow: hidden;
-  background: var(--panel);
+  background: #08080a;
   display: flex;
+}
+
+.newpage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: inset 0 0 32px rgba(var(--accent-rgb), 0.1), inset 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+/* The new-page surface stays dark in the light theme, including its text and controls. */
+html[data-theme="cream"] .newpage {
+  color-scheme: dark;
+  --panel: #1a1714;
+  --text: #ece7e2;
+  --heading: #fff8ef;
+  --muted: #b3a99c;
+  --border: rgba(255, 240, 220, 0.12);
+  --accent: #d0a578;
+  --file-icon: #b3a99c;
+  --button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .newpage[hidden] {
@@ -3945,32 +3970,26 @@ main.blank-page #frames iframe:not(.inactive) {
   width: 42%;
   aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 50%, rgba(92, 86, 230, 0.26), rgba(92, 86, 230, 0.08) 38%, transparent 68%);
+  background: radial-gradient(circle at 50% 50%, rgba(var(--np-c1), 0.26), rgba(var(--np-c1), 0.08) 38%, transparent 68%);
   mix-blend-mode: screen;
   will-change: transform;
 }
 
 .np-b1 { left: 22%; top: 18%; animation: np-drift-a 31s ease-in-out infinite alternate; }
-.np-b2 { left: 42%; top: 36%; width: 34%; background: radial-gradient(circle, rgba(150, 70, 240, 0.24), rgba(150, 70, 240, 0.07) 38%, transparent 68%); animation: np-drift-b 37s ease-in-out infinite alternate; }
-.np-b3 { left: 30%; top: 44%; width: 30%; background: radial-gradient(circle, rgba(80, 150, 255, 0.2), rgba(80, 150, 255, 0.06) 38%, transparent 68%); animation: np-drift-c 43s ease-in-out infinite alternate; }
+.np-b2 { left: 42%; top: 36%; width: 34%; background: radial-gradient(circle, rgba(var(--np-c2), 0.24), rgba(var(--np-c2), 0.07) 38%, transparent 68%); animation: np-drift-b 37s ease-in-out infinite alternate; }
+.np-b3 { left: 30%; top: 44%; width: 30%; background: radial-gradient(circle, rgba(var(--np-c3), 0.2), rgba(var(--np-c3), 0.06) 38%, transparent 68%); animation: np-drift-c 43s ease-in-out infinite alternate; }
 .np-b4 { left: 48%; top: 20%; width: 26%; animation: np-drift-b 29s ease-in-out infinite alternate-reverse; opacity: 0.8; }
-.np-b5 { left: 38%; top: 30%; width: 22%; background: radial-gradient(circle, rgba(var(--lift-rgb), 0.16), transparent 65%); animation: np-breathe 11s ease-in-out infinite; }
+.np-b5 { left: 38%; top: 30%; width: 22%; background: radial-gradient(circle, rgba(var(--np-c2), 0.16), transparent 65%); animation: np-breathe 11s ease-in-out infinite; }
 
 .np-swirl {
   position: absolute;
   inset: 12%;
   border-radius: 50%;
-  background: conic-gradient(from 0deg, transparent, rgba(120, 90, 240, 0.07) 12%, transparent 26%, rgba(80, 140, 255, 0.05) 48%, transparent 62%, rgba(160, 80, 240, 0.06) 80%, transparent);
+  background: conic-gradient(from 0deg, transparent, rgba(var(--np-c1), 0.07) 12%, transparent 26%, rgba(var(--np-c2), 0.05) 48%, transparent 62%, rgba(var(--np-c3), 0.06) 80%, transparent);
   -webkit-mask: radial-gradient(circle, #000 8%, transparent 62%);
   mask: radial-gradient(circle, #000 8%, transparent 62%);
   animation: np-turn 60s linear infinite reverse;
 }
-
-.newpage.provider-colors .np-blob { background: radial-gradient(circle, rgba(var(--np-c1), 0.26), rgba(var(--np-c1), 0.08) 38%, transparent 68%); }
-.newpage.provider-colors .np-b2 { background: radial-gradient(circle, rgba(var(--np-c2), 0.24), rgba(var(--np-c2), 0.07) 38%, transparent 68%); }
-.newpage.provider-colors .np-b3 { background: radial-gradient(circle, rgba(var(--np-c3), 0.2), rgba(var(--np-c3), 0.06) 38%, transparent 68%); }
-.newpage.provider-colors .np-b5 { background: radial-gradient(circle, rgba(var(--np-c2), 0.16), transparent 65%); }
-.newpage.provider-colors .np-swirl { background: conic-gradient(from 0deg, transparent, rgba(var(--np-c1), 0.07) 12%, transparent 26%, rgba(var(--np-c2), 0.05) 48%, transparent 62%, rgba(var(--np-c3), 0.06) 80%, transparent); }
 
 .np-grain {
   position: absolute;
@@ -3979,15 +3998,6 @@ main.blank-page #frames iframe:not(.inactive) {
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   animation: np-shimmer 1.2s steps(4) infinite;
-}
-
-[data-theme="cream"] .np-blob {
-  mix-blend-mode: multiply;
-  opacity: 0.55;
-}
-
-[data-theme="cream"] .np-b5 {
-  background: radial-gradient(circle, rgba(110, 90, 230, 0.12), transparent 65%);
 }
 
 .newpage.working .newpage-matter {
@@ -4043,6 +4053,7 @@ main.blank-page #frames iframe:not(.inactive) {
 
 .newpage-body {
   position: relative;
+  z-index: 2;
   margin: auto;
   width: min(760px, 100%);
   max-height: 100%;

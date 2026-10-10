@@ -18,7 +18,7 @@
   /**
    * What every background shares: noise, the nebula (fractal noise warped through itself twice,
    * coloured from deep navy through indigo and violet to a cool blue rim), and the two ways matter
-   * goes over the theme's panel colour. On a light theme both tint the panel instead of lighting it.
+   * goes over the near-black panel, using the provider or theme effect colours.
    */
   const HEAD = `precision highp float;
 uniform vec2 u_res;uniform float u_time;uniform float u_motionTime;uniform vec3 u_bg;uniform float u_light;uniform float u_work;
@@ -240,12 +240,15 @@ return glow(c,e);}`;
     }
 
     function theme() {
-      const m = getComputedStyle(root).backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
+      const css = getComputedStyle(root);
+      const m = css.backgroundColor.match(/[\d.]+/g) || [0, 0, 0];
       const [r, g, b] = m.slice(0, 3).map((v) => v / 255);
       fx.set({ u_bg: [r, g, b], u_light: 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 1 : 0 });
-      fx.set({ u_tint: palette ? 1 : 0, ...Object.fromEntries((palette || ["#000000", "#000000", "#000000", "#000000"]).map((c, i) => [
-        "u_c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16) / 255),
-      ])) });
+      const themeColors = [1, 2, 3].map((i) => css.getPropertyValue("--fx-" + i).split(",").map((v) => Number(v) / 255));
+      const colors = palette
+        ? palette.map((c) => [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16) / 255))
+        : [themeColors[0].map((v) => v * .2), ...themeColors];
+      fx.set({ u_tint: 1, ...Object.fromEntries(colors.map((c, i) => ["u_c" + i, c])) });
     }
 
     const draw = () => fx?.draw({ u_time: time, u_motionTime: motionTime, u_work: work });
@@ -387,6 +390,7 @@ return glow(c,e);}`;
       const colors = localStorage.getItem(PROVIDER_KEY) !== "0" && provider ? window.scribeOrb?.colors(provider) : null;
       root.classList.toggle("provider-colors", Boolean(colors));
       if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
+      else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));
       backdrop?.set(Boolean(current), current ? background(current.id) : null, current ? host.working(current.id) : false, colors);
     }
 

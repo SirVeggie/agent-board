@@ -18,6 +18,7 @@ function screen(webgl = true) {
     claude: ["#2a0a06", "#a8321a", "#f08a2c", "#ffe1a6"],
     codex: ["#0d2a5c", "#3b82f6", "#93c5fd", "#fff7d6"],
   };
+  const themeColors: Record<string, string> = { "--fx-1": "66,61,209", "--fx-2": "148,77,250", "--fx-3": "82,163,255" };
   const uniforms: Record<string, any> = {};
   const classes = new Set<string>();
   const css: Record<string, string> = {};
@@ -39,7 +40,10 @@ function screen(webgl = true) {
     return animation;
   };
   root.classList.toggle = (name: string, on: boolean) => { if (on) classes.add(name); else classes.delete(name); };
-  (root as any).style = { setProperty: (name: string, value: string) => { css[name] = value; } };
+  (root as any).style = {
+    setProperty: (name: string, value: string) => { css[name] = value; },
+    removeProperty: (name: string) => { delete css[name]; },
+  };
   const parts = new Map<string, ReturnType<typeof node>>();
   root.querySelector = (key: string) => {
     if (!parts.has(key)) parts.set(key, node());
@@ -65,7 +69,10 @@ function screen(webgl = true) {
   runInNewContext(source, {
     window: win, document: { getElementById: () => root, documentElement: {} },
     localStorage: { getItem: (key: string) => key === "scribe.newPageProviderColors" ? providerColors : selected }, matchMedia: () => motion,
-    getComputedStyle: () => ({ backgroundColor: "rgb(17, 18, 24)" }),
+    getComputedStyle: () => ({
+      backgroundColor: "rgb(8, 8, 10)",
+      getPropertyValue: (name: string) => themeColors[name] || "",
+    }),
     MutationObserver: Observer, ResizeObserver: Observer,
     setTimeout: (fn: () => void) => { const id = timers.size + 1; timers.set(id, fn); return id; },
     clearTimeout: (id: number) => timers.delete(id),
@@ -153,7 +160,7 @@ test("working intensity eases in and out while drift keeps its pace and hidden s
   assert.equal(s.draws.length, count);
 });
 
-test("provider palettes update live, preserve the shader and restore defaults when disabled", () => {
+test("provider palettes update live, preserve the shader and use theme colors when disabled", () => {
   const s = screen();
   s.reduce(true);
   s.page.render({ id: "draft" });
@@ -169,10 +176,12 @@ test("provider palettes update live, preserve the shader and restore defaults wh
   assert.equal(s.shaders.length, count);
   assert.equal(s.draws.at(-1)!.u_time, time);
   s.tint(false);
-  assert.equal(s.uniforms.u_tint, 0);
+  assert.equal(s.uniforms.u_tint, 1);
+  assert.equal(s.uniforms.u_c1.join(","), [66 / 255, 61 / 255, 209 / 255].join(","));
+  assert.equal(s.css["--np-c1"], undefined);
   assert.equal(s.classes.has("provider-colors"), false);
   s.provider("claude");
-  assert.equal(s.uniforms.u_tint, 0);
+  assert.equal(s.uniforms.u_c1.join(","), [66 / 255, 61 / 255, 209 / 255].join(","));
   s.tint(true);
   assert.equal(s.uniforms.u_tint, 1);
   assert.equal(s.css["--np-c1"], "168,50,26");
@@ -215,6 +224,7 @@ test("CSS fallback follows providers and the setting without WebGL", () => {
   assert.equal(s.css["--np-c2"], "147,197,253");
   s.tint(false);
   assert.equal(s.classes.has("provider-colors"), false);
+  assert.equal(s.css["--np-c2"], undefined);
   s.page.render(null);
   s.provider("claude");
   assert.equal(s.classes.has("provider-colors"), false);
