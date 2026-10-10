@@ -43,6 +43,7 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     ` });
     for (const name of ["glfx.js", "orb.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL("../public/" + name, import.meta.url), "utf8") });
     await page.getByRole("button", { name: "Customize", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".dock-orb")?.classList.contains("gl"));
     assert.equal(await page.locator(".dock-orb").evaluate(n => n.classList.contains("gl")), true);
     if (process.env.SCRIBE_ORB_SCREENSHOT) await page.screenshot({ path: process.env.SCRIBE_ORB_SCREENSHOT });
     const selects = page.locator("dialog select");
@@ -177,6 +178,7 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     // Reopening must release old GL contexts rather than exhausting Chromium's context limit.
     for (let i = 0; i < 10; i++) {
       await page.getByRole("button", { name: "Customize", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".dock-orb")?.classList.contains("gl"));
       assert.equal(await page.locator(".dock-orb").evaluate(n => n.classList.contains("gl")), true);
       await page.keyboard.press("Escape");
     }
@@ -185,6 +187,7 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
       HTMLCanvasElement.prototype.getContext = function() { return null; };
     ` });
     await page.getByRole("button", { name: "Customize", exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".dock-orb canvas").length === 0);
     assert.equal(await page.locator(".dock-orb").evaluate(n => n.classList.contains("gl")), false);
     assert.equal(await page.locator(".dock-orb canvas").count(), 0);
     assert.equal(await page.locator(".dock-orb").textContent(), "");

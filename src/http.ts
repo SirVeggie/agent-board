@@ -49,6 +49,7 @@ import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 import { searchRouter } from "./search/routes.js";
+import { shellAssets } from "./shellAssets.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
 
@@ -122,7 +123,11 @@ export async function startHttp(): Promise<http.Server> {
   const app = express();
   app.disable("x-powered-by");
   app.use(contentOriginGate);
-  app.use(noStoreShell);
+  app.use(shellAssets(publicDir, {
+    "/vendor/marked.js": path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js"),
+    "/vendor/purify.js": path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js"),
+    "/vendor/highlight.js": () => highlightBundle ??= highlightScript(),
+  }));
   agentHost = new AgentHost((event) => {
     broadcast(event);
     // Fresh model output replaces a claimed card's launch status promptly.
@@ -146,12 +151,6 @@ export async function startHttp(): Promise<http.Server> {
   scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
-  app.get("/vendor/marked.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js")));
-  app.get("/vendor/purify.js", (_req, res) => res.sendFile(path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js")));
-  app.get("/vendor/highlight.js", (_req, res) => {
-    highlightBundle ??= highlightScript();
-    res.type("application/javascript").send(highlightBundle);
-  });
   app.use(express.json({ limit: "6mb" }));
   app.use("/api/search", searchRouter());
   app.use(noteAgentSession);
@@ -1856,15 +1855,6 @@ function contentOriginGate(req: express.Request, res: express.Response, next: ex
   if (req.path === "/view" || req.path.startsWith("/view/") || req.path.startsWith("/blob/")) {
     res.status(404).type("text").send("Tab pages are served from the content origin.");
     return;
-  }
-  next();
-}
-
-const SHELL_PATHS = new Set(["/", "/index.html", "/app.js", "/app.css", "/library.js", "/hovercard.js", "/views.js", "/focusTrap.js", "/preview.js", "/agent.js", "/agent.css", "/agent-render.js", "/vendor/highlight.js"]);
-
-function noStoreShell(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  if (SHELL_PATHS.has(req.path)) {
-    res.setHeader("Cache-Control", "no-store");
   }
   next();
 }

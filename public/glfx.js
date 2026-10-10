@@ -9,7 +9,8 @@
   /**
    * opts: alpha (transparent canvas; the shader writes premultiplied colour), scale (backing pixels
    * per CSS pixel, or a function returning it), extensions (WebGL extensions the shader needs).
-   * Null when WebGL isn't there or the shader fails.
+   * Null when WebGL isn't there or the shader fails. async requests non-blocking readiness
+   * with KHR_parallel_shader_compile when supported; that path returns a Promise.
    */
   function create(canvas, frag, opts = {}) {
     const gl = canvas.getContext("webgl", {
@@ -20,12 +21,13 @@
       powerPreference: "low-power",
     });
     if (!gl) return null;
+    const parallel = opts.async && gl.getExtension("KHR_parallel_shader_compile");
     for (const name of opts.extensions || []) gl.getExtension(name);
     const shader = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src);
       gl.compileShader(s);
-      if (gl.getShaderParameter(s, gl.COMPILE_STATUS)) return s;
+      if (parallel || gl.getShaderParameter(s, gl.COMPILE_STATUS)) return s;
       gl.deleteShader(s);
       return null;
     };
@@ -34,61 +36,132 @@
     if (!vs || !fs) {
       if (vs) gl.deleteShader(vs);
       if (fs) gl.deleteShader(fs);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
       return null;
     }
     const prog = gl.createProgram();
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { gl.deleteProgram(prog); return null; }
-    gl.useProgram(prog);
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, "p");
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const locs = new Map();
-    const u = (name) => {
-      if (!locs.has(name)) locs.set(name, gl.getUniformLocation(prog, name));
-      return locs.get(name);
+    const release = () => {
+      gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteProgram(prog);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
     };
+    function finish() {
+      if (opts.signal?.aborted || gl.isContextLost() || !gl.getProgramParameter(prog, gl.LINK_STATUS)) { release(); return null; }
+      gl.deleteShader(vs); gl.deleteShader(fs);
+      gl.useProgram(prog);
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(prog, "p");
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      const locs = new Map();
+      const u = (name) => {
+        if (!locs.has(name)) locs.set(name, gl.getUniformLocation(prog, name));
+        return locs.get(name);
+      };
 
-    /** Sets uniforms by name: a number is a float, an array of 2 to 4 numbers a vec. */
-    function set(values) {
-      for (const [name, v] of Object.entries(values)) {
-        const at = u(name);
-        if (!at) continue;
-        if (typeof v === "number") gl.uniform1f(at, v);
-        else gl[`uniform${v.length}fv`](at, v);
-      }
-    }
-
-    return {
-      set,
-      destroy() {
-        gl.deleteBuffer(buffer);
-        gl.deleteProgram(prog);
-        gl.getExtension("WEBGL_lose_context")?.loseContext();
-      },
-      /** Sizes the canvas to its CSS box times scale, sets values, and draws a frame. False while it has no size. */
-      draw(values) {
-        if (gl.isContextLost()) return false;
-        const scale = typeof opts.scale === "function" ? opts.scale() : opts.scale || 1;
-        if (!canvas.clientWidth || !canvas.clientHeight) return false;
-        const w = Math.max(1, Math.round(canvas.clientWidth * scale));
-        const h = Math.max(1, Math.round(canvas.clientHeight * scale));
-        if (canvas.width !== w || canvas.height !== h) {
-          canvas.width = w;
-          canvas.height = h;
-          gl.viewport(0, 0, w, h);
+      /** Sets uniforms by name: a number is a float, an array of 2 to 4 numbers a vec. */
+      function set(values) {
+        for (const [name, v] of Object.entries(values)) {
+          const at = u(name);
+          if (!at) continue;
+          if (typeof v === "number") gl.uniform1f(at, v);
+          else gl[`uniform${v.length}fv`](at, v);
         }
-        set({ u_res: [w, h], ...values });
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+
+      return {
+        set,
+        destroy() {
+          gl.deleteBuffer(buffer);
+          gl.deleteProgram(prog);
+          gl.getExtension("WEBGL_lose_context")?.loseContext();
+        },
+        /** Sizes the canvas to its CSS box times scale, sets values, and draws a frame. False while it has no size. */
+        draw(values) {
+          if (gl.isContextLost()) return false;
+          const scale = typeof opts.scale === "function" ? opts.scale() : opts.scale || 1;
+          if (!canvas.clientWidth || !canvas.clientHeight) return false;
+          const w = Math.max(1, Math.round(canvas.clientWidth * scale));
+          const h = Math.max(1, Math.round(canvas.clientHeight * scale));
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+            gl.viewport(0, 0, w, h);
+          }
+          set({ u_res: [w, h], ...values });
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          return true;
+        },
+      };
+    }
+    if (!parallel) return finish();
+    return new Promise((resolve) => {
+      const poll = () => {
+        if (opts.signal?.aborted) { release(); resolve(null); }
+        else if (gl.getProgramParameter(prog, parallel.COMPLETION_STATUS_KHR)) resolve(finish());
+        else setTimeout(poll, 16);
+      };
+      poll();
+    });
+  }
+
+  /** Keep CSS fallbacks until a shown effect is needed, after saved tabs have painted. */
+  function lazy(canvas, frag, opts = {}) {
+    let fx = null;
+    let dead = false;
+    let queued = false;
+    let wanted = false;
+    let frame = 0;
+    let uniforms = {};
+    const controller = new AbortController();
+    const visible = () => !document.hidden && canvas.isConnected && canvas.clientWidth > 0 && canvas.clientHeight > 0;
+    const restored = () => !document.documentElement.hasAttribute("data-restoring");
+    function queue() {
+      if (dead || fx || queued || !wanted || !visible() || !restored()) return;
+      queued = true;
+      // Two frames let the restored shell paint before the first visible effect is built.
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (dead || !visible() || !restored()) { queued = false; return; }
+          Promise.resolve(window.scribeGL.create(canvas, frag, { ...opts, async: true, signal: controller.signal })).then((built) => {
+            queued = false;
+            if (dead) { built?.destroy(); return; }
+            fx = built;
+            cleanup();
+            if (!fx) { dead = true; opts.onError?.(); return; }
+            canvas.dataset.ready = "1";
+            fx.draw(uniforms);
+            opts.onReady?.();
+          });
+        });
+      });
+    }
+    const resize = new ResizeObserver(queue);
+    resize.observe(canvas);
+    document.addEventListener("visibilitychange", queue);
+    window.addEventListener("scribe:restored", queue);
+    function cleanup() {
+      resize.disconnect();
+      document.removeEventListener("visibilitychange", queue);
+      window.removeEventListener("scribe:restored", queue);
+      if (frame) cancelAnimationFrame(frame);
+    }
+    return {
+      set(values) { Object.assign(uniforms, values); fx?.set(values); },
+      draw(values) {
+        Object.assign(uniforms, values);
+        if (dead || !visible()) return false;
+        wanted = true;
+        if (fx) return fx.draw(uniforms);
+        queue();
         return true;
       },
+      destroy() { dead = true; controller.abort(); cleanup(); fx?.destroy(); },
     };
   }
 
@@ -156,5 +229,5 @@
     window.dispatchEvent(new Event("scribe:theme"));
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
-  window.scribeGL = { create, loop, palette };
+  window.scribeGL = { create, lazy, loop, palette };
 })();

@@ -29,7 +29,7 @@ function screen(webgl = true) {
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChange = fn; } };
   const node = () => ({
     hidden: false, textContent: "", innerHTML: "",
-    classList: { toggle(_name: string, _on: boolean) {} }, addEventListener() {}, replaceChildren() {},
+    classList: { toggle(_name: string, _on: boolean) {}, add(_name: string) {}, remove(_name: string) {} }, addEventListener() {}, replaceChildren() {},
     cloneNode: () => node(), replaceWith() {}, querySelector: (_: string): any => node(),
   });
   const root = node();
@@ -40,6 +40,8 @@ function screen(webgl = true) {
     return animation;
   };
   root.classList.toggle = (name: string, on: boolean) => { if (on) classes.add(name); else classes.delete(name); };
+  root.classList.add = name => { classes.add(name); };
+  root.classList.remove = name => { classes.delete(name); };
   (root as any).style = {
     setProperty: (name: string, value: string) => { css[name] = value; },
     removeProperty: (name: string) => { delete css[name]; },
@@ -54,7 +56,7 @@ function screen(webgl = true) {
     addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     scribeOrb: { colors: (p: string) => palettes[p] },
     scribeGL: {
-      create: (_: unknown, shader: string) => {
+      lazy: (_: unknown, shader: string) => {
         shaders.push(shader);
         return { set: (values: any) => Object.assign(uniforms, values), destroy() {}, draw: (values: any) => draws.push(values) };
       },

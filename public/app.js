@@ -1,6 +1,9 @@
 (() => {
   const tabsEl = document.getElementById("tabs");
   const emptyEl = document.getElementById("empty");
+  const startupEl = document.getElementById("startup");
+  const startupMessage = document.getElementById("startup-message");
+  const startupRetry = document.getElementById("startup-retry");
   const newPageEl = document.getElementById("newpage");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
@@ -195,6 +198,7 @@
     builtinOpen: localStorage.getItem(BUILTIN_OPEN_KEY) !== "0",
     activeId: null,
     connected: false,
+    restored: false,
     sideOpen: localStorage.getItem(SIDE_OPEN_KEY) === "1",
     sidebarTab: localStorage.getItem(SIDEBAR_TAB_KEY) === "templates" ? "templates" : "library",
     /** The Trash view replaces the sidebar tabs until Back. */
@@ -214,6 +218,8 @@
 
   /** @type {WebSocket | null} */
   let socket = null;
+  let reconnectTimer = 0;
+  let startupTimer = 0;
   let lastInteractedAt = 0;
   let lastEditAt = 0;
   let viewerHidden = false;
@@ -431,28 +437,57 @@
   bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
   function connect() {
+    clearTimeout(reconnectTimer);
+    if (socket && socket.readyState < WebSocket.CLOSING) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     socket = ws;
+    if (!state.restored) {
+      clearTimeout(startupTimer);
+      startupTimer = setTimeout(() => {
+        startupMessage.textContent = "Still connecting to Scribe. Retrying…";
+        startupRetry.hidden = false;
+        ws.close();
+      }, 5000);
+    }
     ws.addEventListener("open", () => {
+      if (socket !== ws) return;
       state.connected = true;
       renderChrome();
       reportViewer();
       dispatchEvent(new CustomEvent("scribe:connection", { detail: { connected: true } }));
     });
     ws.addEventListener("message", (event) => {
+      if (socket !== ws) return;
       applyEvent(JSON.parse(event.data));
     });
     ws.addEventListener("close", () => {
+      if (socket !== ws) return;
+      clearTimeout(startupTimer);
       if (socket === ws) {
         socket = null;
       }
       state.connected = false;
+      if (!state.restored) {
+        startupMessage.textContent = "Could not connect to Scribe. Retrying…";
+        startupRetry.hidden = false;
+      }
       renderChrome();
       dispatchEvent(new CustomEvent("scribe:connection", { detail: { connected: false } }));
-      setTimeout(connect, 1000);
+      reconnectTimer = setTimeout(connect, 1000);
     });
   }
+
+  startupRetry.addEventListener("click", () => {
+    clearTimeout(startupTimer);
+    clearTimeout(reconnectTimer);
+    const previous = socket;
+    socket = null;
+    previous?.close();
+    startupMessage.textContent = "Restoring your pages…";
+    startupRetry.hidden = true;
+    connect();
+  });
 
   function reportViewer() {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -492,6 +527,7 @@
       return;
     }
     if (msg.type === "snapshot") {
+      clearTimeout(startupTimer);
       showVersionMismatch(msg.version);
       abortDrag(false);
       state.tabs = msg.tabs;
@@ -517,7 +553,14 @@
       unread.clear();
       unreadLibrary.clear();
       syncHash();
+      const firstSnapshot = !state.restored;
+      state.restored = true;
+      startupEl.hidden = true;
       render();
+      if (firstSnapshot) {
+        document.documentElement.removeAttribute("data-restoring");
+        window.dispatchEvent(new Event("scribe:restored"));
+      }
       reportViewer();
       showPersistError(msg.persistError);
       if (fromClosed && !fromOpen) {
@@ -2640,7 +2683,7 @@
   /** The active tab, plus any pane beside it and a peek over it; views.js decides where each frame sits. */
   function renderFrames() {
     const tab = activeTab();
-    emptyEl.hidden = Boolean(tab);
+    emptyEl.hidden = !state.restored || Boolean(tab);
     document.title = tab ? tab.title + " · Scribe" : "Scribe";
     views.layout();
     // The New page screen stands in for a blank page's frame, in whichever pane the page is.

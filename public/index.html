@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="neutral">
+<html lang="en" data-theme="neutral" data-restoring>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,7 +7,7 @@
   <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml" sizes="any">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <link rel="stylesheet" href="./app.css?v=70">
   <link rel="stylesheet" href="./agent.css?v=32">
   <link rel="stylesheet" href="./orb.css?v=2">
@@ -101,7 +101,11 @@
           <p id="template-block-reason">The template changed and this page's data no longer matches. Ask the agent to fix the data.</p>
         </div>
       </div>
-      <div id="empty" class="empty">
+      <div id="startup" class="empty" role="status" aria-live="polite">
+        <p id="startup-message">Restoring your pages…</p>
+        <button id="startup-retry" type="button" hidden>Retry connection</button>
+      </div>
+      <div id="empty" class="empty" hidden>
         <h1>Waiting for a page</h1>
         <p>Ask the Cursor agent to present an investigation, analysis, or design here. New pages show up as tabs. Keep this window open.</p>
         <ul class="shortcuts">

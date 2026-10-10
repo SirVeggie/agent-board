@@ -219,15 +219,21 @@ return glow(c,e);}`;
 
     function build(id) {
       const { frag, sharp, derivatives } = STYLES[id];
-      return GL.create(canvas, (derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "") + HEAD + frag + TAIL, {
+      return GL.lazy(canvas, (derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "") + HEAD + frag + TAIL, {
         scale: sharp ? () => Math.min(2, devicePixelRatio || 1) : 0.5,
         extensions: derivatives ? ["OES_standard_derivatives"] : [],
+        onReady: () => root.classList.add("gl"),
+        onError: () => {
+          loop.stop(); root.classList.remove("gl");
+          if (id !== "nebula" && running) { use("nebula"); start(); }
+        },
       });
     }
 
     /** One shader per WebGL context, so another background gets a fresh canvas. The nebula stands in for one that won't compile. */
     function use(id) {
       if (fx && id === style) return true;
+      root.classList.remove("gl");
       if (fx) {
         fx.destroy();
         const next = canvas.cloneNode();
@@ -270,7 +276,6 @@ return glow(c,e);}`;
       loop.start();
     }
 
-    if (!use("nebula")) return null;
     new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     new ResizeObserver(() => running && draw()).observe(root);
     still.addEventListener("change", () => running && start());
@@ -308,7 +313,6 @@ return glow(c,e);}`;
     askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
     askBtn.addEventListener("click", () => host.openChat());
     const backdrop = createBackdrop(root);
-    root.classList.toggle("gl", Boolean(backdrop));
     /** Each blank page keeps the background it drew, so coming back to it doesn't change it. */
     const picks = new Map();
     let current = null;

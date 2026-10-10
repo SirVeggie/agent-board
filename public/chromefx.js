@@ -118,7 +118,7 @@ gl_FragColor=outc(acc/max(a,1e-3),a*(.4+.4*u_busy));}`;
     canvas = document.createElement("canvas");
     canvas.className = "chrome-fx";
     chrome.prepend(canvas);
-    fx = GL.create(canvas, HEAD + style.frag, { alpha: true, scale: style.scale });
+    fx = GL.lazy(canvas, HEAD + style.frag, { alpha: true, scale: style.scale, onError: () => { loop.stop(); canvas?.remove(); } });
     if (fx) resized.observe(canvas);
   }
 

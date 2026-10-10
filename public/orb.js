@@ -177,11 +177,18 @@ gl_FragColor=c;
     surface.setAttribute("aria-hidden", "true");
     container.prepend(surface);
     const opts = { alpha: true, scale: () => Math.min(2, window.devicePixelRatio || 1) };
-    const fx = window.scribeGL?.create(canvas, FRAG, opts);
-    const spill = fx && window.scribeGL.create(surface, FRAG, opts);
+    const fx = window.scribeGL?.lazy(canvas, FRAG, {
+      ...opts, onReady: () => btn.classList.add("gl"),
+      onError: () => {
+        broken = true; loop.stop(); spill?.destroy();
+        btn.classList.remove("gl", "fx-live"); canvas.remove(); surface.remove();
+        const error = container.closest(".orb-settings")?.querySelector(".orb-settings-error");
+        if (error) error.textContent = "WebGL is unavailable. The chat uses the gradient fallback.";
+      },
+    });
+    const spill = fx && window.scribeGL.lazy(surface, FRAG, opts);
     if (!fx) { canvas.remove(); surface.remove(); return null; }
     if (!spill) surface.remove();
-    btn.classList.add("gl");
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
     let time = 12, busy = false, disposed = false, broken = false;

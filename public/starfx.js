@@ -93,7 +93,11 @@ gl_FragColor=over(pm(sc,fill),c);}`;
     const canvas = document.createElement("canvas");
     canvas.className = "star-fx";
     canvas.setAttribute("aria-hidden", "true");
-    const fx = GL.create(canvas, FRAG, { alpha: true, scale: () => Math.min(2, window.devicePixelRatio || 1) });
+    const fx = GL.lazy(canvas, FRAG, {
+      alpha: true, scale: () => Math.min(2, window.devicePixelRatio || 1),
+      onReady: () => host?.classList.add("gl"),
+      onError: () => { dead = true; loop.stop(); host?.classList.remove("gl"); canvas.remove(); },
+    });
     if (!fx) return null;
     let host = null;
     let dead = false;
@@ -138,7 +142,7 @@ gl_FragColor=over(pm(sc,fill),c);}`;
         if (dead) return;
         host?.classList.remove("gl");
         host = next;
-        host.classList.add("gl");
+        if (canvas.dataset.ready) host.classList.add("gl");
         host.prepend(canvas);
         // The host is usually added to the page right after this.
         requestAnimationFrame(update);

@@ -443,17 +443,14 @@
     }
     loadMissing();
     armUsageTick();
-    for (const provider of PROVIDERS) {
-      if (!providerAvailable(provider)) continue;
-      api("GET", `/models?provider=${provider}`)
-        .then((data) => {
-          if (data.models?.length) {
-            S.config.models[provider] = data.models;
-            renderAll();
-          }
-        })
-        .catch(() => undefined);
+    const models = await Promise.all(PROVIDERS.filter(providerAvailable).map(async (provider) => {
+      try { return [provider, await api("GET", `/models?provider=${provider}`)]; }
+      catch { return [provider, null]; }
+    }));
+    for (const [provider, data] of models) {
+      if (data?.models?.length) S.config.models[provider] = data.models;
     }
+    renderAll();
   }
 
   async function loadThreads() {
@@ -501,13 +498,17 @@
 
   /* ---------- events ---------- */
 
+  let startupData = null;
+  // Boot and the first socket open share one load. Later connections refresh missed data.
+  function loadStartupData() {
+    return startupData ||= Promise.all([loadConfig(), loadThreads(), loadBrowsers()]);
+  }
+
   window.addEventListener("scribe:agent-event", (event) => onEvent(event.detail));
   window.addEventListener("scribe:connection", (event) => {
     if (event.detail?.connected) {
-      loadConfig();
-      loadThreads();
-      loadBrowsers();
-    }
+      loadStartupData();
+    } else startupData = null;
   });
   window.addEventListener("scribe:render", () => {
     const active = app()?.activeTab?.()?.id || null;
@@ -9473,7 +9474,7 @@
       if (id) setCurrent(id);
       sidebar.renderList();
     };
-    Promise.all([loadConfig(), loadThreads(), loadBrowsers()]).then(() => {
+    loadStartupData().then(() => {
       if (S.sideOpen) sidebar.ensureThread();
       dock.syncThread();
       renderAll();
