@@ -3817,7 +3817,7 @@
         web.setAttribute("aria-label", `${wm.label}: ${detail}`);
         bar.append(web);
       }
-      const meter = usageChip(s.provider, this.variant !== "full");
+      const meter = usageChip(s.provider, this.variant !== "full", s.model);
       if (meter) bar.append(meter);
       this.ctxMeter = contextMeter(this);
       bar.append(this.ctxMeter);
@@ -6614,14 +6614,26 @@
     return detailWindows(limits).filter((w) => w.id !== "cursor_on_demand" || w.utilization > 0);
   }
 
-  /** Compact chip: Claude/Codex's 5-hour, Cursor's Included, else the fullest listed window. */
-  function compactWindow(limits) {
+  /** Cursor exposes no usage bucket in our model list; infer it from the selected id or display name. */
+  function cursorUsageWindow(model) {
+    const info = !model || model === "default" ? modelsOf("cursor")[0] : modelInfo("cursor", model);
+    const names = [info?.id || (!model || model === "default" ? "auto" : model), info?.label || ""];
+    return names.some((name) => /^auto$/i.test(name.trim()) || /grok|composer/i.test(name)) ? "cursor_auto" : "cursor_api";
+  }
+
+  /** Compact chip: Cursor's selected model bucket, Claude/Codex's 5-hour, else the fullest listed window. */
+  function compactWindow(limits, provider, model) {
+    if (provider === "cursor") {
+      const selected = limits.windows.find((w) => w.id === cursorUsageWindow(model));
+      const included = limits.windows.find((w) => w.id === "cursor_included");
+      if (selected || included) return selected || included;
+    }
     const listed = chipWindows(limits);
-    return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "codex:codex:primary") || limits.windows.find((w) => w.id === "cursor_included") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
+    return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "codex:codex:primary") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
   }
 
   /** Plan usage on the composer: one percent in the floating chat and sidebar, or "5h 84%" windows in the full window. Nothing until the provider has reported. */
-  function usageChip(provider, compact = false) {
+  function usageChip(provider, compact = false, model = null) {
     const limits = planLimits(provider);
     if (!limits) return null;
     if (provider === "codex" && limits.availability !== "available") {
@@ -6631,7 +6643,7 @@
       return chip;
     }
     const listed = chipWindows(limits);
-    const one = compact ? compactWindow(limits) : null;
+    const one = compact ? compactWindow(limits, provider, model) : null;
     if (!(compact ? one : listed.length)) return null;
     const top = one ? one.utilization : Math.max(...listed.map((w) => w.utilization));
     const chip = button("", `ag-usage lvl-${usageLevel(top)}`, () => {
