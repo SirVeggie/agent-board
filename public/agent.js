@@ -2948,8 +2948,14 @@
       head.append(status);
       const label = el("span", "ag-tool-label");
       const page = pageTool(it);
+      const fileSummary = fileToolSummary(it);
       if (page) {
         label.append(...this.pageToolLabel(page));
+      } else if (fileSummary) {
+        const title = el("span", "ag-tool-title", fileSummary);
+        title.dataset.tooltip = fileSummary;
+        title.setAttribute("aria-description", fileSummary);
+        label.append(title);
       } else if ((it.tool === "edit" || it.tool === "delete") && (it.files?.length || it.paths?.length)) {
         const files = it.files?.length ? it.files : it.paths.map((p) => ({ path: p }));
         label.append(el("span", "ag-tool-verb", it.tool === "delete" ? "Delete" : files.some((f) => f.status === "A") ? "Create" : "Edit"));
@@ -4839,6 +4845,35 @@
       page.summary = ops.length === 1 ? opLine(ops[0]) : ops.length ? `${ops.length} changes` : "";
     } else page.summary = actionSummary(typeof input.action === "string" ? input.action : "", isRecord(input.args) ? input.args : {}, result?.result, done);
     return page;
+  }
+
+  /** Keep the target and search terms visible without opening a file tool's JSON. */
+  function fileToolSummary(it) {
+    if (it.tool !== "mcp") return null;
+    const name = /^Scribe:\s+(read_file|grep_files|list_files)\b/.exec(it.title || "")?.[1]
+      || /^mcp__scribe__(read_file|grep_files|list_files)$/.exec(it.name || "")?.[1];
+    if (!name || !isRecord(it.input)) return null;
+    const input = it.input;
+    const path = typeof input.path === "string" && input.path.trim() ? input.path : ".";
+    const parts = [];
+    if (name === "read_file") {
+      if (typeof input.path !== "string" || !input.path.trim()) return null;
+      parts.push(`Read ${path}`);
+      if (Number.isInteger(input.offset) || Number.isInteger(input.limit)) {
+        const start = Number.isInteger(input.offset) && input.offset > 0 ? input.offset : 1;
+        const limit = Number.isInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 1000) : 200;
+        const result = parseToolJson(it.output);
+        if (result?.kind !== "directory") parts.push(`from line ${start}, up to ${limit} lines`);
+      }
+    } else if (name === "grep_files") {
+      if (typeof input.pattern !== "string") return null;
+      parts.push(`Search “${input.pattern}” in ${path}`);
+    } else parts.push(`List files in ${path}`);
+    if (typeof input.glob === "string" && input.glob) parts.push(input.glob);
+    if (name === "grep_files" && input.fixedStrings) parts.push("literal");
+    if (name === "grep_files" && input.ignoreCase) parts.push("ignore case");
+    if (name !== "read_file" && Number.isInteger(input.offset) && input.offset > 1) parts.push(`from result ${input.offset}`);
+    return parts.join(" · ");
   }
 
   /** A thread's helper threads (agent_run), oldest first. */
