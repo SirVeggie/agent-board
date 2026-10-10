@@ -83,12 +83,12 @@ window.createViews = function createViews(host) {
     return node;
   }
 
-  function iconButton(icon, label, onClick) {
+  function iconButton(icon, label, onClick, tooltip = true) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "view-btn";
     btn.innerHTML = icon;
-    btn.dataset.tooltip = label;
+    if (tooltip) btn.dataset.tooltip = label;
     btn.setAttribute("aria-label", label);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -456,7 +456,7 @@ window.createViews = function createViews(host) {
       headTitle(target),
       openOutButton(target, () => promote(target, { fromSplit: host.spaceId() })),
       iconButton(ICONS.peek, "Show as peek", () => splitToPeek()),
-      iconButton(ICONS.close, "Close split", () => closeSplit())
+      iconButton(ICONS.close, "Close split", () => closeSplit(), false)
     );
     renderBody(splitBody, target);
   }
@@ -470,13 +470,13 @@ window.createViews = function createViews(host) {
     }
     const parts = [];
     if (activePeek().stack.length > 1) {
-      parts.push(iconButton(ICONS.back, "Back", () => peekBack()));
+      parts.push(iconButton(ICONS.back, "Back", () => peekBack(), false));
     }
     parts.push(
       headTitle(top),
       openOutButton(top, () => promote(top, { fromPeek: true })),
       iconButton(ICONS.split, "Show in split", () => peekToSplit()),
-      iconButton(ICONS.close, "Close (Esc)", () => closePeek())
+      iconButton(ICONS.close, "Close", () => closePeek(), false)
     );
     peekHead.replaceChildren(...parts);
     card.setAttribute("aria-label", titleOf(top));

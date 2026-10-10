@@ -308,7 +308,7 @@ window.createLibrary = function createLibrary(host) {
     del.className = "tab-close";
     del.type = "button";
     del.textContent = "×";
-    del.dataset.tooltip = "Delete";
+    del.setAttribute("aria-label", "Delete");
     del.tabIndex = -1;
     el.appendChild(del);
 
@@ -364,7 +364,7 @@ window.createLibrary = function createLibrary(host) {
     if (unreadInside) {
       const dot = document.createElement("span");
       dot.className = "lib-unread-dot";
-      dot.dataset.tooltip = "Has unread pages";
+      dot.setAttribute("aria-label", "Has unread pages");
       el.appendChild(dot);
     }
     const count = document.createElement("span");

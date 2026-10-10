@@ -80,12 +80,15 @@
     return span;
   }
 
-  function button(label, cls, onClick, title) {
+  function button(label, cls, onClick, title, tooltip = true) {
     const b = el("button", cls);
     b.type = "button";
     if (typeof label === "string") b.textContent = label;
     else if (label) b.append(label);
-    if (title) b.dataset.tooltip = title;
+    if (title) {
+      if (tooltip) b.dataset.tooltip = title;
+      else b.setAttribute("aria-label", title);
+    }
     if (onClick) b.addEventListener("click", onClick);
     return b;
   }
@@ -202,7 +205,6 @@
         a.className = "ag-board-link";
         a.dataset.boardTarget = target;
         a.tabIndex = 0;
-        a.dataset.tooltip = `Scribe page · ${target} (Ctrl navigate, Shift split, Alt peek)`;
         if (auto) autoLinks.push(a);
       } else if (/^https?:/i.test(href)) {
         a.classList.add("ag-web-link");

@@ -51,10 +51,10 @@
     return node;
   }
 
-  function iconButton(svg, title, onClick) {
+  function iconButton(svg, title, onClick, tooltip = true) {
     const b = el("button", "pv-btn");
     b.type = "button";
-    b.dataset.tooltip = title;
+    if (tooltip) b.dataset.tooltip = title;
     b.setAttribute("aria-label", title);
     b.innerHTML = svg;
     b.addEventListener("click", onClick);
@@ -121,11 +121,9 @@
     let source = false;
     const toggle = el("button", "pv-btn pv-text-btn", "Source");
     toggle.type = "button";
-    toggle.dataset.tooltip = "Show the source";
     const draw = () => {
       body.replaceChildren(source ? el("pre", "pv-text", text) : renderView());
       toggle.textContent = source ? "Preview" : "Source";
-      toggle.dataset.tooltip = source ? "Show the preview" : "Show the source";
     };
     toggle.addEventListener("click", () => {
       source = !source;
@@ -239,10 +237,9 @@
     const download = el("a", "pv-btn");
     download.href = file.url;
     download.download = file.name || "file";
-    download.dataset.tooltip = "Download";
     download.setAttribute("aria-label", "Download");
     download.innerHTML = SVG.download;
-    const closeBtn = iconButton(SVG.close, "Close (Esc)", close);
+    const closeBtn = iconButton(SVG.close, "Close", close, false);
     tools.append(download, closeBtn);
     head.append(title, tools);
     const body = el("div", "pv-body");

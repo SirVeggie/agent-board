@@ -2078,7 +2078,7 @@
       close.className = "tab-close";
       close.type = "button";
       close.textContent = "×";
-      close.dataset.tooltip = "Delete template";
+      close.setAttribute("aria-label", "Delete template");
       close.addEventListener("click", (event) => {
         event.stopPropagation();
         deleteTemplate(template);

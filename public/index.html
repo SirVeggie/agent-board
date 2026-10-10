@@ -54,7 +54,7 @@
 </head>
 <body>
   <header class="chrome">
-    <button type="button" class="brand" id="settings-toggle" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings-panel" data-tooltip="Settings">
+    <button type="button" class="brand" id="settings-toggle" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings-panel">
       <span class="logo" aria-hidden="true">
         <svg viewBox="0 0 16 16" width="20" height="20">
           <rect x="3" y="2.5" width="5" height="3" rx="1" fill="#fff"/>
@@ -73,7 +73,7 @@
     <div class="actions">
       <button type="button" id="template-edit" hidden data-tooltip="Edit template values">Edit</button>
       <button type="button" id="clear" data-tooltip="Close unpinned tabs">Clear</button>
-      <button type="button" id="agent-toggle" class="icon-btn agent-toggle" aria-label="Agent chat" aria-expanded="false" aria-controls="agent-pane" data-tooltip="Agent chat (Ctrl+L) · floating (Ctrl+K) · full window (Ctrl+Shift+L)">
+      <button type="button" id="agent-toggle" class="icon-btn agent-toggle" aria-label="Agent chat" aria-expanded="false" aria-controls="agent-pane" data-tooltip="Agent chat (Ctrl+L)">
         <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.2l1.5 3.9 3.9 1.5-3.9 1.5L8 12l-1.5-3.9L2.6 6.6l3.9-1.5z" fill="currentColor"/><circle cx="12.8" cy="12.6" r="1.5" fill="currentColor"/></svg>
         <span id="agent-badge" class="badge" hidden></span>
       </button>
@@ -142,14 +142,14 @@
       <div id="frames"></div>
     </main>
     <aside id="agent-pane" class="agent-pane closed" aria-hidden="true" aria-label="Agent chat" inert>
-      <div class="agent-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent chat" data-tooltip="Resize"></div>
+      <div class="agent-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent chat"></div>
       <div class="agent-inner"></div>
     </aside>
     <aside id="side-pane" class="side-pane closed" aria-hidden="true" inert>
-      <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" data-tooltip="Resize sidebar"></div>
+      <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
       <div class="side-inner">
         <div class="sidebar-back" id="sidebar-back" hidden>
-          <button type="button" id="trash-back" class="sidebar-tab" data-tooltip="Back to the Library (Esc)">
+          <button type="button" id="trash-back" class="sidebar-tab">
             <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M13 8H3.5M7.5 3.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Back
           </button>
@@ -161,10 +161,10 @@
         <div id="sidebar-panel-library">
           <div class="side-head">
             <h2>Library <span id="library-count">0</span></h2>
-            <button type="button" id="library-new-folder" class="side-head-icon" aria-label="New folder" data-tooltip="New folder">
+            <button type="button" id="library-new-folder" class="side-head-icon" aria-label="New folder">
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 3.5h4.2l1.5 1.5h7.3v8.5h-13z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 7.2v4.2M5.9 9.3h4.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
             </button>
-            <button type="button" id="library-more" class="side-head-icon" aria-label="Library actions" data-tooltip="More" aria-haspopup="menu">
+            <button type="button" id="library-more" class="side-head-icon" aria-label="Library actions" aria-haspopup="menu">
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>
             </button>
           </div>

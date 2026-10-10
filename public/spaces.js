@@ -42,7 +42,6 @@ window.createSpaces = function createSpaces(host) {
   const chip = document.createElement("button");
   chip.type = "button";
   chip.className = "space-chip";
-  chip.dataset.tooltip = "Spaces (Ctrl+E)";
   chip.setAttribute("aria-label", "Spaces");
   chip.setAttribute("aria-haspopup", "dialog");
   chip.addEventListener("click", () => toggle());
@@ -282,7 +281,7 @@ window.createSpaces = function createSpaces(host) {
       chip.dataset.tooltip = `Space: ${space.name} (Ctrl+E)`;
     } else {
       chip.innerHTML = ICONS.spaces;
-      chip.dataset.tooltip = "Spaces (Ctrl+E)";
+      chip.removeAttribute("data-tooltip");
     }
   }
 
@@ -292,7 +291,6 @@ window.createSpaces = function createSpaces(host) {
     const add = el("button", "space-card space-new");
     add.type = "button";
     add.innerHTML = `${ICONS.plus}<span>New space</span>`;
-    add.dataset.tooltip = "New empty space (N)";
     add.addEventListener("click", () => void createSpace());
     grid.append(add);
     renderDeleted();
@@ -345,13 +343,6 @@ window.createSpaces = function createSpaces(host) {
       top.append(input);
     } else {
       const name = el("span", "space-name", space.name);
-      name.dataset.tooltip = "Double-click to rename";
-      name.addEventListener("dblclick", (event) => {
-        event.stopPropagation();
-        selected = index;
-        renaming = space.id;
-        render();
-      });
       top.append(name);
     }
     if (space.id === data.activeId) {
@@ -360,7 +351,6 @@ window.createSpaces = function createSpaces(host) {
     const more = el("button", "space-more");
     more.type = "button";
     more.innerHTML = ICONS.more;
-    more.dataset.tooltip = "Rename, color, delete";
     more.setAttribute("aria-label", `Options for ${space.name}`);
     more.addEventListener("pointerdown", (event) => event.stopPropagation());
     more.addEventListener("click", (event) => {

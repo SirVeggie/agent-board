@@ -293,7 +293,6 @@
     const chip = el("span", `ag-chip small file${isImage ? " img" : ""}`);
     chip.tabIndex = 0;
     chip.setAttribute("role", "button");
-    chip.dataset.tooltip = `Preview ${file.name}`;
     chip.addEventListener("click", onOpen);
     chip.addEventListener("keydown", (event) => {
       if (event.target !== chip || (event.key !== "Enter" && event.key !== " ")) return;
@@ -1212,7 +1211,7 @@
           const data = await api("GET", `/fs?path=${encodeURIComponent(dir || "")}`);
           crumbs.replaceChildren();
           if (data.parent !== null && data.parent !== undefined) {
-            crumbs.append(button("↑", "ag-btn ghost small", () => load(data.parent), "Up"));
+            crumbs.append(button("↑", "ag-btn ghost small", () => load(data.parent), "Up", false));
           }
           crumbs.append(el("span", "ag-ws-cur", data.path || "This PC"));
           if (data.repo) crumbs.append(el("span", "ag-tag", "git"));
@@ -1375,7 +1374,7 @@
       address,
       el("span", "ag-grow"),
       button("Close browser", "ag-btn ghost", () => api("POST", `${base}/close`).catch((err) => notice(err.message)), "Close the agent's browser and its tabs"),
-      button(icon("close"), "ag-icon-btn", () => close(), "Close this view (Esc)")
+      button(icon("close"), "ag-icon-btn", () => close(), "Close this view (Esc)", false)
     );
     const stage = el("div", "ag-browser-stage");
     const screen = el("img", "ag-browser-screen");
@@ -1491,7 +1490,7 @@
     const title = el("h2", "ag-modal-title", "Changes");
     const tabs = el("div", "ag-seg");
     const actions = el("div", "ag-diff-actions");
-    head.append(title, el("span", "ag-grow"), actions, tabs, button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)"));
+    head.append(title, el("span", "ag-grow"), actions, tabs, button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)", false));
     const body = el("div", "ag-diff-body");
     const side = el("div", "ag-diff-files");
     const main = el("div", "ag-diff-main");
@@ -1940,7 +1939,7 @@
       const top = el("div", "ag-thead-top");
       if (this.variant === "side") {
         top.append(
-          button(icon("list"), `ag-icon-btn${sidebar.listOpen ? " on" : ""}`, () => sidebar.toggleList(), "Threads")
+          button(icon("list"), `ag-icon-btn${sidebar.listOpen ? " on" : ""}`, () => sidebar.toggleList(), "Threads", false)
         );
       }
       const title = el("div", "ag-title", t ? t.title : "New thread");
@@ -1954,13 +1953,13 @@
       }
       if (t && S.browsers.has(t.id)) acts.append(button(icon("browser"), "ag-icon-btn", () => openBrowser(t.id), "Agent browser: watch it, click and type into it"));
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
-      acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings"));
-      acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread with this chat's settings (Ctrl+Shift+K)"));
+      acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings", false));
+      acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread (Ctrl+Shift+K)"));
       if (this.variant === "side") {
-        acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L, or Ctrl+Up from the chat)"));
-        acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)"));
+        acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L)"));
+        acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)", false));
       } else if (this.variant === "full") {
-        acts.append(button(icon("collapse"), "ag-icon-btn", () => leaveFull(), "Back to Scribe (Esc)"));
+        acts.append(button(icon("collapse"), "ag-icon-btn", () => leaveFull(), "Back to Scribe (Esc)", false));
       }
       top.append(acts);
       this.header.append(top);
@@ -2437,7 +2436,7 @@
         if ((rails.length || answers.length > 1) && group.turn) {
           const key = `s:${group.key}`;
           wrap.classList.toggle("open", this.expanded.has(key));
-          const sum = button("", "ag-sum", () => this.toggle(key, wrap), "Show the steps");
+          const sum = button("", "ag-sum", () => this.toggle(key, wrap), "Show the steps", false);
           sum.append(...this.stepSummary(group), icon("chevron", "ag-ico ag-chev"));
           body.prepend(sum);
         }
@@ -2593,14 +2592,14 @@
       }
       if (item.turnId && !queued && !item.dropped && !item.steer) {
         actions.append(
-          button(icon("revert"), "ag-icon-btn", () => this.rewindTo(item, true), "Retry: go back to before this message and send it again"),
-          button(icon("edit"), "ag-icon-btn", () => this.rewindTo(item, false), "Edit: go back to before this message and change it")
+          button(icon("revert"), "ag-icon-btn", () => this.rewindTo(item, true), "Retry message"),
+          button(icon("edit"), "ag-icon-btn", () => this.rewindTo(item, false), "Change sent message")
         );
       }
       if (!item.dropped && !item.turnId && item.steer !== "folded" && !item.editing) {
         actions.append(
           button(icon("close"), "ag-icon-btn", () => this.queueAction("withdraw", item.id), "Cancel message"),
-          button(icon("edit"), "ag-icon-btn", () => this.editQueued(item), "Edit message")
+          button(icon("edit"), "ag-icon-btn", () => this.editQueued(item), "Edit message", false)
         );
       }
       if (item.editing) actions.append(button(icon("edit"), "ag-icon-btn", () => this.editQueued(item), "Resume editing message"));
@@ -2893,7 +2892,6 @@
     pageChip(page) {
       const chip = el("span", "ag-page-chip", page.title);
       chip.setAttribute("role", "link");
-      chip.dataset.tooltip = `Scribe page · ${page.ref} (opens as a peek; Ctrl navigate, Shift split)`;
       chip.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -3113,7 +3111,6 @@
       const open = (event) => app()?.openLink(it.page.key, event, { mode: "peek" });
       const pageLink = el("a", "ag-board-link", pageTitle);
       pageLink.tabIndex = 0;
-      pageLink.dataset.tooltip = `Scribe page · ${it.page.key} (Ctrl navigate, Shift split; opens as a peek)`;
       pageLink.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -3191,7 +3188,7 @@
       if (turn.status === "running") {
         const waiting = items.some((it) => (it.kind === "approval" || it.kind === "question" || it.kind === "plan") && it.status === "pending");
         foot.append(el("span", "ag-spin"), el("span", "ag-foot-label", waiting ? "Waiting for you" : "Working"), elapsed(turn.startedAt));
-        foot.append(button(icon("stop"), "ag-btn tiny", () => this.stop(), "Stop"));
+        foot.append(button(icon("stop"), "ag-btn tiny", () => this.stop(), "Stop", false));
         return foot;
       }
       const parts = el("span", "ag-foot-meta");
@@ -3229,7 +3226,7 @@
         const added = files.reduce((a, f) => a + (f.added || 0), 0);
         const removed = files.reduce((a, f) => a + (f.removed || 0), 0);
         const changes = el("div", `ag-changes${turn.reverted ? " reverted" : ""}`);
-        const top = button("", "ag-changes-head", () => openDiff({ kind: "turn", threadId: turn.threadId, turnId: turn.id }), "Review the diff");
+        const top = button("", "ag-changes-head", () => openDiff({ kind: "turn", threadId: turn.threadId, turnId: turn.id }), "Review diff");
         top.append(icon("diff"), el("span", null, `${turn.reverted ? "Reverted · " : ""}${files.length} file${files.length === 1 ? "" : "s"} changed`), R.counts(added, removed), el("span", "ag-grow"), el("span", "ag-link", "Review"));
         changes.append(top);
         const list = el("div", "ag-changes-list");
@@ -3461,7 +3458,6 @@
       this.input = el("textarea", "ag-textarea");
       this.input.rows = 1;
       this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
-      this.input.dataset.tooltip = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
       this.input.addEventListener("input", () => {
         this.autosize();
         this.updatePicker();
@@ -3740,7 +3736,7 @@
       bar.replaceChildren();
       this.renderForkNote(t);
       const info = modelInfo(s.provider, s.model);
-      const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model");
+      const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model", false);
       model.append(providerIcon(s.provider), el("span", null, info?.label || s.model));
       bar.append(model);
       const hasEffort = info?.efforts?.length || info?.params?.some((p) => p.id !== CONTEXT_PARAM);
@@ -3748,7 +3744,7 @@
         const effortLabel = s.effort ? info.efforts.find((e) => e.id === s.effort)?.label || s.effort : info.defaultEffort ? `${info.efforts.find((e) => e.id === info.defaultEffort)?.label || info.defaultEffort}` : "Default";
         const fast = info.params?.find((p) => p.id === "fast");
         const fastOn = fast ? (s.modelParams?.fast ?? fast.default) === "true" : false;
-        const eff = button("", "ag-pill", (event) => this.effortMenu(event.currentTarget), "Reasoning and model options");
+        const eff = button("", "ag-pill", (event) => this.effortMenu(event.currentTarget), "Reasoning and model options", false);
         eff.append(icon("think"), el("span", null, info.efforts.length ? effortLabel : "Options"));
         if (fastOn) eff.append(el("span", "ag-tag tiny", "fast"));
         bar.append(eff);
@@ -3822,9 +3818,8 @@
       if (t?.background) tail.append(el("span", "ag-tag", `${t.background} in background`));
       const running = t && t.status !== "idle";
       if (running) {
-        tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)"));
+        tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)", false));
       }
-      this.input.dataset.tooltip = `${composerSendHint()} · @ mentions a page, folder or file · / for commands`;
       tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)"));
     }
 
@@ -4975,7 +4970,6 @@
     row.dataset.id = t.id;
     const quiet = t.status === "idle" && !t.background && !(t.unread && !t.fromPage);
     const dot = quiet && hasDraft(t) ? icon("pen", "ag-row-pen") : el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
-    if (quiet && hasDraft(t)) dot.dataset.tooltip = "Unsent message";
     if (t.background) dot.dataset.tooltip = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
@@ -5155,7 +5149,6 @@
         root.style.removeProperty("--ag-full-side");
         localStorage.removeItem(LS.fullSide);
       });
-      resizer.dataset.tooltip = "Drag to resize, double-click to reset";
       document.addEventListener(
         "click",
         (event) => {
@@ -5225,7 +5218,7 @@
       flyout.bind(this.orb, "orb");
       input.append(this.orb, view.composer, view.sendSlot);
       this.status = el("span", "dock-status");
-      this.titleBtn = button("", "dock-title", (event) => this.threadMenu(event.currentTarget), "Switch thread");
+      this.titleBtn = button("", "dock-title", (event) => this.threadMenu(event.currentTarget), "Switch thread", false);
       this.scopeBtn = button("", "dock-scope", (event) => view.scopeMenu(event.currentTarget), SCOPE_CHIP_TITLE);
       const topLeft = el("div", "dock-top-tab dock-top-left");
       topLeft.append(this.status, this.titleBtn);
@@ -5240,7 +5233,7 @@
           sidebar.setOpen(true);
           if (id) sidebar.view.setThread(id);
         }, "Open in the sidebar"),
-        button(icon("close"), "ag-icon-btn small dock-close", () => this.setShown(false), "Hide (Esc)")
+        button(icon("close"), "ag-icon-btn small dock-close", () => this.setShown(false), "Hide (Esc)", false)
       );
       const top = el("div", "dock-top");
       top.append(topLeft, topRight);
@@ -5252,7 +5245,7 @@
       const bar = el("div", "dock-bar");
       bar.append(right);
       panel.append(head, input, bar);
-      const handle = button("", "dock-handle", () => this.setShown(true), "Agent (Ctrl+K)");
+      const handle = button("", "dock-handle", () => this.setShown(true), "Agent (Ctrl+K)", false);
       this.handleClock = el("span", "ag-clock dock-handle-clock");
       this.handleText = el("span", "dock-handle-text");
       handle.append(icon("sparkle", "ag-ico dock-handle-ico"), el("span", "dock-dot"), this.handleClock, el("span", "dock-handle-sep"), this.handleText, el("kbd", null, "Ctrl K"));

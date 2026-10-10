@@ -52,7 +52,7 @@ test("shared tooltips handle dynamic pages, keyboard focus and modal dialogs", a
     await tip.waitFor({ state: "hidden" });
     assert.equal(await page.locator("#plain").getAttribute("aria-description"), null);
 
-    // A thread button's own tooltip must not dismiss the hovercard before click.
+    // The attribution link stays clickable without a redundant text tooltip.
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/hovercard.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: `
       const anchor = document.createElement("button");
@@ -71,11 +71,11 @@ test("shared tooltips handle dynamic pages, keyboard focus and modal dialogs", a
     await page.locator("#page-anchor").hover();
     await card.waitFor({ state: "visible" });
     await thread.hover();
-    await tip.waitFor({ state: "visible" });
+    assert.equal(await thread.getAttribute("data-tooltip"), null);
+    assert.equal(await tip.isVisible(), false);
     assert.equal(await card.isVisible(), true);
-    assert.equal(await tip.textContent(), "Open thread: Maker");
     await page.mouse.down();
-    await tip.waitFor({ state: "visible" });
+    assert.equal(await tip.isVisible(), false);
     assert.equal(await card.isVisible(), true);
     await page.mouse.up();
     assert.deepEqual(await page.evaluate(() => (window as any).openedThreads), ["thread-maker"]);

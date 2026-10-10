@@ -81,7 +81,7 @@
 
   // Compact and the overflow menu sit with the other strip buttons; window controls stay at the edge.
   const compactBtn = iconButton("desktop-compact");
-  const moreBtn = iconButton("desktop-more", ICONS.more, "Window");
+  const moreBtn = iconButton("desktop-more", ICONS.more, "Window", false);
   moreBtn.setAttribute("aria-haspopup", "menu");
   actions.append(compactBtn, moreBtn);
 
@@ -111,14 +111,14 @@
     openMenu(moreBtn, BUTTONS);
   });
 
-  function iconButton(id, icon = "", label = "") {
+  function iconButton(id, icon = "", label = "", tooltip = true) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.id = id;
     btn.className = "icon-btn";
     btn.innerHTML = icon;
     if (label) {
-      btn.dataset.tooltip = label;
+      if (tooltip) btn.dataset.tooltip = label;
       btn.setAttribute("aria-label", label);
     }
     return btn;

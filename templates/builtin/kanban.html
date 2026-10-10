@@ -1045,7 +1045,7 @@
       <button class="tool workers-btn hidden" id="workersBtn" type="button" aria-haspopup="dialog">Workers</button>
       <button class="tool" id="labelsBtn" type="button">Labels</button>
       <button class="tool" id="archiveBtn" type="button">Archive</button>
-      <button class="tool icon" id="settingsBtn" type="button" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button class="tool icon" id="settingsBtn" type="button" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </div>
   </header>
   <main class="board" id="board"></main>
@@ -1073,7 +1073,7 @@
             <input class="field" id="clInput" type="text" placeholder="Add an item" autocomplete="off">
           </div>
 
-          <div class="section-label">Images <label class="cover-toggle hidden" id="coverToggle" title="Show the first image on the board card">Show cover<input class="switch" id="coverSwitch" type="checkbox"></label></div>
+          <div class="section-label">Images <label class="cover-toggle hidden" id="coverToggle">Show cover<input class="switch" id="coverSwitch" type="checkbox"></label></div>
           <div class="gallery" id="gallery"></div>
 
           <div class="section-label">Comments</div>
@@ -1087,7 +1087,7 @@
           <label>Column<select class="field" id="mColumn"></select></label>
           <label>Priority<select class="field" id="mPriority"></select></label>
           <label>Due<input class="field" id="mDue" type="date"></label>
-          <label>Assignee<span class="combo"><input class="field" id="mAssignee" type="text" placeholder="Nobody" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"><button class="combo-clear hidden" id="mAssigneeClear" type="button" title="Unassign" aria-label="Unassign">×</button></span></label>
+          <label>Assignee<span class="combo"><input class="field" id="mAssignee" type="text" placeholder="Nobody" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"><button class="combo-clear hidden" id="mAssigneeClear" type="button" aria-label="Unassign">×</button></span></label>
           <div>
             <div class="section-label" style="margin-top:4px">Labels</div>
             <div class="label-picks" id="mLabels"></div>
@@ -1855,7 +1855,6 @@
         setTimeout(function () { input.focus(); input.select(); }, 0);
       } else {
         var title = el("span", "col-title", col.title || "Untitled");
-        title.title = "Rename";
         title.addEventListener("click", function (e) {
           e.stopPropagation();
           editingCol = col.id;
@@ -1977,13 +1976,12 @@
     if (!isNaN(t)) {
       var today = dueTime(todayStr());
       var due = el("span", "badge", "📅 " + shortDate(t));
-      if (!done && t < today) { due.classList.add("late"); due.title = "Overdue"; }
-      else if (!done && t <= today + 2 * DAY) { due.classList.add("soon"); due.title = "Due soon"; }
+      if (!done && t < today) { due.classList.add("late"); }
+      else if (!done && t <= today + 2 * DAY) { due.classList.add("soon"); }
       badges.appendChild(due);
     }
     if (c.doneAt && settings().showDoneDate) {
       var doneBadge = el("span", "badge full", "✓ " + shortDate(c.doneAt));
-      doneBadge.title = "Done " + new Date(c.doneAt).toLocaleString();
       badges.appendChild(doneBadge);
     }
     if (c.checklist.length) {
@@ -2000,7 +1998,6 @@
       var unread = latestAgentComment(c);
       if (unread) {
         cm.appendChild(el("span", "dot"));
-        cm.title = "New comment from " + (isAgent(unread.by) ? "the agent" : str(unread.by).trim());
       }
       badges.appendChild(cm);
     }
@@ -2014,10 +2011,10 @@
     var blockers = openBlockers(c);
     if (blockers.length) {
       var nums = blockers.map(function (b) { return "#" + b.num; });
-      // The first three blockers on the card; the tooltip lists them all.
+      // The first three blockers on the card; the accessible name lists them all.
       var shown = nums.slice(0, 3).join(", ") + (nums.length > 3 ? " +" + (nums.length - 3) : "");
       var bl = el("span", "badge blocked", "⛔ blocked by " + shown);
-      bl.title = "Blocked by " + nums.join(", ");
+      bl.setAttribute("aria-label", "Blocked by " + nums.join(", "));
       badges.appendChild(bl);
     }
     if (badges.childNodes.length) li.appendChild(badges);
@@ -2044,7 +2041,7 @@
       ok.addEventListener("click", function (e) { e.stopPropagation(); approve(c.id); });
       var back = el("button", "changes", "Changes");
       back.type = "button";
-      back.title = "Request changes";
+      back.setAttribute("aria-label", "Request changes");
       back.addEventListener("click", function (e) { e.stopPropagation(); openCard(c.id); commentBox.focus(); setHint("Write what should change, then press Request changes."); });
       row.appendChild(ok);
       row.appendChild(back);
@@ -2186,7 +2183,6 @@
         });
         ask.appendChild(el("span", "check-mark", col.askAssignee === false ? "" : "✓"));
         ask.appendChild(document.createTextNode("Ask for an assignee on drop"));
-        ask.title = "A card dropped here without an assignee opens the assignee picker";
       }
 
       menu.appendChild(el("div", "sep"));
@@ -2673,10 +2669,9 @@
         });
       });
       var text = el("span", null, item.text);
-      text.title = "Click to tick, double-click to edit";
       var rm = el("button", "x", "×");
       rm.type = "button";
-      rm.title = "Remove";
+      rm.setAttribute("aria-label", "Remove");
       rm.addEventListener("click", function () {
         updateCard(c.id, function (x) {
           x.checklist = x.checklist.filter(function (i) { return i.id !== item.id; });
@@ -2717,7 +2712,7 @@
       img.addEventListener("click", function () { showLightbox(im.data); });
       var rm = el("button", "rm", "×");
       rm.type = "button";
-      rm.title = "Remove image";
+      rm.setAttribute("aria-label", "Remove image");
       rm.addEventListener("click", function () {
         updateCard(c.id, function (x) {
           x.images = x.images.filter(function (y) { return y.id !== im.id; });
@@ -2730,7 +2725,8 @@
     });
     var addImg = el("button", "add-img", "+");
     addImg.type = "button";
-    addImg.title = "Add images (or paste / drop them on the card)";
+    addImg.dataset.tooltip = "Add images (or paste / drop them on the card)";
+    addImg.setAttribute("aria-label", "Add images");
     addImg.addEventListener("click", function () { fileEl.click(); });
     galleryEl.appendChild(addImg);
   }
@@ -2745,7 +2741,6 @@
       who.appendChild(el("span", null, commentWho(cm.by) + " · " + ago(cm.at) + commentFate(cm)));
       var rm = el("button", "x", "×");
       rm.type = "button";
-      rm.title = "Delete comment";
       rm.setAttribute("aria-label", "Delete comment");
       rm.addEventListener("click", function (e) {
         e.preventDefault();
@@ -2792,11 +2787,10 @@
       var open = !b.archived && !isDone(b);
       var row = el("div", "link-row" + (open ? " open-blocker" : ""));
       var name = el("span", null, "#" + b.num + " " + b.title + (open ? "" : " ✓"));
-      name.title = "Open #" + b.num;
       name.addEventListener("click", function () { openCard(b.id); });
       var rm = el("button", "ghost", "×");
       rm.type = "button";
-      rm.title = "Remove link";
+      rm.setAttribute("aria-label", "Remove link");
       rm.addEventListener("click", function () {
         updateCard(c.id, function (x) { x.blockedBy = x.blockedBy.filter(function (y) { return y !== bid; }); return x; });
       });
@@ -3054,10 +3048,9 @@
     var row = el("div", "comment-follow");
     var go = el("button", "primary", "Continue");
     go.type = "button";
-    go.title = "Send the agent chat that last worked on this card back to it. It reads the card again (description, checklist, and comments, since you may have changed them) and goes on with the work; this comment is not sent to it as a message.";
+    go.dataset.tooltip = "Resume worker";
     var skip = el("button", "", "Dismiss");
     skip.type = "button";
-    skip.title = "Keep the comment on the card without waking the agent.";
     go.addEventListener("click", function (e) {
       e.stopPropagation();
       go.disabled = skip.disabled = true;
@@ -3231,7 +3224,7 @@
       if (!l) return;
       var chip = el("button", "label-chip");
       chip.type = "button";
-      chip.title = "Remove " + l.name;
+      chip.setAttribute("aria-label", "Remove " + l.name);
       chip.style.setProperty("--chip", l.color);
       chip.appendChild(el("span", "sw"));
       chip.appendChild(document.createTextNode(l.name));
@@ -3416,7 +3409,6 @@
       var assigned = workerIdFor(c.assignee);
       if (assigned && canRunSolo(c, assigned)) {
         var b = menuButton(menuEl, "Run worker", function () { runSolo(id, assigned); });
-        b.title = "A chat of its own for this card, beside the worker's run";
       }
     }
     // The template's agent actions about one card (context: ["card"]), e.g. Triage this card.
@@ -3840,7 +3832,7 @@
         var sw = el("button", "swatch");
         sw.type = "button";
         sw.style.background = l.color;
-        sw.title = "Change colour";
+        sw.setAttribute("aria-label", "Change colour");
         sw.addEventListener("click", function (ev) {
           ev.stopPropagation();
           var i = PALETTE.indexOf(l.color);
@@ -5474,7 +5466,6 @@
     left.appendChild(add);
     var logTog = el("button", "log-tog" + (workersLogOpen ? " on" : ""), "Log");
     logTog.type = "button";
-    logTog.title = "Starts, pauses, merges, token totals when a chat ends, and usage-limit waits — kept on the board, not in Keeper";
     logTog.addEventListener("click", function () {
       workersLogOpen = !workersLogOpen;
       renderWorkersPanel();
@@ -5496,7 +5487,6 @@
       maxSel.appendChild(extra);
       maxSel.value = extra.value;
     }
-    maxSel.title = "How many workers may be on a card at once";
     maxSel.addEventListener("change", function () { saveSetting("maxWorkers", Number(maxSel.value) || null); });
     maxWrap.appendChild(maxSel);
     enhanceSelect(maxSel);
@@ -5748,7 +5738,7 @@
       var actions = el("div", "wedit-actions");
       var more = el("button", "tool", "All settings…");
       more.type = "button";
-      more.title = "Context, approval, chat, and what the board sends the agent";
+      more.dataset.tooltip = "Context, approval, chat, and what the board sends the agent";
       more.addEventListener("click", function () { flushWorker(); openWorker(id); });
       var remove = el("button", "ghost danger-text", "Remove");
       remove.type = "button";

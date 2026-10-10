@@ -179,7 +179,6 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
       link.className = "hover-card-thread hover-card-actor";
       link.dataset.thread = actor.threadId;
       link.textContent = actor.text;
-      link.dataset.tooltip = `Open thread: ${actor.text}`;
       dd.appendChild(link);
     } else {
       const text = document.createElement("span");
