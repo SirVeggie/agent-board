@@ -183,6 +183,8 @@ fn main() {
             }
             let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
                 .title("Scribe")
+                // Let the board's HTML drop handlers receive files on Windows.
+                .disable_drag_drop_handler()
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(320.0, 240.0)
                 .decorations(true)
