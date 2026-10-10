@@ -1724,32 +1724,48 @@
       if (visible[active] == null) return;
       choose(visible[active]);
     }
-    function fillRows() {
+    function fillRows(resetActive) {
       var q = query.trim().toLowerCase();
+      var previous = Array.from(optionButtons());
+      var activeButton = resetActive ? null : previous[active];
+      var byValue = new Map(previous.map(function (b) { return [b.dataset.value, b]; }));
       visible = [];
       var rows = rowsEl();
-      rows.replaceChildren();
+      var next = [];
       var choice = filterKey ? filterChoice(filterKey) : null;
       Array.prototype.forEach.call(sel.options, function (opt, i) {
         if (q && !opt.value) return;
         if (q && opt.textContent.toLowerCase().indexOf(q) === -1) return;
         visible.push(i);
-        var b = el("button", opt.value === "" ? "placeholder" : "");
-        b.type = "button";
-        b.tabIndex = -1;
-        b.setAttribute("role", "option");
+        var b = byValue.get(opt.value);
+        if (!b) {
+          b = el("button");
+          b.type = "button";
+          b.tabIndex = -1;
+          b.dataset.value = opt.value;
+          b.setAttribute("role", "option");
+          b.appendChild(el("span", "tick-mark"));
+          b.appendChild(document.createTextNode(""));
+          // Retained rows must use the latest option index after additions or reordering.
+          b.addEventListener("mouseenter", function () { active = visible.indexOf(b._optionIndex); highlight(); });
+          b.addEventListener("click", function () { choose(b._optionIndex); });
+        }
+        b._optionIndex = i;
+        b.classList.toggle("placeholder", opt.value === "");
         var excluded = choice && choice.exclude.indexOf(opt.value) !== -1;
         var selected = choice ? excluded || choice.include.indexOf(opt.value) !== -1 : i === sel.selectedIndex;
         b.setAttribute("aria-selected", selected ? "true" : "false");
         if (choice) b.setAttribute("aria-label", opt.textContent + (excluded ? ": excluded" : selected ? ": included" : ": off"));
         b.classList.toggle("excluded", Boolean(excluded));
-        b.appendChild(el("span", "tick-mark", excluded ? "−" : selected ? "✓" : ""));
-        b.appendChild(document.createTextNode(opt.textContent));
-        b.addEventListener("mouseenter", function () { active = visible.indexOf(i); highlight(); });
-        b.addEventListener("click", function () { choose(i); });
-        rows.appendChild(b);
+        var tick = excluded ? "−" : selected ? "✓" : "";
+        if (b.firstChild.textContent !== tick) b.firstChild.textContent = tick;
+        if (b.lastChild.textContent !== opt.textContent) b.lastChild.textContent = opt.textContent;
+        next.push(b);
       });
-      if (!visible.length) rows.appendChild(el("div", "empty-row", "No matches."));
+      if (!visible.length) next.push(rows.querySelector(".empty-row") || el("div", "empty-row", "No matches."));
+      Array.from(rows.children).forEach(function (node) { if (next.indexOf(node) === -1) node.remove(); });
+      next.forEach(function (node, i) { if (rows.children[i] !== node) rows.insertBefore(node, rows.children[i] || null); });
+      if (activeButton && next.indexOf(activeButton) !== -1) active = next.indexOf(activeButton);
       if (active >= visible.length) active = Math.max(0, visible.length - 1);
       highlight();
     }
@@ -1794,7 +1810,7 @@
         input.placeholder = sel.getAttribute("data-search") || "Filter";
         input.setAttribute("aria-label", input.placeholder);
         input.value = query;
-        input.addEventListener("input", function () { query = input.value; active = 0; fillRows(); place(); });
+        input.addEventListener("input", function () { query = input.value; active = 0; fillRows(true); place(); });
         input.addEventListener("keydown", key);
         list.appendChild(input);
         list.appendChild(el("div", "select-opts"));

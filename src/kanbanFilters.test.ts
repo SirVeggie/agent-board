@@ -45,6 +45,29 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
     const clear = () => page.locator("#clearFilter").click();
     assert.deepEqual(await shown(), ["1", "2", "3", "4"]);
 
+    // Worker updates must leave every unchanged open option connected and hovered.
+    for (const [id, name] of [["fLabel", "Alpha: off"], ["fPriority", "High: off"], ["fAssignee", "Sol: off"]]) {
+      await filter(id).click();
+      await option(name).hover();
+      assert.deepEqual(await page.evaluate(() => {
+        const scribe = (window as any).scribe;
+        const rows = [...document.querySelectorAll('.select-list button[role="option"]')];
+        const hovered = rows.find(row => row.classList.contains("active"))!;
+        const observer = new MutationObserver(() => {});
+        observer.observe(document.querySelector(".select-list")!, { childList: true, subtree: true });
+        for (let i = 0; i < 5; i++) {
+          scribe.state.settings.workerLog = [{ text: "Worker update " + i }];
+          scribe.state.cards[1].status = { kind: "working", text: "Working " + i };
+          scribe.changed();
+        }
+        const removed = observer.takeRecords().flatMap(record => [...record.removedNodes]);
+        observer.disconnect();
+        return [rows.every(row => row.isConnected), hovered.classList.contains("active"),
+          removed.every(node => rows.every(row => node !== row && !node.contains(row)))];
+      }), [true, true, true]);
+      await page.keyboard.press("Escape");
+    }
+
     await filter("fLabel").click();
     await option("Alpha: off").click();
     assert.deepEqual(await shown(), ["1", "3"]);
@@ -117,6 +140,28 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
     await filter("fPriority").click();
     await option("High: off").click();
     assert.deepEqual(await shown(), ["3"]);
+    await clear();
+
+    // Retained rows reflect renamed options and choose their current index after reordering.
+    await filter("fLabel").click();
+    await option("Alpha: off").hover();
+    assert.deepEqual(await page.evaluate(() => {
+      const scribe = (window as any).scribe;
+      const alpha = document.querySelector('[role="option"][aria-label="Alpha: off"]')!;
+      const beta = document.querySelector('[role="option"][aria-label="Beta: off"]')!;
+      scribe.state.labels = [{ id: "c", name: "Gamma" }, { id: "a", name: "Renamed Alpha" }];
+      scribe.changed();
+      return [alpha.isConnected, beta.isConnected, alpha.getAttribute("aria-label"), alpha.classList.contains("active")];
+    }), [true, false, "Renamed Alpha: off", true]);
+    await option("Renamed Alpha: off").click();
+    assert.deepEqual(await shown(), ["1", "3"]);
+    await option("Renamed Alpha: included").click();
+    assert.deepEqual(await shown(), ["2", "4"]);
+    await option("Renamed Alpha: excluded").click();
+    assert.deepEqual(await shown(), ["1", "2", "3", "4"]);
+    // Keyboard selection also follows the retained active row, rather than its old index.
+    await page.keyboard.press("Enter");
+    assert.deepEqual(await shown(), ["1", "3"]);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
