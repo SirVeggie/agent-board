@@ -192,16 +192,17 @@ window.createLibrary = function createLibrary(host) {
     model = buildModel();
     countEl.textContent = String(model.pages.length);
     const focused = rowKey(document.activeElement);
-    list.replaceChildren();
+    // Rows that did not change stay in the page: a rebuilt row loses its hover and blinks (#407).
+    const rows = document.createDocumentFragment();
     if (query && hits) {
-      renderHits();
+      renderHits(rows);
     } else {
-      renderTree(null, 0);
+      renderTree(rows, null, 0);
       const empty = model.pages.length === 0 && model.folders.length === 0;
       none.hidden = !empty;
       none.textContent = "Pages you show appear here";
     }
-    list.appendChild(lineEl);
+    window.scribeSyncChildren(list, [rows, lineEl]);
     if (drag?.target) {
       paintTarget(drag.target);
     }
@@ -215,20 +216,20 @@ window.createLibrary = function createLibrary(host) {
     }
   }
 
-  function renderTree(folderId, depth) {
+  function renderTree(out, folderId, depth) {
     for (const folder of foldersOf(folderId)) {
       const open = !collapsed.has(folder.id);
-      list.appendChild(folderRow(folder, depth, open));
+      out.appendChild(folderRow(folder, depth, open));
       if (open) {
-        renderTree(folder.id, depth + 1);
+        renderTree(out, folder.id, depth + 1);
       }
     }
     for (const page of pagesOf(folderId)) {
-      list.appendChild(pageRow(page, depth));
+      out.appendChild(pageRow(page, depth));
     }
   }
 
-  function renderHits() {
+  function renderHits(out) {
     const rows = hits || [];
     none.hidden = rows.length > 0;
     none.textContent = "No matching pages";
@@ -239,11 +240,11 @@ window.createLibrary = function createLibrary(host) {
         rows.length < hitTotal
           ? `Showing ${rows.length} of ${hitTotal} matches`
           : `${hitTotal} matching page${hitTotal === 1 ? "" : "s"}`;
-      list.appendChild(meta);
+      out.appendChild(meta);
     }
     for (const hit of rows) {
       const live = model.pageById.get(hit.id) || hit;
-      list.appendChild(pageRow(live, 0, { path: pathOf(folderOfPage(live)), snippet: hit.snippet }));
+      out.appendChild(pageRow(live, 0, { path: pathOf(folderOfPage(live)), snippet: hit.snippet }));
     }
   }
 

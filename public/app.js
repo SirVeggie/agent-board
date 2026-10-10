@@ -1527,6 +1527,7 @@
       return;
     }
     const seen = new Set();
+    const ordered = [];
     for (const tab of state.tabs) {
       let el = tabEls.get(tab.id);
       if (!el) {
@@ -1536,7 +1537,7 @@
         syncTabEl(el, tab);
       }
       seen.add(tab.id);
-      tabsEl.appendChild(el);
+      ordered.push(el);
     }
     for (const [id, el] of tabEls) {
       if (seen.has(id)) {
@@ -1544,6 +1545,15 @@
       }
       el.remove();
       tabEls.delete(id);
+    }
+    // Move only the tabs that are out of place: a tab put back in loses its hover and blinks (#407).
+    let before = null;
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const el = ordered[index];
+      if (el.parentNode !== tabsEl || el.nextSibling !== before) {
+        tabsEl.insertBefore(el, before);
+      }
+      before = el;
     }
     const active = tabsEl.querySelector(".tab.active");
     if (active && !drag) {

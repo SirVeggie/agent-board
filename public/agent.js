@@ -5082,7 +5082,6 @@
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
     const hadFocus = Boolean(oldSearch) && document.activeElement === oldSearch;
     const caret = hadFocus ? [oldSearch.selectionStart, oldSearch.selectionEnd] : null;
-    container.replaceChildren();
     const top = el("div", "ag-list-top");
     const search = el("input", "ag-input small");
     search.type = "search";
@@ -5163,10 +5162,21 @@
     compact.append(el("span", "ag-switch"), el("span", null, "Compact"));
     tools.append(workers, compact);
     top.append(search, seg, newBtn, tools, ...movedBanners());
-    const list = el("div", `ag-list${compactThreads() ? " compact" : ""}`);
-    container.append(top, list);
+    // The list and its unchanged rows stay in the page: a rebuilt row loses its hover and blinks (#407).
+    const list = container.querySelector(":scope > .ag-list") || el("div", "ag-list");
+    list.className = `ag-list${compactThreads() ? " compact" : ""}`;
+    window.scribeSyncChildren(container, [top, list]);
     const fill = () => {
-      list.replaceChildren();
+      for (const row of list.querySelectorAll(".ag-row-active")) row.classList.remove("ag-row-active");
+      const out = [];
+      collect(out);
+      window.scribeSyncChildren(list, out);
+      const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
+      highlight(Math.max(0, at), false);
+    };
+    // A kept row's button outlives this render, so it fills through the latest one.
+    container.agFill = fill;
+    const collect = (out) => {
       const q = S.search.trim().toLowerCase();
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
@@ -5192,15 +5202,15 @@
           const more = button("", "ag-list-more", () => {
             if (hidden) helpersShown.add(parent.id);
             else helpersShown.delete(parent.id);
-            fill();
+            container.agFill();
           });
           more.append(el("span", null, hidden ? `Show ${hidden} earlier ${hidden === 1 ? "helper" : "helpers"}` : "Show fewer helpers"));
           box.append(more);
         }
-        list.append(box);
+        out.push(box);
       };
       if (!threads.length) {
-        list.append(
+        out.push(
           el(
             "div",
             "ag-list-empty",
@@ -5254,22 +5264,22 @@
           }, `New thread here, with the settings of its latest thread`);
           head.append(add);
         }
-        list.append(head);
+        out.push(head);
         for (const t of visible) {
-          list.append(threadRow(t, t.id === currentId, onPick));
+          out.push(threadRow(t, t.id === currentId, onPick));
           helperRows(t);
         }
         if (hidden) {
           const more = button("", "ag-list-more", () => {
             S.groupExtra.set(key, (S.groupExtra.get(key) || 0) + LIST_PAGE);
-            fill();
+            container.agFill();
           });
           more.append(el("span", null, "Show 10 more"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
-          list.append(more);
+          out.push(more);
         }
       }
       if (!shown) {
-        list.append(
+        out.push(
           el(
             "div",
             "ag-list-empty",
@@ -5279,8 +5289,6 @@
           )
         );
       }
-      const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
-      highlight(Math.max(0, at), false);
     };
     fill();
     search.addEventListener("focus", () => container.classList.remove("ag-list-kb"));
@@ -5327,8 +5335,12 @@
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     row.dataset.tooltip = name;
     const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
+    // The row stays in the list while it looks the same, so its handlers read the thread as it is now.
+    const id = t.id;
+    const first = t;
     wrap.addEventListener("contextmenu", (event) => {
       event.preventDefault();
+      const t = S.threads.get(id) || first;
       openMenu(wrap, [
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
         { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
@@ -5346,11 +5358,11 @@
     acts.append(
       button(icon("archive"), "ag-icon-btn small", (e) => {
         e.stopPropagation();
-        archiveThread(t);
+        archiveThread(S.threads.get(id) || first);
       }, t.archived ? "Unarchive" : "Archive"),
       button(icon("trash"), "ag-icon-btn small danger", (e) => {
         e.stopPropagation();
-        void deleteThread(t);
+        void deleteThread(S.threads.get(id) || first);
       }, "Delete thread"),
     );
     wrap.append(row, acts);
