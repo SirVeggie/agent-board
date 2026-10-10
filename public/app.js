@@ -4,6 +4,28 @@
   const startupEl = document.getElementById("startup");
   const startupMessage = document.getElementById("startup-message");
   const startupRetry = document.getElementById("startup-retry");
+  const refreshOverlay = document.getElementById("refresh-overlay");
+  const refreshOverlayToggle = document.getElementById("refresh-overlay-toggle");
+  const REFRESH_OVERLAY_KEY = "scribe.refreshOverlay";
+  let refreshOverlayTimer = setTimeout(() => dismissRefreshOverlay(), 5000);
+
+  function dismissRefreshOverlay(fade = false) {
+    clearTimeout(refreshOverlayTimer);
+    if (refreshOverlay.hidden) return;
+    if (fade && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      refreshOverlay.classList.add("leaving");
+      refreshOverlayTimer = setTimeout(() => { refreshOverlay.hidden = true; }, 220);
+    } else {
+      refreshOverlay.hidden = true;
+    }
+  }
+
+  function finishRefreshOverlay() {
+    if (refreshOverlay.hidden) return;
+    clearTimeout(refreshOverlayTimer);
+    // Let the restored shell settle before revealing it; fast refreshes get a brief, stable view.
+    refreshOverlayTimer = setTimeout(() => dismissRefreshOverlay(true), Math.max(250, 700 - performance.now()));
+  }
   const newPageEl = document.getElementById("newpage");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
@@ -393,6 +415,13 @@
   document.documentElement.classList.toggle("hide-clear", !flagOn(showClearToggle));
   document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
   applyFlag(uiFxToggle, UI_FX_KEY, true);
+  applyFlag(refreshOverlayToggle, REFRESH_OVERLAY_KEY, true);
+  if (!flagOn(refreshOverlayToggle)) dismissRefreshOverlay();
+  refreshOverlayToggle.addEventListener("click", () => toggleFlag(refreshOverlayToggle, REFRESH_OVERLAY_KEY));
+  bindSettingHint(
+    document.getElementById("refresh-overlay-label"),
+    "Briefly covers the shell while saved tabs and spaces settle after a refresh. Clears when a connection needs attention."
+  );
   document.documentElement.classList.toggle("no-ui-fx", !flagOn(uiFxToggle));
   applyFlag(auroraEdgeToggle, AURORA_EDGE_KEY, true);
   applyFlag(auroraIdleToggle, AURORA_IDLE_KEY, true);
@@ -447,6 +476,7 @@
       startupTimer = setTimeout(() => {
         startupMessage.textContent = "Still connecting to Scribe. Retrying…";
         startupRetry.hidden = false;
+        dismissRefreshOverlay();
         ws.close();
       }, 5000);
     }
@@ -471,6 +501,7 @@
       if (!state.restored) {
         startupMessage.textContent = "Could not connect to Scribe. Retrying…";
         startupRetry.hidden = false;
+        dismissRefreshOverlay();
       }
       renderChrome();
       dispatchEvent(new CustomEvent("scribe:connection", { detail: { connected: false } }));
@@ -558,6 +589,7 @@
       startupEl.hidden = true;
       render();
       if (firstSnapshot) {
+        finishRefreshOverlay();
         document.documentElement.removeAttribute("data-restoring");
         window.dispatchEvent(new Event("scribe:restored"));
       }
@@ -1221,6 +1253,7 @@
       document.documentElement.classList.toggle("no-ui-fx", !on);
       window.dispatchEvent(new Event("scribe:ui-fx"));
     }
+    if (el === refreshOverlayToggle && !on) dismissRefreshOverlay();
     if (el === auroraEdgeToggle || el === auroraIdleToggle) {
       window.dispatchEvent(new Event("scribe:aurora"));
     }

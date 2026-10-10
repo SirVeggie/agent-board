@@ -74,6 +74,7 @@ test("refresh keeps the restoring view until a snapshot, and retry recovers to t
     await page.route("http://restore.local/**", route => {
       const name = new URL(route.request().url()).pathname.slice(1);
       if (name.startsWith("api/")) return route.fulfill({ contentType: "application/json", body: "{}" });
+      if (name.startsWith("view/")) return route.fulfill({ contentType: "text/html", body: "<p>Saved page</p>" });
       if (name.startsWith("vendor/")) return route.fulfill({ body: "" });
       if (!name) {
         // The shell is tested independently of the agent UI's network configuration.
@@ -98,10 +99,12 @@ test("refresh keeps the restoring view until a snapshot, and retry recovers to t
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.goto("http://restore.local/");
+    assert.equal(await page.locator("#refresh-overlay").isVisible(), true);
     assert.equal(await page.locator("#startup").isVisible(), true);
     assert.equal(await page.locator("#empty").isVisible(), false);
     // Initial connection timeout must expose a useful retry control.
     await page.getByRole("button", { name: "Retry connection" }).waitFor({ state: "visible", timeout: 8000 });
+    assert.equal(await page.locator("#refresh-overlay").isVisible(), false, "connection failure exposes retry");
     await page.getByRole("button", { name: "Retry connection" }).click();
     await page.evaluate(() => {
       const w = window as any;
@@ -112,6 +115,37 @@ test("refresh keeps the restoring view until a snapshot, and retry recovers to t
     assert.equal(await page.locator("#startup").isVisible(), false);
     assert.equal(await page.locator("#empty").isVisible(), true);
     assert.equal(await page.evaluate(() => document.documentElement.hasAttribute("data-restoring")), false);
+
+    // A successful refresh gets the short overlay even with a fast snapshot.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.reload();
+    assert.equal(await page.locator("#refresh-overlay").isVisible(), true);
+    assert.equal(await page.locator(".refresh-overlay-line").evaluate(el => getComputedStyle(el).animationName), "none");
+    await page.evaluate(() => {
+      const socket = (window as any).sockets.at(-1);
+      socket.readyState = 1; socket.dispatchEvent(new Event("open"));
+      const tab = { id: "saved", title: "Saved page", revision: 1 };
+      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+        type: "snapshot", tabs: [tab], activeId: "saved",
+        spaces: { activeId: "work", spaces: [{ id: "work", name: "Work", activeId: "saved", tabs: [{ id: "saved" }] }] },
+      }) }));
+    });
+    assert.equal(await page.locator("#refresh-overlay").isVisible(), true, "snapshot renders underneath the brief overlay");
+    await page.locator("#refresh-overlay").waitFor({ state: "hidden", timeout: 2000 });
+    assert.equal(await page.locator("#empty").isVisible(), false);
+    assert.equal(await page.getByRole("tab", { name: "Saved page" }).isVisible(), true);
+    assert.equal(await page.locator(".space-chip").innerText(), "Work");
+    await page.evaluate(() => (window as any).sockets.at(-1).close());
+    assert.equal(await page.locator("#refresh-overlay").isVisible(), false, "reconnect does not replay the overlay");
+    assert.equal(await page.getByRole("tab", { name: "Saved page" }).isVisible(), true, "reconnect keeps saved tabs visible");
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Appearance", exact: true }).click();
+    await page.getByRole("switch", { name: "Overlay on refresh", exact: true }).click();
+    assert.equal(await page.evaluate(() => localStorage.getItem("scribe.refreshOverlay")), "0");
+    await page.reload();
+    assert.equal(await page.locator("#refresh-overlay").isVisible(), false, "off persists before first paint");
+    assert.equal(await page.locator("#startup").isVisible(), true, "off retains the restoration status");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

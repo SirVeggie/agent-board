@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <link rel="stylesheet" href="./app.css?v=70">
+  <link rel="stylesheet" href="./app.css?v=71">
   <link rel="stylesheet" href="./agent.css?v=32">
   <link rel="stylesheet" href="./orb.css?v=2">
   <script>
@@ -20,6 +20,9 @@
           if (localStorage.getItem(next) === null) localStorage.setItem(next, localStorage.getItem(key));
           localStorage.removeItem(key);
         }
+      }
+      if (localStorage.getItem("scribe.refreshOverlay") === "0") {
+        document.documentElement.classList.add("no-refresh-overlay");
       }
       if (localStorage.getItem("scribe.tightSmall") !== "0") {
         document.documentElement.classList.add("tight-small");
@@ -53,6 +56,17 @@
   </script>
 </head>
 <body>
+  <div id="refresh-overlay" class="refresh-overlay" aria-hidden="true">
+    <div class="refresh-overlay-content">
+      <svg class="refresh-overlay-mark" viewBox="0 0 16 16" width="48" height="48">
+        <rect x="3" y="2.5" width="5" height="3" rx="1" fill="currentColor"/>
+        <rect x="3" y="6.5" width="10" height="7" rx="1.25" fill="currentColor"/>
+      </svg>
+      <span class="refresh-overlay-name">Scribe</span>
+      <span class="refresh-overlay-caption">Restoring your pages…</span>
+      <span class="refresh-overlay-line"></span>
+    </div>
+  </div>
   <header class="chrome">
     <button type="button" class="brand" id="settings-toggle" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings-panel">
       <span class="logo" aria-hidden="true">
@@ -250,6 +264,10 @@
       <section class="settings-section">
         <h3>Layout</h3>
         <div class="setting-row">
+          <span id="refresh-overlay-label" class="setting-hinted">Overlay on refresh</span>
+          <button type="button" class="pill-toggle" id="refresh-overlay-toggle" role="switch" aria-checked="true" aria-labelledby="refresh-overlay-label"></button>
+        </div>
+        <div class="setting-row">
           <span id="agent-side-label" class="setting-hinted">Agent sidebar</span>
           <div class="button-track text-track" id="agent-side" role="group" aria-labelledby="agent-side-label"></div>
         </div>
@@ -421,7 +439,7 @@
   <script src="./aurora.js?v=2"></script>
   <script src="./chromefx.js?v=1"></script>
   <script src="./starfx.js?v=1"></script>
-  <script src="./app.js?v=83"></script>
+  <script src="./app.js?v=84"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
