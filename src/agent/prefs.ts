@@ -41,6 +41,8 @@ export type Prefs = {
    * Off by default: a helper spends that provider's quota.
    */
   helpers: boolean;
+  /** Chats get the shared memories in their instructions, and the memory tools to keep them (see memory.ts). */
+  memory: boolean;
   recentWorkspaces: string[];
   /**
    * Last workspace used for a folder scope ("folder:<id>"), so new threads there start in it.
@@ -71,6 +73,7 @@ export const DEFAULT_PREFS: Prefs = {
   claudeHooks: false,
   cursorHostShell: false,
   helpers: false,
+  memory: true,
   recentWorkspaces: [],
   scopeWorkspaces: {},
   favoriteModels: [],

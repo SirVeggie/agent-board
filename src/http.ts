@@ -920,6 +920,20 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /** memory_list, memory_save and memory_delete from a Scribe chat's MCP: the memories agents share (#104). */
+  app.post("/api/memory/:op", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "Memory only works in Scribe chat threads." });
+      return;
+    }
+    try {
+      res.json(agentHost.memoryOp(thread, req.params.op, isPlainObject(req.body) ? req.body : {}));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   /**
    * agent_run and agent_models from a Scribe chat's MCP: hand a task to a helper agent on another
    * provider or model. run stays open until the helper's turn ends; closing it stops the helper.

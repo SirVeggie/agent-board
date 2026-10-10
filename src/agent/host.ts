@@ -54,6 +54,7 @@ import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage } from "./usage.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
+import { cleanMemories, memoriesFor, memoryApplies, saveMemory, type Memory } from "./memory.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -702,6 +703,7 @@ export class AgentHost {
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
       helpers: saved.helpers === true,
+      memory: saved.memory !== false,
       disabledModes: cleanDisabledModes(saved.disabledModes),
     };
   }
@@ -713,6 +715,7 @@ export class AgentHost {
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
     if (patch.helpers !== undefined) next.helpers = patch.helpers === true;
+    if (patch.memory !== undefined) next.memory = patch.memory !== false;
     if (patch.disabledModes !== undefined) next.disabledModes = cleanDisabledModes(patch.disabledModes);
     if (patch.searxngUrl !== undefined) {
       next.searxngUrl = cleanSearxngUrl(patch.searxngUrl);
@@ -1304,6 +1307,7 @@ export class AgentHost {
     const info = this.scopePages(thread);
     if (this.prefs().searxngUrl) info.webSearch = true;
     if (this.prefs().helpers && !thread.helperOf) info.helpers = true;
+    if (this.prefs().memory) info.memories = memoriesFor(this.memories(), this.memoryWorkspace(thread));
     if (thread.provider === "claude") {
       const have = new Set(serversForThread(thread).map((s) => s.name));
       const leftOut = claudeOwnServers(threadWorkspace(thread)).filter((name) => !have.has(name));
@@ -2083,6 +2087,88 @@ export class AgentHost {
       ...(start > 0 && page.length ? { earlier: { from: pool[Math.max(0, start - limit)].seq } } : {}),
       ...(start >= 0 && start + limit < pool.length ? { later: { from: pool[start + limit].seq } } : {}),
     };
+  }
+
+  // ---------- shared memory (#104) ----------
+
+  /** Every saved memory. */
+  memories(): Memory[] {
+    return cleanMemories(this.db.getSetting<unknown>("memories", []));
+  }
+
+  /** The folder a thread's workspace memories belong to: its workspace, or the main checkout for a worktree. None in Pages mode. */
+  private memoryWorkspace(thread: Thread): string | null {
+    if (thread.mode === "board") return null;
+    return thread.worktree?.home ?? thread.cwd ?? (thread.scope.kind === "workspace" ? thread.scope.ref : null);
+  }
+
+  /** Add a memory or change one, from Agent settings. */
+  saveUserMemory(id: string | null, body: unknown): Memory {
+    const input = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const workspace = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : null;
+    if (workspace && !path.isAbsolute(workspace)) throw new Error("The workspace must be an absolute folder path.");
+    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), text: typeof input.text === "string" ? input.text : "", scope: workspace ? "workspace" : "global", workspace, by: "user" });
+    this.db.setSetting("memories", saved.memories);
+    return saved.memory;
+  }
+
+  deleteMemory(id: string): void {
+    const all = this.memories();
+    if (!all.some((m) => m.id === id)) throw new Error(`memory not found: ${id}`);
+    this.db.setSetting("memories", all.filter((m) => m.id !== id));
+  }
+
+  /**
+   * memory_list, memory_save and memory_delete from a chat's MCP. A chat sees and changes the global
+   * memories and those of its own workspace; each change leaves a note in the chat, so the user sees
+   * what their agents keep.
+   */
+  memoryOp(threadId: string, op: string, body: Record<string, unknown>): Record<string, unknown> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Memory only works in Scribe chat threads.");
+    if (!this.prefs().memory) throw new Error("Shared memory is turned off in Agent settings. Carry on without it.");
+    const workspace = this.memoryWorkspace(thread);
+    const all = this.memories();
+    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
+    const note = (text: string) => {
+      const run = this.runs.get(threadId);
+      if (run) this.closeBlocks(run);
+      this.addItem(threadId, run?.turn.id ?? null, { kind: "notice", level: "info", text });
+    };
+    if (op === "list") {
+      const words = queryWords(body.q);
+      const memories = memoriesFor(all, workspace).filter((m) => words.every((w) => m.text.toLowerCase().includes(w)));
+      return { ...(workspace ? { workspace } : {}), memories: memories.map(row) };
+    }
+    if (op === "save") {
+      const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : undefined;
+      const old = id ? all.find((m) => m.id === id) : undefined;
+      if (old && !memoryApplies(old, workspace)) throw new Error(`Memory ${id} belongs to another workspace.`);
+      const scope = body.scope === "global" ? "global" : body.scope === "workspace" || workspace ? "workspace" : "global";
+      if (scope === "workspace" && !workspace) throw new Error("This thread has no workspace folder, so it can only save global memories.");
+      // A change keeps the memory where it is (a parent workspace's stays the parent's) unless scope says otherwise.
+      const keep = old && typeof body.scope !== "string" ? old : null;
+      const saved = saveMemory(all, {
+        ...(id ? { id } : {}),
+        text: typeof body.text === "string" ? body.text : "",
+        scope: keep ? keep.scope : scope,
+        workspace: keep ? keep.workspace : workspace,
+        by: thread.provider,
+        thread: threadId,
+      });
+      this.db.setSetting("memories", saved.memories);
+      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${saved.memory.scope === "global" ? "all chats" : `chats in ${saved.memory.workspace}`}): ${saved.memory.text}`);
+      return { saved: row(saved.memory), created: saved.created, note: "Chats get it in their instructions from their next message. The user can edit or remove it under Agent settings, Memories." };
+    }
+    if (op === "delete") {
+      const id = typeof body.id === "string" ? body.id.trim() : "";
+      const old = all.find((m) => m.id === id);
+      if (!old || !memoryApplies(old, workspace)) throw new Error(`No memory ${id || "(no id)"} in this thread's scopes. memory_list shows them.`);
+      this.db.setSetting("memories", all.filter((m) => m.id !== id));
+      note(`Deleted a memory: ${old.text}`);
+      return { deleted: id };
+    }
+    throw new Error(`unknown op: ${op}`);
   }
 
   /** Nobody is watching this chat: a page (board worker) runs it, or it is a helper of such a chat. */
@@ -3244,6 +3330,8 @@ export class AgentHost {
       scopeWorkspaces: Object.fromEntries(Object.entries(prefs.scopeWorkspaces).map(([k, dir]) => [k, move(dir) ?? dir])),
       worktrees: Object.fromEntries(Object.entries(prefs.worktrees).map(([k, on]) => [move(k) ? workspaceKey(move(k)!) : k, on])),
     });
+    const memories = this.memories();
+    if (memories.some((m) => move(m.workspace))) this.db.setSetting("memories", memories.map((m) => (move(m.workspace) ? { ...m, workspace: move(m.workspace)! } : m)));
     const known = this.db.getSetting<Record<string, KnownWorkspace>>("workspaceIds", {});
     this.db.setSetting("workspaceIds", Object.fromEntries(Object.entries(known).filter(([key]) => !move(key))));
     this.db.setSetting("workspaceMovesDismissed", this.db.getSetting<string[]>("workspaceMovesDismissed", []).filter((key) => !move(key)));

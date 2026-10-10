@@ -186,6 +186,18 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // Shared agent memory (#104): the notes every chat gets in its instructions.
+  router.get("/memories", wrap(() => ({ memories: host.memories() })));
+  router.post("/memories", wrap((req) => ({ memory: host.saveUserMemory(null, req.body) })));
+  router.put("/memories/:id", wrap((req) => ({ memory: host.saveUserMemory(req.params.id, req.body) })));
+  router.delete(
+    "/memories/:id",
+    wrap((req) => {
+      host.deleteMemory(req.params.id);
+      return { ok: true };
+    })
+  );
+
   router.get("/threads", wrap(() => ({ threads: host.listThreads() })));
 
   router.get("/commands", wrap((req) => ({ commands: host.providerCommands(parseProvider(req.query.provider)) })));
