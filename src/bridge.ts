@@ -31,6 +31,7 @@ export const ENGINE_JS = `(function () {
 export const BOARD_BRIDGE_JS = `
 (function () {
   var boot = window.__SCRIBE_BOOT__ || {};
+  var capturing = boot.capture === true || window.__SCRIBE_CAPTURE__ === true;
   try { delete window.__SCRIBE_BOOT__; } catch (err) { window.__SCRIBE_BOOT__ = undefined; }
 
   var engine = ${ENGINE_JS};
@@ -271,6 +272,7 @@ export const BOARD_BRIDGE_JS = `
 
   /** Change state with ops (see the scribe skill). Applies at once; throws if an op can't apply. */
   function update(ops) {
+    if (capturing) return;
     var list = Array.isArray(ops) ? ops : [ops];
     if (!list.length) {
       return;
@@ -284,6 +286,7 @@ export const BOARD_BRIDGE_JS = `
 
   /** Replace top-level keys. Arrays of items with ids are diffed, so only what changed is sent. */
   function set(partial) {
+    if (capturing) return;
     if (!partial || typeof partial !== "object") {
       return;
     }
@@ -401,7 +404,7 @@ export const BOARD_BRIDGE_JS = `
 
   /* ---------- local state: this viewer's own, never shared ---------- */
 
-  var viewer = typeof boot.viewer === "string" ? boot.viewer : "";
+  var viewer = !capturing && typeof boot.viewer === "string" ? boot.viewer : "";
   var local = boot.local && typeof boot.local === "object" ? boot.local : {};
   var localTimer = null;
 
@@ -444,6 +447,7 @@ export const BOARD_BRIDGE_JS = `
   /* ---------- events and actions ---------- */
 
   function signal(name, data) {
+    if (capturing) return;
     var next = name == null ? "" : String(name).trim();
     if (!next) {
       console.error("[scribe] signal name is required");
@@ -457,6 +461,7 @@ export const BOARD_BRIDGE_JS = `
 
   /** Run one of the page template's actions; resolves with its result. State changes arrive as a delta. */
   function action(name, args) {
+    if (capturing) return Promise.resolve(undefined);
     flush();
     return post("/action", "POST", { action: String(name || ""), args: args || {} }).then(function (data) {
       return data.result;
@@ -963,6 +968,7 @@ export const BOARD_BRIDGE_JS = `
   var template = boot.template && typeof boot.template === "object" ? boot.template : null;
 
   function reportIncompatible(reason) {
+    if (capturing) return;
     if (!tabId || !template) {
       return;
     }
@@ -998,6 +1004,7 @@ export const BOARD_BRIDGE_JS = `
    * grace period.
    */
   function saveAsset(data, options) {
+    if (capturing) return Promise.resolve(undefined);
     var opts = options || {};
     if (!tabId) {
       return Promise.reject(new Error("no tab id"));
@@ -1024,6 +1031,7 @@ export const BOARD_BRIDGE_JS = `
   }
 
   function deleteAsset(id) {
+    if (capturing) return Promise.resolve(undefined);
     return fetch(assetsPath("/" + encodeURIComponent(String(id))), { method: "DELETE" })
       .then(readJson)
       .then(function (result) {

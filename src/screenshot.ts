@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Browser, Page } from "playwright-core";
 import { launchChromium } from "./chromium.js";
+import { allowCaptureFraming } from "./captureFraming.js";
 import { MAX_LOCAL_STATE_BYTES, contentBaseUrl } from "./config.js";
 import { embedUrlFromHtml } from "./embed.js";
 import { store } from "./store.js";
@@ -77,16 +78,21 @@ export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotRe
     throw new Error("local and fromViewer do not apply to embed pages; the capture loads the embedded URL directly");
   }
   const seeded = captureLocal(tab.id, fromViewer, overlay);
-  const shotId = seeded && Object.keys(seeded).length ? beginCaptureBoot(seeded) : undefined;
+  const shotId = embedUrl ? undefined : beginCaptureBoot(seeded ?? {});
   const url = screenshotUrl(tab, shotId);
 
   try {
     return await withBrowser(async (opened) => {
-      const page = await opened.newPage({
+      const context = await opened.newContext({
         viewport: { width, height },
         deviceScaleFactor: 1,
+        serviceWorkers: "block",
       });
       try {
+        await allowCaptureFraming(context);
+        // Also protect Scribe pages loaded inside nested frames.
+        await context.addInitScript(() => { (window as any).__SCRIBE_CAPTURE__ = true; });
+        const page = await context.newPage();
         await page.goto(url, {
           waitUntil: "load",
           timeout: NAV_TIMEOUT_MS,
@@ -112,7 +118,7 @@ export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotRe
           selector,
           ...(click ? { click } : {}),
           ...(fromViewer ? { fromViewer: true } : {}),
-          ...(shotId ? { local: true } : {}),
+          ...(seeded && Object.keys(seeded).length ? { local: true } : {}),
           ...(embedUrl ? { embed: true } : {}),
           id: tab.id,
           key: tab.key,
@@ -120,7 +126,7 @@ export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotRe
           bytes: shot.buffer.length,
         };
       } finally {
-        await page.close();
+        await context.close();
       }
     });
   } finally {

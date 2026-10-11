@@ -286,7 +286,7 @@ Rules:
 - `selector` is a CSS selector; it captures the first match. If it is missing or not visible, the tool errors — fix the markup or selector, do not retry blindly.
 - `local` is seeded into `scribe.local` for this capture only; it is not saved as a viewer. Overlay it on `fromViewer` when both are set. Prefer `local` over patching the page's default to check another view.
 - `fromViewer` uses the most recently written viewer local, not the live window's scroll, hover, or size.
-- `click` clicks a selector after load. Prefer `local` when the view lives in `scribe.local` — a click that calls `scribe.set` will persist shared state.
+- `click` clicks a selector after load. Capture boots ignore shared state writes (`set`, `update`), actions, signals, and asset writes. Local view changes still work; prefer `local` when the view lives in `scribe.local`.
 - Embed-template pages are captured at the embedded URL, not the placeholder HTML.
 - After `page_update` or `page_patch`, screenshot again without re-showing the full HTML. The capture loads current HTML + state from the daemon.
 - The image is a canonical viewport, not the user's window size, zoom, or currently focused tab. Inactive / hidden tabs still screenshot correctly.

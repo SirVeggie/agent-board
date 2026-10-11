@@ -915,7 +915,7 @@ export async function startMcp(): Promise<void> {
         .string()
         .optional()
         .describe(
-          "CSS selector to click after load, before capture. First match, must be visible. Prefer local when the view lives in scribe.local — a click that calls scribe.set will persist shared state."
+          "CSS selector to click after load, before capture. First match, must be visible. Scribe capture boots ignore shared state writes, actions, and signals; local view changes still work. Prefer local when the view lives in scribe.local."
         ),
     },
     { readOnlyHint: true },
