@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 const EXE = "scribe.exe";
 const PREVIOUS_EXES = ["agent-board-desktop.exe", "board.exe"];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const built = path.join(root, "desktop", "target", "release", EXE);
 const tauriJs = path.join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const cargoBin = path.join(os.homedir(), ".cargo", "bin");
 
@@ -31,6 +30,10 @@ if (!commandExists("cargo", env)) {
   console.error("Install a toolchain from https://rustup.rs/ (Windows: MSVC, plus Visual Studio C++ build tools), then retry.");
   process.exit(1);
 }
+
+// Cargo may use CARGO_TARGET_DIR or a configured target-dir (including in worktrees).
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--manifest-path", path.join(root, "desktop", "Cargo.toml"), "--format-version", "1", "--no-deps"], { cwd: root, env, encoding: "utf8" }));
+const built = path.join(metadata.target_directory, "release", EXE);
 
 const wasRunning = isRunning();
 if (wasRunning) {
