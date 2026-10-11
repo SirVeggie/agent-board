@@ -2970,6 +2970,22 @@ button.pill-toggle[aria-checked="true"]::after {
 }
 
 /* Desktop app (public/desktop.js): native-style window controls and the compact form factor. */
+.desktop-zoom-popup {
+  position: fixed;
+  right: 12px;
+  z-index: 1100;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.desktop-zoom-popup[hidden] { display: none; }
+
 .win-controls {
   display: flex;
   align-self: stretch;

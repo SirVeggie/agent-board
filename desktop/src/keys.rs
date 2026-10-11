@@ -12,7 +12,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler,
-    ClearBrowsingDataCompletedHandler,
+    ClearBrowsingDataCompletedHandler, ZoomFactorChangedEventHandler,
 };
 use windows::core::{w, Interface};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -149,6 +149,25 @@ pub fn install(window: &WebviewWindow) {
     let target = window.clone();
     let _ = window.with_webview(move |webview| unsafe {
         let controller = webview.controller();
+        // Read the native factor so wheel, pinch, reset, and keyboard zoom report the same value.
+        let for_zoom = target.clone();
+        let zoom_handler = ZoomFactorChangedEventHandler::create(Box::new(move |sender, _| {
+            let Some(controller) = sender else { return Ok(()) };
+            let mut factor = 1.0;
+            controller.ZoomFactor(&mut factor)?;
+            if factor.is_finite() && factor > 0.0 {
+                let window = for_zoom.clone();
+                // Leave the WebView2 callback before evaluating script, as with board shortcuts.
+                std::thread::spawn(move || {
+                    let _ = window.eval(format!(
+                        "window.scribeDesktop?.showZoom({factor})"
+                    ));
+                });
+            }
+            Ok(())
+        }));
+        let mut zoom_token = 0i64;
+        let _ = controller.add_ZoomFactorChanged(&zoom_handler, &mut zoom_token);
         let for_keys = controller.clone();
         let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
             let Some(args) = args else { return Ok(()) };

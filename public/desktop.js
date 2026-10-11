@@ -422,7 +422,30 @@
     render();
   }
 
-  window.scribeDesktop = { setState };
+  const zoomPopup = document.createElement("div");
+  zoomPopup.className = "desktop-zoom-popup";
+  zoomPopup.setAttribute("role", "status");
+  zoomPopup.setAttribute("aria-atomic", "true");
+  zoomPopup.hidden = true;
+  document.body.append(zoomPopup);
+  let zoomTimer = 0;
+
+  function positionZoom() {
+    zoomPopup.style.top = `${chrome.getBoundingClientRect().bottom + 8}px`;
+  }
+
+  function showZoom(factor) {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    zoomPopup.textContent = `Zoom ${Math.round(factor * 100)}%`;
+    positionZoom();
+    zoomPopup.hidden = false;
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => { zoomPopup.hidden = true; }, 2000);
+  }
+
+  // Zoom also resizes the CSS viewport; keep the popup below the resized tab strip.
+  new ResizeObserver(() => { if (!zoomPopup.hidden) positionZoom(); }).observe(chrome);
+  window.scribeDesktop = { setState, showZoom };
 
   // Lost the daemon for more than a moment (it restarts for a new build in about that long):
   // the app swaps in its offline page, which brings the board back once the daemon answers.
