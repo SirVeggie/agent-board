@@ -330,6 +330,12 @@ export class ClaudeProvider implements AgentProvider {
       : scribe;
     const q = sdk.query({ prompt: input, options: { ...options, persistSession: false, abortController } });
     try {
+      // MCP servers connect after the process starts; a count taken before that misses their tools.
+      for (let i = 0; i < 60; i += 1) {
+        const servers = await q.mcpServerStatus();
+        if (!servers.some((server) => server.status === "pending")) break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
       const usage = await q.getContextUsage();
       return {
         model: usage.model,

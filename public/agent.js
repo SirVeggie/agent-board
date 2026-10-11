@@ -8528,7 +8528,15 @@
         { label: "Memory", sections: [memory] },
         { label: "Helper agents", sections: [helpers] },
         { label: "Keys", sections: [keys] },
-      ], { close: () => this.close(), before: { label: "← General settings", run: () => app()?.openSettings?.() } });
+      ], {
+        close: () => this.close(),
+        before: { label: "← General settings", run: () => app()?.openSettings?.() },
+        // The full panel on what chats are given and how they use it (harness.js).
+        after: { label: "Agent harness →", run: () => {
+          this.close();
+          window.scribeHarness?.open();
+        } },
+      });
 
     },
     renderCycleModes() {
@@ -9697,7 +9705,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: () => void mcpServers.open(), shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

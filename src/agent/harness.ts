@@ -19,6 +19,11 @@ export function estimateTokens(chars: number): number {
   return Math.ceil(chars / 4);
 }
 
+/** Tool schemas are JSON, which tokenizes denser than prose: Claude Code counts Scribe's own at about three characters a token. */
+function schemaTokens(chars: number): number {
+  return Math.ceil(chars / 3);
+}
+
 // ---------- seed context ----------
 
 export type InstructionSection = { label: string; chars: number; tokens: number; text: string };
@@ -65,7 +70,7 @@ function toolCosts(tools: Array<{ name: string; description?: string; inputSchem
     .map((tool) => {
       // What a model is sent for a tool: its name, description and parameter schema.
       const chars = tool.name.length + (tool.description?.length ?? 0) + JSON.stringify(tool.inputSchema ?? {}).length;
-      return { name: tool.name, description: (tool.description ?? "").split("\n")[0].slice(0, 200), chars, tokens: estimateTokens(chars) };
+      return { name: tool.name, description: (tool.description ?? "").split("\n")[0].slice(0, 200), chars, tokens: schemaTokens(chars) };
     })
     .sort((a, b) => b.chars - a.chars);
 }
@@ -77,7 +82,7 @@ async function listTools(connect: (client: Client) => Promise<void>): Promise<To
     const { tools } = await client.listTools(undefined, { timeout: PROBE_TIMEOUT_MS });
     const costs = toolCosts(tools);
     const chars = costs.reduce((sum, tool) => sum + tool.chars, 0);
-    return { tools: costs, chars, tokens: estimateTokens(chars), instructionsChars: client.getInstructions()?.length ?? 0 };
+    return { tools: costs, chars, tokens: schemaTokens(chars), instructionsChars: client.getInstructions()?.length ?? 0 };
   } catch (err) {
     return { tools: [], chars: 0, tokens: 0, instructionsChars: 0, error: (err as Error).message || String(err) };
   } finally {
