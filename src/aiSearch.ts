@@ -1,4 +1,4 @@
-import { htmlToText } from "./librarySearch.js";
+import { pageText } from "./pageText.js";
 import type { Tab } from "./types.js";
 
 /**
@@ -22,34 +22,10 @@ export const CHUNK_TEXT = 500;
 /** `index` is the place in the numbered list of the line the model picked. */
 export type AiSearchHit = { id: string; reason: string; index: number };
 
-/** String values in a page's state, without ids, asset refs, and other machine values. */
-function stateWords(value: unknown, out: string[], budget: { left: number }): void {
-  if (budget.left <= 0) return;
-  if (typeof value === "string") {
-    const text = value.replace(/\s+/g, " ").trim();
-    if (text.length < 3 || /^[a-z]{1,4}_[a-z0-9]+$/i.test(text) || /^(asset|data|https?):/.test(text) || /^#[0-9a-f]{3,8}$/i.test(text)) return;
-    out.push(text);
-    budget.left -= text.length + 1;
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) stateWords(item, out, budget);
-    return;
-  }
-  if (value && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) {
-      if (key === "images" || key === "assets" || key === "workerLog") continue;
-      stateWords(item, out, budget);
-    }
-  }
-}
-
 /** One line per page: title, folder, and the start of its text and state. */
 export function pageDigest(tab: Tab, folder: string | null): string {
-  const text = htmlToText(tab.html).replace(/\s+/g, " ").trim();
-  const words: string[] = [];
-  stateWords(tab.state, words, { left: DIGEST_TEXT });
-  const body = [text, words.join(" · ")].filter(Boolean).join(" | ").slice(0, DIGEST_TEXT);
+  const text = pageText(tab);
+  const body = [text.content, text.data.replace(/\n/g, " · ")].filter(Boolean).join(" | ").slice(0, DIGEST_TEXT);
   const head = [tab.title || tab.key, folder ? `folder: ${folder}` : ""].filter(Boolean).join(" — ");
   return `${head}${body ? `: ${body}` : ""}`;
 }

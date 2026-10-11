@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { locationLabel, matchRecord, qualityLabel, searchPages, type PageSearchHit } from "./pageSearch.js";
 import type { Tab } from "./types.js";
+import { pageText } from "./pageText.js";
+import { searchLibrary } from "./librarySearch.js";
 
 function tab(over: Partial<Tab> & Pick<Tab, "title">): Tab {
   const id = over.id ?? over.title.toLowerCase().replace(/\s+/g, "-");
@@ -172,4 +174,48 @@ test("a data match names the record it sits in", () => {
   // Words spread over two cards, or half of them missing, name no card.
   assert.equal(matchRecord(records, "tabs meaning"), null);
   assert.equal(matchRecord(records, "nothing here"), null);
+});
+
+test("searches share extraction and invalidate content and in-place state edits by revision", () => {
+  const page = tab({ title: "Résumé", html: "<p>Old content</p>", state: { note: "Old data" } });
+  const first = pageText(page);
+  searchPages([page], [], "old");
+  searchLibrary([page], "old", 0, 20);
+  assert.equal(pageText(page), first);
+  assert.equal(first.normalizedTitle, "resume");
+  page.html = "<p>New content</p>";
+  page.revision++;
+  assert.notEqual(pageText(page), first);
+  assert.equal(pageText(page).content, "New content");
+  assert.equal(searchPages([page], [], "new content").hits[0]?.quality, "phrase");
+  assert.equal(searchLibrary([page], "new content", 0, 20).matchCount, 1);
+  const second = pageText(page);
+  (page.state as { note: string }).note = "Changed data";
+  page.stateRevision++;
+  assert.notEqual(pageText(page), second);
+  assert.equal(searchLibrary([page], "old data", 0, 20).matchCount, 0);
+  assert.equal(searchPages([page], [], "changed data").hits[0]?.snippet, "Changed data");
+  page.title = "Renamed";
+  page.key = "scribe:new-key";
+  assert.equal(searchPages([page], [], "renamed").hits[0]?.location, "title");
+  assert.equal(searchLibrary([page], "new-key", 0, 20).matchCount, 1);
+  // Different stores/pages can have identical ids and revisions.
+  assert.equal(searchPages([tab({ id: page.id, title: "Other", state: { note: "Separate data" } })], [], "separate").matchCount, 1);
+});
+
+test("both searches use readable state content and exclude machine fields", () => {
+  const page = tab({ title: "Tasks", state: {
+    cards: [{ id: "arbitrary-machine-id", title: "Fix login", color: "magenta", comments: [{ text: "Useful comment" }], checklist: [{ text: "Check session" }] }],
+    settings: { instructions: "secretsetting", workerLog: [{ text: "workertrace" }] },
+    workerLog: [{ text: "othertrace" }], images: [{ name: "assetname" }],
+  } });
+  for (const query of ["arbitrary-machine-id", "magenta", "secretsetting", "workertrace", "othertrace", "assetname"]) {
+    assert.equal(searchPages([page], [], query).matchCount, 0, query);
+    assert.equal(searchLibrary([page], query, 0, 20).matchCount, 0, query);
+  }
+  for (const query of ["fix login", "useful comment", "check session"]) {
+    assert.equal(searchPages([page], [], query).hits[0]?.location, "data");
+    const snippet = searchLibrary([page], query, 0, 20).hits[0]?.snippet;
+    assert.equal(snippet, "Fix login Useful comment Check session");
+  }
 });

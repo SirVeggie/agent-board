@@ -1,4 +1,4 @@
-import { htmlToText } from "./librarySearch.js";
+import { pageText, normalizeSearchText as normalize } from "./pageText.js";
 import type { Tab } from "./types.js";
 
 export const PAGE_SEARCH_DEFAULT = 40;
@@ -147,11 +147,12 @@ function queryParts(query: string): string[] {
 }
 
 function scoreTab(tab: Tab, query: string, parts: string[], open: boolean): PageSearchHit | null {
+  const text = pageText(tab);
   const fields: Array<{ location: MatchLocation; hay: string; raw: string }> = [
-    { location: "title", hay: normalize(tab.title), raw: tab.title },
-    { location: "key", hay: normalize(tab.key), raw: tab.key },
-    { location: "content", hay: normalize(htmlToText(tab.html)), raw: htmlToText(tab.html) },
-    { location: "data", hay: normalize(stateText(tab)), raw: stateText(tab) },
+    { location: "title", hay: text.normalizedTitle, raw: text.title },
+    { location: "key", hay: text.normalizedKey, raw: text.key },
+    { location: "content", hay: text.normalizedContent, raw: text.content },
+    { location: "data", hay: text.normalizedData, raw: text.data },
   ];
 
   for (const field of fields) {
@@ -254,18 +255,6 @@ function partsInOrder(hay: string, parts: string[]): boolean {
     from = at + part.length;
   }
   return true;
-}
-
-function stateText(tab: Tab): string {
-  try {
-    return JSON.stringify(tab.state ?? {});
-  } catch {
-    return "";
-  }
-}
-
-function normalize(value: string): string {
-  return value.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
 }
 
 function makeSnippet(text: string, query: string, parts: string[]): string {

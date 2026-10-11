@@ -1,3 +1,5 @@
+import { pageText, normalizeSearchText as normalize } from "./pageText.js";
+export { htmlToText } from "./pageText.js";
 import type { Tab } from "./types.js";
 
 export const LIBRARY_PAGE_DEFAULT = 20;
@@ -40,31 +42,6 @@ export type LibrarySearchResult = {
   total: number;
 };
 
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
-    .replace(/&#39;|&apos;|&lsquo;|&rsquo;/gi, "'")
-    .replace(/&mdash;|&ndash;/gi, "-")
-    .replace(/&hellip;/gi, "...")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
-      const code = Number.parseInt(hex, 16);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
-    })
-    .replace(/&#(\d+);/g, (_, n) => {
-      const code = Number(n);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
-    })
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export function clampLibraryPage(offset: unknown, limit: unknown): { offset: number; limit: number } {
   const off = typeof offset === "number" && Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
   const raw = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : LIBRARY_PAGE_DEFAULT;
@@ -103,20 +80,9 @@ function queryTokens(query: string): string[] {
     .filter((tok) => tok && !QUERY_STOPWORDS.has(tok));
 }
 
-function stateText(tab: Tab): string {
-  try {
-    return JSON.stringify(tab.state ?? {});
-  } catch {
-    return "";
-  }
-}
-
 function scoreTab(tab: Tab, toks: string[]): LibrarySearchHit | null {
-  const title = normalize(tab.title);
-  const key = normalize(tab.key);
-  const body = normalize(htmlToText(tab.html));
-  const state = normalize(stateText(tab));
-  const hay = `${title} ${key} ${body} ${state}`;
+  const text = pageText(tab);
+  const { normalizedTitle: title, normalizedKey: key, normalizedContent: body, normalizedData: state, hay } = text;
   const joined = toks.join("");
   const titleSeq = subsequence(title, joined);
   const allInHay = toks.every((tok) => hay.includes(tok));
@@ -147,17 +113,13 @@ function scoreTab(tab: Tab, toks: string[]): LibrarySearchHit | null {
   const snippetSource = toks.every((tok) => title.includes(tok))
     ? ""
     : toks.some((tok) => body.includes(tok))
-      ? htmlToText(tab.html)
-      : stateText(tab);
+      ? text.content
+      : text.data;
   return {
     tab,
     snippet: snippetSource ? makeSnippet(snippetSource, toks[0] ?? "") : null,
     score,
   };
-}
-
-function normalize(value: string): string {
-  return value.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
 }
 
 function subsequence(hay: string, needle: string): boolean {

@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { htmlToText } from "../librarySearch.js";
+import { htmlToText, pageText as extractPageText, stateToText as words, ignoredStateField as ignored, type PageTextSource } from "../pageText.js";
 import { collectPageAssetRefs } from "../pageAssets.js";
-import type { Tab } from "../types.js";
 
-export const CHUNKER_VERSION = "2";
+export const CHUNKER_VERSION = "3";
 export type SearchDeclaration = { records: SearchRecord[] };
 export type SearchRecord = { path: string; skip?: Record<string, unknown>; title: string; text: string[]; anchor: string; label?: string; context?: "page" | "record" };
 /** An asset a page shows: a page asset id (`pa_…`) or `asset:<name>`, with the key of the text chunk it sits on. */
@@ -36,14 +35,6 @@ function values(value: unknown, path: string): unknown[] {
   }
   return current;
 }
-const ignored = /^(?:id|num|col|color|colour|settings|workerLog|images|assets|claim|thread|usage|status|blockedBy|from|cover|createdAt|updatedAt|movedAt|doneAt)$/i;
-function words(value: unknown): string {
-  if (typeof value === "string") return /^(?:asset|data|https?):|^#[\da-f]{3,8}$|^[a-z]{1,4}_[a-z0-9]+$/i.test(value) ? "" : value.replace(/https?:\/\/\S+/g, "").trim();
-  if (Array.isArray(value)) return value.map(words).filter(Boolean).join("\n");
-  if (value && typeof value === "object") return Object.entries(value).filter(([key]) => !ignored.test(key)).map(([, v]) => words(v)).filter(Boolean).join("\n");
-  return "";
-}
-
 /** Sentence-aware bounded inputs. Only length splits repeat the last sentence. */
 export function splitText(text: string): string[] {
   let rest = text.trim();
@@ -64,12 +55,12 @@ export function splitText(text: string): string[] {
 
 const assetRefs = (text: string): string[] => [...collectPageAssetRefs(text), ...new Set([...text.matchAll(/\basset:[A-Za-z0-9._-]+/g)].map(m => m[0]))];
 
-export function chunkPage(tab: Pick<Tab, "title" | "html" | "state">, folder: string | null = null, declaration?: SearchDeclaration): TextChunk[] {
+export function chunkPage(tab: PageTextSource, folder: string | null = null, declaration?: SearchDeclaration): TextChunk[] {
   return analyzePage(tab, folder, declaration).chunks;
 }
 
 /** A page's text chunks, and the assets it refers to with the chunk each one belongs to (its card, item or section). */
-export function analyzePage(tab: Pick<Tab, "title" | "html" | "state">, folder: string | null = null, declaration?: SearchDeclaration): { chunks: TextChunk[]; images: ImageRef[] } {
+export function analyzePage(tab: PageTextSource, folder: string | null = null, declaration?: SearchDeclaration): { chunks: TextChunk[]; images: ImageRef[] } {
   const out: TextChunk[] = [];
   const images = new Map<string, ImageRef>();
   const own = (text: string, owner: string | undefined, label: string) => {
@@ -93,9 +84,10 @@ export function analyzePage(tab: Pick<Tab, "title" | "html" | "state">, folder: 
     walk(tab.state, "");
   }
   const html = tab.html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
-  const visible = htmlToText(html);
+  const extracted = extractPageText(tab);
+  const visible = extracted.content;
   const titles = records.map(r => words(values(r.value, r.spec.title)[0])).filter(Boolean).join("\n");
-  const pageText = declaration ? titles : [visible, words(tab.state)].filter(Boolean).join("\n");
+  const pageText = declaration ? titles : [visible, extracted.data].filter(Boolean).join("\n");
   // Empty pages rank for everything, so they are skipped. A declared list with one short item is still a page.
   const empty = declaration ? !records.some(r => words(r.value)) : pageText.length < 40 && records.every(r => words(r.value).length < 40);
   add("page", "page", null, tab.title, tab.title, `Folder: ${folder ?? "/"}.\n${pageText.slice(0, 3000)}`);
