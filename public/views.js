@@ -944,8 +944,8 @@ window.createViews = function createViews(host) {
         const rect = dropPaneRect(pane, split);
         const cx = (rect.left + rect.width / 2) * box.width;
         const cy = (rect.top + rect.height / 2) * box.height;
-        if (Math.abs(dx - cx) <= Math.min(90, rect.width * box.width * 0.15) &&
-            Math.abs(dy - cy) <= Math.min(60, rect.height * box.height * 0.15)) {
+        if (Math.abs(dx - cx) <= Math.min(108, rect.width * box.width * 0.18) &&
+            Math.abs(dy - cy) <= Math.min(72, rect.height * box.height * 0.18)) {
           const samePane = split ? paneOf(pageDrag.id) === pane : pageDrag.id === host.activeId();
           if (pageDrag.pane === "peek" || samePane) return null;
           return { pane };
