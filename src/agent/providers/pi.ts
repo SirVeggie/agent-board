@@ -755,6 +755,7 @@ class PiSession implements ProviderSession {
         toolId: event.toolCallId,
         // Outside the workspace it is not a plain edit: "edits" does not cover it.
         tool: within ? "edit" : "other",
+        paths: [target],
         title: within ? `${name === "write" ? "Write" : "Edit"} ${rel}` : `${name === "write" ? "Write" : "Edit"} outside the workspace: ${target}`,
         options: [
           { id: "allow", label: "Allow", kind: "allow_once" },

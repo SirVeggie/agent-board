@@ -1207,6 +1207,7 @@ class ClaudeSession implements ProviderSession {
           tool: toolKind(name),
           title: opts.title || described.title,
           detail: detail || undefined,
+          paths: described.paths,
           options,
           // Only the in-process registration counts, not a same-named server from the user's config.
           boardTool: name.startsWith(`mcp__${BOARD_SERVER}__`) && (opts as { mcpServer?: { source?: string } }).mcpServer?.source === "sdk",

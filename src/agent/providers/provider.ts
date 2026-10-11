@@ -60,6 +60,8 @@ export type ApprovalRequest = {
   tool: ToolKind;
   title: string;
   detail?: string;
+  /** All file targets of an edit, delete or move; relative paths use the thread's cwd. */
+  paths?: string[];
   options: ApprovalOption[];
 };
 

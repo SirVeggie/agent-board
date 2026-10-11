@@ -226,6 +226,46 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
   return recap + origin + pageEdits + contextBlock(msg.context) + guides + files + text;
 }
 
+/** Resolve new file targets through their nearest existing parent, including junctions. */
+function writeRealPath(target: string): string {
+  try {
+    return fs.realpathSync.native(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    // A dangling link is not a new file: its destination is unknown, so ask the user.
+    try { fs.lstatSync(target); throw new Error("Unresolved file link"); }
+    catch (statErr) { if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") throw statErr; }
+    const parent = path.dirname(target);
+    if (parent === target) throw err;
+    return path.join(writeRealPath(parent), path.basename(target));
+  }
+}
+
+function editsInsideWorkspace(t: Thread, paths: string[] | undefined): boolean {
+  const cwd = openWorktree(t)?.path ?? t.cwd;
+  if (!cwd || !paths?.length) return false;
+  try {
+    const root = fs.realpathSync.native(cwd);
+    return paths.every((file) => {
+      if (typeof file !== "string" || !file.trim() || file.includes("\0")) return false;
+      // Drive-relative Windows paths depend on process state, not the thread's cwd.
+      if (process.platform === "win32" && /^[a-z]:($|[^\\/])/i.test(file)) return false;
+      const inputRoot = path.parse(file).root;
+      let target = inputRoot ? fs.realpathSync.native(path.resolve(cwd, inputRoot)) : root;
+      // Resolve each link before processing '..'; lexical normalization could hide an escape.
+      for (const part of file.slice(inputRoot.length).split(process.platform === "win32" ? /[\\/]/ : /\//)) {
+        if (!part || part === ".") continue;
+        target = part === ".." ? path.dirname(target) : writeRealPath(path.join(target, part));
+      }
+      const rel = path.relative(root, target);
+      return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+    });
+  } catch {
+    // Missing roots, permissions errors and unresolvable links must never grant an edit.
+    return false;
+  }
+}
+
 /**
  * Approvals the thread's settings answer without asking: Scribe's own board tools, Pages mode's
  * refusals, and the "full" and "edits" approval levels. Null when the user has to decide.
@@ -247,7 +287,7 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
   if (t?.approval === "full" && allow) {
     return Promise.resolve({ optionId: allow.id });
   }
-  if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move")) {
+  if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move") && editsInsideWorkspace(t, req.paths)) {
     return Promise.resolve({ optionId: allow.id });
   }
   return null;
