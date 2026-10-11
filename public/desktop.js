@@ -218,7 +218,8 @@
   window.addEventListener("resize", closeMenu);
 
   // Settings → Desktop.
-  const section = document.createElement("section");
+  // Popout windows load the window controls without the main settings panel.
+  const section = document.getElementById("desktop-settings") || document.createElement("section");
   section.className = "settings-section";
   section.innerHTML =
     '<h3>Desktop</h3><p class="settings-hint">Right-click a title bar button to bring back hidden ones.</p>';
@@ -249,7 +250,6 @@
   motionLabel.dataset.tooltip = motionHint;
   motionLabel.setAttribute("aria-description", motionHint);
   section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, hint);
-  document.getElementById("import-page")?.closest(".settings-section")?.before(section);
 
   /** One row of connected icon toggles, one per title bar button, in strip order. */
   function buttonTrackRow() {

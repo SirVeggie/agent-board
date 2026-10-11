@@ -1372,10 +1372,16 @@
   }
 
   const settingsSections = [...document.querySelectorAll("#settings-panel > .settings-section")];
+  const desktopSettingsSection = window.__TAURI__?.core ? document.createElement("section") : null;
+  if (desktopSettingsSection) {
+    desktopSettingsSection.id = "desktop-settings";
+    desktopSettingsSection.className = "settings-section";
+  }
   const settingsCategories = window.scribeSettingsUI.mount(document.getElementById("settings-panel"), [
     { label: "Appearance", sections: [settingsSections[0], settingsSections[5]] },
     { label: "Navigation", sections: [settingsSections[1], settingsSections[2]] },
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
+    ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Import / Export", sections: [settingsSections[6]] },
   ], { close: closeSettings, after: { label: "Agent settings →", run: () => window.scribeChat?.openSettings() } });
 
