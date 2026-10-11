@@ -52,7 +52,7 @@ import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type Kn
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
-import { sumThreadUsage } from "./usage.js";
+import { sumThreadUsage, sumUsageTree } from "./usage.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
 import { cleanMemories, memoriesFor, memoryApplies, saveMemory, type Memory } from "./memory.js";
@@ -856,7 +856,7 @@ export class AgentHost {
     const status = this.status.get(id) ?? "idle";
     const turns = this.db.listTurns(id);
     const last = turns.at(-1);
-    const usage = sumThreadUsage(turns);
+    const usage = this.threadUsage(id);
     const outputAt = this.runs.get(id)?.turn.outputAt ?? last?.outputAt;
     const recovery = thread.provider === "codex" && last?.limitResetsAt
       ? codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt) : undefined;
@@ -1388,6 +1388,14 @@ export class AgentHost {
 
   /** The helper thread an agent_run step names in its caller's activity line. */
   private helperLookup = (id: string) => (id ? this.threads.get(id) : undefined);
+
+  private threadUsage(id: string) {
+    return sumUsageTree(id, this.threads.values(), (threadId) => {
+      const turns = this.loadTurns(threadId);
+      const live = this.runs.get(threadId);
+      return live ? turns.map((t) => t.id === live.turn.id ? { ...live.turn, usage: live.usage } : t) : turns;
+    });
+  }
 
   /** A running thread's live step changed: send the thread again, at most every ACTIVITY_MS. */
   private activityChanged(threadId: string): void {
@@ -2530,6 +2538,7 @@ export class AgentHost {
       provider: latest.provider,
       model: turn.model,
       status: turn.status,
+      usage: this.threadUsage(helper.id),
       ...(turn.error ? { error: turn.error } : {}),
       reply: reply || (turn.status === "done" ? "(The helper ended its turn without a final message. Check its changes yourself.)" : ""),
       ...(files.length ? { files } : {}),

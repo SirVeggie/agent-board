@@ -43,6 +43,7 @@ before(() => {
       cancel: async () => helperWaits.get(thread.id)?.(),
       run: async (input: TurnInput, sink: RunSink): Promise<TurnResult> => {
         asked.push({ thread, input });
+        sink.usage({ inputTokens: 20, cacheReadTokens: 10, outputTokens: 5 });
         if (hanging) {
           await new Promise<void>((resolve) => { helperWaits.set(thread.id, resolve); });
           helperWaits.delete(thread.id);
@@ -93,6 +94,7 @@ test("a helper runs the brief on the named model with the caller's settings and 
   const result = await host.runHelper(id, { task: "rename foo to bar", provider: "pi", model: "qwen coder" });
   assert.equal(result.status, "done");
   assert.equal(result.reply, "did: rename foo to bar");
+  assert.deepEqual(result.usage, { turns: 1, inputTokens: 20, cacheReadTokens: 10, outputTokens: 5, promptTokens: 30, costPartial: true });
   const helper = host.getThread(String(result.thread))!;
   assert.equal(helper.helperOf, id);
   assert.equal(helper.model, "local/qwen-coder");
@@ -108,6 +110,14 @@ test("a helper runs the brief on the named model with the caller's settings and 
   const again = await host.runHelper(id, { task: "now the tests", thread: helper.id });
   assert.equal(again.thread, helper.id);
   assert.equal(again.reply, "did: now the tests");
+  assert.equal((again.usage as { promptTokens: number }).promptTokens, 60);
+  const info = host.runInfo(id);
+  assert.ok(info.exists);
+  if (info.exists) {
+    assert.equal(info.usage?.inputTokens, 60);
+    assert.equal(info.usage?.helpers?.threads, 1);
+    assert.equal(info.usage?.helpers?.turns, 2);
+  }
 });
 
 test("new helpers inherit or reduce file mode and follow-ups retain the selected mode", async () => {
@@ -290,6 +300,13 @@ test("background launches overlap and steering or an aborted wait keeps helpers 
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.ok(helpers.every((helper) => helperWaits.has(helper)), "all three sessions run concurrently");
+    const info = host.runInfo(id);
+    assert.ok(info.exists);
+    if (info.exists) {
+      assert.equal(info.usage?.helpers?.threads, 3);
+      assert.equal(info.usage?.inputTokens, 90, "live reported usage is included without waiting");
+      assert.equal(info.usage?.outputTokens, 15);
+    }
     await host.cancel(id, { keepQueue: true });
     assert.ok(helpers.every((helper) => helperWaits.has(helper)));
     const abort = new AbortController();

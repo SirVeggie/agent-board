@@ -3085,6 +3085,7 @@
     if (c.archivedAt && c.archived) times.push("Archived " + ago(c.archivedAt));
     var usageLine = formatUsage(c.usage);
     if (usageLine) times.push("Last chat " + usageLine);
+    if (c.usage && c.usage.main) times.push("Main chat " + formatUsage(c.usage.main));
     mTimes.replaceChildren();
     times.forEach(function (t) { mTimes.appendChild(el("div", null, t)); });
   }
@@ -4458,12 +4459,17 @@
     if (n >= 1000) return (n >= 10000 ? String(Math.round(n / 1000)) : (n / 1000).toFixed(1).replace(/\.0$/, "")) + "k";
     return String(n);
   }
-  function compactUsage(value) {
+  function compactUsage(value, breakdown) {
     if (!value || typeof value !== "object") return null;
     var out = {};
-    ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd"].forEach(function (key) {
+    ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "promptTokens", "threads"].forEach(function (key) {
       var n = Number(value[key]);
-      if (isFinite(n) && n > 0) out[key] = n;
+      if (isFinite(n) && (n > 0 || n === 0 && value[key] !== undefined && (key === "promptTokens" || key === "costUsd"))) out[key] = n;
+    });
+    if (value.costPartial === true) out.costPartial = true;
+    if (breakdown !== false) ["main", "helpers"].forEach(function (key) {
+      var part = compactUsage(value[key], false);
+      if (part) out[key] = part;
     });
     return Object.keys(out).length ? out : null;
   }
@@ -4471,10 +4477,12 @@
     var u = compactUsage(value);
     if (!u) return "";
     var parts = [];
-    var input = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0);
+    var input = u.promptTokens !== undefined ? u.promptTokens : (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0);
     if (input) parts.push(fmtTokens(input) + " in");
     if (u.outputTokens) parts.push(fmtTokens(u.outputTokens) + " out");
     if (u.turns) parts.push(u.turns + (u.turns === 1 ? " round" : " rounds"));
+    if (u.costUsd !== undefined) parts.push("$" + u.costUsd.toFixed(2) + (u.costPartial ? " partial" : ""));
+    if (u.helpers) parts.push("helpers: " + (u.helpers.threads || 0) + ", " + fmtTokens(u.helpers.inputTokens || 0) + " in, " + fmtTokens(u.helpers.outputTokens || 0) + " out" + (u.helpers.costUsd !== undefined ? ", $" + u.helpers.costUsd.toFixed(2) + (u.helpers.costPartial ? " partial" : "") : ""));
     return parts.join(" · ");
   }
   function usageTip(value) {
@@ -4487,11 +4495,14 @@
     if (u.outputTokens) parts.push(fmtTokens(u.outputTokens) + " output");
     if (u.reasoningTokens) parts.push(fmtTokens(u.reasoningTokens) + " reasoning");
     if (u.turns) parts.push(u.turns + (u.turns === 1 ? " round" : " rounds"));
+    if (u.main) parts.push("Main: " + formatUsage(u.main));
+    if (u.helpers) parts.push("Helpers: " + formatUsage(u.helpers));
+    if (u.costPartial && u.costUsd !== undefined) parts.push("Cost is partial: some turns did not report a cost");
     return "Last worker chat: " + parts.join(" · ");
   }
   function usageHeavy(value) {
     var u = compactUsage(value);
-    return Boolean(u && (u.inputTokens || 0) + (u.cacheReadTokens || 0) >= 1000000);
+    return Boolean(u && (u.promptTokens !== undefined ? u.promptTokens : (u.inputTokens || 0) + (u.cacheReadTokens || 0)) >= 1000000);
   }
   /** Last worker chat's totals on the card (and any other card that chat claimed). */
   function applyCardUsage(cardNum, threadId, usage) {

@@ -210,7 +210,7 @@ test("run info and thread views total token usage across turns", () => {
   const info = host.runInfo(id);
   assert.equal(info.exists, true);
   if (!info.exists) return;
-  assert.deepEqual(info.usage, { turns: 2, inputTokens: 150, outputTokens: 30, cacheReadTokens: 5 });
+  assert.deepEqual(info.usage, { turns: 2, inputTokens: 150, outputTokens: 30, cacheReadTokens: 5, promptTokens: 155, costPartial: true });
   const view = host.listThreads().find((t) => t.id === id);
-  assert.deepEqual(view?.usage, info.usage);
+  assert.deepEqual(view?.usage, { turns: 2, inputTokens: 150, outputTokens: 30, cacheReadTokens: 5 });
 });

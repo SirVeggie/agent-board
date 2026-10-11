@@ -43,14 +43,7 @@ type Card = {
   /** Last in-app agent thread that claimed the card; kept after the claim ends. */
   thread?: string;
   /** Last worker chat's token totals (set by the page when that chat ends). */
-  usage?: {
-    turns?: number;
-    inputTokens?: number;
-    outputTokens?: number;
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
-    reasoningTokens?: number;
-    costUsd?: number;
+  usage?: UsageTotals & {
     at?: number;
     thread?: string;
   };
@@ -104,7 +97,7 @@ const STEP_LEASE_MS = 15 * 60 * 1000;
 const MAX_WORKER_LOG = 200;
 const DEFAULT_LOG_LIMIT = 80;
 
-const USAGE_KEYS = ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd"] as const;
+const USAGE_KEYS = ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "promptTokens", "threads"] as const;
 
 type UsageTotals = {
   turns?: number;
@@ -114,15 +107,25 @@ type UsageTotals = {
   cacheWriteTokens?: number;
   reasoningTokens?: number;
   costUsd?: number;
+  promptTokens?: number;
+  threads?: number;
+  costPartial?: boolean;
+  main?: UsageTotals;
+  helpers?: UsageTotals;
 };
 
-function compactUsage(value: unknown): UsageTotals | undefined {
+function compactUsage(value: unknown, breakdown = true): UsageTotals | undefined {
   if (!value || typeof value !== "object") return undefined;
   const src = value as Record<string, unknown>;
   const out: UsageTotals = {};
   for (const key of USAGE_KEYS) {
     const n = Number(src[key]);
-    if (Number.isFinite(n) && n > 0) out[key] = n;
+    if (Number.isFinite(n) && (n > 0 || n === 0 && src[key] !== undefined && ["promptTokens", "costUsd"].includes(key))) out[key] = n;
+  }
+  if (src.costPartial === true) out.costPartial = true;
+  if (breakdown) for (const key of ["main", "helpers"] as const) {
+    const part = compactUsage(src[key], false);
+    if (part) out[key] = part;
   }
   return Object.keys(out).length ? out : undefined;
 }

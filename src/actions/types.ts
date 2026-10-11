@@ -1,4 +1,5 @@
 import type { PageRunView, RunNote } from "../agent/pageRuns.js";
+import type { ThreadUsage } from "../agent/types.js";
 import type { BoardState, TemplateValues } from "../types.js";
 
 /** Who runs an action. Agents carry their MCP session, and the chat thread when Scribe started them. */
@@ -52,15 +53,7 @@ export type ThreadRunInfo =
       outputAt?: number;
       lastTurn?: { status: string; endedAt?: number; error?: string; limitResetsAt?: number; usageRecoveryAllowed?: boolean };
       /** Token totals across the thread's non-reverted turns, so a board can log them when the chat ends. */
-      usage?: {
-        turns: number;
-        inputTokens?: number;
-        outputTokens?: number;
-        cacheReadTokens?: number;
-        cacheWriteTokens?: number;
-        reasoningTokens?: number;
-        costUsd?: number;
-      };
+      usage?: ThreadUsage;
       /** While the page has handed the thread to Scribe as a run: its phase, limit wait, and outcome once ended. */
       run?: PageRunView;
       /** While the turn waits on the user: the question (a page_ask page too), approval or plan. */

@@ -36,6 +36,18 @@ const card = (state: Record<string, unknown>, num: number) =>
   (state.cards as Array<Record<string, unknown>>).find((c) => c.num === num)!;
 const order = (state: Record<string, unknown>) => (state.cards as Array<{ num: number }>).map((c) => c.num);
 
+test("list, get and logs preserve helper totals and the main chat breakdown", () => {
+  const state = board() as Record<string, unknown>;
+  const usage = { turns: 3, inputTokens: 100, promptTokens: 100, outputTokens: 12,
+    costUsd: 0.2, costPartial: true, main: { turns: 1, inputTokens: 10, promptTokens: 10 },
+    helpers: { threads: 2, turns: 2, inputTokens: 90, outputTokens: 12, costUsd: 0.2, costPartial: true } };
+  card(state, 1).usage = usage;
+  state.settings = { workerLog: [{ at: 1, kind: "done", text: "Done", usage }] };
+  assert.deepEqual((run(state, "list", {}).result.cards as Array<{ usage: unknown }>)[0].usage, usage);
+  assert.deepEqual(run(state, "get", { card: 1 }).result.usage, usage);
+  assert.deepEqual((run(state, "logs", {}).result.logs as Array<{ usage: unknown }>)[0].usage, usage);
+});
+
 test("claim moves a card to working, records the holder, and refuses a second agent", () => {
   const { state } = run(board(), "claim", { card: "#2", text: "Fixing it" });
   const c = card(state, 2);

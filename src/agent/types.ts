@@ -220,6 +220,12 @@ export type ThreadUsage = {
   cacheWriteTokens?: number;
   reasoningTokens?: number;
   costUsd?: number;
+  /** Normalized prompt tokens, including cached input exactly once. */
+  promptTokens?: number;
+  costPartial?: boolean;
+  /** The main thread's original provider figures, before helpers are added. */
+  main?: ThreadUsage;
+  helpers?: ThreadUsage & { threads: number };
 };
 
 export type TurnStatus = "running" | "done" | "error" | "cancelled";
