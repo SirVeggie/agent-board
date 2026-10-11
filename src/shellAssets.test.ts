@@ -6,6 +6,37 @@ import http from "node:http";
 import { test } from "node:test";
 import express from "express";
 import { shellAssets } from "./shellAssets.js";
+import { contentOriginGate } from "./contentOrigin.js";
+import { CONTENT_HOST } from "./config.js";
+import { fileURLToPath } from "node:url";
+
+test("content origin serves the injected tooltip script while rejecting other shell resources", async () => {
+  const publicDir = fileURLToPath(new URL("../public/", import.meta.url));
+  const app = express();
+  app.use(contentOriginGate);
+  app.use(shellAssets(publicDir, {}));
+  app.use(express.static(publicDir));
+  // A sentinel catches requests accidentally allowed through the gate.
+  app.use((_req, res) => { res.status(200).send("passed gate"); });
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, CONTENT_HOST, resolve));
+  const base = `http://${CONTENT_HOST}:${(server.address() as { port: number }).port}`;
+  try {
+    const response = await fetch(base + "/tooltip.js?v=3");
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type")!, /javascript/);
+    assert.equal(await response.text(), fs.readFileSync(path.join(publicDir, "tooltip.js"), "utf8"));
+    for (const url of ["/app.js", "/app.css", "/vendor/marked.js", "/api/tabs", "/api/agent/threads", "/tooltip.js/extra", "/Tooltip.js"]) {
+      assert.equal((await fetch(base + url)).status, 403, url);
+    }
+    for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {
+      assert.equal((await fetch(base + "/tooltip.js?v=3", { method })).status, 403, method);
+    }
+    assert.equal((await fetch(base + "/view/test-page")).status, 200);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
 
 test("shell cache versions follow bytes, compress responses, and revalidate unversioned URLs", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-shell-cache-"));
