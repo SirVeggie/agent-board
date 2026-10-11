@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
-test("Workers panel shows provider quotas, missing reports, and live recovery", async (t) => {
+test("Board header shows main provider quotas, detailed tips, and live recovery", async (t) => {
   let browser;
   try {
     browser = process.env.SCRIBE_TEST_CHROMIUM
@@ -27,25 +27,55 @@ test("Workers panel shows provider quotas, missing reports, and live recovery", 
         local: {}, set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); },
         onChange(fn) { this.changed = fn; },
         agent: {
-          options() { return Promise.resolve({ ok: true, providers: [{ id: 'codex', available: true }], models: {} }); },
+          options() { return Promise.resolve({ ok: true, providers: ['codex', 'claude', 'cursor'].map(id => ({ id, available: true })), models: {} }); },
           limits() { return Promise.resolve({ ok: true, limits: { codex: { at: Date.now(), ordinaryUsageAllowed: false,
-            windows: [{ id: 'primary', label: '5 hours', utilization: 1, resetsAt: Date.now() - 1000 }] } } }); },
+            windows: [{ id: 'codex:codex:primary', label: '5-hour', utilization: 1, resetsAt: Date.now() - 1000 },
+              { id: 'codex:codex:secondary', label: 'Weekly', utilization: 0.5 }] },
+            claude: { at: Date.now(), windows: [{ id: 'five_hour', label: '5-hour', utilization: 0.75 },
+              { id: 'seven_day', label: 'Weekly', utilization: 0.95 }] },
+            cursor: { at: Date.now(), windows: [{ id: 'cursor_included', label: 'Included', utilization: 0.91 },
+              { id: 'cursor_auto', label: 'Auto', utilization: 0.3 }, { id: 'cursor_api', label: 'API', utilization: 0.8 }] }
+          } }); },
           onLimits(fn) { this.changedLimits = fn; }, threads() { return Promise.resolve({ ok: true, threads: [] }); }
         }
       };
     </script>${html}`);
-    await page.locator('#workersBtn').click();
+    await page.addScriptTag({ content: fs.readFileSync(new URL('../public/tooltip.js', import.meta.url), 'utf8') });
     const usage = page.getByRole('region', { name: 'Usage limits' });
-    await usage.getByText('100% used').waitFor();
-    assert.match(await usage.innerText(), /Reset passed · awaiting update/);
-    assert.match(await usage.innerText(), /Included usage blocked/);
-    assert.match(await usage.innerText(), /Pi\s+Usage limits unavailable/);
-    assert.equal(await usage.locator('progress').getAttribute('value'), '100');
+    const codex = usage.locator('[data-provider="codex"]');
+    const claude = usage.locator('[data-provider="claude"]');
+    const cursor = usage.locator('[data-provider="cursor"]');
+    await codex.getByText('100%').waitFor();
+    assert.match(await codex.getAttribute('data-tooltip') || '', /Reset passed · awaiting update/);
+    assert.match(await codex.getAttribute('data-tooltip') || '', /Included usage blocked/);
+    assert.match(await usage.locator('[data-provider="pi"]').getAttribute('data-tooltip') || '', /Usage limits unavailable/);
+    assert.equal(await codex.locator('progress').getAttribute('value'), '100');
+    assert.equal(await claude.locator('progress').getAttribute('value'), '75');
+    assert.equal(await cursor.locator('progress').getAttribute('value'), '91');
+    assert.match(await claude.getAttribute('class') || '', /lvl-warn/);
+    assert.match(await cursor.getAttribute('class') || '', /lvl-high/);
+    const headerBounds = (await usage.boundingBox())!;
+    const actionBounds = (await page.locator('#workersBtn').boundingBox())!;
+    assert.ok(headerBounds.y + headerBounds.height < actionBounds.y);
+    assert.ok(headerBounds.x + headerBounds.width > actionBounds.x);
+    await cursor.hover();
+    const tip = page.getByRole('tooltip');
+    await tip.waitFor({ state: 'visible' });
+    assert.match(await tip.innerText(), /Included: 91% used/);
+    assert.match(await tip.innerText(), /Auto: 30% used/);
+    assert.match(await tip.innerText(), /API: 80% used/);
+    await codex.focus();
+    await tip.getByText(/Weekly: 50% used/).waitFor();
+    await page.locator('#workersBtn').click();
+    assert.equal(await page.locator('#workersPop .board-quota').count(), 0);
     await page.evaluate(() => (window as any).scribe.agent.changedLimits({ codex: { at: Date.now(), ordinaryUsageAllowed: true,
-      windows: [{ id: 'primary', label: '5 hours', utilization: 0.25, resetsAt: Date.now() + 3600000 }] } }));
-    await usage.getByText('25% used').waitFor();
-    assert.doesNotMatch(await usage.innerText(), /Included usage blocked|awaiting update/);
-    assert.equal(await usage.locator('progress').getAttribute('value'), '25');
+      windows: [{ id: 'codex:codex:primary', label: '5-hour', utilization: 0.25, resetsAt: Date.now() + 3600000 }] } }));
+    await codex.getByText('25%').waitFor();
+    assert.doesNotMatch(await codex.getAttribute('data-tooltip') || '', /Included usage blocked|awaiting update/);
+    assert.equal(await codex.locator('progress').getAttribute('value'), '25');
+    assert.match(await codex.getAttribute('class') || '', /lvl-ok/);
+    await page.setViewportSize({ width: 520, height: 900 });
+    assert.ok(await usage.evaluate(node => node.getBoundingClientRect().right <= innerWidth));
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
