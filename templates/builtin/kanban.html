@@ -5666,12 +5666,12 @@
     head.appendChild(el("b", null, "Workers"));
     var liveInbox = columns().filter(function (c) { return isReadyCol(c) && !isPausedCol(c); });
     var pausedInbox = columns().filter(function (c) { return isReadyCol(c) && isPausedCol(c); });
-    var inboxLine = liveInbox.length
-      ? "take their cards in " + liveInbox.map(function (c) { return c.title; }).join(", ")
-      : pausedInbox.length
+    if (!liveInbox.length) {
+      var inboxLine = pausedInbox.length
         ? "inboxes paused — click an inbox tag to resume"
         : "add an agent column for their cards";
-    head.appendChild(el("span", null, inboxLine));
+      head.appendChild(el("span", null, inboxLine));
+    }
     workersPop.appendChild(head);
     if (!hasWorkerApi()) workersPop.appendChild(el("p", "worker-note", "Restart Scribe to run agent workers."));
     var sharedSummary = el("div", "wp-shared");
