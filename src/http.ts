@@ -962,6 +962,7 @@ export async function startHttp(): Promise<http.Server> {
           provider: str(body.provider, 40),
           model: str(body.model, 200),
           effort: str(body.effort, 40),
+          mode: body.mode === undefined ? undefined : typeof body.mode === "string" ? body.mode : "invalid",
           thread: str(body.thread, 60),
           background: body.background === true,
           stop: body.stop === true,

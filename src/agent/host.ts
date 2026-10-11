@@ -2250,7 +2250,7 @@ export class AgentHost {
   }
 
   /** Ask the user before a thread starts a helper, unless it has full access or they allowed helpers for the thread. */
-  private async approveHelper(parent: Thread, what: string, task: string, signal?: AbortSignal): Promise<void> {
+  private async approveHelper(parent: Thread, what: string, task: string, mode: ThreadMode, signal?: AbortSignal): Promise<void> {
     if (parent.approval === "full" || parent.helpersAllowed) return;
     const run = this.runs.get(parent.id);
     if (!run) throw new Error("With no turn running the user cannot be asked to allow a helper.");
@@ -2260,7 +2260,7 @@ export class AgentHost {
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
-    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace with this thread's mode and permissions.\n\n${clip(task, 2000)}`;
+    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace in ${mode} mode with this thread's approval and web settings.\n\n${clip(task, 2000)}`;
     const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Start a helper agent: ${what}`.slice(0, 300), detail, options, status: "pending" });
     let decision: ApprovalDecision;
     try {
@@ -2278,16 +2278,31 @@ export class AgentHost {
     }
   }
 
+  /** Pages has a different tool boundary; file modes can only be reduced: Code -> Plan -> Ask. */
+  private helperMode(parent: Thread, requested: string | undefined): ThreadMode {
+    if (requested === undefined) return parent.mode;
+    const allowed: Record<ThreadMode, readonly string[]> = {
+      code: ["code", "plan", "ask"],
+      plan: ["plan", "ask"],
+      ask: ["ask"],
+      board: ["board"],
+    };
+    if (!allowed[parent.mode].includes(requested)) {
+      throw new Error(`Helper mode "${requested}" is not allowed from ${parent.mode} mode. Choose: ${allowed[parent.mode].join(", ")}.`);
+    }
+    return requested as ThreadMode;
+  }
+
   /**
    * agent_run from a thread's MCP: hand a task to a helper thread on another provider or model, wait
    * for its turn to end and return its final reply. The helper works in the caller's folder (an open
-   * worktree is shared) with its mode, approval and web setting. thread sends a follow-up to a helper
+   * worktree is shared) with the same or a lower mode, and its approval and web setting. thread sends a follow-up to a helper
    * this thread started earlier; with no task it only waits for that helper's turn (one a restart cut
    * off and sent on) and returns its report.
    */
   async runHelper(
     threadId: string,
-    opts: { task: string; provider?: string; model?: string; effort?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
+    opts: { task: string; provider?: string; model?: string; effort?: string; mode?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
     const parent = this.helperParent(threadId);
     const task = opts.task.trim();
@@ -2305,6 +2320,7 @@ export class AgentHost {
       if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
       helper = existing;
     } else {
+      const mode = this.helperMode(parent, opts.mode);
       if (!opts.provider || !isProviderId(opts.provider)) throw new Error(`provider is required: one of ${Object.keys(this.providers).join(", ")}. agent_models lists their models.`);
       const provider = opts.provider;
       const status = (await this.providerStatus()).find((s) => s.id === provider);
@@ -2315,7 +2331,7 @@ export class AgentHost {
       }
       const busy = [...this.threads.values()].filter((t) => t.helperOf === threadId && this.runs.has(t.id)).length;
       if (busy >= MAX_HELPERS) throw new Error(`This thread already has ${busy} helpers working. Wait for one to finish.`);
-      await this.approveHelper(parent, `${status.label}${model ? ` (${model.label})` : ""}`, task, opts.signal);
+      await this.approveHelper(parent, `${status.label}${model ? ` (${model.label})` : ""}`, task, mode, opts.signal);
       if (opts.signal?.aborted) throw new Error("cancelled");
       // Other calls can have started while this one waited for approval.
       if ([...this.threads.values()].filter((t) => t.helperOf === threadId && (this.runs.has(t.id) || this.queues.get(t.id)?.length || this.resuming.has(t.id))).length >= MAX_HELPERS) {
@@ -2329,7 +2345,8 @@ export class AgentHost {
         provider,
         ...(model ? { model: model.id } : {}),
         ...(opts.effort ? { effort: opts.effort } : {}),
-        mode: now.mode,
+        // Recheck the boundary: the parent mode may have changed while approval was pending.
+        mode: this.helperMode(now, opts.mode),
         approval: now.approval,
         web: now.web,
         // A helper for files and commands gets no page tools; one of a Pages thread works on the same pages.

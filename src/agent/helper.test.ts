@@ -110,6 +110,60 @@ test("a helper runs the brief on the named model with the caller's settings and 
   assert.equal(again.reply, "did: now the tests");
 });
 
+test("new helpers inherit or reduce file mode and follow-ups retain the selected mode", async () => {
+  host.setPrefs({ helpers: true });
+  const id = host.createThread({ provider: "codex", mode: "code", approval: "full", cwd: dir, scope: { kind: "workspace", ref: dir } }).id;
+  for (const mode of [undefined, "plan", "ask"] as const) {
+    asked.length = 0;
+    const result = await host.runHelper(id, { task: "inspect the files", provider: "pi", mode });
+    const helper = host.getThread(String(result.thread))!;
+    assert.equal(helper.mode, mode ?? "code");
+    assert.equal(asked[0].thread.mode, mode ?? "code");
+    assert.equal(helper.cwd, dir);
+    assert.equal(helper.approval, "full");
+    assert.equal(helper.web, host.getThread(id)!.web);
+    assert.deepEqual(helper.scope, { kind: "workspace", ref: dir });
+    await host.runHelper(id, { task: "inspect again", thread: helper.id, mode: "code" });
+    assert.equal(host.getThread(helper.id)!.mode, mode ?? "code");
+  }
+  host.updateThread(id, { mode: "plan" });
+  const result = await host.runHelper(id, { task: "inspect", provider: "pi", mode: "ask" });
+  assert.equal(host.getThread(String(result.thread))!.mode, "ask");
+});
+
+test("helpers cannot raise file mode or cross the Pages tool boundary", async () => {
+  host.setPrefs({ helpers: true });
+  for (const mode of ["code", "plan", "ask", "board"] as const) {
+    const id = host.createThread({ provider: "codex", mode, approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
+    const denied = { code: ["board"], plan: ["code", "board"], ask: ["code", "plan", "board"], board: ["code", "plan", "ask"] }[mode];
+    for (const requested of [...denied, "invalid", ""]) {
+      await assert.rejects(host.runHelper(id, { task: "inspect", provider: "pi", mode: requested }), /Helper mode .* is not allowed/);
+    }
+  }
+  const id = host.createThread({ provider: "codex", mode: "board", approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
+  const result = await host.runHelper(id, { task: "inspect the pages", provider: "pi", mode: "board" });
+  assert.equal(host.getThread(String(result.thread))!.mode, "board");
+  assert.deepEqual(host.getThread(String(result.thread))!.scope, { kind: "global", ref: null });
+});
+
+test("helper mode is rechecked if the parent changes while approval is pending", async () => {
+  host.setPrefs({ helpers: true });
+  const id = host.createThread({ provider: "codex", mode: "code", approval: "ask", cwd: null, scope: { kind: "workspace", ref: null } }).id;
+  running(id);
+  const internals = host as unknown as Internals;
+  const rejected = assert.rejects(host.runHelper(id, { task: "inspect", provider: "pi", mode: "plan" }), /not allowed from ask mode/);
+  let request: { itemId: string } | undefined;
+  for (let i = 0; i < 100 && !request; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    request = [...internals.pending.values()].at(-1);
+  }
+  assert.ok(request, "the helper awaits approval");
+  host.updateThread(id, { mode: "ask" });
+  host.resolveApproval(request.itemId, "once");
+  await rejected;
+  internals.runs.delete(id);
+});
+
 test("a helper cannot start helpers, and only its own thread can send it on", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();

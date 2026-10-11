@@ -1760,17 +1760,18 @@ function registerHelperTools(server: McpServer): void {
 
   server.tool(
     "agent_run",
-    "Hand a task to a helper agent on another provider or model. By default a task starts in the background and returns its thread immediately, so the main chat and other helpers can keep working. Call again with thread and no task to wait for the final report; collect every report before ending your turn. Set background false to wait during launch. Use this ONLY when the user, or this chat's instructions, told you to hand work to another model, and then only with the model and for the kind of work they named: never on your own to save effort, go faster or get a second opinion. It spends the user's quota with that provider, and the user may be asked to allow it. The helper works in this chat's workspace with this chat's mode and permissions, in a chat thread of its own the user can open. It sees none of this conversation, so task must stand on its own: the goal, the files and folders involved, what done looks like, how to check it, and what to leave alone. Launching returns the helper's thread id and running status. Waiting returns its final reply, changed files and final status. Check the work yourself (read the diff, run the tests) before you build on it or report it as done. Pass thread to send a follow-up to a helper you started earlier in this chat, which keeps its context; thread with no task waits for a helper that is still working (after a Scribe restart cut your call off) and returns its report. Background launches run helpers side by side in the same folder, even when tool calls are sequential: only do that for tasks that touch different files.",
+    "Hand a task to a helper agent on another provider or model. By default a task starts in the background and returns its thread immediately, so the main chat and other helpers can keep working. Call again with thread and no task to wait for the final report; collect every report before ending your turn. Set background false to wait during launch. Use this ONLY when the user, or this chat's instructions, told you to hand work to another model, and then only with the model and for the kind of work they named: never on your own to save effort, go faster or get a second opinion. It spends the user's quota with that provider, and the user may be asked to allow it. The helper works in this chat's workspace with the same or a lower mode (set mode to ask for read-only work), inheriting approval and web settings, in a chat thread of its own the user can open. It sees none of this conversation, so task must stand on its own: the goal, the files and folders involved, what done looks like, how to check it, and what to leave alone. Launching returns the helper's thread id and running status. Waiting returns its final reply, changed files and final status. Check the work yourself (read the diff, run the tests) before you build on it or report it as done. Pass thread to send a follow-up to a helper you started earlier in this chat, which keeps its context; thread with no task waits for a helper that is still working (after a Scribe restart cut your call off) and returns its report. Background launches run helpers side by side in the same folder, even when tool calls are sequential: only do that for tasks that touch different files.",
     {
       task: z.string().optional().describe("The brief: everything the helper needs to do the task without seeing this conversation. Required unless thread is given to wait for that helper's report."),
       provider: z.string().optional().describe("claude, cursor, codex or pi (Native: the user's own model sources, such as a locally hosted model). Required for a new helper."),
       model: z.string().optional().describe("Model id or name from agent_models. Default: the provider's last used model."),
       effort: z.string().optional().describe("Reasoning effort, one of the model's efforts in agent_models. Default: the model's last used one."),
-      thread: z.string().optional().describe("Thread id an earlier agent_run returned, to send that helper a follow-up instead of starting a new one. provider, model and effort are then ignored."),
+      mode: z.enum(["code", "plan", "ask", "board"]).optional().describe("Default: the parent's mode. Can only reduce access: Code may choose Plan or read-only Ask; Plan may choose Ask. Ask and Pages (board) must keep their mode. Applies only to a new helper."),
+      thread: z.string().optional().describe("Thread id an earlier agent_run returned, to send that helper a follow-up instead of starting a new one. provider, model, effort and mode are then ignored; the helper keeps its original mode."),
       background: z.boolean().optional().describe("Default true for a task: launch it and return its thread immediately, so other helpers and the main chat can keep working. Pass thread with no task to wait for the report. Set false to wait during launch."),
       stop: z.boolean().optional().describe("Pass true with thread and no task to stop that helper when it is no longer needed, for example after the user changes direction. Other helpers keep working."),
     },
-    async ({ task, provider, model, effort, thread, background, stop }, extra) => {
+    async ({ task, provider, model, effort, mode, thread, background, stop }, extra) => {
       const progressToken = extra._meta?.progressToken;
       const startedAt = Date.now();
       const heartbeat =
@@ -1783,7 +1784,7 @@ function registerHelperTools(server: McpServer): void {
                 .catch(() => {});
             }, WAIT_HEARTBEAT_MS);
       try {
-        const { status, data } = await api("POST", "/api/helper/run", { task, provider, model, effort, thread, stop, background: background ?? true }, { signal: extra.signal });
+        const { status, data } = await api("POST", "/api/helper/run", { task, provider, model, effort, mode, thread, stop, background: background ?? true }, { signal: extra.signal });
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }
