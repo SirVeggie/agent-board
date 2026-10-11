@@ -3181,6 +3181,12 @@ main.has-split .newpage[data-pane] {
   z-index: 2;
 }
 
+/* New pages fill the pane behind their floating header. Existing-page covers keep the normal inset. */
+main.has-split .newpage:not(.cover)[data-pane] {
+  top: var(--pane-y);
+  height: var(--pane-h);
+}
+
 #frames iframe[data-role="peek"] {
   top: calc(var(--peek-y) + var(--view-head));
   left: var(--peek-x);
@@ -3408,6 +3414,27 @@ body.dragging-pane iframe { pointer-events: none; }
 @media (hover: hover) {
   .pane-head:not(.pointer-in):not(:hover) .view-btn:not(:focus-visible) {
     opacity: 0;
+  }
+
+  /* Keep the header's hit area so approaching the pane's top reveals its controls. */
+  .pane-head.blank {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .pane-head.blank:hover,
+  .pane-head.blank:focus-within {
+    opacity: 1;
+  }
+
+  .pane-head.blank:focus-within .view-btn {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-head.blank {
+    transition: none;
   }
 }
 
