@@ -5833,7 +5833,11 @@
       var provider = str(worker(id).provider) || workerDefaults(agentOptions).provider;
       if (provider) providers[provider] = true;
     });
-    var ids = Object.keys(providers);
+    var ids = Object.keys(providers).filter(function (provider) {
+      var limits = workerLimits[provider];
+      return limits && (!limits.availability || limits.availability === "available")
+        && (limits.windows || []).some(function (w) { return Number.isFinite(w.utilization); });
+    });
     section.classList.toggle("hidden", !AGENT_MODE || !ids.length);
     var nodes = ids.map(function (provider) {
       var limits = workerLimits[provider];

@@ -48,7 +48,7 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     await codex.getByText('100%').waitFor();
     assert.match(await codex.getAttribute('data-tooltip') || '', /Reset passed · awaiting update/);
     assert.match(await codex.getAttribute('data-tooltip') || '', /Included usage blocked/);
-    assert.match(await usage.locator('[data-provider="pi"]').getAttribute('data-tooltip') || '', /Usage limits unavailable/);
+    assert.equal(await usage.locator('[data-provider="pi"]').count(), 0);
     assert.equal(await codex.locator('progress').getAttribute('value'), '100');
     assert.equal(await claude.locator('progress').getAttribute('value'), '75');
     assert.equal(await cursor.locator('progress').getAttribute('value'), '91');
@@ -76,6 +76,19 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     assert.match(await codex.getAttribute('class') || '', /lvl-ok/);
     await page.setViewportSize({ width: 520, height: 900 });
     assert.ok(await usage.evaluate(node => node.getBoundingClientRect().right <= innerWidth));
+    await page.evaluate(() => (window as any).scribe.agent.changedLimits({
+      codex: { availability: 'unavailable', windows: [] },
+      claude: { windows: [] },
+      cursor: { windows: [{ id: 'cursor_included', utilization: null }] },
+    }));
+    assert.equal(await usage.locator('.board-quota').count(), 0);
+    assert.equal(await usage.isVisible(), false);
+    await page.evaluate(() => (window as any).scribe.agent.changedLimits({
+      claude: { at: Date.now(), windows: [{ id: 'five_hour', label: '5-hour', utilization: 0 }] },
+    }));
+    await claude.getByText('0%').waitFor();
+    assert.equal(await usage.locator('.board-quota').count(), 1);
+    assert.equal(await claude.locator('progress').getAttribute('value'), '0');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
