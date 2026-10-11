@@ -159,6 +159,20 @@ async function queryPlanUsage(q: Query): Promise<unknown | null> {
   }
 }
 
+/** Claude Code's own count of a session's context before the first message. */
+export type ContextMeasure = {
+  model: string;
+  totalTokens: number;
+  maxTokens: number;
+  /** deferred: tool schemas listed by name only, loaded when the agent asks for them. */
+  categories: Array<{ name: string; tokens: number; deferred: boolean }>;
+  mcpTools: Array<{ name: string; server: string; tokens: number; loaded: boolean }>;
+  memoryFiles: Array<{ path: string; type: string; tokens: number }>;
+  skills: Array<{ name: string; source: string; tokens: number }>;
+  systemTools: Array<{ name: string; tokens: number }>;
+  systemPromptSections: Array<{ name: string; tokens: number }>;
+};
+
 export class ClaudeProvider implements AgentProvider {
   readonly id = "claude" as const;
   readonly label = "Claude";
@@ -283,6 +297,53 @@ export class ClaudeProvider implements AgentProvider {
       log(`Claude model list failed: ${(err as Error).message}`);
       return this.modelCache?.models ?? [];
     } finally {
+      input.close();
+      try {
+        q.close();
+      } catch {
+        abortController.abort();
+      }
+    }
+  }
+
+  /**
+   * What a session of this thread holds before its first message, counted by Claude Code itself
+   * (its /context report). plain: Claude Code as it runs on its own in the same folder, without
+   * Scribe's instructions, tools or MCP list, to compare against. Starts a process; calls no model.
+   */
+  async measureContext(thread: Thread, instructions: string, ctx: SessionContext, plain = false): Promise<ContextMeasure> {
+    const sdk = await loadSdk();
+    const input = new InputQueue();
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), 90_000);
+    const session = new ClaudeSession({ ...thread, nativeId: null }, ctx, () => undefined);
+    const scribe = session.measureOptions(instructions);
+    const options: Options = plain
+      ? {
+          cwd: scribe.cwd,
+          ...(scribe.model ? { model: scribe.model } : {}),
+          settingSources: ["user", "project", "local"],
+          settings: { disableAllHooks: true },
+          systemPrompt: { type: "preset", preset: "claude_code" },
+          tools: { type: "preset", preset: "claude_code" },
+        }
+      : scribe;
+    const q = sdk.query({ prompt: input, options: { ...options, persistSession: false, abortController } });
+    try {
+      const usage = await q.getContextUsage();
+      return {
+        model: usage.model,
+        totalTokens: usage.totalTokens,
+        maxTokens: usage.rawMaxTokens,
+        categories: usage.categories.filter((c) => c.kind === "used" || c.kind === "deferred").map((c) => ({ name: c.name, tokens: c.tokens, deferred: c.kind === "deferred" })),
+        mcpTools: usage.mcpTools.map((t) => ({ name: t.name, server: t.serverName, tokens: t.tokens, loaded: t.isLoaded !== false })),
+        memoryFiles: usage.memoryFiles.map((f) => ({ path: f.path, type: f.type, tokens: f.tokens })),
+        skills: (usage.skills?.skillFrontmatter ?? []).map((s) => ({ name: s.name, source: s.source, tokens: s.tokens })),
+        systemTools: (usage.systemTools ?? []).map((t) => ({ name: t.name, tokens: t.tokens })),
+        systemPromptSections: (usage.systemPromptSections ?? []).map((t) => ({ name: t.name, tokens: t.tokens })),
+      };
+    } finally {
+      clearTimeout(timer);
       input.close();
       try {
         q.close();
@@ -570,6 +631,12 @@ class ClaudeSession implements ProviderSession {
 
   scribeThreadId(): string {
     return this.thread.id;
+  }
+
+  /** The options a new session of this thread starts with, for measuring its context. */
+  measureOptions(instructions: string): Options {
+    this.instructions = instructions;
+    return this.buildOptions();
   }
 
   hasQuery(): boolean {

@@ -16,10 +16,10 @@ import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTr
 import { syncDependencies } from "./deps.js";
 import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
-import { contextBlock, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
+import { contextBlock, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
-import { ClaudeProvider } from "./providers/claude.js";
+import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
 import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
@@ -46,7 +46,8 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
-import { claudeOwnServers, readMcpFile, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
+import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
+import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
@@ -82,7 +83,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
-import { isProviderId } from "./types.js";
+import { isProviderId, noPages } from "./types.js";
 
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
@@ -910,6 +911,69 @@ export class AgentHost {
     const thread = this.threads.get(id);
     if (!thread) return null;
     return { thread: this.view(thread), turns: this.loadTurns(id), items: this.loadItems(id) };
+  }
+
+  // ---------- harness view (#456) ----------
+
+  /** Token and tool totals over the stored threads; days limits it to turns started in that many days. */
+  harnessStats(days: number | null): HarnessStats {
+    const since = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+    return harnessStats([...this.threads.values()], (id) => this.loadTurns(id), (id) => this.loadItems(id), since);
+  }
+
+  /** What a new thread with these settings starts with: Scribe's instructions, its tools, the user's MCP servers, and what the provider adds itself. */
+  async harnessContext(input: Partial<Thread> & { scope?: ThreadScope }) {
+    const thread = this.draftThread(input);
+    const text = threadInstructions(thread, this.scopeInfo(thread));
+    const workspace = threadWorkspace(thread);
+    const active = new Map(serversForThread(thread).map((server) => [server.name, server]));
+    const servers = mergedServers(readMcpFile(), workspace).map(({ name, layer, server }) => ({
+      name,
+      layer,
+      target: server.url ?? [server.command, ...(server.args ?? [])].join(" "),
+      approve: server.approve ?? "ask",
+      modes: serverModes(server),
+      active: active.has(name),
+      ...(active.has(name) ? {} : { why: server.enabled === false ? "Turned off" : `Not given to ${thread.mode === "board" ? "Pages" : thread.mode} threads` }),
+    }));
+    // Keeper inherited from Claude Code's config: in no Scribe layer, but the thread gets it.
+    for (const server of active.values()) {
+      if (!servers.some((row) => row.name === server.name)) {
+        servers.push({ name: server.name, layer: server.layer, target: server.url ?? [server.command, ...server.args].join(" "), approve: server.approve, modes: ["code"], active: true });
+      }
+    }
+    const leftOut = thread.provider === "claude" ? claudeOwnServers(workspace).filter((name) => !active.has(name)) : [];
+    const duplicates = thread.provider === "cursor" && thread.mode !== "board" ? cursorScribeServers() : [];
+    return {
+      thread: { provider: thread.provider, model: thread.model, mode: thread.mode, cwd: thread.cwd, scope: thread.scope, web: thread.web },
+      instructions: { chars: text.length, tokens: estimateTokens(text.length), text, sections: instructionSections(text) },
+      scribeTools: await boardTools(this.ctx.boardMcp, thread.provider, !noPages(thread.scope)),
+      servers,
+      leftOut,
+      duplicates,
+      own: ownContext(thread, { claudeHooks: this.prefs().claudeHooks }),
+      memories: this.prefs().memory ? memoriesFor(this.memories(), this.memoryWorkspace(thread)).length : 0,
+    };
+  }
+
+  /** Start one of the user's MCP servers to list its tools and what their schemas cost. */
+  harnessProbe(name: string, cwd: string | null): Promise<ToolList> {
+    const entry = mergedServers(readMcpFile(), cwd).find((row) => row.name === name);
+    const server = entry ? resolveServer(entry.name, entry.layer, entry.server) : serversForThread({ cwd, mode: "code" }).find((row) => row.name === name);
+    if (!server) throw new Error(`MCP server not found: ${name}`);
+    return probeServer(server, cwd ?? this.ctx.scratchDir);
+  }
+
+  /** Claude Code's own count of a new thread's starting context, with Scribe's setup or as plain Claude Code. */
+  harnessMeasure(input: Partial<Thread> & { scope?: ThreadScope }, plain: boolean): Promise<ContextMeasure> {
+    const thread = this.draftThread({ ...input, provider: "claude" });
+    const error = workspaceFolderError(thread);
+    if (error) throw new Error(error);
+    return (this.providers.claude as ClaudeProvider).measureContext(thread, threadInstructions(thread, this.scopeInfo(thread)), this.ctx, plain);
+  }
+
+  skills(cwd: string | null): SkillInfo[] {
+    return discoverSkills(cwd);
   }
 
   /** Start a thread's provider session ahead of a message. Nothing happens while it runs. */

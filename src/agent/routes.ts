@@ -244,6 +244,38 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // The agent harness view (#456): what chats start with and how the stored threads used it. Read-only.
+  router.get(
+    "/harness/stats",
+    wrap((req) => {
+      const days = Number(req.query.days);
+      return host.harnessStats(Number.isFinite(days) && days > 0 ? days : null);
+    })
+  );
+  router.post(
+    "/harness/context",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return host.harnessContext({ ...threadPatch(body), ...(body.scope ? { scope: parseScope(body.scope) } : {}) });
+    })
+  );
+  router.post(
+    "/harness/measure",
+    wrap(async (req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return { measure: await host.harnessMeasure({ ...threadPatch(body), ...(body.scope ? { scope: parseScope(body.scope) } : {}) }, body.plain === true) };
+    })
+  );
+  router.get("/harness/skills", wrap((req) => ({ skills: host.skills(typeof req.query.cwd === "string" && req.query.cwd ? req.query.cwd : null) })));
+  router.post(
+    "/harness/mcp/probe",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      if (typeof body.name !== "string" || !body.name) throw new Error("name is required");
+      return host.harnessProbe(body.name, typeof body.cwd === "string" && body.cwd ? body.cwd : null);
+    })
+  );
+
   router.get("/threads", wrap(() => ({ threads: host.listThreads() })));
 
   router.get("/commands", wrap((req) => ({ commands: host.providerCommands(parseProvider(req.query.provider)) })));
