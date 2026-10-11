@@ -1078,8 +1078,9 @@
     const renderItems = () => {
       list.replaceChildren();
       const q = filter.trim().toLowerCase();
-      const matches = items.filter((item) => item.header || item.separator || !q ||
-        `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q));
+      // searchOnly: a row left out of the plain list that a search still finds.
+      const matches = items.filter((item) => item.header || item.separator || (!q ? !item.searchOnly :
+        `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q)));
       let count = 0;
       const visible = matches.filter((item) => item.header || item.separator || item.fixed || ++count <= visibleLimit);
       const nativeSources = new Set(visible.map((item) => item.nativeSource).filter(Boolean));
@@ -1106,7 +1107,7 @@
           list.append(lastHeader);
           lastHeader = null;
         }
-        const row = el("button", `ag-menu-item${item.checked ? " on" : ""}${item.danger ? " danger" : ""}`);
+        const row = el("button", `ag-menu-item${item.checked ? " on" : ""}${item.danger ? " danger" : ""}${item.sub && !q ? " sub" : ""}`);
         row.type = "button";
         row.disabled = Boolean(item.disabled);
         if (search) row.tabIndex = -1;
@@ -4842,6 +4843,8 @@
   /** One live step as the collapsed dock and pages' step feeds show it: { kind, text }, or null. */
   function liveStep(item) {
     if (item.kind === "tool") {
+      const helper = helperCall(item);
+      if (helper) return { kind: `k-${item.tool}`, text: helperLine(helper) };
       const text = item.tool === "edit" && item.files?.length ? `Edited ${item.files.map((f) => `${R.basename(f.path)} +${f.added} −${f.removed}`).join(", ")}` : item.detail && item.tool === "execute" ? `$ ${item.detail}` : item.title;
       return { kind: `k-${item.tool}`, text };
     }
@@ -4952,6 +4955,15 @@
   function helperStep(t) {
     if (t.status === "waiting") return t.asking?.title ? `Needs your answer: ${t.asking.title}` : "Needs your answer";
     return t.activity?.line || "Starting…";
+  }
+
+  /** An agent_run call as one live step: the helper and its model, not the tool's name. Keep in sync with src/agent/activity.ts */
+  function helperLine(call) {
+    const h = call.thread;
+    const task = typeof call.input.task === "string" ? call.input.task.trim().split("\n")[0] : "";
+    const name = (h ? helperName(h) : task).slice(0, 120);
+    const model = h ? modelLabel(h.provider, h.model) : [call.input.model, call.input.provider].find((v) => typeof v === "string" && v.trim()) || "";
+    return ["Helper", name, model].filter(Boolean).join(" · ");
   }
 
   /** Helpers appear through their parent in the active list, including between parent turns. */
@@ -6043,15 +6055,27 @@
     },
     threadMenu(anchor) {
       const tab = activeTab();
-      const threads = [...S.threads.values()].filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
+      // A helper sits under the thread that started it, as in the thread list.
+      const threads = [...S.threads.values()].filter((t) => !t.archived && !nestsUnder(t)).sort((a, b) => threadRank(b) - threadRank(a));
       const pageThreads = tab ? threads.filter((t) => t.scope.kind === "page" && t.scope.ref === tab.id) : [];
       const others = threads.filter((t) => !pageThreads.includes(t));
       const items = [];
+      const currentId = this.view.threadId;
+      const add = (t, detail) => {
+        items.push({ label: t.title, detail, checked: t.id === currentId, run: () => this.pick(t.id) });
+        const helpers = helpersOf(t.id).filter((h) => !h.archived);
+        // Working ones and the open one always show; of the rest, the latest two. A search finds them all.
+        const must = (h) => h.status !== "idle" || h.id === currentId;
+        const latest = helpers.filter((h) => !must(h)).slice(-2);
+        for (const h of helpers) {
+          items.push({ label: helperName(h), detail: `Helper · ${threadWhenText(h)}`, search: t.title, sub: true, searchOnly: !must(h) && !latest.includes(h), checked: h.id === currentId, run: () => this.pick(h.id) });
+        }
+      };
       items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) clearDockPick(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
-      for (const t of pageThreads) items.push({ label: t.title, detail: threadWhenText(t), checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
+      for (const t of pageThreads) add(t, threadWhenText(t));
       if (others.length) items.push({ header: "Recent" });
-      for (const t of others) items.push({ label: t.title, detail: `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`, checked: t.id === this.view.threadId, run: () => this.pick(t.id) });
+      for (const t of others) add(t, `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`);
       openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10 });
     },
     pick(id) {
@@ -8857,17 +8881,20 @@
   function searchThreads(query, { limit = 40 } = {}) {
     const q = String(query || "").trim();
     let threads = [...S.threads.values()].filter((t) => !t.archived);
+    // A helper is reached through the thread that started it. A search finds it, named as that thread's helper.
     if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
+    else threads = threads.filter((t) => !nestsUnder(t));
     threads.sort((a, b) => threadRank(b) - threadRank(a));
     return threads.slice(0, limit).map((t) => {
       const scope = scopeLabel(t.scope);
       const running = t.status === "running" || (t.status === "idle" && t.background);
+      const parent = nestsUnder(t) ? S.threads.get(t.helperOf) : null;
       return {
         kind: "thread",
         id: t.id,
-        title: t.title,
-        snippet: scope.text && scope.text !== "Global" ? scope.text : "",
-        locationLabel: "Thread",
+        title: parent ? helperName(t) : t.title,
+        snippet: parent ? parent.title : scope.text && scope.text !== "Global" ? scope.text : "",
+        locationLabel: parent ? "Helper" : "Thread",
         location: "thread",
         qualityLabel: running ? "Running" : "",
         open: t.id === S.current,

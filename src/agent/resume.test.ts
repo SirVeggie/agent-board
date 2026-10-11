@@ -175,6 +175,27 @@ test("the resumed turn reaches the agent worded as Scribe's", async () => {
   assert.match(input.text, /Scribe restarted while you were working/);
 });
 
+test("a helper cut off by a restart is told to report to its agent, not to ask the user", () => {
+  const first = startHost().host;
+  const caller = cutOff(first);
+  const helper = cutOff(first);
+  const thread = (first as unknown as { threads: Map<string, object> }).threads.get(helper)!;
+  first.db.saveThread({ ...(thread as never), helperOf: caller });
+  first.dispose();
+  hosts.splice(hosts.indexOf(first), 1);
+
+  const { host } = startHost();
+  const resumed = host.resumeInterrupted();
+  assert.ok(resumed.includes(caller) && resumed.includes(helper));
+  const note = userItems(host, helper).at(-1)!;
+  assert.equal(note.from, "scribe");
+  assert.match(note.text, /do not ask the user/);
+  assert.doesNotMatch(note.text, /ask again/);
+  const callerNote = userItems(host, caller).at(-1)!;
+  assert.match(callerNote.text, /ask again/);
+  assert.match(callerNote.text, new RegExp(`sent on with its task: ${helper}`));
+});
+
 test("run info and thread views total token usage across turns", () => {
   const { host } = startHost();
   const id = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } }).id;

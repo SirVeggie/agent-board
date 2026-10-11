@@ -205,6 +205,10 @@ function helperResumeNote(helpers: Thread[]): string {
 const RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (a question, an approval, a background command) is gone. Check where you left off (files, git status, the pages or card you were working on) and go on from there to finish the task. If you were waiting for the user's answer, ask again.";
 
+/** The note for a helper: it works on another agent's brief, so what it still needs goes into its report, not to the user. */
+const HELPER_RESUME_NOTE =
+  "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (an approval, a background command) is gone. Check where you left off (files, git status, the pages you were working on) and go on from there to finish the brief you were given. You work for another agent, which gets your final reply as your report: do not ask the user about the task. If you cannot finish without an answer, say what you need in that reply.";
+
 /** What the model reads for a message: where it came from, its context chips, the guides of the pages it brings up, its files, then the text. */
 function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdits = ""): string {
   const origin = msg.card
@@ -907,7 +911,8 @@ export class AgentHost {
           const t = this.threads.get(id);
           return t && t.helperOf === threadId && !t.archived ? [t] : [];
         });
-        this.send(threadId, { text: RESUME_NOTE + (helpers.length ? helperResumeNote(helpers) : ""), from: "scribe" });
+        const note = this.threads.get(threadId)?.helperOf ? HELPER_RESUME_NOTE : RESUME_NOTE + (helpers.length ? helperResumeNote(helpers) : "");
+        this.send(threadId, { text: note, from: "scribe" });
       } catch (err) {
         log(`Could not resume thread ${threadId} after the restart: ${(err as Error).message}`);
         this.addItem(threadId, null, { kind: "notice", level: "error", text: `Scribe restarted during this thread's turn and could not send it on: ${(err as Error).message}` });
@@ -1356,7 +1361,7 @@ export class AgentHost {
     const asking = this.asking(thread.id);
     const status = this.status.get(thread.id) ?? "idle";
     const unread = this.unread.has(thread.id) && !fromPage;
-    const activity = threadActivity(items, status, unread);
+    const activity = threadActivity(items, status, unread, this.helperLookup);
     if (activity) this.activitySent.set(thread.id, activityKey(activity));
     else this.activitySent.delete(thread.id);
     const grants = grantRows(thread, this.scopeLookup());
@@ -1381,6 +1386,9 @@ export class AgentHost {
     };
   }
 
+  /** The helper thread an agent_run step names in its caller's activity line. */
+  private helperLookup = (id: string) => (id ? this.threads.get(id) : undefined);
+
   /** A running thread's live step changed: send the thread again, at most every ACTIVITY_MS. */
   private activityChanged(threadId: string): void {
     if (this.activityTimers.has(threadId) || (this.status.get(threadId) ?? "idle") === "idle") return;
@@ -1389,7 +1397,7 @@ export class AgentHost {
       const thread = this.threads.get(threadId);
       if (!thread) return;
       const status = this.status.get(threadId) ?? "idle";
-      const activity = threadActivity(this.loadItems(threadId), status, false);
+      const activity = threadActivity(this.loadItems(threadId), status, false, this.helperLookup);
       if (activity && activityKey(activity) !== this.activitySent.get(threadId)) this.emitThread(threadId);
     }, ACTIVITY_MS);
     timer.unref?.();

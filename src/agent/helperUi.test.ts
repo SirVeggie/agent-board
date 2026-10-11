@@ -32,7 +32,7 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     for (const name of ["dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     // Exercise the real chat views with fixture data, without booting a daemon or providers.
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall };") });
+    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall, liveStep, searchThreads, dock };") });
     await page.evaluate(() => {
       const { S, view } = (window as any).helperTest;
       const base = { provider: "claude", model: "sonnet", effort: null, mode: "code", approval: "ask", web: "off", cwd: null, scope: { kind: "global", ref: null }, stats: { turns: 1, files: 0, added: 0, removed: 0 }, createdAt: 1, activityAt: 1, archived: false, unread: false, queued: 0 };
@@ -74,6 +74,22 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     }
     await page.locator("#button-names").evaluate(node => node.remove());
     assert.equal(await page.locator(".ag-helper-call .ag-task-badge").textContent(), "working");
+    // The live feed names the helper, and the pickers keep it under its thread until a search asks for it.
+    const picked = await page.evaluate(() => {
+      const { S, liveStep, searchThreads, dock } = (window as any).helperTest;
+      const anchor = document.createElement("button");
+      document.body.append(anchor);
+      dock.threadMenu(anchor);
+      const menu = [...document.querySelectorAll(".ag-menu-item")].map((node) => [node.querySelector(".ag-menu-label")!.textContent, node.classList.contains("sub")]);
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      anchor.remove();
+      const hit = (r: any) => [r.id, r.title, r.locationLabel, r.snippet];
+      return { step: liveStep(S.details.get("parent").items[0]).text, menu, all: searchThreads("").map(hit), found: searchThreads("audit").map(hit) };
+    });
+    assert.equal(picked.step, "Helper · Audit the files · sonnet");
+    assert.deepEqual(picked.menu, [["New thread", false], ["Main task", false], ["Audit the files", true]]);
+    assert.deepEqual(picked.all, [["parent", "Main task", "Thread", ""]]);
+    assert.deepEqual(picked.found, [["helper", "Audit the files", "Helper", "Main task"]]);
     assert.equal(await page.getByRole("button", { name: "Open thread", exact: true }).count(), 0);
     await page.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
     assert.equal(await page.locator(".ag-view-helper .ag-title").textContent(), "Helper: Audit the files");

@@ -2750,6 +2750,14 @@ button.ag-menu-item.on {
   color: var(--heading);
 }
 
+/* A helper under the thread that started it. */
+button.ag-menu-item.sub {
+  width: calc(100% - 14px);
+  margin-left: 14px;
+  min-height: 26px;
+  font-size: 12.5px;
+}
+
 button.ag-menu-item.danger {
   color: var(--danger);
 }
