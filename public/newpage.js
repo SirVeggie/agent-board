@@ -340,7 +340,7 @@ return glow(c,e);}`;
 
     function start(immediate = false) {
       theme();
-      if (still.matches) {
+      if (still.matches || document.documentElement.classList.contains("no-ui-fx")) {
         loop.stop();
         work = target;
         draw();
@@ -354,6 +354,7 @@ return glow(c,e);}`;
     new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     new ResizeObserver(() => running && draw()).observe(root);
     still.addEventListener("change", () => running && start());
+    window.addEventListener("scribe:ui-fx", () => running && start());
 
     return {
       /** Run with this background while the screen is shown. */

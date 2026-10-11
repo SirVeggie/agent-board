@@ -3674,6 +3674,11 @@
   }
 
   function onBoardShortcut(event) {
+    // Ordinary typing has no board action. Only scan for dialogs when a shortcut
+    // could run; the spaces overview also handles unmodified navigation keys.
+    if (!event.ctrlKey && !event.metaKey && event.key !== "Escape" && !isFindKey(event) && !spaces.isOpen()) {
+      return;
+    }
     if (document.querySelector("dialog[open]")) {
       return;
     }

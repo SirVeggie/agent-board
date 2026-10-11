@@ -11,6 +11,7 @@ function screen(webgl = true, restoring = false) {
   let step: (dt: number) => void = () => {};
   let motionChange = () => {};
   let running = false;
+  let uiEffects = true;
   const events: Record<string, (event?: any) => void> = {};
   let provider = "claude";
   let providerColors: string | null = null;
@@ -78,7 +79,7 @@ function screen(webgl = true, restoring = false) {
   class Observer { observe() {} }
   runInNewContext(source, {
     window: win, document: {
-      getElementById: () => root, documentElement: { hasAttribute: () => restoring },
+      getElementById: () => root, documentElement: { hasAttribute: () => restoring, classList: { contains: (name: string) => name === "no-ui-fx" && !uiEffects } },
       body: { appendChild() {} }, get hidden() { return hidden; },
       addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     },
@@ -112,6 +113,7 @@ function screen(webgl = true, restoring = false) {
     busy: (value: boolean) => { working = value; },
     choose: (id: string) => { selected = id; events["scribe:newpage-bg"](); },
     reduce: (value: boolean) => { motion.matches = value; motionChange(); },
+    uiEffects: (value: boolean) => { uiEffects = value; events["scribe:ui-fx"](); },
     running: () => running,
     effects, warmTimers,
     warm: () => { for (const [id, fn] of [...warmTimers]) { warmTimers.delete(id); fn(); } },
@@ -246,6 +248,34 @@ test("working intensity eases in and out while drift keeps its pace and hidden s
   s.tick(.1);
   assert.equal(s.running(), false);
   assert.equal(s.draws.length, count);
+});
+
+test("UI effects off freezes the backdrop on entry and live changes resume only visible, moving screens", () => {
+  const s = screen();
+  s.uiEffects(false);
+  s.page.render({ id: "draft" });
+  assert.equal(s.running(), false);
+  assert.ok(s.draws.length > 0);
+  const count = s.draws.length;
+  s.tick(1);
+  assert.equal(s.draws.length, count);
+  s.uiEffects(true);
+  assert.equal(s.running(), true);
+  s.tick(.1);
+  assert.ok(s.draws.length > count);
+  s.uiEffects(false);
+  assert.equal(s.running(), false);
+  const frozen = s.draws.length;
+  s.tick(1);
+  assert.equal(s.draws.length, frozen);
+  s.reduce(true);
+  s.uiEffects(true);
+  assert.equal(s.running(), false);
+  s.page.render(null);
+  s.reduce(false);
+  s.uiEffects(false);
+  s.uiEffects(true);
+  assert.equal(s.running(), false);
 });
 
 test("provider palettes update live, preserve the shader and use theme colors when disabled", () => {
