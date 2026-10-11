@@ -11,7 +11,7 @@ test("updates keep hovered rows and focused editors connected", async () => {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
-    page.on("pageerror", error => errors.push(error.message));
+    page.on("pageerror", error => errors.push(error.stack || error.message));
     await page.setContent(`<script>
       window.scribe = {
         state: {
@@ -97,6 +97,57 @@ test("updates keep hovered rows and focused editors connected", async () => {
     assert.equal(await page.locator('.item[data-id="a"] .check').isChecked(), true);
     assert.equal(await page.evaluate(() => (window as any).scribe.state.todos[0].done), true);
     assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("queued Kanban paints stop after the board is detached", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Detached board paint test" });
+  try {
+    for (const trigger of ["frame", "timer"]) {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(`<script>
+          const frames = new Map(), timers = new Map();
+          let nextId = 1000000;
+          const originalTimeout = window.setTimeout;
+          window.requestAnimationFrame = fn => { const id = nextId++; frames.set(id, fn); return id; };
+          window.cancelAnimationFrame = id => frames.delete(id);
+          window.setTimeout = (fn, delay, ...args) => {
+            if (delay !== 150) return originalTimeout(fn, delay, ...args);
+            const id = nextId++; timers.set(id, fn); return id;
+          };
+          const originalClearTimeout = window.clearTimeout;
+          window.clearTimeout = id => { if (!timers.delete(id)) originalClearTimeout(id); };
+          window.paintQueue = {
+            flush(trigger) { (trigger === 'frame' ? frames : timers).values().next().value(); },
+            size() { return frames.size + timers.size; }
+          };
+          window.scribe = {
+            state: { columns: [{ id: 'todo', title: 'Todo' }], labels: [], settings: {},
+              cards: [{ id: 'a', num: 1, col: 'todo', title: 'One' }], nextNum: 2 }, local: {},
+            set(patch) { Object.assign(this.state, patch); },
+            setLocal(patch) { Object.assign(this.local, patch); },
+            onChange(fn) { this.changed = fn; }
+          };
+        </script>${source("../templates/builtin/kanban.html")}`);
+        assert.deepEqual(await page.evaluate(trigger => {
+          const w = window as any;
+          w.scribe.state.cards[0].title = 'Updated';
+          w.scribe.changed();
+          const queued = w.paintQueue.size();
+          w.paintQueue.flush(trigger);
+          const title = document.querySelector('.card-title')!.textContent;
+          w.scribe.changed();
+          document.body.replaceChildren();
+          w.paintQueue.flush(trigger);
+          return [queued, title, w.paintQueue.size()];
+        }, trigger), [2, "#1Updated", 0]);
+      } finally {
+        await page.close();
+      }
+    }
   } finally {
     await browser.close();
   }

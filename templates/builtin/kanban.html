@@ -2004,6 +2004,8 @@
     paintTimer = setTimeout(paint, 150);
   }
   function renderDom() {
+    // A queued paint can outlive this board when the host replaces the document.
+    if (!boardEl.isConnected) return;
     renderedView = JSON.stringify(view());
     renderCache = { colIds: new Set(columns().map(function (c) { return c.id; })), cardsIn: new Map(), workerCards: new Map(), nextCard: new Map(), labels: {} };
     try {
