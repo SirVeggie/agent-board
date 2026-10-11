@@ -17,6 +17,7 @@ import { store } from "../store.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
 import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
+import { checkSdkUpdates } from "./sdkUpdates.js";
 
 type AiPassage = { id: string; digest: string; kind: string; anchor: string | null; headingId: string | null; label: string };
 
@@ -94,6 +95,8 @@ export function agentRouter(host: AgentHost): express.Router {
       limits: host.limits(),
     }))
   );
+
+  router.get("/sdk-updates", wrap((req) => checkSdkUpdates(req.query.refresh === "1")));
 
   // The palette's `?` search (#245): one summarizer call over the passages closest to the question (#374), or,
   // with semantic search off, over a digest of every page the agent may see.

@@ -8314,6 +8314,14 @@
         actions
       );
 
+      const sdks = el("section", "settings-section");
+      this.sdkStatus = el("div", "ag-settings-status");
+      this.sdkStatus.setAttribute("role", "status");
+      this.sdkCheck = button("Check for updates", null, () => void this.renderSdkUpdates(true));
+      const sdkActions = el("div", "settings-actions");
+      sdkActions.append(this.sdkCheck);
+      sdks.append(helpHeading("Agent SDKs", "Compares the installed agent SDKs with npm’s latest releases when you open settings. Results are cached for six hours; Check for updates retries now. To use an update, update Scribe’s dependencies and restart Scribe."), this.sdkStatus, sdkActions);
+
       const cursor = el("section", "settings-section");
       const hostShell = switchControl(
         () => Boolean(prefs().cursorHostShell),
@@ -8522,9 +8530,9 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, cursor, helpers, memory, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, helpers, memory, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
-        { label: "Providers", sections: [providers, cursor, sources, usage] },
+        { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Memory", sections: [memory] },
         { label: "Helper agents", sections: [helpers] },
@@ -8589,6 +8597,29 @@
           row.append(el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
         }
         this.status.append(row);
+      }
+    },
+    async renderSdkUpdates(refresh = false) {
+      if (this.sdkCheck.disabled) return;
+      this.sdkCheck.disabled = true;
+      this.sdkStatus.replaceChildren(el("div", "ag-muted", "Checking SDK versions…"));
+      try {
+        const report = await api("GET", `/sdk-updates${refresh ? "?refresh=1" : ""}`);
+        this.sdkStatus.replaceChildren();
+        for (const sdk of report.sdks) {
+          const row = el("div", "setting-row");
+          const label = el("span");
+          label.append(el("strong", null, sdk.label), el("span", "ag-muted", ` · ${sdk.installed || "Version unknown"}${sdk.latest ? ` · latest ${sdk.latest}` : ""}`));
+          const text = sdk.error || (sdk.outdated ? "Update available" : "Up to date");
+          row.append(label, el("span", sdk.outdated === false ? "ag-tag ok" : "ag-tag", text));
+          this.sdkStatus.append(row);
+        }
+        this.sdkStatus.append(el("div", "ag-muted", `Checked ${new Date(report.checkedAt).toLocaleString()}`));
+        if (report.sdks.some((sdk) => sdk.outdated)) this.sdkStatus.append(el("div", "ag-muted", "Update Scribe’s dependencies, then restart Scribe to use the newer SDKs."));
+      } catch (err) {
+        this.sdkStatus.replaceChildren(el("div", "ag-muted", `SDK check failed: ${err.message}`));
+      } finally {
+        this.sdkCheck.disabled = false;
       }
     },
     async renderSources() {
@@ -8663,6 +8694,7 @@
       this.renderSummarizer();
       this.categories.open();
       this.renderUsage();
+      void this.renderSdkUpdates();
     },
     close() {
       if (!this.isOpen()) return false;
