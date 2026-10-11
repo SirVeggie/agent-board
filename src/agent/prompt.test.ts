@@ -166,6 +166,26 @@ test("Pi threads hear about web_search only when a SearXNG instance is set", () 
   assert.match(threadInstructions(thread({ web: "limited", provider: "cursor" }), {}), /web_fetch \(there is no web search\)/);
 });
 
+test("Codex web instructions describe disabled search and the limits of a web_request grant", () => {
+  for (const web of ["off", "limited", "on"] as const) {
+    const thread = { provider: "codex", mode: "code", cwd: "/work", web, scope: { kind: "global", ref: null } } as Thread;
+    // A configured SearXNG instance still does not give Codex a search/fetch bridge.
+    const text = threadInstructions(thread, { webSearch: true });
+    if (web === "on") {
+      assert.doesNotMatch(text, /Native web search is disabled|web_request can record|switch Web to On/);
+    } else {
+      assert.ok(text.includes(`Web ${web === "limited" ? "Limited" : "Off"}`));
+      assert.match(text, /Native web search is disabled/);
+      assert.match(text, /Scribe provides no web_search or web_fetch tools for Codex/);
+      assert.match(text, /allowlist does not enable native search/);
+      assert.match(text, /web_request can record why you need web access/);
+      assert.match(text, /even an allowed request does not enable search or fetch/);
+      assert.match(text, /switch Web to On to enable native search/);
+      assert.doesNotMatch(text, /asks the user first|call web_request first/);
+    }
+  }
+});
+
 test("Claude threads are told which of the user's own MCP servers they do not get", () => {
   const thread = (over: Partial<Thread>): Thread =>
     ({ provider: "claude", mode: "code", cwd: "/work", web: "on", scope: { kind: "global", ref: null }, ...over }) as Thread;

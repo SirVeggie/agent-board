@@ -103,9 +103,14 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   // Pi always and Cursor without full web get Scribe's web_search when a SearXNG instance is set.
   const scribeSearch = Boolean(scope.webSearch) && (thread.provider === "pi" || thread.provider === "cursor");
   if (thread.web === "on" && thread.provider === "pi") lines.push(scribeSearch ? "Web: web_search searches the web and web_fetch fetches pages." : "Web: web_fetch fetches pages; there is no web search.");
-  if (thread.web !== "on") {
+  if (thread.web !== "on" && thread.provider === "codex") {
+    lines.push(
+      `Web: this Codex thread has Web ${thread.web === "limited" ? "Limited" : "Off"}. Native web search is disabled, and Scribe provides no web_search or web_fetch tools for Codex. The allowlist does not enable native search.`,
+      "web_request can record why you need web access, but even an allowed request does not enable search or fetch in this Codex thread. Carry on with the available sources and explain what you could not check; the user can switch Web to On to enable native search."
+    );
+  } else if (thread.web !== "on") {
     const tools =
-      thread.provider === "claude" ? "WebSearch or WebFetch" : thread.provider === "codex" ? "web search" : scribeSearch ? "web_search or web_fetch" : "web_fetch (there is no web search)";
+      thread.provider === "claude" ? "WebSearch or WebFetch" : scribeSearch ? "web_search or web_fetch" : "web_fetch (there is no web search)";
     const openSearch = thread.provider === "claude" || scribeSearch;
     lines.push(
       thread.web === "limited"
