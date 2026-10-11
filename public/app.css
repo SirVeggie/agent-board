@@ -3484,6 +3484,7 @@ html.popout .chrome {
 html.popout:not(.desktop) .chrome,
 html.popout:not(.desktop) .chrome-edge,
 html.popout .brand,
+html.popout .space-chip,
 html.popout .tabs-wrap,
 html.popout .actions,
 html.popout .side-pane,
