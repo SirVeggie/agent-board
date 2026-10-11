@@ -198,11 +198,14 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     const appSource = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
     const controller = appSource.slice(appSource.indexOf("  function onTabPointerDown("), appSource.indexOf('  /**\n   * Library row dragged over the strip'));
     await page.addScriptTag({ content: `{
-      const state = { tabs: ['a','b','c'].map(id => ({id,title:id,pinned:false})), activeId:'a' };
+      const state = { tabs: ['a','b','c'].map(id => ({id,title:id,pinned:false})), closed: [], activeId:'a' };
       const mainEl = document.querySelector('main'), tabsEl = document.querySelector('#tabs'), tabsWrap = document.querySelector('#strip');
       const libraryToggle = document.createElement('button'), tabEls = new Map(), frames = new Map();
       let drag = null, dragScrollTimer = 0, toggleHoverTimer = 0, dragSuppressClick = false;
-      const popout = {desktop:false};
+      const popped = [];
+      const popout = {desktop:false,supported:true,has:()=>false,open(tab,at){popped.push({id:tab.id,at});views.onPopOut(tab.id);views.layout();return true;}};
+      const findAnyTab = id => [...state.tabs,...state.closed].find(tab=>tab.id===id);
+      const isBlank = tab => Boolean(tab?.draft), showNotice = () => {};
       const hoverCard = {suspend(){},resume(){}}, library = {stripDragCancel(){},stripDragMove(){return false},stripDragDrop(){return false}};
       const lookupTab = el => state.tabs.find(t => t.id === el.dataset.id);
       const stopTabScroll = () => {}, updateTabFade = () => {}, flipStrip = fn => fn();
@@ -211,7 +214,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const renderTabs = () => { for(const tab of state.tabs) tabsEl.appendChild(tabEls.get(tab.id)); };
       const views = window.createViews({mainEl,startPaneDrag,contentOrigin:()=>location.origin,
         tabs:()=>state.tabs,closed:()=>[],activeId:()=>state.activeId,activeTab:()=>state.tabs.find(t=>t.id===state.activeId),
-        findAnyTab:id=>state.tabs.find(t=>t.id===id),isBlank:()=>false,draftId:()=>null,
+        findAnyTab,isBlank,draftId:()=>null,
         spaceId:()=> 'pointer-test',spaceIds:()=>['pointer-test'],activate:select,selectTab:select,
         frame:id=>frames.get(id),frameIds:()=>[...frames.keys()],ensureFrame:meta=>{
           if(!frames.has(meta.id)){const el=document.createElement('iframe');mainEl.appendChild(el);frames.set(meta.id,{el});}
@@ -222,7 +225,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
         el.addEventListener('pointerdown',e=>onTabPointerDown(e,el));tabEls.set(tab.id,el); }
       renderTabs(); views.layout();
       window.addEventListener('keydown',e=>{if(e.key==='Escape')abortDrag();});
-      window.dragTest = {views,state,frames};
+      window.dragTest = {views,state,frames,popout,popped};
       ${controller}
     }` });
     const moveDrag = async (selector: string, x: number, y: number) => {
@@ -397,6 +400,60 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       await views.open(state.tabs.find((tab: any) => tab.id !== state.activeId).id, 'split');
       return [...frames.values()].some((frame: any) => frame.el.getAnimations().length > 0);
     }), false);
+    // Desktop tear-off works from either split header and a peek, using the same margin as tabs.
+    await page.evaluate(() => { (window as any).dragTest.popout.desktop = true; });
+    for (const pane of ['a', 'b']) {
+      const ids = await page.evaluate(async pane => {
+        const { views, state } = (window as any).dragTest;
+        views.closeSplit();
+        await views.open(state.tabs.find((tab: any) => tab.id !== state.activeId).id, 'split');
+        return { source: views.pageInPane(pane).id, kept: views.pageInPane(pane === 'a' ? 'b' : 'a').id };
+      }, pane);
+      await moveDrag(`.pane-head[data-pane="${pane}"]`, 1205, 250);
+      await page.mouse.up();
+      assert.equal(await page.evaluate(() => (window as any).dragTest.popped.length), pane === 'a' ? 0 : 1);
+      await moveDrag(`.pane-head[data-pane="${pane}"]`, 1240, 250);
+      await page.mouse.up();
+      assert.equal(await page.evaluate(() => (window as any).dragTest.popped.at(-1).id), ids.source);
+      assert.deepEqual(await page.evaluate(() => {
+        const { views, state } = (window as any).dragTest;
+        return { shown: [...views.shownIds()], active: state.activeId, tabs: state.tabs.length };
+      }), { shown: [ids.kept], active: ids.kept, tabs: 3 });
+    }
+    // A Library-only peek must acquire a background tab before its child window opens.
+    let openedPeek = false;
+    let failPeekOpen = true;
+    await page.route('**/api/tabs/library-peek/open', async route => {
+      assert.deepEqual(route.request().postDataJSON(), { activate: false });
+      openedPeek = true;
+      if (failPeekOpen) {
+        await route.fulfill({ status: 404, json: { error: 'not_found' } });
+        return;
+      }
+      await route.fulfill({ json: { tab: { id: 'library-peek', title: 'Library peek', pinned: false } } });
+    });
+    await page.evaluate(async () => {
+      const { views, state } = (window as any).dragTest;
+      state.closed.push({ id: 'library-peek', title: 'Library peek' });
+      await views.open('library-peek', 'peek');
+    });
+    await moveDrag('.peek-card .view-head', 1240, 250);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    assert.equal(openedPeek, false);
+    const failedOpen = page.waitForResponse('**/api/tabs/library-peek/open');
+    await moveDrag('.peek-card .view-head', 1240, 250);
+    await page.mouse.up();
+    await failedOpen;
+    assert.equal(await page.locator('.peek-card').evaluate(el => (el as HTMLElement).hidden), false);
+    assert.equal(await page.evaluate(() => (window as any).dragTest.popped.length), 2);
+    failPeekOpen = false;
+    await moveDrag('.peek-card .view-head', 1240, 250);
+    await page.mouse.up();
+    await page.waitForFunction(() => (window as any).dragTest.popped.at(-1)?.id === 'library-peek');
+    assert.equal(openedPeek, true);
+    assert.equal(await page.locator('.peek-card').evaluate(el => (el as HTMLElement).hidden), true);
+    assert.equal(await page.evaluate(() => (window as any).dragTest.state.tabs.at(-1).id), 'library-peek');
     // Exercise the actual frame loader with a cold document whose response arrives
     // during the split animation. Loading must not pin opacity to zero until it ends.
     await page.emulateMedia({ reducedMotion: 'no-preference' });

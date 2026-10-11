@@ -1741,7 +1741,7 @@
   function startPaneDrag(event, pane, head) {
     if (drag) return;
     drag = {
-      pane, sourceHead: head, el: head.cloneNode(true),
+      pane, id: views.pageInPane(pane)?.id, sourceHead: head, el: head.cloneNode(true),
       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
       moved: false, originOrder: state.tabs.map((tab) => tab.id), scrollDir: 0,
     };
@@ -2140,9 +2140,9 @@
     const source = drag.pane ? { pane: drag.pane } : { id };
     const pageDrop = drag.pageDrop;
     const outside = !drag.overStrip && !pageDrop;
-    const draggedTab = state.tabs.find((tab) => tab.id === id);
+    const draggedTab = findAnyTab(id);
     // Let go outside the window (the desktop app): the page gets a window of its own there.
-    const tornOff = Boolean(popout.desktop && !drag.pane && outside && outsideWindow(event) && canPopOut(draggedTab));
+    const tornOff = Boolean(popout.desktop && outside && outsideWindow(event) && canPopOut(draggedTab));
     const filed = Boolean(!tornOff && !drag.pane && !pageDrop && draggedTab && library.stripDragDrop(draggedTab));
     library.stripDragCancel();
     stopDragVisual();
@@ -2156,7 +2156,7 @@
     }
     renderTabs();
     if (tornOff) {
-      popOut(id, { x: event.screenX - TEAR_OFF_GRIP.x, y: event.screenY - TEAR_OFF_GRIP.y });
+      await popOut(id, { x: event.screenX - TEAR_OFF_GRIP.x, y: event.screenY - TEAR_OFF_GRIP.y });
       return;
     }
     if (pageDrop || source.pane) {
@@ -2201,14 +2201,28 @@
   }
 
   function canPopOut(tab) {
-    return Boolean(popout.supported && tab && !isBlank(tab) && !popout.has(tab.id) && state.tabs.some((item) => item.id === tab.id));
+    return Boolean(popout.supported && tab && !isBlank(tab) && !popout.has(tab.id));
   }
 
-  /** Give an open tab's page a window of its own. The tab stays in the strip and stands for that window. */
-  function popOut(id, at) {
-    const tab = state.tabs.find((item) => item.id === id);
+  /** Give a page a window of its own. Its tab stays in the strip and stands for that window. */
+  async function popOut(id, at) {
+    let tab = findAnyTab(id);
     if (!canPopOut(tab)) {
       return;
+    }
+    // A Library page shown in a peek may not have a tab yet. Child windows need that tab.
+    if (!state.tabs.some((item) => item.id === id)) {
+      const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ activate: false }),
+      }).catch(() => null);
+      if (!res?.ok) return;
+      tab = (await res.json()).tab;
+      if (!canPopOut(tab)) return;
+      // The socket may still be delivering the open event; keep the child alive in the meantime.
+      if (!state.tabs.some((item) => item.id === id)) state.tabs.push(tab);
+      state.closed = state.closed.filter((item) => item.id !== id);
     }
     if (!popout.open(tab, at)) {
       showNotice("The browser blocked the new window. Allow pop-ups for Scribe to open pages in their own windows.");
@@ -5128,7 +5142,7 @@
   popout.onChange(() => {
     // A page that left for its own window gives up its pane, and its frame here.
     for (const id of popout.ids()) {
-      views.onClosed(id);
+      views.onPopOut(id);
     }
     render();
     for (const id of popout.ids()) {

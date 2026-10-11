@@ -1017,6 +1017,28 @@ window.createViews = function createViews(host) {
     return Boolean(split && (pane !== PANES[split.side] || split.other.kind === "page"));
   }
 
+  /** The Scribe page under a header; URL panes do not have a page to tear off. */
+  function pageInPane(pane) {
+    if (pane === "peek") {
+      const target = peekTarget();
+      return target?.kind === "page" ? host.findAnyTab(target.id) : null;
+    }
+    const split = activeSplit();
+    if (!split || !PANES.includes(pane)) return null;
+    return pane === PANES[split.side] ? host.activeTab() : otherPage();
+  }
+
+  /** Remove a page's views after it leaves for its own window. Keep the other split page. */
+  function onPopOut(id) {
+    const pane = paneOf(id);
+    if (pane) closePane(pane);
+    onClosed(id);
+    for (const [key, peek] of peeks) {
+      peek.stack = peek.stack.filter(target => target.kind !== "page" || target.id !== id);
+      if (!peek.stack.length) peeks.delete(key);
+    }
+  }
+
   async function dropPage(source, drop) {
     if (!drop) return;
     if (drop.strip) {
@@ -1616,6 +1638,8 @@ window.createViews = function createViews(host) {
     updatePageDrag,
     endPageDrag,
     canCloseDraggedPane,
+    pageInPane,
+    onPopOut,
     dropPage,
     peekOpen: () => Boolean(activePeek()),
   };
