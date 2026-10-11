@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { installRelease } from "./install-release.mjs";
 
 const EXE = "scribe.exe";
 const PREVIOUS_EXES = ["agent-board-desktop.exe", "board.exe"];
@@ -35,11 +36,6 @@ if (!commandExists("cargo", env)) {
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--manifest-path", path.join(root, "desktop", "Cargo.toml"), "--format-version", "1", "--no-deps"], { cwd: root, env, encoding: "utf8" }));
 const built = path.join(metadata.target_directory, "release", EXE);
 
-const wasRunning = isRunning();
-if (wasRunning) {
-  stopApp();
-}
-
 console.log("Building the release app");
 const build = spawnSync(process.execPath, [tauriJs, "build", "--no-bundle"], { cwd: root, stdio: "inherit", env });
 if (build.status !== 0) {
@@ -47,21 +43,23 @@ if (build.status !== 0) {
   process.exit(build.status ?? 1);
 }
 
-fs.mkdirSync(path.dirname(installed), { recursive: true });
-fs.copyFileSync(built, installed);
+try {
+  await installRelease({ built, installed, runningApps, stop: stopApp, restart: restartApp });
+} catch (error) {
+  console.error("Desktop installation failed:", error);
+  process.exit(1);
+}
 for (const name of PREVIOUS_EXES) {
   const leftover = path.join(path.dirname(installed), name);
   if (fs.existsSync(leftover)) {
-    fs.unlinkSync(leftover);
+    try {
+      fs.unlinkSync(leftover);
+    } catch (error) {
+      console.warn(`Could not remove ${leftover}: ${error.message}`);
+    }
   }
 }
 console.log(`Copied to ${installed}`);
-
-// Launching also points agents at this copy (it rewrites desktop.json on start).
-if (wasRunning) {
-  spawn(installed, [], { detached: true, stdio: "ignore" }).unref();
-  console.log("Restarted the desktop app");
-}
 
 function envWithCargo() {
   const env = { ...process.env };
@@ -93,6 +91,24 @@ function isRunning() {
   return processNames().some(isImageRunning);
 }
 
+// Capture the actual paths, including an older executable name or another install folder.
+function runningApps() {
+  const names = processNames().map((name) => `'${path.parse(name).name}'`).join(",");
+  const script = `$ErrorActionPreference = 'Stop'; $apps = @(Get-Process -Name ${names} -ErrorAction SilentlyContinue); $paths = @($apps | ForEach-Object { if (!$_.Path) { throw 'Cannot read the running desktop executable path' }; $_.Path } | Select-Object -Unique); ConvertTo-Json -InputObject $paths -Compress`;
+  return JSON.parse(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true }));
+}
+
+// Launching also points agents at this copy (it rewrites desktop.json on start).
+async function restartApp(executable, recovering) {
+  if (recovering && runningApps().some((app) => app.toLowerCase() === executable.toLowerCase())) return;
+  await new Promise((resolve, reject) => {
+    const child = spawn(executable, [], { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => { child.unref(); resolve(); });
+  });
+  console.log(recovering ? `Restarted the previous desktop app: ${executable}` : "Restarted the desktop app");
+}
+
 /** Ask the window to close first so it saves its layout; force it only if that does not work. */
 function stopApp() {
   console.log("Closing the desktop app");
@@ -106,8 +122,7 @@ function stopApp() {
     spawnSync("taskkill", ["/IM", name, "/F"], { stdio: "ignore" });
   }
   if (!waitForExit(5000)) {
-    console.error("The desktop app is still running; close it and try again");
-    process.exit(1);
+    throw new Error("The desktop app is still running; close it and try again");
   }
 }
 
