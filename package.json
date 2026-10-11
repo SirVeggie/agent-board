@@ -24,7 +24,7 @@
     "node": ">=22.19"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.286",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
     "@anthropic-ai/sdk": "^0.130.0",
     "@cursor/sdk": "^1.0.35",
     "@earendil-works/pi-ai": "^1.0.3",
