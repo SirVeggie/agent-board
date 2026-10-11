@@ -101,7 +101,7 @@ test("pinned and current threads stay visible even when old or beyond the cap", 
   assert.equal(visible.length, 12);
 });
 
-test("hidePage drops page-owned threads unless pinned, current, or searching", () => {
+test("hidePage drops idle page-owned threads unless pinned, current, or searching", () => {
   const threads = [t("page", { fromPage: true }), t("user"), t("pin", { fromPage: true, pinned: true })];
   const hidden = windowThreadGroup(threads, { now, hidePage: true });
   assert.deepEqual(
@@ -116,4 +116,21 @@ test("hidePage drops page-owned threads unless pinned, current, or searching", (
     ["page", "user", "pin"]
   );
   assert.equal(search.hidden, 0);
+});
+
+test("active workers stay visible with Show workers off, beyond the cap and age limit", () => {
+  const users = Array.from({ length: 12 }, (_, i) => t(`user${i}`));
+  const workers = [
+    t("running", { fromPage: true, status: "running", when: now - WEEK * 2 }),
+    t("waiting", { fromPage: true, status: "waiting", when: now - WEEK * 2 }),
+    t("idle", { fromPage: true, status: "idle" }),
+  ];
+  for (const hidePage of [true, false]) {
+    const result = windowThreadGroup([...users, ...workers], { now, hidePage });
+    assert.deepEqual(result.visible.map((x) => x.id), [...users.slice(0, 10).map((x) => x.id), "running", "waiting"]);
+    assert.equal(result.hidden, hidePage ? 2 : 3);
+  }
+  const stopped = windowThreadGroup(workers.map((worker) => ({ ...worker, status: "idle" as const })), { now, hidePage: true });
+  assert.deepEqual(stopped.visible, []);
+  assert.equal(stopped.hidden, 0);
 });

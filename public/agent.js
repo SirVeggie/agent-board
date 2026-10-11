@@ -937,11 +937,12 @@
 
   function windowGroup(threads, { extra = 0, now, currentId, searching, hidePage }) {
     const hide = Boolean(hidePage) && !searching;
-    const pool = hide ? threads.filter((t) => !t.fromPage || t.pinned || t.id === currentId) : threads;
+    const activeWorker = (t) => t.fromPage && (t.status === "running" || t.status === "waiting");
+    const pool = hide ? threads.filter((t) => !t.fromPage || activeWorker(t) || t.pinned || t.id === currentId) : threads;
     if (searching) return { visible: pool, hidden: 0 };
     const keep = new Set();
     for (const t of pool) {
-      if (t.pinned || t.id === currentId) keep.add(t.id);
+      if (activeWorker(t) || t.pinned || t.id === currentId) keep.add(t.id);
     }
     const recent = [];
     const older = [];
@@ -5325,7 +5326,7 @@
       localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
       event.currentTarget.setAttribute("aria-checked", String(!S.hidePageThreads));
       container.agFill();
-    }, "Threads started by a page (board workers) stay hidden until you type in them, unless this is on");
+    }, "Running workers and workers waiting for input always show. This also shows inactive threads started by a page (board workers).");
     workers.setAttribute("role", "switch");
     workers.setAttribute("aria-checked", String(!S.hidePageThreads));
     workers.append(el("span", "ag-switch"), el("span", null, "Show workers"));

@@ -26,6 +26,7 @@ export type ListThread = {
   id: string;
   pinned?: boolean;
   fromPage?: boolean;
+  status?: "idle" | "running" | "waiting";
   when: number;
 };
 
@@ -40,16 +41,17 @@ export type WindowGroupOpts = {
 /**
  * Visible rows in one grouping. Default: threads from the last 7 days, at most 10.
  * `extra` reveals that many more from the rest (further recent, then older).
- * Pinned and the open thread stay visible. Search skips trimming; hidePage drops page-owned rows
- * unless they are pinned or current (search shows them).
+ * Active workers, pinned threads and the open thread stay visible. Search skips trimming; hidePage drops page-owned rows
+ * unless they are running, waiting, pinned or current (search shows them).
  */
 export function windowThreadGroup(threads: ListThread[], opts: WindowGroupOpts): { visible: ListThread[]; hidden: number } {
   const hide = Boolean(opts.hidePage) && !opts.searching;
-  const pool = hide ? threads.filter((t) => !t.fromPage || t.pinned || t.id === opts.currentId) : threads;
+  const activeWorker = (t: ListThread) => t.fromPage && (t.status === "running" || t.status === "waiting");
+  const pool = hide ? threads.filter((t) => !t.fromPage || activeWorker(t) || t.pinned || t.id === opts.currentId) : threads;
   if (opts.searching) return { visible: pool, hidden: 0 };
   const keep = new Set<string>();
   for (const t of pool) {
-    if (t.pinned || t.id === opts.currentId) keep.add(t.id);
+    if (activeWorker(t) || t.pinned || t.id === opts.currentId) keep.add(t.id);
   }
   const recent: ListThread[] = [];
   const older: ListThread[] = [];
