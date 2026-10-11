@@ -2602,7 +2602,8 @@
         if ((rails.length || answers.length > 1) && group.turn) {
           const key = `s:${group.key}`;
           wrap.classList.toggle("open", this.expanded.has(key));
-          const sum = button("", "ag-sum", () => this.toggle(key, wrap), "Show the steps", false);
+          // Through closest(): the button can end up in the turn already in the page (dom-sync.js).
+          const sum = button("", "ag-sum", (event) => this.toggle(key, event.currentTarget.closest(".ag-turn")), "Show the steps", false);
           sum.append(...this.stepSummary(group), icon("chevron", "ag-ico ag-chev"));
           body.prepend(sum);
         }
@@ -2945,7 +2946,9 @@
       if (reads) parts.push(`${reads} file${reads === 1 ? "" : "s"}`);
       if (searches) parts.push(`${searches} search${searches === 1 ? "" : "es"}`);
       if (other) parts.push(`${other} step${other === 1 ? "" : "s"}`);
-      const head = button("", "ag-group-head", () => this.toggle(key, node));
+      node.dataset.key = key;
+      const head = button("", "ag-group-head", (event) => this.toggle(key, event.currentTarget.closest(".ag-group")));
+      head.dataset.key = key;
       head.append(
         running ? el("span", "ag-spin") : icon("search"),
         el("span", "ag-group-label", `${running ? "Exploring" : "Explored"} ${parts.join(", ")}`),
@@ -3707,14 +3710,15 @@
         }
         const fresh = this.renderGroup(group);
         const known = existing && new Set([...existing.querySelectorAll("[data-item-id]")].map((n) => n.dataset.itemId));
-        if (existing) existing.replaceWith(fresh);
-        else {
+        // The turn stays in the page and takes what changed: a replaced step loses its hover and blinks (#443).
+        const live = existing ? window.scribeMorph(existing, fresh, { atomic: isItemNode }) : fresh;
+        if (!existing) {
           const idx = groups.indexOf(group);
           const nextGroup = groups.slice(idx + 1).map((g) => host.querySelector(`.ag-turn[data-turn="${g.key}"]`)).find(Boolean);
           if (nextGroup) nextGroup.before(fresh);
           else host.append(fresh);
         }
-        this.markEntering(fresh, known);
+        this.markEntering(live, known);
       }
       this.markLatest();
       this.measureUserMessages();
@@ -3728,7 +3732,8 @@
       const now = performance.now();
       for (const [id, at] of this.entering) if (now - at >= ENTER_MS) this.entering.delete(id);
       for (const node of root.querySelectorAll("[data-item-id]")) {
-        if (node.parentElement?.closest(".ag-enter")) continue;
+        // A step kept from the last render is already fading in, or done.
+        if (node.classList.contains("ag-enter") || node.parentElement?.closest(".ag-enter")) continue;
         const id = node.dataset.itemId;
         let at = this.entering.get(id);
         if (at == null) {
@@ -5166,6 +5171,9 @@
     }
   }, 1000);
 
+  /** A chat step: kept or replaced whole when its turn is re-rendered, since its handlers close over its own nodes. */
+  const isItemNode = (node) => node.hasAttribute("data-item-id");
+
   const mdCtx = { resolvePages: (targets) => app()?.resolvePages?.(targets) || {} };
 
   function onLinkClick(event) {
@@ -5340,7 +5348,8 @@
       for (const row of list.querySelectorAll(".ag-row-active")) row.classList.remove("ag-row-active");
       const out = [];
       collect(out);
-      window.scribeSyncChildren(list, out);
+      // Rows are patched where they stand, so a running thread's row keeps its hover as its status changes (#443).
+      window.scribeSyncChildren(list, out, { patch: true });
       const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
       highlight(Math.max(0, at), false);
     };
@@ -5366,6 +5375,7 @@
         const latest = all.filter((h) => !must(h)).slice(-2);
         const keep = helpersShown.has(parent.id) ? all : all.filter((h) => must(h) || latest.includes(h));
         const box = el("div", "ag-row-helpers");
+        box.dataset.key = `helpers:${parent.id}`;
         for (const h of keep) box.append(threadRow(h, h.id === currentId, onPick, helperName(h)));
         const hidden = all.length - keep.length;
         if (hidden || (helpersShown.has(parent.id) && all.length > 2)) {
@@ -5421,6 +5431,7 @@
         const first = visible[0];
         const gt = groupTitle(first);
         const head = el("div", "ag-list-group");
+        head.dataset.key = `group:${key}`;
         const name = gt.kind === "Global" ? "" : gt.text;
         head.append(icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
         if (S.filter === "workspaces") {
@@ -5444,6 +5455,7 @@
             S.groupExtra.set(key, (S.groupExtra.get(key) || 0) + LIST_PAGE);
             container.agFill();
           });
+          more.dataset.key = `more:${key}`;
           more.append(el("span", null, "Show 10 more"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
           out.push(more);
         }
@@ -5505,7 +5517,8 @@
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     row.dataset.tooltip = name;
     const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
-    // The row stays in the list while it looks the same, so its handlers read the thread as it is now.
+    wrap.dataset.key = t.id;
+    // The row stays in the list and is patched as the thread changes, so its handlers read the thread as it is now.
     const id = t.id;
     const first = t;
     wrap.addEventListener("contextmenu", (event) => {

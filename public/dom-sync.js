@@ -41,19 +41,136 @@
     return true;
   }
 
-  window.scribeSyncChildren = function scribeSyncChildren(parent, nodes) {
-    const wanted = nodes.flatMap((node) => (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? [...node.childNodes] : [node]));
+  /*
+   * Patching: a row whose text changed (a running thread's status, a chat turn that got one more step) would
+   * still be swapped for its new copy, and blink under the pointer on every update (#443). With `patch`, the
+   * node in the page takes the new copy's attributes and children instead, so only what differs is touched.
+   *
+   * A patched node keeps its own listeners, so:
+   * - a node that stands for one thing among its siblings carries a key (KEYS), and is only ever patched from
+   *   the new copy with that key. Its handlers may close over what the key names, nothing that changes.
+   * - controls without a key (buttons, links) are kept only while they look the same, else the new copy goes in.
+   * - handlers must not close over a parent node: the new copy's parent is thrown away. Use closest().
+   * - `atomic(node)` marks nodes to keep or replace whole: kept while a new copy renders to the same HTML as
+   *   the copy it came from, whatever was done to it in the page since (classes, styles, what the user opened).
+   */
+  const KEYS = ["data-key", "data-item-id", "data-turn", "data-id"];
+  // Without a key these are never patched: their handlers or their content belong to the copy they came with.
+  const WHOLE = new Set(["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "DETAILS", "CANVAS", "IFRAME", "VIDEO", "AUDIO"]);
+  const sigs = new WeakMap();
+
+  function keyOf(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    for (const name of KEYS) {
+      const value = node.getAttribute(name);
+      if (value !== null) return `${name}=${value}`;
+    }
+    return null;
+  }
+
+  const firstClass = (el) => (el.getAttribute("class") || "").trim().split(/\s+/)[0];
+
+  /** Remember what each atomic node in a new subtree rendered as, before the page changes it. */
+  function stamp(node, opts) {
+    if (node.nodeType !== Node.ELEMENT_NODE || !opts.atomic) return;
+    if (opts.atomic(node)) sigs.set(node, node.outerHTML);
+    else for (const child of node.children) stamp(child, opts);
+  }
+
+  /** The same for a subtree kept because it looks like its new copy: each atomic node rendered as that copy's does. */
+  function stampFrom(old, fresh, opts) {
+    if (old.nodeType !== Node.ELEMENT_NODE || !opts.atomic) return;
+    if (opts.atomic(fresh)) sigs.set(old, fresh.outerHTML);
+    else for (let i = 0; i < old.children.length; i += 1) stampFrom(old.children[i], fresh.children[i], opts);
+  }
+
+  function patchAttrs(old, fresh) {
+    for (const { name } of [...old.attributes]) {
+      if (!IGNORED.has(name) && !fresh.hasAttribute(name)) old.removeAttribute(name);
+    }
+    for (const { name, value } of fresh.attributes) {
+      if (old.getAttribute(name) !== value) old.setAttribute(name, value);
+    }
+  }
+
+  /** The node to show for `fresh` where `old` is now: `old` brought up to date, or `fresh` itself. */
+  function patch(old, fresh, opts) {
+    if (old === fresh) return old;
+    if (old.nodeType !== fresh.nodeType || old.nodeName !== fresh.nodeName) return fresh;
+    if (old.nodeType !== Node.ELEMENT_NODE) {
+      if (old.nodeValue !== fresh.nodeValue) old.nodeValue = fresh.nodeValue;
+      return old;
+    }
+    const key = keyOf(fresh);
+    if (keyOf(old) !== key) return fresh;
+    if (opts.atomic?.(fresh)) {
+      const sig = fresh.outerHTML;
+      const had = sigs.get(old);
+      if (had === undefined ? same(old, fresh) : had === sig) {
+        sigs.set(old, sig);
+        return old;
+      }
+      sigs.set(fresh, sig);
+      return fresh;
+    }
+    if (STATEFUL.has(old.nodeName) || (key === null && WHOLE.has(old.nodeName))) {
+      if (same(old, fresh)) return old;
+      stamp(fresh, opts);
+      return fresh;
+    }
+    patchAttrs(old, fresh);
+    sync(old, [...fresh.childNodes], opts);
+    return old;
+  }
+
+  /** Whether `old` may be patched into `node`: the same key, or neither has one and they are the same kind of node. */
+  function pairs(old, node, key) {
+    if (old.nodeType !== node.nodeType || old.nodeName !== node.nodeName) return false;
+    if (node.nodeType !== Node.ELEMENT_NODE) return true;
+    if (keyOf(old) !== key) return false;
+    return key !== null || firstClass(old) === firstClass(node);
+  }
+
+  function sync(parent, wanted, opts) {
     const pool = [...parent.childNodes];
+    const dropped = [];
     const next = wanted.map((node) => {
       let at = pool.indexOf(node);
-      if (at < 0) at = pool.findIndex((old) => same(old, node));
-      return at < 0 ? node : pool.splice(at, 1)[0];
+      if (at >= 0) return pool.splice(at, 1)[0];
+      const key = opts.patch ? keyOf(node) : null;
+      // A keyed node is only ever its own earlier copy; the rest take the first one that looks the same.
+      if (key === null) at = pool.findIndex((old) => same(old, node));
+      if (at >= 0) {
+        if (opts.patch) stampFrom(pool[at], node, opts);
+        return pool.splice(at, 1)[0];
+      }
+      if (opts.patch) at = pool.findIndex((old) => pairs(old, node, key));
+      if (at < 0) {
+        if (opts.patch) stamp(node, opts);
+        return node;
+      }
+      const old = pool.splice(at, 1)[0];
+      const live = patch(old, node, opts);
+      if (live !== old) dropped.push(old);
+      return live;
     });
-    for (const old of pool) old.remove();
+    for (const old of [...pool, ...dropped]) old.remove();
     let cursor = parent.firstChild;
     for (const node of next) {
       if (node === cursor) cursor = cursor.nextSibling;
       else parent.insertBefore(node, cursor);
     }
+  }
+
+  /** opts: { patch, atomic }. Without `patch`, a child is kept only while it looks the same. */
+  window.scribeSyncChildren = function scribeSyncChildren(parent, nodes, opts = {}) {
+    sync(parent, nodes.flatMap((node) => (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? [...node.childNodes] : [node])), opts);
+  };
+
+  /** Bring `old` up to date with `fresh` where it stands, and return the node now in the page (`fresh` if `old` could not be patched). */
+  window.scribeMorph = function scribeMorph(old, fresh, opts = {}) {
+    const live = patch(old, fresh, { ...opts, patch: true });
+    if (live !== old) old.replaceWith(live);
+    return live;
   };
 })();

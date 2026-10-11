@@ -163,3 +163,48 @@ test("shell updates retain composer pills, thread controls and template rows wit
     await browser.close();
   }
 });
+
+test("patching keeps a changed row in the page and replaces a changed chat step whole", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "DOM patch test" });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="list"></div><div id="chat"></div>');
+    await page.addScriptTag({ content: source("../public/dom-sync.js") });
+    // A plain script: helpers declared inside evaluate() do not survive the test runner's transform.
+    await page.addScriptTag({ content: `
+      window.check = () => {
+        const html = (text) => { const t = document.createElement("template"); t.innerHTML = text; return t.content.firstElementChild; };
+        const list = document.querySelector("#list");
+        const row = (id, status) => html('<div data-key="' + id + '"><button data-id="' + id + '"><span class="dot s-' + status + '"></span><span>' + id + ' ' + status + '</span></button><button class="act">Archive</button></div>');
+        scribeSyncChildren(list, [row("a", "idle"), row("b", "idle")], { patch: true });
+        const [a, b] = [...list.children];
+        const [aButton, aAct] = [...a.children];
+        let clicks = 0;
+        aButton.addEventListener("click", () => clicks++);
+        // b moves above a and a starts running: both stay, a's row button and its unchanged control too.
+        scribeSyncChildren(list, [row("b", "idle"), row("a", "running")], { patch: true });
+        list.children[1].firstElementChild.click();
+        const rows = [list.children[0] === b, list.children[1] === a, a.firstElementChild === aButton, a.lastElementChild === aAct, aButton.textContent, clicks];
+
+        const chat = document.querySelector("#chat");
+        const atomic = (node) => node.hasAttribute("data-item-id");
+        const turn = (steps, label) => html('<div data-turn="t1" class="turn"><div class="body">' + steps.map((s, i) => '<div data-item-id="i' + i + '" class="tool s-' + s + '"><button>step ' + i + '</button></div>').join("") + '</div><div class="foot"><span>' + label + '</span><button class="stop">Stop</button></div></div>');
+        const first = turn(["done", "running"], "Working");
+        chat.append(first);
+        const next = scribeMorph(first, turn(["done", "running"], "Working"), { atomic });
+        const [done, running] = [...first.querySelectorAll("[data-item-id]")];
+        const stop = first.querySelector(".stop");
+        // What the page does to a step afterwards (a fade class, a tooltip) does not make it look changed.
+        done.classList.add("entering");
+        const after = scribeMorph(first, turn(["done", "done", "running"], "Still working"), { atomic });
+        const steps = [...first.querySelectorAll("[data-item-id]")];
+        return [...rows, next === first, after === first, steps.length, steps[0] === done, steps[1] === running, steps[1].className,
+          first.querySelector(".stop") === stop, first.querySelector(".foot span").textContent];
+      };
+    ` });
+    assert.deepEqual(await page.evaluate(() => (window as any).check()),
+      [true, true, true, true, "a running", 1, true, true, 3, true, false, "tool s-done", true, "Still working"]);
+  } finally {
+    await browser.close();
+  }
+});
