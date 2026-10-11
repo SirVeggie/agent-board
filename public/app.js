@@ -982,7 +982,7 @@
    * Ctrl+T: a New page in front (in the focused pane of a split), with no tab until a thread or a
    * template makes it a page. Resolves to whether a New page is in front.
    */
-  async function newPage() {
+  async function newPage({ beforeRender } = {}) {
     if (childId) {
       return false;
     }
@@ -1007,6 +1007,7 @@
     pendingFocus = null;
     lastInteractedAt = Date.now();
     syncHash();
+    beforeRender?.();
     render();
     reportViewer();
     newPageView.focus();

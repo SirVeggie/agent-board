@@ -1212,11 +1212,14 @@ window.createViews = function createViews(host) {
         flash(frameId);
         return { ok: true, mode, id: target.id, alreadyVisible: true };
       }
-      if (!(await host.newPage()) || host.activeId() === active) {
+      // Install the split before the draft's first render: only the original page
+      // should animate from full width, while the new draft enters at pane width.
+      if (!(await host.newPage({ beforeRender: () => {
+        splits.set(host.spaceId(), { other: target, ratio: lastRatio, dir: "row", side: 1, seen: host.activeId() });
+        saveSplits();
+      } })) || host.activeId() === active) {
         return { ok: false, error: "no_new_page" };
       }
-      splits.set(host.spaceId(), { other: target, ratio: lastRatio, dir: "row", side: 1, seen: host.activeId() });
-      saveSplits();
       host.render();
       return { ok: true, mode, id: target.id };
     }

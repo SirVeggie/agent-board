@@ -37,7 +37,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
         activeId: () => active, activeTab: () => pages.get(active!) || (draft?.id === active ? draft : null),
         isBlank: (tab: any) => Boolean(tab?.draft), draftId: () => draft?.id || null,
         activate: (id: string) => select(id),
-        newPage: async () => { draft = { id: "new", title: "New page", draft: true }; active = "new"; views.layout(); return true; },
+        newPage: async ({ beforeRender }: any = {}) => { draft = { id: "new", title: "New page", draft: true }; active = "new"; beforeRender?.(); views.layout(); return true; },
         spaceId: () => space, spaceIds: () => spaceIds,
         frame: (id: string) => frames.get(id), frameIds: () => [...frames.keys()],
         ensureFrame: (meta: any) => {
@@ -418,6 +418,64 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       views.layout();
       return transformStillRunning && frame === (window as any).coldFrame && getComputedStyle(frame).opacity === '1';
     }), true);
+    // Use the real draft creation and frame rendering together: splitting the
+    // active tab must never render the new draft at full width.
+    await page.route('http://views.test/api/drafts', route => route.fulfill({
+      contentType: 'application/json', body: JSON.stringify({ tab: { id: 'draft', title: 'New page', draft: true } }),
+    }));
+    await page.setContent('<main style="width:1100px;height:650px"><div id="frames"></div><div id="empty"></div><div id="newpage" class="newpage" hidden></div></main>');
+    await page.addStyleTag({ content: fs.readFileSync(new URL('../public/app.css', import.meta.url), 'utf8') });
+    const newPageSource = appSource.slice(appSource.indexOf('  async function newPage('), appSource.indexOf('  /**\n   * Leaving a draft'));
+    const renderFramesSource = appSource.slice(appSource.indexOf('  function renderFrames('), appSource.indexOf('  function endPageIntent('));
+    await page.addScriptTag({ content: `{
+      const mainEl = document.querySelector('main'), newPageEl = document.querySelector('#newpage'), emptyEl = document.querySelector('#empty');
+      const tabs = [{id:'original',title:'Original'}], frames = new Map();
+      const state = {activeId:'original',draft:null,restored:true};
+      const childId = null, popoutTitle = null, pageIntent = null;
+      let pendingFocus = null, lastInteractedAt = 0;
+      const activeTab = () => state.draft?.id === state.activeId ? state.draft : tabs[0];
+      const draftActive = () => activeTab()?.draft, isBlank = tab => !!tab?.draft;
+      const syncHash = () => {}, reportViewer = () => {}, showNotice = () => {};
+      const draftWidths = [];
+      const newPageView = {
+        focus(){}, replace(){newPageEl.hidden=true;},
+        render(tab){newPageEl.hidden=!tab;if(tab)draftWidths.push(newPageEl.getBoundingClientRect().width);}
+      };
+      const render = () => renderFrames();
+      ${newPageSource}
+      ${renderFramesSource}
+      const views = window.createViews({mainEl,contentOrigin:()=>location.origin,
+        tabs:()=>tabs,closed:()=>[],activeId:()=>state.activeId,activeTab,
+        findAnyTab:id=>tabs.find(tab=>tab.id===id) || (state.draft?.id===id ? state.draft : null),
+        isBlank,draftId:()=>state.draft?.id,spaceId:()=> 'active-split-test',spaceIds:()=>['active-split-test'],
+        frame:id=>frames.get(id),frameIds:()=>[...frames.keys()],ensureFrame:meta=>{
+          if(!frames.has(meta.id)){const el=document.createElement('iframe');document.querySelector('#frames').append(el);frames.set(meta.id,{el});}
+          return frames.get(meta.id);
+        },discardFrame:()=>{},markSeen:()=>{},render,newPage
+      });
+      render(); window.activeSplitTest = {views,frames,draftWidths};
+    }` });
+    const activeMotion = await page.evaluate(async () => {
+      const { views, frames, draftWidths } = (window as any).activeSplitTest;
+      const original = frames.get('original').el;
+      const originalWidth = original.getBoundingClientRect().width;
+      await views.open('original', 'split');
+      const draft = document.querySelector('#newpage')!;
+      const animations = [original, draft].map(node => node.getAnimations()[0]);
+      for (const animation of animations) animation.pause();
+      const samples = [0, 120, 240].map(time => {
+        for (const animation of animations) animation.currentTime = time;
+        return [original.getBoundingClientRect().width, draft.getBoundingClientRect().width];
+      });
+      return { originalWidth, draftWidths, samples, originalKept: frames.get('original').el === original };
+    });
+    assert.ok(activeMotion.draftWidths.length > 0);
+    assert.ok(activeMotion.draftWidths.every((width: number) => Math.abs(width - 550) < 1));
+    assert.ok(activeMotion.samples.every((sample: number[]) => Math.abs(sample[1] - 550) < 1));
+    assert.ok(Math.abs(activeMotion.samples[0][0] - activeMotion.originalWidth) < 1);
+    assert.ok(activeMotion.samples[0][0] > activeMotion.samples[1][0] && activeMotion.samples[1][0] > activeMotion.samples[2][0]);
+    assert.ok(Math.abs(activeMotion.samples[2][0] - 550) < 1);
+    assert.equal(activeMotion.originalKept, true);
   } finally {
     await browser.close();
   }
