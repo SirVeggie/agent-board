@@ -1,4 +1,10 @@
 fn main() {
+    println!("cargo:rerun-if-changed=src");
+    let built_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock predates Unix epoch")
+        .as_secs();
+    println!("cargo:rustc-env=SCRIBE_DESKTOP_BUILT_AT={built_at}");
     println!("cargo:rerun-if-changed=../public/tooltip.js");
     let tooltip = std::fs::read("../public/tooltip.js").expect("failed to read shared tooltips");
     if std::fs::read("splash/tooltip.js").ok().as_deref() != Some(tooltip.as_slice()) {

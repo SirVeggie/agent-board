@@ -2154,6 +2154,30 @@ button.settings-close svg {
   color: var(--muted);
 }
 
+.desktop-build-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: 560px;
+  padding: 20px;
+}
+
+.desktop-build-dialog h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--heading);
+}
+
+.desktop-build-dialog pre,
+.desktop-build-dialog p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.desktop-build-dialog p {
+  padding: 0;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;

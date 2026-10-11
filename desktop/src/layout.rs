@@ -76,6 +76,11 @@ pub struct LayoutState {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopState {
+    /// Increase this and public/desktop.js's requirement when native UI APIs change.
+    api_revision: u32,
+    version: &'static str,
+    built_at: &'static str,
+    executable: Option<String>,
     compact: bool,
     maximized: bool,
     compact_on_top: bool,
@@ -230,6 +235,10 @@ pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
     let state = state(window);
     let layout = state.layout.lock().unwrap();
     DesktopState {
+        api_revision: 1,
+        version: env!("CARGO_PKG_VERSION"),
+        built_at: env!("SCRIBE_DESKTOP_BUILT_AT"),
+        executable: std::env::current_exe().ok().map(|path| path.to_string_lossy().into_owned()),
         compact: layout.compact_mode,
         maximized: window.is_maximized().unwrap_or(false),
         compact_on_top: layout.compact_on_top,

@@ -5,6 +5,9 @@
     return;
   }
   const invoke = tauri.core.invoke;
+  // Keep in step with layout::DesktopState. Bump when this UI needs a new native API.
+  const REQUIRED_API_REVISION = 1;
+  let stateReceived = false;
   const root = document.documentElement;
   const chrome = document.querySelector(".chrome");
   const actions = chrome.querySelector(".actions");
@@ -87,6 +90,13 @@
   const moreBtn = iconButton("desktop-more", ICONS.more, "Window", false);
   moreBtn.setAttribute("aria-haspopup", "menu");
   actions.append(compactBtn, moreBtn);
+  const updateBtn = document.createElement("button");
+  updateBtn.type = "button";
+  updateBtn.id = "desktop-update";
+  updateBtn.textContent = "Update desktop";
+  updateBtn.hidden = true;
+  updateBtn.addEventListener("click", showBuildDetails);
+  actions.append(updateBtn);
 
   const controls = document.createElement("div");
   controls.className = "win-controls";
@@ -255,6 +265,51 @@
   motionError.textContent = "Update the desktop app to use Reduce motion.";
   motionError.hidden = true;
   section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, motionError, hint);
+  const buildRow = document.createElement("div");
+  buildRow.className = "setting-row";
+  const buildStatus = document.createElement("span");
+  buildStatus.textContent = "Checking desktop app…";
+  const buildDetails = document.createElement("button");
+  buildDetails.type = "button";
+  buildDetails.textContent = "Build details";
+  buildDetails.addEventListener("click", showBuildDetails);
+  buildRow.append(buildStatus, buildDetails);
+  section.prepend(buildRow);
+
+  function needsUpdate() {
+    return stateReceived && (!Number.isInteger(desktop.apiRevision) || desktop.apiRevision < REQUIRED_API_REVISION ||
+      ["compactOnTop", "openFromAgents", "closeToTray", "launchAtStartup", "reducedMotion"].some((name) => typeof desktop[name] !== "boolean"));
+  }
+
+  function showBuildDetails() {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm desktop-build-dialog";
+    dialog.setAttribute("aria-labelledby", "desktop-build-title");
+    const heading = document.createElement("h3");
+    heading.id = "desktop-build-title";
+    heading.textContent = needsUpdate() ? "Update the desktop app" : "Desktop build";
+    const details = document.createElement("p");
+    const builtAt = Number(desktop.builtAt) * 1000;
+    details.textContent = stateReceived
+      ? `Version: ${desktop.version || "unreported"} · API: ${desktop.apiRevision ?? "unreported"} (UI requires ${REQUIRED_API_REVISION}) · Built: ${builtAt && Number.isFinite(builtAt) ? new Date(builtAt).toLocaleString() : "unreported"}`
+      : "Desktop build information is unavailable.";
+    const explanation = document.createElement("p");
+    explanation.textContent = "To update, run this in PowerShell from your current Scribe source folder. It builds and replaces the desktop app, then restarts it if it was open.";
+    const command = document.createElement("pre");
+    const folder = desktop.executable?.replace(/[\\/][^\\/]+$/, "");
+    command.textContent = `npm run desktop:install -- '${(folder || "<installed app folder>").replaceAll("'", "''")}'`;
+    const location = document.createElement("p");
+    location.textContent = desktop.executable ? `Running app: ${desktop.executable}` : "Replace <installed app folder> with the folder containing your scribe.exe.";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", () => dialog.close());
+    dialog.addEventListener("close", () => dialog.remove(), { once: true });
+    dialog.append(heading, details, explanation, command, location, close);
+    document.body.append(dialog);
+    dialog.showModal();
+    close.focus();
+  }
 
   /** One row of connected icon toggles, one per title bar button, in strip order. */
   function buttonTrackRow() {
@@ -344,9 +399,14 @@
     motionRow.toggle.setAttribute("aria-checked", String(desktop.reducedMotion));
     // The daemon serves current UI assets even to an older desktop executable.
     // Older shells neither report this preference nor accept its setting command.
-    const supportsMotion = typeof desktop.reducedMotion === "boolean";
-    motionRow.toggle.disabled = !supportsMotion;
-    motionError.hidden = supportsMotion;
+    const supportsMotion = stateReceived && typeof desktop.reducedMotion === "boolean";
+    for (const [name, row] of [["compactOnTop", onTopRow], ["openFromAgents", openRow], ["closeToTray", trayRow], ["launchAtStartup", startupRow], ["reducedMotion", motionRow]]) {
+      row.toggle.disabled = !stateReceived || typeof desktop[name] !== "boolean";
+    }
+    motionError.hidden = !stateReceived || supportsMotion;
+    updateBtn.hidden = child || !needsUpdate();
+    buildStatus.textContent = !stateReceived ? "Checking desktop app…" : needsUpdate() ? "Desktop update required" : `Desktop ${desktop.version || ""} · Compatible`;
+    buildDetails.textContent = needsUpdate() ? "How to update" : "Build details";
   }
 
   function setState(state) {
@@ -357,6 +417,7 @@
       window.scribeSetHidden?.(state.hidden);
     }
     desktop = state;
+    stateReceived = true;
     root.classList.toggle("compact", state.compact && !child);
     render();
   }
@@ -395,5 +456,8 @@
     });
   }
   render();
-  invoke("desktop_state").then(setState);
+  invoke("desktop_state").then(setState).catch((err) => {
+    console.error(err);
+    buildStatus.textContent = "Could not check desktop app";
+  });
 })();
