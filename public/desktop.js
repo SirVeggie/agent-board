@@ -249,7 +249,12 @@
   const motionLabel = motionRow.row.querySelector("span");
   motionLabel.dataset.tooltip = motionHint;
   motionLabel.setAttribute("aria-description", motionHint);
-  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, hint);
+  const motionError = document.createElement("p");
+  motionError.className = "settings-hint settings-hint-after";
+  motionError.setAttribute("role", "status");
+  motionError.textContent = "Update the desktop app to use Reduce motion.";
+  motionError.hidden = true;
+  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, motionError, hint);
 
   /** One row of connected icon toggles, one per title bar button, in strip order. */
   function buttonTrackRow() {
@@ -337,6 +342,11 @@
     trayRow.toggle.setAttribute("aria-checked", String(desktop.closeToTray));
     startupRow.toggle.setAttribute("aria-checked", String(desktop.launchAtStartup));
     motionRow.toggle.setAttribute("aria-checked", String(desktop.reducedMotion));
+    // The daemon serves current UI assets even to an older desktop executable.
+    // Older shells neither report this preference nor accept its setting command.
+    const supportsMotion = typeof desktop.reducedMotion === "boolean";
+    motionRow.toggle.disabled = !supportsMotion;
+    motionError.hidden = supportsMotion;
   }
 
   function setState(state) {
