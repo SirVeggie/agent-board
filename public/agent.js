@@ -7826,7 +7826,7 @@
 
   /* ---------- MCP servers: Scribe's one list for every provider (data/agent/mcp.json) ---------- */
 
-  const MCP_SOURCE_LABEL = { claude: "Claude Code", cursor: "Cursor", pi: "Pi" };
+  const MCP_SOURCE_LABEL = { claude: "Claude Code", cursor: "Cursor", pi: "Pi", codex: "Codex" };
 
   /** One line about where a server runs: its command line or URL. */
   function mcpTarget(server) {
@@ -8230,7 +8230,7 @@
         error, actions
       );
     },
-    /** Pick servers from Claude Code, Cursor and Pi to copy into Scribe's list. */
+    /** Pick servers from other apps to copy into Scribe's list. */
     async importDialog() {
       const { panel, close } = modal("ag-source ag-mcp-import");
       const title = () => el("h2", "ag-modal-title", "Import MCP servers");
@@ -8258,7 +8258,7 @@
       const renderList = () => {
         list.replaceChildren();
         const shown = visible();
-        if (!shown.length) list.append(el("div", "ag-muted", candidates.length ? "Nothing matches." : "No servers found in Claude Code, Cursor or Pi."));
+        if (!shown.length) list.append(el("div", "ag-muted", candidates.length ? "Nothing matches." : "No servers found in Claude Code, Cursor, Pi or Codex."));
         for (const c of shown) {
           const box = el("input");
           box.type = "checkbox";
@@ -8319,7 +8319,7 @@
       actions.append(count, el("span", "ag-grow"), button("Cancel", "ag-btn", close), button("Import", "ag-btn primary", run));
       panel.replaceChildren(
         title(),
-        el("p", "ag-modal-hint", "From Claude Code (~/.claude.json, .mcp.json), Cursor (~/.cursor/mcp.json, .cursor/mcp.json) and Pi (~/.pi). Workspace servers keep their folder; the other apps' files are left as they are."),
+        helpHeading("Sources", "From Claude Code (~/.claude.json, .mcp.json), Cursor (~/.cursor/mcp.json, .cursor/mcp.json), Pi (~/.pi) and Codex (~/.codex/config.toml). Workspace servers keep their folder; the other apps' files are left as they are."),
         sourceBar,
         tools,
         list,

@@ -20,7 +20,7 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     page.on("pageerror", (error) => errors.push(error.message));
     const view = { path: "scribe/mcp.json", defaultModes: ["code", "plan", "ask"], file: { mcpServers: {} as Record<string, unknown>, workspaces: {} as Record<string, any> } };
     const candidate = (name: string, scope = "global", source = "claude") => ({ source, name, scope, file: scope === "global" ? "home/.claude.json" : `${scope}/.mcp.json`, server: { command: name, approve: "auto" } });
-    const candidates = [candidate("keeper"), candidate("shared", "/project"), candidate("cursor-only", "global", "cursor")];
+    const candidates = [candidate("keeper"), candidate("shared", "/project"), candidate("cursor-only", "global", "cursor"), candidate("codex-only", "global", "codex")];
     const imported: any[] = [];
     let fail = false;
     await page.route("http://mcp.test/**", async (route) => {
@@ -67,6 +67,15 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await page.getByRole("button", { name: "Edit", exact: true }).waitFor();
     assert.equal(imported[1].scope, "/project");
     assert.equal(imported[1].server.approve, "ask");
+    await page.getByRole("button", { name: "Import…", exact: true }).click();
+    const importer = page.locator(".ag-mcp-import");
+    await importer.getByRole("checkbox", { name: "Codex", exact: true }).waitFor();
+    assert.match(await importer.innerText(), /codex-only/);
+    await importer.getByRole("checkbox", { name: /codex-only/ }).check();
+    await importer.getByRole("button", { name: "Import", exact: true }).click();
+    await importer.waitFor({ state: "detached" });
+    assert.equal(imported[2].name, "codex-only");
+    assert.equal(imported[2].scope, "global");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

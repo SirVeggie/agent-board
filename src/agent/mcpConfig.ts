@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { dataDir } from "../config.js";
 import { workspaceKey } from "./prefs.js";
 import type { Thread, ThreadMode } from "./types.js";
@@ -264,7 +265,7 @@ export function bridgedToolName(server: string, tool: string): string {
 
 // ---------- import from other apps ----------
 
-export type McpImportSource = "claude" | "cursor" | "pi";
+export type McpImportSource = "claude" | "cursor" | "pi" | "codex";
 
 export type McpImportCandidate = {
   source: McpImportSource;
@@ -288,9 +289,32 @@ function readJson(file: string): unknown {
   }
 }
 
+/** Translate Codex's TOML tables without resolving secrets into the saved copy. */
+function readCodexMcp(file: string): McpLayer {
+  try {
+    const config = parseToml(fs.readFileSync(file, "utf8"));
+    const servers = isPlainRecord(config.mcp_servers) ? config.mcp_servers : {};
+    const mcpServers: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(servers)) {
+      if (!isPlainRecord(value)) continue;
+      const server = { ...value };
+      if (typeof value.bearer_token_env_var === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.bearer_token_env_var)) {
+        server.headers = { ...stringMap(value.http_headers), Authorization: `Bearer \${${value.bearer_token_env_var}}` };
+      } else if (isPlainRecord(value.http_headers)) {
+        server.headers = value.http_headers;
+      }
+      mcpServers[name] = server;
+    }
+    return cleanLayer({ mcpServers });
+  } catch {
+    return { mcpServers: {} };
+  }
+}
+
 /**
  * Servers in Claude Code (~/.claude.json, its per-project entries, a workspace's .mcp.json), Cursor
- * (~/.cursor/mcp.json, .cursor/mcp.json) and Pi (~/.pi/agent/mcp.json, .pi/mcp.json), for the user to
+ * (~/.cursor/mcp.json, .cursor/mcp.json), Pi (~/.pi/agent/mcp.json, .pi/mcp.json) and Codex
+ * (~/.codex/config.toml), for the user to
  * pick from. workspaces: folders to look in besides the per-project entries Claude keeps.
  */
 export function importCandidates(workspaces: string[], current: McpFile = readMcpFile(), home = os.homedir()): McpImportCandidate[] {
@@ -313,6 +337,8 @@ export function importCandidates(workspaces: string[], current: McpFile = readMc
   }
   add("cursor", path.join(home, ".cursor", "mcp.json"), "global", readJson(path.join(home, ".cursor", "mcp.json")));
   add("pi", path.join(home, ".pi", "agent", "mcp.json"), "global", readJson(path.join(home, ".pi", "agent", "mcp.json")));
+  const codexFile = path.join(home, ".codex", "config.toml");
+  add("codex", codexFile, "global", readCodexMcp(codexFile));
   const seen = new Set<string>();
   for (const dir of workspaces) {
     const key = workspaceKey(dir);

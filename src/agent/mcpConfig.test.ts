@@ -4,9 +4,58 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { bridgeAsks } from "./mcpBridge.js";
-import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, serversForThread, writeMcpFile } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, resolveServer, serversForThread, writeMcpFile } from "./mcpConfig.js";
 
 const thread = (mode: "code" | "ask" | "plan" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
+
+test("Codex TOML imports stdio and HTTP servers while preserving token environment references", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-codex-mcp-"));
+  const file = path.join(home, ".codex", "config.toml");
+  fs.mkdirSync(path.dirname(file));
+  const source = `model = "gpt-5"
+[mcp_servers.local]
+command = "node"
+args = ["server.js", "--stdio"]
+cwd = 'C:\\tools'
+enabled = false
+[mcp_servers.local.env]
+PORT = "9000"
+[mcp_servers.remote]
+url = "https://example.com/mcp"
+bearer_token_env_var = "SCRIBE_MCP_TEST_TOKEN"
+[mcp_servers.remote.http_headers]
+"X-Client" = "scribe"
+[mcp_servers.incomplete]
+args = ["no-command"]
+[mcp_servers.scribe]
+command = "reserved"
+`;
+  try {
+    assert.deepEqual(importCandidates([], cleanFile({}), home), []);
+    fs.writeFileSync(file, source);
+    const current = cleanFile({ mcpServers: { remote: { command: "old" } } });
+    const found = importCandidates([], current, home);
+    assert.deepEqual(found.map((c) => [c.source, c.name, c.scope, c.exists]), [["codex", "local", "global", false], ["codex", "remote", "global", true]]);
+    assert.equal(found[0].file, file);
+    assert.deepEqual(found[0].server, { command: "node", args: ["server.js", "--stdio"], env: { PORT: "9000" }, cwd: "C:\\tools", enabled: false });
+    assert.deepEqual(found[1].server.headers, { "X-Client": "scribe", Authorization: "Bearer ${SCRIBE_MCP_TEST_TOKEN}" });
+    const imported = applyImport(current, found);
+    assert.equal(imported.mcpServers.remote.url, "https://example.com/mcp");
+    assert.equal(imported.mcpServers.remote.approve, undefined);
+    const previous = process.env.SCRIBE_MCP_TEST_TOKEN;
+    try {
+      process.env.SCRIBE_MCP_TEST_TOKEN = "test-secret";
+      assert.equal(resolveServer("remote", "global", imported.mcpServers.remote)?.headers.Authorization, "Bearer test-secret");
+      assert.equal(imported.mcpServers.remote.headers?.Authorization, "Bearer ${SCRIBE_MCP_TEST_TOKEN}");
+    } finally {
+      if (previous === undefined) delete process.env.SCRIBE_MCP_TEST_TOKEN;
+      else process.env.SCRIBE_MCP_TEST_TOKEN = previous;
+    }
+    assert.equal(fs.readFileSync(file, "utf8"), source);
+    fs.writeFileSync(file, "[invalid");
+    assert.deepEqual(importCandidates([], current, home), []);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 
 test("cleanServer keeps known fields and reads other apps' shapes", () => {
   assert.deepEqual(cleanServer({ command: "npx", args: ["-y", "x"], env: { A: 1 }, foo: "bar" }), { command: "npx", args: ["-y", "x"], env: { A: "1" } });
