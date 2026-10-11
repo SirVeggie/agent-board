@@ -902,7 +902,12 @@
   .wp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 2px 6px 8px; }
   .wp-head b { font-size: 14px; }
   .wp-head span { color: var(--muted); font-size: 12px; text-align: right; }
-  .wrow { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; gap: 9px; align-items: center; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
+  .wrow { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto auto; gap: 9px; align-items: center; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
+  .w-reorder { display: flex; gap: 2px; }
+  .w-reorder button { padding: 2px 4px; color: var(--muted); }
+  .w-reorder button:hover { color: var(--text); }
+  .w-reorder button:disabled { opacity: .3; cursor: default; }
+  .w-reorder button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .wrow:hover, .wrow.open { background: rgba(255, 255, 255, .05); }
   .wrow .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wrow .sub { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4319,7 +4324,21 @@
     return w && typeof w === "object" ? w : null;
   }
   function workerIds() {
-    return Object.keys(workers()).filter(function (id) { return worker(id); });
+    var ids = Object.keys(workers()).filter(function (id) { return worker(id); });
+    var order = Array.isArray(settings().workerOrder) ? settings().workerOrder : [];
+    var ordered = order.filter(function (id, i) { return ids.indexOf(id) !== -1 && order.indexOf(id) === i; });
+    return ordered.concat(ids.filter(function (id) { return ordered.indexOf(id) === -1; }));
+  }
+  function moveWorker(id, direction) {
+    var ids = workerIds(), index = ids.indexOf(id), target = index + direction;
+    if (index < 0 || target < 0 || target >= ids.length) return;
+    ids.splice(index, 1);
+    ids.splice(target, 0, id);
+    scribe.update([{ op: "set", path: "settings/workerOrder", value: ids }]);
+    render();
+    var button = workersPop.querySelector('[data-worker="' + id + '"] [data-direction="' + direction + '"]');
+    if (button && button.disabled) button = button.parentElement.querySelector('button:not(:disabled)');
+    if (button) button.focus();
   }
   function workerName(w) { return str(w && w.name).trim(); }
   function sameName(a, b) { return str(a).trim().toLowerCase() === str(b).trim().toLowerCase(); }
@@ -5676,6 +5695,7 @@
     ids.forEach(function (id) {
       var w = worker(id);
       var row = el("div", "wrow" + (panelOpen === id ? " open" : ""));
+      row.dataset.worker = id;
       row.appendChild(workerBadge(id));
       var txt = el("div", "wtxt");
       txt.appendChild(el("div", "nm", workerName(w) || "Unnamed"));
@@ -5683,6 +5703,19 @@
       row.appendChild(txt);
       var count = workerCards(id).length;
       row.appendChild(el("span", "cnt", count === 1 ? "1 card" : count + " cards"));
+      var reorder = el("span", "w-reorder");
+      [-1, 1].forEach(function (direction) {
+        var button = el("button", null, direction < 0 ? "↑" : "↓");
+        button.type = "button";
+        button.dataset.direction = direction;
+        var label = "Move " + (workerName(w) || "worker") + (direction < 0 ? " up" : " down");
+        button.setAttribute("aria-label", label);
+        button.dataset.tooltip = label;
+        button.disabled = direction < 0 ? ids.indexOf(id) === 0 : ids.indexOf(id) === ids.length - 1;
+        button.addEventListener("click", function (e) { e.stopPropagation(); moveWorker(id, direction); });
+        reorder.appendChild(button);
+      });
+      row.appendChild(reorder);
       var tog = el("button", "tog" + (workerOn(w) || launching[id] ? " on" : ""));
       tog.type = "button";
       tog.setAttribute("role", "switch");

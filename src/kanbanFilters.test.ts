@@ -25,6 +25,7 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
         state: { columns: [{ id: 'todo', title: 'Ready', role: 'agent' }], labels: [], cards: [], nextNum: 1,
           settings: { workers: { a: { name: 'Sol', provider: 'codex' }, b: { name: 'Luna', provider: 'pi' } } } },
         local: {}, set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); },
+        update(ops) { for (const op of ops) if (op.path === 'settings/workerOrder') this.state.settings.workerOrder = op.value; },
         onChange(fn) { this.changed = fn; },
         agent: {
           options() { return Promise.resolve({ ok: true, providers: ['codex', 'claude', 'cursor'].map(id => ({ id, available: true })), models: {} }); },
@@ -68,6 +69,25 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     await tip.getByText(/Weekly: 50% used/).waitFor();
     await page.locator('#workersBtn').click();
     assert.equal(await page.locator('#workersPop .board-quota').count(), 0);
+    const workerNames = () => page.locator('#workersPop .wrow .nm').allTextContents();
+    assert.deepEqual(await workerNames(), ['Sol', 'Luna']);
+    assert.equal(await page.getByRole('button', { name: 'Move Sol up', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: 'Move Luna up', exact: true }).click();
+    assert.deepEqual(await workerNames(), ['Luna', 'Sol']);
+    assert.equal(await page.locator('#workersPop .wedit').count(), 0);
+    assert.deepEqual(await page.evaluate(() => (window as any).scribe.state.settings.workerOrder), ['b', 'a']);
+    await page.locator('#workersBtn').click();
+    await page.locator('#workersBtn').click();
+    assert.deepEqual(await workerNames(), ['Luna', 'Sol']);
+    await page.getByRole('button', { name: 'Move Luna down', exact: true }).click();
+    assert.deepEqual(await workerNames(), ['Sol', 'Luna']);
+    await page.evaluate(() => {
+      const scribe = (window as any).scribe;
+      scribe.state.settings.workerOrder = ['missing', 'b', 'b'];
+      scribe.state.settings.workers.c = { name: 'New worker', color: '#ffffff' };
+      scribe.changed();
+    });
+    assert.deepEqual(await workerNames(), ['Luna', 'Sol', 'New worker']);
     await page.evaluate(() => (window as any).scribe.agent.changedLimits({ codex: { at: Date.now(), ordinaryUsageAllowed: true,
       windows: [{ id: 'codex:codex:primary', label: '5-hour', utilization: 0.25, resetsAt: Date.now() + 3600000 }] } }));
     await codex.getByText('25%').waitFor();
