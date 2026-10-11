@@ -3626,8 +3626,8 @@ html.tight-small .agent-full {
   pointer-events: none;
 }
 
-.agent-dock.busy.expanded .dock-sweep,
-.agent-dock.busy .dock-out:has(> .dock-feed:not(:empty)) .dock-sweep {
+.agent-dock.shown.busy.expanded .dock-sweep,
+.agent-dock.shown.busy .dock-out:has(> .dock-feed:not(:empty)) .dock-sweep {
   opacity: 1;
 }
 
@@ -3639,6 +3639,11 @@ html.tight-small .agent-full {
   width: 60%;
   background: linear-gradient(90deg, transparent, var(--dock-sweep-palette, var(--ag-live) 50%), transparent);
   opacity: 0.8;
+}
+
+/* Opacity and visibility alone do not stop an infinite CSS animation. */
+.agent-dock.shown.busy.expanded .dock-sweep::before,
+.agent-dock.shown.busy .dock-out:has(> .dock-feed:not(:empty)) .dock-sweep::before {
   animation: dock-sweep 4.6s ease-in-out infinite;
 }
 
