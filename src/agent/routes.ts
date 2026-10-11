@@ -11,8 +11,9 @@ import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYT
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
 import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
-import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, setServerEnabled, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey } from "./prefs.js";
+import { copySkill, createSkill, readHarnessFile, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
 import { refreshSearchIndex, searchIndex } from "../search/service.js";
@@ -166,6 +167,17 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // One server's switch on the harness view: off for a workspace alone, or where the server is defined.
+  router.put(
+    "/mcp/enabled",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      if (typeof body.name !== "string" || !body.name) throw new Error("name is required");
+      writeMcpFile(setServerEnabled(writableMcpFile(), body.name, typeof body.cwd === "string" && body.cwd ? body.cwd : null, body.on === true));
+      return mcpView();
+    })
+  );
+
   router.get(
     "/mcp/import",
     wrap((req) => {
@@ -247,7 +259,7 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
-  // The agent harness view (#456): what chats start with and how the stored threads used it. Read-only.
+  // The agent harness view (#456): what chats start with and how the stored threads used it.
   router.get(
     "/harness/stats",
     wrap((req) => {
@@ -269,7 +281,39 @@ export function agentRouter(host: AgentHost): express.Router {
       return { measure: await host.harnessMeasure({ ...threadPatch(body), ...(body.scope ? { scope: parseScope(body.scope) } : {}) }, body.plain === true) };
     })
   );
-  router.get("/harness/skills", wrap((req) => ({ skills: host.skills(typeof req.query.cwd === "string" && req.query.cwd ? req.query.cwd : null) })));
+  router.get("/harness/skills", wrap((req) => host.skills(typeof req.query.cwd === "string" && req.query.cwd ? req.query.cwd : null)));
+
+  // What the view changes (#495): skills in the providers' folders, and the instruction files they load.
+  const workspaceOf = (value: unknown) => ({ workspace: typeof value === "string" && value ? value : null });
+  router.post(
+    "/harness/skills",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return createSkill(String(body.folder ?? ""), String(body.name ?? ""), String(body.description ?? ""), workspaceOf(body.cwd));
+    })
+  );
+  router.post(
+    "/harness/skills/copy",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return copySkill(String(body.file ?? ""), String(body.folder ?? ""), workspaceOf(body.cwd));
+    })
+  );
+  router.post(
+    "/harness/skills/remove",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return removeSkill(String(body.file ?? ""), workspaceOf(body.cwd));
+    })
+  );
+  router.get("/harness/file", wrap((req) => readHarnessFile(String(req.query.path ?? ""), workspaceOf(req.query.cwd))));
+  router.put(
+    "/harness/file",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return writeHarnessFile(String(body.path ?? ""), body.text as string, workspaceOf(body.cwd));
+    })
+  );
   router.post(
     "/harness/mcp/probe",
     wrap((req) => {

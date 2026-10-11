@@ -47,7 +47,7 @@ import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRef
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
-import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
+import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
 import { pageOwned } from "./threadList.js";
@@ -978,13 +978,16 @@ export class AgentHost {
       target: server.url ?? [server.command, ...(server.args ?? [])].join(" "),
       approve: server.approve ?? "ask",
       modes: serverModes(server),
+      enabled: server.enabled !== false,
+      // In Scribe's own list, so the view can change it.
+      editable: true,
       active: active.has(name),
       ...(active.has(name) ? {} : { why: server.enabled === false ? "Turned off" : `Not given to ${thread.mode === "board" ? "Pages" : thread.mode} threads` }),
     }));
     // Keeper inherited from Claude Code's config: in no Scribe layer, but the thread gets it.
     for (const server of active.values()) {
       if (!servers.some((row) => row.name === server.name)) {
-        servers.push({ name: server.name, layer: server.layer, target: server.url ?? [server.command, ...server.args].join(" "), approve: server.approve, modes: ["code"], active: true });
+        servers.push({ name: server.name, layer: server.layer, target: server.url ?? [server.command, ...server.args].join(" "), approve: server.approve, modes: ["code"], enabled: true, editable: false, active: true });
       }
     }
     const leftOut = thread.provider === "claude" ? claudeOwnServers(workspace).filter((name) => !active.has(name)) : [];
@@ -1017,8 +1020,8 @@ export class AgentHost {
     return (this.providers.claude as ClaudeProvider).measureContext(thread, threadInstructions(thread, this.scopeInfo(thread)), this.ctx, plain);
   }
 
-  skills(cwd: string | null): SkillInfo[] {
-    return discoverSkills(cwd);
+  skills(cwd: string | null): { skills: SkillInfo[]; folders: ReturnType<typeof skillFolders> } {
+    return { skills: discoverSkills(cwd), folders: skillFolders(cwd) };
   }
 
   /** Start a thread's provider session ahead of a message. Nothing happens while it runs. */

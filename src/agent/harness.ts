@@ -11,7 +11,8 @@ import type { Item, ProviderId, Thread, ThreadMode, Turn, Usage } from "./types.
 
 /**
  * The agent harness view (#456): what Scribe gives each chat at its start (instructions, tools, skills,
- * MCP servers) and what the stored threads say about how it is used. Everything here is read-only.
+ * MCP servers) and what the stored threads say about how it is used. Everything here is read-only;
+ * harnessFiles.ts holds what the view changes.
  */
 
 /** Rough token count for text Scribe cannot count with a provider's tokenizer: four characters a token. */
@@ -132,6 +133,8 @@ export type SkillInfo = {
   description: string;
   /** The SKILL.md file. */
   file: string;
+  /** The folder of skills it was found in. */
+  folder: string;
   /** "user" for a provider's own folder, "workspace" for one in the project. */
   scope: "user" | "workspace";
   /** Providers whose threads look in this folder. */
@@ -222,6 +225,7 @@ export function discoverSkills(workspace: string | null, home = os.homedir(), da
         name,
         description,
         file,
+        folder: folder.dir,
         scope: folder.scope,
         providers: folder.providers,
         indexTokens: estimateTokens(name.length + description.length),

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { bridgeAsks } from "./mcpBridge.js";
-import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, resolveServer, serversForThread, writeMcpFile } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, resolveServer, serversForThread, setServerEnabled, writeMcpFile } from "./mcpConfig.js";
 
 const thread = (mode: "code" | "ask" | "plan" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
 
@@ -240,4 +240,31 @@ test("claudeOwnServers names what Claude Code would load in a workspace", () => 
   assert.deepEqual(claudeOwnServers(ws, home).sort(), ["keeper", "local", "shared"]);
   assert.deepEqual(claudeOwnServers(null, home), ["keeper"]);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test("a server's switch turns it off for one workspace, or where it is defined", () => {
+  const file = cleanFile({
+    mcpServers: { github: { command: "gh" }, off: { command: "x", enabled: false } },
+    workspaces: { "/work/app": { path: "/work/app", mcpServers: { local: { command: "l" } } } },
+  });
+  const names = (f: typeof file, cwd: string | null) => serversForThread(thread("code", cwd), f, null).map((s) => s.name).sort();
+
+  // From Everywhere, seen in a workspace: off there alone.
+  const here = cleanFile(setServerEnabled(file, "github", "/work/app/sub", false));
+  assert.deepEqual(here.workspaces["/work/app/sub"].mcpServers, { github: { enabled: false } });
+  assert.deepEqual(names(here, "/work/app/sub"), ["local"]);
+  assert.deepEqual(names(here, "/work/app"), ["github", "local"]);
+  // On again drops the override, and an empty layer with it.
+  const back = cleanFile(setServerEnabled(here, "github", "/work/app/sub", true));
+  assert.deepEqual(back, file);
+
+  // With no workspace, or for a workspace's own server, the entry itself changes.
+  assert.equal(setServerEnabled(file, "github", null, false).mcpServers.github.enabled, false);
+  assert.deepEqual(setServerEnabled(file, "off", null, true).mcpServers.off, { command: "x" });
+  const local = setServerEnabled(file, "local", "/work/app", false);
+  assert.equal(local.workspaces["/work/app"].mcpServers.local.enabled, false);
+  assert.deepEqual(names(local, "/work/app"), ["github"]);
+  assert.throws(() => setServerEnabled(file, "missing", null, true), /not found/);
+  // The file passed in is left as it was.
+  assert.equal(file.mcpServers.github.enabled, undefined);
 });

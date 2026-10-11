@@ -200,6 +200,38 @@ export function mergedServers(file: McpFile, dir: string | null): Array<{ name: 
   return [...out.values()];
 }
 
+/**
+ * Turn a server on or off as the harness view shows it for dir. A server from Everywhere is turned
+ * off for dir alone when there is one; otherwise the change is made where the server is defined.
+ */
+export function setServerEnabled(file: McpFile, name: string, dir: string | null, on: boolean): McpFile {
+  const entry = mergedServers(file, dir).find((row) => row.name === name);
+  if (!entry) throw new Error(`MCP server not found: ${name}`);
+  const next: McpFile = {
+    mcpServers: { ...file.mcpServers },
+    workspaces: Object.fromEntries(Object.entries(file.workspaces).map(([key, layer]) => [key, { ...layer, mcpServers: { ...layer.mcpServers } }])),
+  };
+  const own = entry.layer === "global" ? next.mcpServers : next.workspaces[workspaceKey(entry.layer)].mcpServers;
+  if (on) {
+    // Workspace entries that only switch it off.
+    for (const layer of layersFor(next, dir)) {
+      const override = layer.mcpServers[name];
+      if (override && !override.command && !override.url) delete layer.mcpServers[name];
+    }
+    if (own[name]?.enabled === false) {
+      const { enabled: _off, ...rest } = own[name];
+      own[name] = rest;
+    }
+  } else if (dir && entry.layer === "global") {
+    const key = workspaceKey(dir);
+    next.workspaces[key] ??= { path: dir, mcpServers: {} };
+    next.workspaces[key].mcpServers[name] = { enabled: false };
+  } else {
+    own[name] = { ...own[name], enabled: false };
+  }
+  return next;
+}
+
 export function serverModes(server: McpServer): ThreadMode[] {
   return server.modes ?? DEFAULT_MODES;
 }
