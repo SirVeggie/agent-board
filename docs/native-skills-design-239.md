@@ -22,7 +22,7 @@ The bundled scribe documentation is served by scribe_docs; it is not a general c
 - Editor: trigger description, Markdown instructions and preview, supporting files. Validate frontmatter and show import contents before saving.
 - External skills: view source and Copy to Scribe; initially no editing provider or repository files in place.
 - Thread picker and worker picker use stable skill IDs. Show why a skill is unavailable (disabled, scope, provider or mode).
-- First version scopes: explicitly enabled global skills, workspace assignments, thread selections and worker selections. Resolve workspace identity from the original checkout, not each temporary worktree path.
+- Recommended first version scopes: explicitly enabled global skills, thread selections and worker selections. Add workspace assignments next; resolve workspace identity from the original checkout, not each temporary worktree path.
 - Built-in Scribe documentation stays versioned with the app; offer a copy for customization while keeping current page/API rules discoverable.
 - Defer ZIP import, agent writes, rich version history and sharing until basic folder support works.
 
