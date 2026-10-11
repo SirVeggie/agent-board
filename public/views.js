@@ -1411,12 +1411,29 @@ window.createViews = function createViews(host) {
   function hoverPane(pane) {
     for (const id of PANES) {
       paneEls[id].head.classList.toggle("pointer-in", id === pane);
+      if (id !== pane) paneEls[id].head.classList.remove("pointer-near");
+    }
+  }
+  // Reveal blank-page headers from nearby content without covering that content with a hit area.
+  function hoverBlankHeaders(event) {
+    for (const id of PANES) {
+      const head = paneEls[id].head;
+      if (head.hidden || !head.classList.contains("blank")) {
+        head.classList.remove("pointer-near");
+        continue;
+      }
+      const box = head.getBoundingClientRect();
+      const near = event.clientX >= box.left && event.clientX < box.right &&
+        event.clientY >= box.top && event.clientY < box.bottom + 48;
+      head.classList.toggle("pointer-near", near);
     }
   }
   mainEl.addEventListener("pointerover", (event) => {
     const paneEl = event.target instanceof Element ? event.target.closest("[data-pane]") : null;
     hoverPane(paneEl ? paneEl.dataset.pane : "");
+    hoverBlankHeaders(event);
   });
+  mainEl.addEventListener("pointermove", hoverBlankHeaders);
   mainEl.addEventListener("pointerleave", () => hoverPane(""));
   // Sites and embedded pages have no bridge to report a press: the frame taking focus says it.
   window.addEventListener("blur", () => {
