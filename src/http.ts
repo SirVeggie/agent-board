@@ -18,7 +18,8 @@ import { log } from "./log.js";
 import { checkPermission, isPermissionValue, permissionViews } from "./pagePermissions.js";
 import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
-import { locationLabel, qualityLabel } from "./pageSearch.js";
+import { locationLabel, matchRecord, qualityLabel } from "./pageSearch.js";
+import { chunkPage } from "./search/chunker.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
 import { isBlankPage, isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import type { SpacesView } from "./spaces.js";
@@ -232,6 +233,16 @@ export async function startHttp(): Promise<http.Server> {
     });
   });
 
+  /** A match in a template page's data: the card or item it sits in, for the palette to name and open (#355). */
+  const recordHit = (tab: Tab, location: string | null, query: string): { anchor?: string; matchLabel?: string } => {
+    const declaration = location === "data" ? store.searchDeclaration(tab) : undefined;
+    if (!declaration) {
+      return {};
+    }
+    const record = matchRecord(chunkPage(tab, null, declaration).filter((chunk) => chunk.kind === "record"), query);
+    return record ? { anchor: `record=${encodeURIComponent(record.anchor)}`, matchLabel: record.label } : {};
+  };
+
   app.get("/api/search", (req, res) => {
     const query = typeof req.query.query === "string" ? req.query.query : "";
     const limit = optionalNumber(req.query.limit);
@@ -239,6 +250,7 @@ export async function startHttp(): Promise<http.Server> {
     res.json({
       tabs: result.hits.map((hit) => ({
         ...libraryMeta(hit.tab),
+        ...recordHit(hit.tab, hit.location, query),
         location: hit.location,
         quality: hit.quality,
         locationLabel: hit.location ? locationLabel(hit.location) : null,

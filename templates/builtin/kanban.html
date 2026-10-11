@@ -3923,7 +3923,7 @@
   var PAGE_LINK_RES = [
     /\[\[\s*(?:(tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
     /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|(scribe:[^)\s]+))\)/g,
-    /(^|[^\w\/#:-])(scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?![\w-])/g
+    /(^|[^\w\/#:-])((?:scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?:#[\w=&%.:-]*\w)?)(?![\w-])/g
   ];
   function pageLinkHtml(target, label, mode) {
     return '<a href="#" class="page-link" data-scribe-open="' + escapeHtml(target) + '"' +
@@ -6372,6 +6372,12 @@
   });
   ensureShape();
   render();
+  // A link to one card (scribe:board-key#card=12, or a search hit): open its dialog.
+  if (scribe.onOpen) scribe.onOpen(function (request) {
+    var num = Number(request.args.card || request.args.record);
+    var target = num ? byNum(num) : null;
+    if (target && target.id !== openId) openCard(target.id);
+  });
   if (AGENT_MODE) loadWorkerLimits();
 })();
 </script>

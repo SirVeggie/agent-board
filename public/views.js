@@ -261,6 +261,13 @@ window.createViews = function createViews(host) {
     return slug ? `scribe:${slug}` : "";
   }
 
+  /** "key#anchor" as [key, anchor]. A URL keeps its hash. */
+  function splitAnchor(raw) {
+    const text = String(raw || "").trim();
+    const at = text.indexOf("#");
+    return at > 0 && !externalUrl(text) ? [text.slice(0, at), text.slice(at + 1).replace(/\|auto$/i, "")] : [text, ""];
+  }
+
   function findPage(raw) {
     const text = String(raw || "").trim().replace(/\|auto$/i, "");
     if (!text) {
@@ -1177,6 +1184,10 @@ window.createViews = function createViews(host) {
         return { ok: true, mode: "browser", url: href };
       }
     } else {
+      // "key#anchor": a place in the page (an element id), or open arguments such as "card=12" for the page's scribe.onOpen.
+      const [name, hash] = splitAnchor(raw);
+      raw = name;
+      anchor = anchor || hash;
       const page = findPage(String(raw || "").replace(/\|auto$/, "").trim());
       if (!page) {
         const trashed = await inTrash(String(raw || "").trim());
@@ -1291,7 +1302,7 @@ window.createViews = function createViews(host) {
       if (!key) {
         continue;
       }
-      const page = findPage(key);
+      const page = findPage(splitAnchor(key)[0]);
       pages[key] = page ? { id: page.id, title: page.title, open: host.tabs().some((tab) => tab.id === page.id) } : null;
     }
     return pages;

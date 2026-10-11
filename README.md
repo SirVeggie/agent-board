@@ -153,6 +153,7 @@ scribe.state                  // shared state, readable synchronously on load
 scribe.set({ todos })         // replace top-level keys; arrays of items with ids go out as item changes
 scribe.update(ops)            // change one item directly: [{ op: "merge", path: "todos/t_1", value: { done: true } }]
 scribe.onChange(render)       // an agent or another viewer changed something
+scribe.onOpen(({ anchor, args }) => …)  // a link (key#card=12) or search hit asked for a place in this page
 scribe.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
 scribe.local / scribe.setLocal({ filter })   // this viewer's own state: filters, open panels, drafts
 scribe.signal("submitted", { item: "t_1" })  // log an event agents can wait on
@@ -185,6 +186,7 @@ Pages can open other Scribe pages and websites as a tab, a **peek** (a fixed car
 ```html
 <a data-scribe-open="release-notes">Release notes</a>                      <!-- Settings default (Navigate) -->
 <a data-scribe-open="release-notes#risks" data-scribe-mode="peek">Risks</a> <!-- key#anchor scrolls the target -->
+<a data-scribe-open="roadmap#card=12">Card 12</a>                          <!-- key#name=value opens a record: the page gets it in scribe.onOpen -->
 <a href="https://docs.rs/tauri" data-scribe-mode="split">Tauri docs</a>    <!-- a plain href opens the browser -->
 ```
 

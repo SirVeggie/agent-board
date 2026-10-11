@@ -11,6 +11,7 @@ import { createStateOps } from "./stateOps.js";
  * - `scribe.action(name, args)`: the page template's actions.
  * - `scribe.reply(data, { summary })`: a form's answers to the page its agent wired it to (replyTo).
  * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
+ *   `scribe.onOpen` for a link that names a record in the page (`key#card=12`),
  *   `scribe.preview` for Scribe's file viewer, and `scribe.agent` for chat threads the page starts.
  *
  * Boot data is inlined ahead of this script so `scribe.state` is readable synchronously.
@@ -859,6 +860,55 @@ export const BOARD_BRIDGE_JS = `
     }
   }
 
+  /**
+   * What a link asked this page to show: "card=12" (or "a=1&b=2") is open arguments for scribe.onOpen, anything
+   * else an element id to scroll to. A request that comes before the page listens waits for its first listener.
+   */
+  var openListeners = [];
+  var pendingOpen = null;
+  function openRequest(anchor) {
+    var name = anchor == null ? "" : String(anchor).replace(/^#/, "");
+    var args = {};
+    if (name.indexOf("=") > 0) {
+      name.split("&").forEach(function (part) {
+        var eq = part.indexOf("=");
+        var key = eq > 0 ? part.slice(0, eq) : "";
+        if (key) {
+          try {
+            args[key] = decodeURIComponent(part.slice(eq + 1));
+          } catch (err) {
+            args[key] = part.slice(eq + 1);
+          }
+        }
+      });
+    }
+    return { anchor: name, args: args };
+  }
+  function deliverOpen(request) {
+    openListeners.slice().forEach(function (fn) {
+      try {
+        fn(request);
+      } catch (err) {
+        console.error("[scribe] onOpen handler failed", err);
+      }
+    });
+  }
+  function onOpen(fn) {
+    openListeners.push(fn);
+    if (pendingOpen) {
+      var request = pendingOpen;
+      pendingOpen = null;
+      Promise.resolve().then(function () {
+        deliverOpen(request);
+      });
+    }
+    return function () {
+      openListeners = openListeners.filter(function (item) {
+        return item !== fn;
+      });
+    };
+  }
+
   window.addEventListener("message", function (event) {
     if (event.source !== window.parent) {
       return;
@@ -872,7 +922,15 @@ export const BOARD_BRIDGE_JS = `
       delete linkRequests[data.reqId];
       done(data.result || { ok: false, error: "unknown" });
     } else if (data.type === "scribe-scroll") {
-      scrollToAnchor(data.anchor);
+      var request = openRequest(data.anchor);
+      if (!Object.keys(request.args).length) {
+        scrollToAnchor(request.anchor);
+      }
+      if (openListeners.length) {
+        deliverOpen(request);
+      } else {
+        pendingOpen = request;
+      }
     } else if (data.type === "scribe-pages-changed") {
       recheckLinks();
     } else if (data.type === "scribe-agent-event") {
@@ -1358,6 +1416,7 @@ export const BOARD_BRIDGE_JS = `
       }
     },
     reportIncompatible: reportIncompatible,
+    onOpen: onOpen,
     onChange: function (fn) {
       listeners.push(fn);
       return function () {

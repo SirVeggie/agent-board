@@ -219,6 +219,31 @@ function matchField(
   return null;
 }
 
+/**
+ * The record (a kanban card, a todo item) a data match sits in, so the hit can open it: the one whose text
+ * matches the query best. Null when the words are spread over several records or sit outside them.
+ */
+export function matchRecord(
+  records: Array<{ anchor: string | null; label: string; text: string }>,
+  query: string
+): { anchor: string; label: string } | null {
+  const q = query.trim();
+  const parts = queryParts(q);
+  let best: { anchor: string; label: string; rank: number; matched: number } | null = null;
+  for (const record of records) {
+    const match = record.anchor ? matchField(normalize(`${record.label}
+${record.text}`), q, parts) : null;
+    if (!match || !record.anchor || match.quality === "partial") {
+      continue;
+    }
+    const rank = QUALITY_RANK[match.quality];
+    if (!best || rank < best.rank || (rank === best.rank && match.matchedParts > best.matched)) {
+      best = { anchor: record.anchor, label: record.label, rank, matched: match.matchedParts };
+    }
+  }
+  return best ? { anchor: best.anchor, label: best.label } : null;
+}
+
 function partsInOrder(hay: string, parts: string[]): boolean {
   let from = 0;
   for (const part of parts) {

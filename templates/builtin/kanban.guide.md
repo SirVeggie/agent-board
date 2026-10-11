@@ -64,7 +64,7 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?, workerInstructions?,    
 
 - `description` and comments are markdown: headings, lists, quotes, code, links and GFM tables (`| a | b |` over a `|---|---|` row). `#12` links to card 12. `![alt](#img-<image id>)` shows one of the card's images inline.
 - comments `by` is `"user"` for the person, or the assignee/worker name that posted it. Older comments may still say `"agent"`.
-- Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. Use keys you created or found with `page_list` / `library_search`.
+- Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. A card on another board (or this one, from a chat reply or another page) is `scribe:board-key#card=12`: `[[scribe:board-key#card=12|#12 on the other board]]` opens that card's dialog. Use keys you created or found with `page_list` / `library_search`.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
 - `thread` is the in-app agent thread that last claimed the card (set by `claim`, kept after `finish`). The card's right-click menu opens it.
 - `usage` is the last worker chat's token totals (input, output, rounds), written when that chat ends. Leave it alone; `list` includes it so cost outliers are easy to spot.

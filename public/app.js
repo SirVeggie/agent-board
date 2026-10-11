@@ -4219,16 +4219,25 @@
   }
 
   /**
+   * Where a hit opens its page. A section opens at its heading: by id when it has one, else by its place among
+   * the page's h1 to h4. A record (a kanban card, a todo item) is passed to the page's scribe.onOpen.
+   */
+  function hitAnchor(at) {
+    if (at.kind === "record") {
+      return at.anchor ? `record=${encodeURIComponent(at.anchor)}` : "";
+    }
+    return at.kind === "section" ? at.headingId || (Number(at.anchor) > 0 ? `scribe-section:${at.anchor}` : "") : "";
+  }
+
+  /**
    * Palette rows for semantic hits: the page, with what matched (section heading or "#335 Card title") and a snippet.
    * An image hit shows its thumbnail and the card, item or section it sits on.
    */
   function semanticRows(hits) {
     return hits.map((hit) => {
       const tab = findAnyTab(hit.id) || { id: hit.id, title: hit.title, folderPath: hit.folder };
-      // A section opens at its heading: by id when it has one, else by its place among the page's h1 to h4.
       const at = hit.kind === "image" ? hit.owner || {} : hit;
-      const anchor =
-        at.kind === "section" ? at.headingId || (Number(at.anchor) > 0 ? `scribe-section:${at.anchor}` : "") : "";
+      const anchor = hitAnchor(at);
       return {
         ...tab,
         open: state.tabs.some((item) => item.id === hit.id),
@@ -4471,8 +4480,7 @@
       const tab = findAnyTab(hit.id);
       if (tab) {
         // With semantic search on, a hit names the section or card the model picked.
-        const anchor =
-          hit.kind === "section" ? hit.headingId || (Number(hit.anchor) > 0 ? `scribe-section:${hit.anchor}` : "") : "";
+        const anchor = hitAnchor(hit);
         const matchLabel = hit.label && hit.label !== tab.title ? hit.label : "";
         rows.push({ ...tab, open: state.tabs.some((item) => item.id === tab.id), snippet: hit.reason, matchLabel, anchor });
       }
@@ -4788,7 +4796,7 @@
     }
     closePalette();
     if (tab.anchor) {
-      // A section found by meaning: open the page scrolled to it.
+      // A section, card or item that matched: open the page at it.
       views.open(tab.id, mode === "peek" || mode === "split" ? mode : "tab", { anchor: tab.anchor });
       return;
     }

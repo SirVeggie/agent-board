@@ -582,7 +582,7 @@ export async function startMcp(): Promise<void> {
           returned: hits.length,
           note:
             (hits.length
-              ? "Ranked by meaning, best first; only hits close to the best one are listed, at most three per page. A record's anchor is its id in the page (the card number on a kanban board)."
+              ? "Ranked by meaning, best first; only hits close to the best one are listed, at most three per page. A record's anchor is its id in the page (the card number on a kanban board); link to it as key#record=<anchor>, which opens that card or item."
               : "Nothing fits by meaning.") + partial,
         });
       }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { locationLabel, qualityLabel, searchPages, type PageSearchHit } from "./pageSearch.js";
+import { locationLabel, matchRecord, qualityLabel, searchPages, type PageSearchHit } from "./pageSearch.js";
 import type { Tab } from "./types.js";
 
 function tab(over: Partial<Tab> & Pick<Tab, "title">): Tab {
@@ -159,4 +159,17 @@ test("labels cover every location and quality", () => {
   assert.equal(qualityLabel("ordered", 2, 2), "In order");
   assert.equal(qualityLabel("all", 2, 2), "All terms");
   assert.equal(qualityLabel("partial", 2, 4), "Partial 2/4");
+});
+
+test("a data match names the record it sits in", () => {
+  const records = [
+    { anchor: "3", label: "#3 Fix the tab strip", text: "Tabs jump when one closes" },
+    { anchor: "7", label: "#7 Search by meaning", text: "Open a card from a search hit" },
+    { anchor: null, label: "Board", text: "search hit" },
+  ];
+  assert.deepEqual(matchRecord(records, "search hit"), { anchor: "7", label: "#7 Search by meaning" });
+  assert.deepEqual(matchRecord(records, "strip fix"), { anchor: "3", label: "#3 Fix the tab strip" });
+  // Words spread over two cards, or half of them missing, name no card.
+  assert.equal(matchRecord(records, "tabs meaning"), null);
+  assert.equal(matchRecord(records, "nothing here"), null);
 });

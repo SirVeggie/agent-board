@@ -1592,7 +1592,7 @@
   var PAGE_LINK_RES = [
     /\[\[\s*(?:(tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
     /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|(scribe:[^)\s]+))\)/g,
-    /(^|[^\w\/#:-])(scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?![\w-])/g
+    /(^|[^\w\/#:-])((?:scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?:#[\w=&%.:-]*\w)?)(?![\w-])/g
   ];
   function pageLinkHtml(target, label, mode) {
     return '<a href="#" class="page-link" data-scribe-open="' + escapeHtml(target) + '"' +
@@ -1924,6 +1924,17 @@
   buildColumns();
   render();
   input.focus();
+  // A link to one item (scribe:page-key#item=<id>, or a search hit): open it.
+  if (scribe.onOpen) scribe.onOpen(function (request) {
+    var id = request.args.item || request.args.record;
+    var found = id && items().some(function (item) { return item.id === id; });
+    if (!found || scribe.local.openId === id) return;
+    var rows = document.querySelectorAll(".item");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute("data-id") === id) rows[i].scrollIntoView({ block: "center" });
+    }
+    openModal(id);
+  });
 })();
 </script>
 </body>

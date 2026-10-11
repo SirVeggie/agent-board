@@ -226,10 +226,12 @@ Rules:
 
 - Link by **key**: the keys you chose in `page_show`, or ones from `page_list` / `library_search`. Never guess a key. A link to a key with no page is struck through, and fixes itself as soon as a page with that key exists, so you may show a hub page before its detail pages as long as you create them in the same turn.
 - `#anchor` scrolls the target to the element with that `id`. Give the target the id.
+- `#name=value` opens a record inside the target instead of scrolling: `scribe:some-board#card=12` opens card 12 of a Kanban board, `scribe:some-list#item=<item id>` an item of a Todo list. It works as a tab, peek or split, and when the page is already open. Search hits for a card or item open the same way. A page of your own takes these with `scribe.onOpen`; a page without it ignores them.
 - A plain `href` to a website opens the browser. `data-scribe-mode="peek"` or `"split"` shows the site inside Scribe, but many sites refuse to be framed (GitHub, Google, most logins) and then show an Open in browser card instead. Sites the user is signed in to may appear signed out. Use peek or split for docs and references, not for apps.
 - Do not use `target="_blank"` or scripts for navigation; the link attributes cover it. `scribe.open(target, { mode, anchor })` is the script form for a click handler (it resolves to `{ ok, mode, id }` or `{ ok: false, error: "not_found" | "in_trash" }`). It refuses calls outside a click or key press, so a page can never switch the user's view on load.
 - `scribe.resolve([keys])` returns `{ key: { id, title, open } | null }`, for a page that builds its link list from state.
 - The built-in Todo list, Kanban board and Markdown note link pages in titles, descriptions, and comments with `[[scribe:key]]` (shows the page's title), `[[scribe:key|text]]`, `[[peek:scribe:key]]`, or `[[split:scribe:key]]`, and `[text](scribe:key)` in markdown. A key or page id written on its own links too. Write these in their state, not raw HTML.
+- `scribe.onOpen(fn)` calls `fn({ anchor, args })` each time a link or a search hit opens this page with a `#…` part, also when the page is already open, and once for a request that came before the page listened. `args` holds the `name=value` pairs (`#card=12` gives `{ card: "12" }`; several are joined with `&`), and is empty for a plain `#id`, which Scribe has already scrolled to. A search hit for one of the template's `search.records` comes as `args.record`, holding that record's `anchor` field, so accept it beside your own name. It returns a function that stops listening.
 - In chat replies, link a page as `[[scribe:key]]` or `[label](scribe:key)`.
 - You cannot open a peek or split yourself: `page_show` / `page_open` focus a tab. Links are for the user to follow.
 
@@ -335,6 +337,7 @@ scribe.state                      // shared state, available synchronously
 scribe.set({ todos })             // replace top-level keys; arrays of items with ids are sent as item changes
 scribe.update([{ op: "merge", path: "todos/t_1", value: { done: true } }])   // change one item directly with ops
 scribe.onChange(render)           // someone else changed the state; not fired for your own writes
+scribe.onOpen(({ anchor, args }) => showItem(args.item || args.record))   // a link or search hit asked for a place in this page
 scribe.bind(el, "notes")          // two-way bind an input, textarea, or checkbox to a shared key
 scribe.local                      // this viewer's own state: filters, open panels, drafts
 scribe.setLocal({ filter: "mine" })
