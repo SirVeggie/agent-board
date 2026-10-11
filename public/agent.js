@@ -7843,6 +7843,8 @@
     view: null,
     scope: "global",
     panel: null,
+    candidates: [],
+    discoveryError: null,
     close: () => {},
     async open() {
       const { panel, close } = modal("ag-mcp");
@@ -7850,6 +7852,8 @@
       this.close = close;
       this.current = targetView().settings().cwd || null;
       this.scope = "global";
+      this.candidates = [];
+      this.discoveryError = null;
       panel.append(el("h2", "ag-modal-title", "MCP servers"), el("div", "ag-muted", "Loading…"));
       try {
         this.view = await api("GET", "/mcp");
@@ -7858,11 +7862,22 @@
         return;
       }
       this.render();
+      try {
+        this.candidates = (await this.findImports()).filter((c) => c.source === "claude");
+      } catch (err) {
+        this.discoveryError = err.message;
+      }
+      this.render();
+    },
+    async findImports() {
+      const query = this.workspaces().map((d) => `cwd=${encodeURIComponent(d)}`).join("&");
+      return (await api("GET", `/mcp/import${query ? `?${query}` : ""}`)).candidates || [];
     },
     /** Workspaces to choose from: the current one, recent ones, and any with servers of their own. */
     workspaces() {
       const layers = Object.values(this.view.file.workspaces).map((w) => w.path);
-      const dirs = [this.current, ...(prefs().recentWorkspaces || []), ...layers].filter(Boolean);
+      const discovered = this.candidates.filter((c) => c.scope !== "global").map((c) => c.scope);
+      const dirs = [this.current, ...(prefs().recentWorkspaces || []), ...layers, ...discovered].filter(Boolean);
       const seen = new Set();
       return dirs.filter((dir) => {
         const key = dirKey(dir);
@@ -7912,7 +7927,7 @@
       const body = [
         helpHeading(
           "Servers",
-          "One list for Claude, Cursor and Native threads, in place of each app's own MCP config. Claude threads get only these; Cursor threads still load ~/.cursor/mcp.json as well. A workspace's servers apply in that folder and its subfolders, and replace a server of the same name from Everywhere. Changes apply from a thread's next session."
+          "One list for Claude, Cursor and Native threads, in place of each app's own MCP config. Code chats also inherit Keeper from Claude Code when Scribe has no Keeper entry; Cursor threads still load ~/.cursor/mcp.json as well. A workspace's servers apply in that folder and its subfolders, and replace a server of the same name from Everywhere. Changes apply from a thread's next session."
         ),
         pick,
         list,
@@ -7940,6 +7955,33 @@
           box.append(row);
         }
         if (box.children.length) body.push(helpHeading("From Everywhere", "Turn a server off for this workspace only. It stays on everywhere else."), box);
+      }
+
+      const available = this.candidates.filter((c) =>
+        dirKey(c.scope) === dirKey(this.scope) && !Object.hasOwn(own, c.name));
+      if (available.length || this.discoveryError) {
+        const box = el("div", "ag-mcp-list");
+        if (this.discoveryError) box.append(el("p", "ag-source-error", `Could not check Claude Code's servers: ${this.discoveryError}`));
+        for (const c of available) {
+          const row = el("div", "setting-row ag-mcp-row");
+          const label = el("span", "ag-mcp-label");
+          label.append(el("strong", null, c.name), el("code", "ag-mcp-target", c.file), el("code", "ag-mcp-target", mcpTarget(c.server)));
+          const importButton = button("Import", "ag-btn small", async () => {
+            importButton.disabled = true;
+            try {
+              this.view = await api("POST", "/mcp/import", { items: [{ scope: c.scope, name: c.name, server: { ...c.server, approve: "ask" } }] });
+              this.render();
+              notice(`Imported ${c.name}. It asks before each call unless the chat has full access.`);
+            } catch (err) {
+              notice(err.message);
+              importButton.disabled = false;
+            }
+          });
+          importButton.setAttribute("aria-label", `Import ${c.name} from ${c.file}`);
+          row.append(label, importButton);
+          box.append(row);
+        }
+        body.push(helpHeading("Found in Claude Code", "These servers are not in Scribe's list for this scope. Import copies a server here and leaves Claude Code's file unchanged. Imported servers ask before each call, including worker calls, unless the chat has full access; change this in the server's Edit dialog."), box);
       }
 
       const actions = el("div", "ag-modal-actions");
@@ -8195,10 +8237,7 @@
       panel.append(title(), el("div", "ag-muted", "Looking…"));
       let candidates = [];
       try {
-        const query = this.workspaces()
-          .map((d) => `cwd=${encodeURIComponent(d)}`)
-          .join("&");
-        candidates = (await api("GET", `/mcp/import${query ? `?${query}` : ""}`)).candidates || [];
+        candidates = await this.findImports();
       } catch (err) {
         panel.replaceChildren(title(), el("p", "ag-source-error", err.message));
         return;
