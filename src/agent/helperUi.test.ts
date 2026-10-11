@@ -48,6 +48,31 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       view.setThread("parent");
       view.input.value = "Parent draft";
     });
+    // Header icons must be discoverable without seeing their custom hover tips.
+    const parent = page.locator(".ag-view-side");
+    for (const name of ["Thread actions", "Agent settings", "New thread (Ctrl+Shift+K)", "Full window (Ctrl+Shift+L)", "Send (Enter)"]) {
+      assert.equal(await parent.getByRole("button", { name, exact: true }).count(), 1);
+    }
+    const threadActions = parent.getByRole("button", { name: "Thread actions", exact: true });
+    assert.equal(await threadActions.getAttribute("data-tooltip"), "Thread actions");
+    assert.equal(await threadActions.getAttribute("title"), null);
+    // Text and staged text labels keep their visible name, even with a longer tip.
+    await page.evaluate(() => {
+      const { button, icon, el } = (window as any).AgentRender;
+      const fixture = el("div");
+      fixture.id = "button-names";
+      fixture.append(button("Save", "", null, "Save all changes"));
+      const staged = button("", "", null, "Show threads started by workers");
+      staged.append(icon("task"), el("span", null, "Show workers"));
+      const labelled = el("span", null, "Review");
+      labelled.prepend(icon("diff"));
+      fixture.append(staged, button(labelled, "", null, "Review the full diff"));
+      document.body.append(fixture);
+    });
+    for (const name of ["Save", "Show workers", "Review"]) {
+      assert.equal(await page.locator("#button-names").getByRole("button", { name, exact: true }).count(), 1);
+    }
+    await page.locator("#button-names").evaluate(node => node.remove());
     assert.equal(await page.locator(".ag-helper-call .ag-task-badge").textContent(), "working");
     assert.equal(await page.getByRole("button", { name: "Open thread", exact: true }).count(), 0);
     await page.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();

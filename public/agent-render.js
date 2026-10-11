@@ -87,7 +87,9 @@
     else if (label) b.append(label);
     if (title) {
       if (tooltip) b.dataset.tooltip = title;
-      else b.setAttribute("aria-label", title);
+      // Empty labels are often filled with visible text by the caller later.
+      // Only name a supplied icon here; text buttons keep their content name.
+      if (!tooltip || (label && typeof label !== "string" && !label.textContent.trim())) b.setAttribute("aria-label", title);
     }
     if (onClick) b.addEventListener("click", onClick);
     return b;
