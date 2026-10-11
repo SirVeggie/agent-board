@@ -146,6 +146,7 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>) ->
     let board_origin = url.origin();
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title(title)
+        .zoom_hotkeys_enabled(true)
         .disable_drag_drop_handler()
         .inner_size(CHILD_SIZE.0, CHILD_SIZE.1)
         .min_inner_size(320.0, 240.0)
@@ -277,6 +278,7 @@ fn main() {
             }
             let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
                 .title("Scribe")
+                .zoom_hotkeys_enabled(true)
                 // Let the board's HTML drop handlers receive files on Windows.
                 .disable_drag_drop_handler()
                 .inner_size(1280.0, 800.0)
