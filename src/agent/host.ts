@@ -1271,6 +1271,19 @@ export class AgentHost {
     return list;
   }
 
+  /**
+   * The message as typed, when the user typed one of the provider's slash commands (/compact, /model).
+   * The provider only runs a command that starts the message, so it goes without the context, guides
+   * and files that promptText puts before the text; a guide left out here goes with the next message.
+   * Null for any other message.
+   */
+  private commandText(thread: Thread, msg: QueuedMessage): string | null {
+    if (msg.from || msg.card || thread.rewind?.recap) return null;
+    const name = /^\/([\w:.-]+)(?=\s|$)/.exec(msg.text)?.[1];
+    if (!name || !this.providerCommands(thread.provider).some((cmd) => cmd.name === name)) return null;
+    return msg.text;
+  }
+
   private rememberCommands(provider: ProviderId, list: SlashCommand[]): void {
     const prev = this.commandCache.get(provider);
     this.commandCache.set(provider, list);
@@ -1723,7 +1736,7 @@ export class AgentHost {
     if (!queue.length) this.queues.delete(threadId);
     const item = this.loadItems(threadId).find((it) => it.id === msg.itemId);
     const thread = this.requireThread(threadId);
-    const id = session.steer({ text: promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
+    const id = session.steer({ text: this.commandText(thread, msg) ?? promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
     run.steer = { id, msg, itemId: item?.id };
     if (item && item.kind === "user") {
       item.steer = "waiting";
@@ -2705,9 +2718,11 @@ export class AgentHost {
         const session = this.session(thread);
         session.update(thread);
         const pageEdits = this.pageEditPrefix(thread, turn.id);
+        // A note the agent must read comes before the text, so the message is then not sent as a command.
+        const command = msg && !earlier && !reopened ? this.commandText(thread, msg) : null;
         result = await session.run(
           {
-            text: msg ? earlier + reopened + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits,
+            text: command ?? (msg ? earlier + reopened + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
             images: msg?.images ?? [],
             documents: msg ? pdfs(msg) : [],
             instructions: threadInstructions(thread, this.scopeInfo(thread)),

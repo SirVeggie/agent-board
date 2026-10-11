@@ -602,6 +602,8 @@ class ClaudeSession implements ProviderSession {
   /** page_show calls whose input is still streaming, by block index: the JSON so far, until its head is reported. */
   private streamPageShows = new Map<number, string>();
   private streamedText = false;
+  /** What a slash command Claude Code ran itself (/context, /autocompact) answered; shown when its turn ends well. */
+  private commandOutput = "";
   /**
    * Steering. Claude Code queues a message sent mid-turn and folds it into the running turn between
    * tool rounds; one it could not fold runs as its own turn as soon as the current one ends. Its
@@ -1304,6 +1306,9 @@ class ClaudeSession implements ProviderSession {
             sink.steered?.(id);
           }
         }
+        // An API error is written the same way, but the result carries that one as the turn's error.
+        if (m.subtype === "success" && !m.is_error && this.commandOutput && !this.cancelled) sink.text(this.commandOutput);
+        this.commandOutput = "";
         if (m.subtype === "success") {
           this.endTurn({ status: this.cancelled ? "cancelled" : m.is_error ? "error" : "done", error: m.is_error ? String(m.result ?? "Claude reported an error") : undefined });
         } else {
@@ -1369,9 +1374,16 @@ class ClaudeSession implements ProviderSession {
     }
   }
 
-  private onAssistant(msg: { message: { content?: unknown[]; usage?: unknown }; parent_tool_use_id: string | null }): void {
+  private onAssistant(msg: { message: { content?: unknown[]; usage?: unknown; model?: unknown }; parent_tool_use_id: string | null }): void {
     const sink = this.sink!;
     const parent = msg.parent_tool_use_id ?? undefined;
+    // Claude Code writes a slash command's answer itself: one whole message, with no stream before it.
+    if (!parent && msg.message.model === "<synthetic>") {
+      for (const block of msg.message.content ?? []) {
+        if (isPlainRecord(block) && block.type === "text" && typeof block.text === "string") this.commandOutput += block.text;
+      }
+      return;
+    }
     // The context in use is what the latest main-thread call read and wrote, cache included.
     const u = msg.message.usage;
     if (!parent && isPlainRecord(u)) {
