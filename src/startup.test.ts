@@ -4,6 +4,55 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
+test("bundled Inter is ready for the first text paint, including a cache-free refresh", async () => {
+  const browser = process.env.SCRIBE_TEST_CHROMIUM
+    ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+    : await launchChromium({ headless: true, args: [], purpose: "Bundled fonts test" });
+  try {
+    const page = await browser.newPage();
+    const root = new URL("../public/", import.meta.url);
+    const shell = fs.readFileSync(new URL("index.html", root), "utf8");
+    const fontLink = shell.match(/<link[^>]+href="\.\/fonts\.css"[^>]*>/)![0];
+    const fontScript = shell.match(/<script src="\.\/fonts\.js"[^>]*><\/script>/)![0];
+    const external: string[] = [];
+    page.on("request", request => {
+      if (!request.url().startsWith("http://fonts.local/")) external.push(request.url());
+    });
+    // Routing disables the browser HTTP cache. Delay the stylesheet to simulate
+    // a cold/hard refresh; its embedded faces must still be ready at first paint.
+    await page.route("http://fonts.local/**", async route => {
+      if (new URL(route.request().url()).pathname === "/fonts.css") {
+        await new Promise(resolve => setTimeout(resolve, 150));
+        return route.fulfill({ contentType: "text/css", body: fs.readFileSync(new URL("fonts.css", root)) });
+      }
+      if (new URL(route.request().url()).pathname === "/fonts.js") {
+        return route.fulfill({ contentType: "text/javascript", body: fs.readFileSync(new URL("fonts.js", root)) });
+      }
+      return route.fulfill({ contentType: "text/html", body: `<!doctype html><html><head><meta charset="utf-8">${fontLink}${fontScript}
+        <style>span { font-family: Inter, monospace; font-size: 24px; }</style></head><body>
+        ${[400, 500, 600, 700].map(weight => `<span style="font-weight:${weight}">Restoring your pages… Ää Őő Ελληνικά Русский</span>`).join("<br>")}
+        </body></html>` });
+    });
+    await page.addInitScript({ content: `
+      window.firstTextFrame = new Promise(resolve => {
+        document.addEventListener('DOMContentLoaded', () => requestAnimationFrame(function check() {
+          if (getComputedStyle(document.body).visibility === 'hidden') { requestAnimationFrame(check); return; }
+          resolve({ ready: [400,500,600,700].every(w => document.fonts.check(w + ' 24px Inter', 'Restoring Ää Őő Ελληνικά Русский')),
+            widths: Array.from(document.querySelectorAll('span'), el => el.getBoundingClientRect().width) });
+        }), { once: true });
+      });
+    ` });
+    for (let refresh = 0; refresh < 2; refresh++) {
+      if (refresh) await page.reload(); else await page.goto("http://fonts.local/");
+      const first = await page.evaluate(() => (window as any).firstTextFrame);
+      assert.equal(first.ready, true, "all shell weights are loaded before text is painted");
+      await page.evaluate(() => document.fonts.ready);
+      assert.deepEqual(await page.locator("span").evaluateAll(elements => elements.map(el => el.getBoundingClientRect().width)), first.widths);
+    }
+    assert.deepEqual(external, [], "fonts require no external connections");
+  } finally { await browser.close(); }
+});
+
 test("New page warms one real shader after restoration and shows it immediately on use", async () => {
   const browser = process.env.SCRIBE_TEST_CHROMIUM
     ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
