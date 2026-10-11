@@ -191,6 +191,11 @@
     return S.days ? `the last ${S.days} days` : "all stored threads";
   }
 
+  function costText(cost) {
+    if (cost > 0 && cost < 0.0001) return "<$0.0001";
+    return cost ? `$${cost.toFixed(cost < 0.01 ? 4 : cost < 0.1 ? 3 : 2)}` : "–";
+  }
+
   function renderOverview() {
     const stats = S.stats;
     if (!stats) return [empty("Loading…")];
@@ -204,7 +209,7 @@
         ["Sent to models", tokens(t.prompt), `${pct(t.cached, t.prompt)} read from cache`],
         ["Written by models", tokens(t.output), t.reasoning ? `${tokens(t.reasoning)} reasoning` : ""],
         ["Tool calls", count(t.toolCalls), `${(t.toolCalls / Math.max(1, t.turns)).toFixed(1)} a turn · ${pct(t.toolErrors, t.toolCalls)} failed`],
-        ...(t.costUsd ? [["Reported cost", `$${t.costUsd.toFixed(2)}`, "Where the provider reports one"]] : []),
+        ...(t.costUsd ? [["Cost", costText(t.costUsd), "Includes Native estimates at catalog prices; discounts may lower the bill."]] : []),
       ])
     );
 
@@ -243,7 +248,7 @@
           { label: "Cached", num: true, get: (r) => pct(r.cached, r.prompt) },
           { label: "Written", num: true, get: (r) => tokens(r.output) },
           { label: "Tools a turn", num: true, get: (r) => (r.toolCalls / Math.max(1, r.turns)).toFixed(1) },
-          { label: "Cost", num: true, get: (r) => (r.costUsd ? `$${r.costUsd.toFixed(2)}` : "–") },
+          { label: "Cost", num: true, get: (r) => costText(r.costUsd) },
         ],
         stats.models
       )
@@ -735,7 +740,7 @@
               { label: "Tool calls", num: true, get: (r) => count(r.toolCalls) },
               { label: "Sent", num: true, get: (r) => tokens(r.prompt) },
               { label: "Written", num: true, get: (r) => tokens(r.output) },
-              { label: "Cost", num: true, get: (r) => (r.costUsd ? `$${r.costUsd.toFixed(2)}` : "–") },
+              { label: "Cost", num: true, get: (r) => costText(r.costUsd) },
             ],
             stats.heavy,
             {

@@ -68,6 +68,21 @@ export function sourceProviderId(sourceId: string): string {
   return `src-${sourceId}`;
 }
 
+/** Catalog prices apply only to the official endpoint, never a proxy or local copy. */
+export function sourceModelCost(source: OpenAISource, model: string, catalog: readonly Model[]): Model["cost"] {
+  const unknown = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let url: URL;
+  try {
+    url = new URL(source.baseUrl);
+  } catch {
+    return unknown;
+  }
+  if (url.origin !== "https://api.deepseek.com" || !["", "/", "/v1", "/v1/", "/beta", "/beta/"].includes(url.pathname)) return unknown;
+  // DeepSeek still accepts these retired Flash names at the current Flash price.
+  const id = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].includes(model) ? "deepseek-flash" : model;
+  return { ...(catalog.find((m) => m.provider === "deepseek" && m.id === id)?.cost ?? unknown) };
+}
+
 /** "<pi provider>/<model id>" → its parts. Model ids may contain slashes themselves (OpenRouter). */
 export function splitPiModel(id: string): { provider: string; model: string } | null {
   const at = id.indexOf("/");
@@ -251,6 +266,7 @@ export class PiProvider implements AgentProvider {
   /** Register every model source as a Pi provider speaking OpenAI Chat Completions. */
   private async registerSources(runtime: ModelRuntime): Promise<void> {
     const sources = this.sources();
+    const deepseekModels = runtime.getModels("deepseek");
     const wanted = new Set(sources.map((s) => sourceProviderId(s.id)));
     for (const id of this.registered) {
       if (!wanted.has(id)) runtime.unregisterProvider(id);
@@ -279,7 +295,7 @@ export class PiProvider implements AgentProvider {
             name: model,
             reasoning: Boolean(source.reasoning),
             input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            cost: sourceModelCost(source, model, deepseekModels),
             contextWindow: SOURCE_CONTEXT,
             maxTokens: SOURCE_MAX_TOKENS,
           })),
