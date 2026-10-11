@@ -7846,10 +7846,13 @@
     candidates: [],
     discoveryError: null,
     close: () => {},
-    async open() {
-      const { panel, close } = modal("ag-mcp");
+    /** Told after each saved change, when the harness page opened a dialog here. */
+    changed: null,
+    async open({ onClose } = {}) {
+      const { panel, close } = modal("ag-mcp", onClose);
       this.panel = panel;
       this.close = close;
+      this.changed = null;
       this.current = targetView().settings().cwd || null;
       this.scope = "global";
       this.candidates = [];
@@ -7868,6 +7871,20 @@
         this.discoveryError = err.message;
       }
       this.render();
+    },
+    /** One server's dialog on its own, for the harness page. scope is "global" or a workspace folder; no name adds a server. */
+    async editFrom(scope, name, changed) {
+      try {
+        this.view = await api("GET", "/mcp");
+      } catch (err) {
+        notice(err.message);
+        return;
+      }
+      this.panel = null;
+      this.scope = scope || "global";
+      this.changed = changed;
+      if (name && !this.layer()[name]) return notice(`${name} is no longer in Scribe's list.`);
+      this.edit(name || null);
     },
     async findImports() {
       const query = this.workspaces().map((d) => `cwd=${encodeURIComponent(d)}`).join("&");
@@ -7895,6 +7912,7 @@
       try {
         this.view = await api("PUT", "/mcp/layer", { scope: this.scope, servers });
         this.render();
+        this.changed?.();
         return true;
       } catch (err) {
         notice(err.message);
@@ -9804,7 +9822,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: () => void mcpServers.open(), shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

@@ -1383,7 +1383,17 @@
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Import / Export", sections: [settingsSections[6]] },
-  ], { close: closeSettings, after: { label: "Agent settings →", run: () => window.scribeChat?.openSettings() } });
+  ], {
+    close: closeSettings,
+    after: [
+      { label: "Agent settings →", run: () => window.scribeChat?.openSettings() },
+      // The full panel on what chats are given, with their MCP servers, skills and memories (harness.js).
+      { label: "Agent harness →", run: () => {
+        closeSettings();
+        window.scribeHarness?.open();
+      } },
+    ],
+  });
 
   const searchSwitch = document.getElementById("search-enabled");
   const searchPackStatus = document.getElementById("search-pack-status");

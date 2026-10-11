@@ -109,10 +109,11 @@
       entries.push({ body, button });
       content.append(body);
     });
-    if (after) {
-      const button = link(after);
-      button.classList.add("settings-nav-bottom");
-    }
+    // One link or several; the first is pushed to the bottom and the rest follow it.
+    [].concat(after ?? []).forEach((entry, index) => {
+      const button = link(entry);
+      if (!index) button.classList.add("settings-nav-bottom");
+    });
     nav.addEventListener("keydown", event => {
       if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
       const buttons = [...nav.querySelectorAll("button")];

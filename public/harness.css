@@ -491,6 +491,13 @@ i.hx-p-pi { background: var(--hx-pi); }
   gap: 8px;
 }
 
+.hx-server-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .hx-target {
   font-size: 11.5px;
   color: var(--muted);
@@ -516,6 +523,41 @@ i.hx-p-pi { background: var(--hx-pi); }
   color: var(--text);
 }
 
+/* ---------- editing ---------- */
+
+/* Settings dialogs (allowlists) share this panel's layer, and open over it. */
+body.agent-harness-open .settings {
+  z-index: 45;
+}
+
+.hx-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hx-file .ag-modal-panel {
+  width: min(860px, calc(100vw - 40px));
+}
+
+.hx-file-text {
+  min-height: min(56vh, 520px);
+}
+
+.ag-field > .hx-select,
+.ag-mem-form-row > .hx-select {
+  flex: none;
+  max-width: 100%;
+}
+
+.ag-mem-form-row > .hx-select {
+  width: min(420px, 60%);
+}
+
+.agent-harness .ag-perm-set {
+  margin-bottom: 0;
+}
+
 @media (max-width: 860px) {
   .agent-harness {
     grid-template-columns: minmax(0, 1fr);
@@ -532,7 +574,8 @@ i.hx-p-pi { background: var(--hx-pi); }
     flex-direction: row;
     overflow-x: auto;
   }
-  .agent-harness button.hx-nav-bottom {
+  .agent-harness button.hx-nav-bottom,
+  .agent-harness button.hx-nav-bottom ~ .hx-nav-link {
     display: none;
   }
   .hx-bar-head {

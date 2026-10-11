@@ -1,7 +1,8 @@
 /**
  * The agent harness view (#456): a full panel on what every chat is given at its start (Scribe's
- * instructions and tools, MCP servers, skills) and how the stored threads used it. It reads
- * /api/agent/harness/* and changes nothing; the settings dialogs stay where things are edited.
+ * instructions and tools, MCP servers, skills, memories) and how the stored threads used it. What
+ * Scribe manages is changed here too (#495): MCP servers, skills, memories and instruction files.
+ * The server dialogs are agent.js's own, opened over this panel.
  */
 (() => {
   const PROVIDERS = ["cursor", "claude", "codex", "pi"];
@@ -20,6 +21,7 @@
     { id: "tools", label: "Tool use" },
     { id: "mcp", label: "MCP servers" },
     { id: "skills", label: "Skills" },
+    { id: "memories", label: "Memories" },
     { id: "threads", label: "Heaviest threads" },
   ];
   const LS = { days: "scribe.harness.days", section: "scribe.harness.section", pick: "scribe.harness.pick" };
@@ -31,6 +33,11 @@
     stats: null,
     context: null,
     skills: null,
+    skillFolders: [],
+    memories: null,
+    /** The memory being edited, and the text typed for a new one, kept across renders. */
+    memEdit: null,
+    memDraft: { text: "", workspace: "" },
     config: null,
     measure: null,
     probes: new Map(),
@@ -69,6 +76,41 @@
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
+  }
+
+  const chat = () => window.scribeChat;
+  const notice = (text) => window.scribeApp?.showNotice?.(text);
+  const dirKey = (dir) => String(dir || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const cwdQuery = (lead) => (S.pick.cwd ? `${lead}cwd=${encodeURIComponent(S.pick.cwd)}` : "");
+
+  function switchButton(on, label, toggle) {
+    const node = button("", "pill-toggle", () => {
+      node.disabled = true;
+      toggle();
+    });
+    node.setAttribute("role", "switch");
+    node.setAttribute("aria-checked", String(on));
+    node.setAttribute("aria-label", label);
+    return node;
+  }
+
+  function field(label, input, hint) {
+    const wrap = el("label", "ag-field");
+    wrap.append(el("span", "ag-field-label", label), input);
+    if (hint) wrap.append(el("span", "ag-muted ag-field-hint", hint));
+    return wrap;
+  }
+
+  /** Who reads a folder of skills. */
+  function folderLabel(folder) {
+    return `${folder.providers.map((provider) => PROVIDER_LABEL[provider]).join(", ")}, ${folder.scope === "user" ? "everywhere" : "this workspace"}`;
+  }
+
+  function folderSelect(folders, label) {
+    const select = el("select", "hx-select");
+    select.setAttribute("aria-label", label);
+    for (const folder of folders) select.append(new Option(`${folderLabel(folder)} · ${folder.dir}`, folder.dir));
+    return select;
   }
 
   function tokens(n) {
@@ -433,7 +475,7 @@
     }
     out.push(toolCard);
 
-    const own = card(`What ${PROVIDER_LABEL[ctx.thread.provider]} loads by itself`, "Not sent by Scribe, but part of every session.");
+    const own = card(`What ${PROVIDER_LABEL[ctx.thread.provider]} loads by itself`, `Not sent by Scribe, but part of every session.${ctx.own.files.length ? " Click an instruction file to edit it." : ""}`);
     const list = el("ul", "hx-list");
     for (const line of ctx.own.loads) list.append(el("li", null, line));
     own.append(list);
@@ -444,7 +486,8 @@
             { label: "Instruction file", get: (r) => el("code", null, r.path) },
             { label: "Tokens", num: true, get: (r) => `≈ ${tokens(r.tokens)}` },
           ],
-          ctx.own.files
+          ctx.own.files,
+          { onRow: (row) => void editFile({ title: row.path.split(/[\\/]/).pop(), path: row.path, onSaved: () => void loadContext() }) }
         )
       );
     }
@@ -573,11 +616,18 @@
     }
 
     const servers = card(`Servers for a ${PROVIDER_LABEL[ctx.thread.provider]} ${MODE_LABEL[ctx.thread.mode]} thread${ctx.thread.cwd ? ` in ${ctx.thread.cwd}` : ""}`, ctx.own.mcpDelivery);
-    const edit = button("Edit servers…", "hx-btn", () => {
-      harness.close();
-      window.scribeChat?.openMcpServers?.();
-    });
-    servers.append(edit);
+    const cwd = ctx.thread.cwd;
+    const reload = (name) => {
+      for (const key of [...S.probes.keys()]) if (!name || key.startsWith(`${name}\n`)) S.probes.delete(key);
+      void loadContext();
+    };
+    const bar = el("div", "hx-actions");
+    bar.append(button("Add server…", "hx-btn", () => chat()?.editMcpServer?.("global", null, () => reload())));
+    if (cwd) bar.append(button("Add to this workspace…", "hx-btn", () => chat()?.editMcpServer?.(cwd, null, () => reload())));
+    const more = button("All servers…", "hx-btn", () => chat()?.openMcpServers?.({ onClose: () => reload() }));
+    more.dataset.tooltip = "Every workspace's list, import from Claude Code, Cursor, Pi and Codex, and the list as JSON";
+    bar.append(more);
+    servers.append(bar);
     const scribeUse = calls.get("scribe");
     const rows = [
       { name: "scribe", layer: "Built in", target: "Scribe's own page, browser, thread and memory tools", approve: "auto", active: true, builtin: true },
@@ -592,6 +642,20 @@
       head.append(name);
       const meta = [server.layer === "global" ? "Everywhere" : server.layer, server.builtin ? null : server.approve === "auto" ? "runs without asking" : "asks before each call", use ? `${count(use.calls)} calls, ${pct(use.errors, use.calls)} failed` : "no calls in range"].filter(Boolean).join(" · ");
       head.append(el("span", "hx-muted", meta));
+      if (server.editable) {
+        const controls = el("span", "hx-server-controls");
+        const toggle = switchButton(server.enabled, `Use ${server.name}`, async () => {
+          try {
+            await api("PUT", "/mcp/enabled", { name: server.name, cwd, on: !server.enabled });
+          } catch (err) {
+            notice(err.message);
+          }
+          reload(server.name);
+        });
+        toggle.dataset.tooltip = !server.enabled ? "Turn on" : cwd && server.layer === "global" ? "Turn off in this workspace only" : server.layer === "global" ? "Turn off everywhere" : "Turn off";
+        controls.append(toggle, button("Edit", "hx-btn", () => chat()?.editMcpServer?.(server.layer, server.name, () => reload(server.name))));
+        head.append(controls);
+      }
       box.append(head, el("code", "hx-target", server.target));
       const key = server.builtin ? "scribe" : `${server.name}\n${ctx.thread.cwd || ""}`;
       const probe = server.builtin ? ctx.scribeTools : S.probes.get(key);
@@ -635,7 +699,7 @@
     if (ctx.leftOut.length || ctx.duplicates.length) {
       const notes = card("Worth a look");
       const list = el("ul", "hx-list");
-      if (ctx.leftOut.length) list.append(el("li", null, `In your own Claude Code config but not given to Claude threads here: ${ctx.leftOut.join(", ")}. A skill written for one of them finds its tools missing. Import them with Edit servers.`));
+      if (ctx.leftOut.length) list.append(el("li", null, `In your own Claude Code config but not given to Claude threads here: ${ctx.leftOut.join(", ")}. A skill written for one of them finds its tools missing. Import them with All servers.`));
       if (ctx.duplicates.length) list.append(el("li", null, `Your Cursor config also loads Scribe as ${ctx.duplicates.join(", ")}, so a Cursor thread sees every page tool twice and pays for both sets of schemas. Remove it from ~/.cursor/mcp.json.`));
       notes.append(list);
       out.push(notes);
@@ -674,8 +738,11 @@
     const uses = new Map((S.stats?.skills || []).map((row) => [row.name, row.calls]));
     const node = card(
       "Skills each provider finds",
-      "Every chat is sent each skill's name and description; the body is read only when the skill is used. Uses are counted from Claude's Skill tool: the other providers read a skill as a plain file, which cannot be told apart from any other read."
+      "Every chat is sent each skill's name and description; the body is read only when the skill is used. Uses are counted from Claude's Skill tool: the other providers read a skill as a plain file, which cannot be told apart from any other read. Click a skill to edit it, copy it to another provider, or remove it."
     );
+    const add = button("New skill…", "hx-btn", () => newSkill());
+    add.disabled = !S.skillFolders.length;
+    node.append(add);
     const mine = S.skills.filter((skill) => skill.providers.includes(S.pick.provider) && (S.pick.mode !== "board" || (skill.scope === "user" && S.pick.provider === "claude")));
     node.append(
       tiles([
@@ -710,7 +777,8 @@
                 },
               },
             ],
-            S.skills
+            S.skills,
+            { onRow: (row) => void openSkill(row) }
           )
         : empty("No skills found.")
     );
@@ -723,6 +791,270 @@
       out.push(extra);
     }
     return out;
+  }
+
+  /* ---------- editing: files, skills, memories ---------- */
+
+  /** A text file in a dialog. extra(leave) gives buttons for the left of the action row. */
+  async function editFile({ title, path, hint, onSaved, extra }) {
+    let dirty = false;
+    let leaving = false;
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const fail = (text) => {
+      error.textContent = text;
+      error.hidden = false;
+    };
+    // A click outside or Esc must not throw typed text away.
+    const { panel, close } = chat().modal("hx-file", null, () => {
+      if (!dirty || leaving) return true;
+      fail("Save or cancel your changes first.");
+      return false;
+    });
+    const leave = () => {
+      leaving = true;
+      close();
+    };
+    const heading = () => [el("h2", "ag-modal-title", title), el("p", "ag-modal-hint ag-mcp-path", path)];
+    panel.append(...heading(), el("div", "ag-muted", "Loading…"));
+    let file;
+    try {
+      file = await api("GET", `/harness/file?path=${encodeURIComponent(path)}${cwdQuery("&")}`);
+    } catch (err) {
+      const row = el("div", "ag-modal-actions");
+      row.append(el("span", "ag-grow"), button("Close", "ag-btn", leave));
+      panel.replaceChildren(...heading(), el("p", "ag-source-error", err.message), row);
+      return;
+    }
+    const text = el("textarea", "ag-input ag-source-models hx-file-text");
+    text.spellcheck = false;
+    text.value = file.text;
+    text.setAttribute("aria-label", title);
+    text.addEventListener("input", () => {
+      dirty = true;
+    });
+    const save = button("Save", "ag-btn primary", async () => {
+      save.disabled = true;
+      try {
+        await api("PUT", "/harness/file", { path, cwd: S.pick.cwd, text: text.value });
+        leave();
+        onSaved?.();
+      } catch (err) {
+        fail(err.message);
+        save.disabled = false;
+      }
+    });
+    const row = el("div", "ag-modal-actions");
+    row.append(...(extra?.(leave) ?? []), el("span", "ag-grow"), button("Cancel", "ag-btn", leave), save);
+    panel.replaceChildren(...heading(), ...(hint ? [el("p", "ag-modal-hint", hint)] : []), text, error, row);
+    setTimeout(() => text.focus(), 0);
+  }
+
+  function openSkill(skill) {
+    return editFile({
+      title: skill.name,
+      path: skill.file,
+      hint: "The name and description at the top go into every chat; the rest is read when the skill is used.",
+      onSaved: () => void loadContext(),
+      extra: (leave) => {
+        const remove = button("Remove", "ag-btn ghost danger", async () => {
+          const ok = await window.scribeApp?.confirm?.(`Remove ${skill.name}? Its folder is moved into Scribe's data folder, so it can be put back by hand.`, "Remove");
+          if (!ok) return;
+          try {
+            const { kept } = await api("POST", "/harness/skills/remove", { file: skill.file, cwd: S.pick.cwd });
+            leave();
+            notice(kept ? `Removed ${skill.name}. Kept in ${kept}` : `Removed the link to ${skill.name}. The folder it pointed at is unchanged.`);
+          } catch (err) {
+            notice(err.message);
+          }
+          void loadContext();
+        });
+        const targets = S.skillFolders.filter((folder) => dirKey(folder.dir) !== dirKey(skill.folder));
+        const copy = button("Copy to…", "ag-btn ghost", () => copySkill(skill, targets));
+        copy.disabled = !targets.length;
+        return [remove, copy];
+      },
+    });
+  }
+
+  /** Providers read different folders, so a skill reaches another one as a copy. */
+  function copySkill(skill, targets) {
+    const { panel, close } = chat().modal("ag-source");
+    const select = folderSelect(targets, "Copy to");
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const run = button("Copy", "ag-btn primary", async () => {
+      run.disabled = true;
+      try {
+        await api("POST", "/harness/skills/copy", { file: skill.file, folder: select.value, cwd: S.pick.cwd });
+        close();
+        notice(`Copied ${skill.name}.`);
+        void loadContext();
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        run.disabled = false;
+      }
+    });
+    const row = el("div", "ag-modal-actions");
+    row.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), run);
+    panel.append(el("h2", "ag-modal-title", `Copy ${skill.name}`), field("To", select, "The whole skill folder is copied. Later edits to one copy do not reach the other."), error, row);
+  }
+
+  function newSkill() {
+    const { panel, close } = chat().modal("ag-source");
+    const name = el("input", "ag-input");
+    name.placeholder = "e.g. release-notes";
+    name.spellcheck = false;
+    const description = el("textarea", "ag-input ag-mem-input");
+    description.rows = 3;
+    description.placeholder = "What it is for and when an agent should use it.";
+    const select = folderSelect(S.skillFolders, "Where");
+    const mine = S.skillFolders.find((folder) => folder.providers.includes(S.pick.provider));
+    if (mine) select.value = mine.dir;
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const run = button("Create", "ag-btn primary", async () => {
+      run.disabled = true;
+      try {
+        const { file } = await api("POST", "/harness/skills", { folder: select.value, name: name.value, description: description.value, cwd: S.pick.cwd });
+        close();
+        await loadContext();
+        void openSkill(S.skills?.find((skill) => skill.file === file) || { name: name.value.trim(), file, folder: select.value });
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        run.disabled = false;
+      }
+    });
+    const row = el("div", "ag-modal-actions");
+    row.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), run);
+    panel.append(
+      el("h2", "ag-modal-title", "New skill"),
+      field("Name", name),
+      field("Description", description, "Sent to every chat of the provider, so keep it short."),
+      field("For", select, S.pick.cwd ? null : "Pick a workspace on the page to add a skill to it."),
+      error,
+      row
+    );
+    setTimeout(() => name.focus(), 0);
+  }
+
+  /** A text box and a scope picker; workspace "" is every chat. */
+  function memoryForm(value, submitLabel, submit, { cancel, onInput } = {}) {
+    const box = el("textarea", "ag-input ag-mem-input");
+    box.rows = 2;
+    box.value = value.text;
+    box.placeholder = "Add a memory, e.g. Run the tests with npm test, not pnpm.";
+    box.setAttribute("aria-label", "Memory");
+    const scope = el("select", "hx-select");
+    scope.setAttribute("aria-label", "Applies to");
+    const dirs = [...new Map([value.workspace, S.pick.cwd, ...(S.config?.prefs?.recentWorkspaces || []), ...(S.memories || []).map((m) => m.workspace)].filter(Boolean).map((dir) => [dirKey(dir), dir])).values()];
+    scope.append(new Option("Every chat", ""));
+    for (const dir of dirs) scope.append(new Option(dir, dir));
+    scope.value = value.workspace || "";
+    const changed = () => onInput?.({ text: box.value, workspace: scope.value });
+    box.addEventListener("input", changed);
+    scope.addEventListener("change", changed);
+    const go = async () => {
+      if (!box.value.trim()) return box.focus();
+      try {
+        await submit({ text: box.value, workspace: scope.value || null });
+      } catch (err) {
+        notice(err.message);
+      }
+    };
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        void go();
+      }
+    });
+    const row = el("div", "ag-mem-form-row");
+    row.append(scope, el("span", "ag-grow"));
+    if (cancel) row.append(button("Cancel", "ag-btn small", cancel));
+    row.append(button(submitLabel, "ag-btn small primary", () => void go()));
+    const wrap = el("div", "ag-mem-form");
+    wrap.append(box, row);
+    return wrap;
+  }
+
+  function memoryRow(memory) {
+    if (S.memEdit === memory.id) {
+      return memoryForm(
+        { text: memory.text, workspace: memory.workspace || "" },
+        "Save",
+        async (body) => {
+          await api("PUT", `/memories/${memory.id}`, body);
+          S.memEdit = null;
+          await loadMemories();
+        },
+        {
+          cancel: () => {
+            S.memEdit = null;
+            render();
+          },
+        }
+      );
+    }
+    const row = el("div", "ag-mem");
+    const meta = el("div", "ag-mem-meta");
+    meta.append(
+      el("span", null, `Saved by ${memory.by === "user" ? "you" : PROVIDER_LABEL[memory.by] || memory.by}, ${new Date(memory.updatedAt).toLocaleDateString()}`),
+      el("span", "ag-grow"),
+      button("Edit", "ag-btn small", () => {
+        S.memEdit = memory.id;
+        render();
+        body.querySelector(".ag-perm-set .ag-mem-input")?.focus();
+      }),
+      button("Remove", "ag-btn small", async () => {
+        try {
+          await api("DELETE", `/memories/${memory.id}`);
+        } catch (err) {
+          notice(err.message);
+        }
+        await loadMemories();
+      })
+    );
+    row.append(el("div", "ag-mem-text", memory.text), meta);
+    return row;
+  }
+
+  function renderMemories() {
+    if (!S.memories) return [empty(S.error || "Loading…")];
+    const node = card(
+      "Shared memory",
+      "Short notes that every chat gets in its instructions, whatever its provider: corrections you gave, mistakes to avoid, facts about a project. Agents save them as they work. A workspace's memories reach chats in that folder and below it. Changes apply from a thread's next message."
+    );
+    if (S.config?.prefs?.memory === false) node.append(el("p", "ag-source-error", "Memory is off in Agent settings: chats get none of these and cannot save any."));
+    node.append(
+      memoryForm(
+        S.memDraft,
+        "Add",
+        async (body) => {
+          await api("POST", "/memories", body);
+          S.memDraft = { text: "", workspace: S.memDraft.workspace };
+          await loadMemories();
+        },
+        { onInput: (draft) => (S.memDraft = draft) }
+      )
+    );
+    if (!S.memories.length) node.append(empty("Nothing saved yet."));
+    const groups = new Map();
+    for (const memory of [...S.memories].sort((a, b) => b.updatedAt - a.updatedAt)) {
+      const key = memory.workspace ? dirKey(memory.workspace) : "";
+      if (!groups.has(key)) groups.set(key, { title: memory.workspace || "Every chat", items: [] });
+      groups.get(key).items.push(memory);
+    }
+    for (const key of [...groups.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))) {
+      const group = groups.get(key);
+      const box = el("div", "ag-perm-set");
+      const head = el("div", "ag-perm-head");
+      head.append(key ? el("span", "ag-perm-path", group.title) : el("strong", null, group.title));
+      box.append(head, ...group.items.map(memoryRow));
+      node.append(box);
+    }
+    return [node];
   }
 
   function renderThreads() {
@@ -755,7 +1087,7 @@
     return [node];
   }
 
-  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, threads: renderThreads };
+  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, memories: renderMemories, threads: renderThreads };
   /** Sections whose numbers depend on the range. */
   const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills"]);
 
@@ -814,12 +1146,18 @@
     if (pick.provider !== S.pick.provider || pick.mode !== S.pick.mode || pick.cwd !== S.pick.cwd) return;
     S.context = context;
     S.skills = skills.skills;
+    S.skillFolders = skills.folders || [];
+  });
+
+  const loadMemories = () => load(async () => {
+    S.memories = (await api("GET", "/memories")).memories || [];
   });
 
   async function refresh() {
     S.probes.clear();
     await Promise.all([
       loadStats(),
+      loadMemories(),
       load(async () => {
         S.config = await api("GET", "/config");
         if (S.pick.cwd === undefined) S.pick.cwd = null;
@@ -834,7 +1172,7 @@
     root.setAttribute("aria-label", "Agent harness");
     const side = el("aside", "hx-side");
     side.append(el("h2", "hx-title", "Agent harness"));
-    side.append(el("p", "hx-hint", "What your chats are given, and what they do with it."));
+    side.append(el("p", "hx-hint", "What your chats are given, what they do with it, and where you change it."));
     nav = el("nav", "hx-nav");
     nav.setAttribute("aria-label", "Harness sections");
     for (const section of SECTIONS) {
@@ -848,11 +1186,13 @@
       nav.append(control);
     }
     side.append(nav);
-    const settings = button("Agent settings…", "hx-nav-link hx-nav-bottom", () => {
+    // The providers' own allow, ask and deny rules: their dialog opens over this panel.
+    const rules = button("Allowlists…", "hx-nav-link hx-nav-bottom", () => chat()?.openAllowlists?.());
+    const settings = button("Agent settings…", "hx-nav-link", () => {
       harness.close();
-      window.scribeChat?.openSettings?.();
+      chat()?.openSettings?.();
     });
-    side.append(settings);
+    side.append(rules, settings);
     const main = el("div", "hx-main");
     const head = el("header", "hx-head");
     heading = el("h2", "hx-heading");
@@ -865,8 +1205,9 @@
     window.addEventListener(
       "keydown",
       (event) => {
-        if (event.key !== "Escape" || !harness.isOpen()) return;
-        if (document.querySelector("dialog[open]") || window.scribeSettingsUI?.isOpen?.() || document.querySelector(".ag-modal")) return;
+        // A dialog over the panel that an earlier listener just closed has taken the key.
+        if (event.key !== "Escape" || event.defaultPrevented || !harness.isOpen()) return;
+        if (document.querySelector("dialog[open]") || window.scribeSettingsUI?.isOpen?.() || document.querySelector(".ag-modal, .settings:not([hidden])")) return;
         event.preventDefault();
         event.stopPropagation();
         harness.close();
