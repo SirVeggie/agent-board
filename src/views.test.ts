@@ -295,6 +295,34 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
     assert.equal(await page.locator('.tab').count(), 3);
+    // Self-replacement and peek centre drops have no preview or layout effect.
+    const activeId = await page.evaluate(() => (window as any).dragTest.state.activeId);
+    await moveDrag(`.tab[data-id="${activeId}"]`, area.x + area.width / 2, area.y + area.height / 2);
+    assert.equal(await page.locator('.pane-drop-preview').evaluate(el => (el as HTMLElement).hidden), true);
+    await page.mouse.up();
+    assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), false);
+    const peekId = await page.evaluate(async () => {
+      const { views, state } = (window as any).dragTest;
+      const id = state.tabs.find((tab: any) => tab.id !== state.activeId).id;
+      await views.open(id, 'peek');
+      for (const node of document.querySelectorAll('.peek-card, .peek-scrim, iframe')) {
+        for (const animation of node.getAnimations()) animation.finish();
+      }
+      return id;
+    });
+    await moveDrag('.peek-card .view-head', area.x + area.width / 2, area.y + area.height / 2);
+    assert.equal(await page.locator('.pane-drop-preview').evaluate(el => (el as HTMLElement).hidden), true);
+    await page.mouse.up();
+    assert.equal(await page.locator('.peek-card').evaluate(el => (el as HTMLElement).hidden), false);
+    await moveDrag('.peek-card .view-head', area.x + area.width - 5, area.y + 200);
+    assert.equal(await page.locator('.pane-drop-label').textContent(), 'Place right');
+    await page.mouse.up();
+    assert.equal(await page.locator('.peek-card').evaluate(el => (el as HTMLElement).hidden), true);
+    assert.equal(await page.evaluate(id => (window as any).dragTest.frames.get(id).el.dataset.pane, peekId), 'b');
+    await moveDrag(`.tab[data-id="${peekId}"]`, area.x + area.width * 0.75, area.y + area.height / 2);
+    assert.equal(await page.locator('.pane-drop-preview').evaluate(el => (el as HTMLElement).hidden), true);
+    await page.mouse.up();
+    await page.evaluate(() => (window as any).dragTest.views.closeSplit());
     // Sample the real opening animation at fixed times, without timing-sensitive sleeps.
     const motion = await page.evaluate(async () => {
       const { views, frames, state } = (window as any).dragTest;

@@ -110,6 +110,11 @@ window.createViews = function createViews(host) {
       }
     });
   }
+  peekHead.addEventListener("pointerdown", (event) => {
+    if (event.button === 0 && !event.target.closest("button") && peekTarget()) {
+      host.startPaneDrag?.(event, "peek", peekHead);
+    }
+  });
 
   scrim.addEventListener("mousedown", (event) => {
     event.preventDefault();
@@ -934,13 +939,17 @@ window.createViews = function createViews(host) {
     const split = activeSplit();
     // Replacement is a deliberate drop at the centre of a pane. Everything around it
     // arranges a split, even on large displays where a fixed edge band was hard to reach.
-    if (!pageDrag.pane) {
+    if (!pageDrag.pane || pageDrag.pane === "peek") {
       for (const pane of split ? PANES : ["a"]) {
         const rect = dropPaneRect(pane, split);
         const cx = (rect.left + rect.width / 2) * box.width;
         const cy = (rect.top + rect.height / 2) * box.height;
         if (Math.abs(dx - cx) <= Math.min(90, rect.width * box.width * 0.15) &&
-            Math.abs(dy - cy) <= Math.min(60, rect.height * box.height * 0.15)) return { pane };
+            Math.abs(dy - cy) <= Math.min(60, rect.height * box.height * 0.15)) {
+          const samePane = split ? paneOf(pageDrag.id) === pane : pageDrag.id === host.activeId();
+          if (pageDrag.pane === "peek" || samePane) return null;
+          return { pane };
+        }
       }
     }
     const edges = [
@@ -1003,6 +1012,7 @@ window.createViews = function createViews(host) {
   }
 
   function canCloseDraggedPane(pane) {
+    if (pane === "peek") return peekTarget()?.kind === "page";
     const split = activeSplit();
     return Boolean(split && (pane !== PANES[split.side] || split.other.kind === "page"));
   }
@@ -1010,12 +1020,27 @@ window.createViews = function createViews(host) {
   async function dropPage(source, drop) {
     if (!drop) return;
     if (drop.strip) {
+      if (source.pane === "peek") {
+        const target = peekTarget();
+        if (target?.kind === "page") promote(target);
+        return;
+      }
       if (source.pane && canCloseDraggedPane(source.pane)) closePane(source.pane);
       return;
     }
     let split = activeSplit();
     if (drop.edge) {
-      let pane = source.pane || paneOf(source.id);
+      let pane;
+      if (source.pane === "peek") {
+        const target = peekTarget();
+        if (!target) return;
+        setPeek(null);
+        setSplit(target);
+        split = activeSplit();
+        pane = PANES[1 - split.side];
+      } else {
+        pane = source.pane || paneOf(source.id);
+      }
       if (!pane) {
         if (source.id === host.activeId()) {
           await open(source.id, "split");
