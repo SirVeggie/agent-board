@@ -284,6 +284,25 @@ test("stopping the caller stops its helper", async () => {
   }
 });
 
+test("a thread allows ten working helpers and refuses an eleventh", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent();
+  hanging = true;
+  try {
+    for (let i = 0; i < 10; i++) {
+      const result = await host.runHelper(id, { task: `helper ${i}`, provider: "pi", background: true });
+      assert.equal(result.status, "running");
+    }
+    await assert.rejects(
+      host.runHelper(id, { task: "one too many", provider: "pi", background: true }),
+      /already has 10 helpers working/
+    );
+  } finally {
+    await host.cancel(id);
+    hanging = false;
+  }
+});
+
 test("background launches overlap and steering or an aborted wait keeps helpers running", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();

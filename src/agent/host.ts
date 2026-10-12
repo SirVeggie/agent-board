@@ -113,7 +113,7 @@ export function openWorktree(thread: Thread): ThreadWorktree | null {
 
 /** Code and Plan threads in a workspace can have a worktree; Pages and Ask never edit files. */
 /** Helpers one thread may have working at once. */
-const MAX_HELPERS = 4;
+const MAX_HELPERS = 10;
 
 function wantsWorktree(thread: Thread): boolean {
   return Boolean(thread.useWorktree && thread.cwd && (thread.mode === "code" || thread.mode === "plan") && !openWorktree(thread));

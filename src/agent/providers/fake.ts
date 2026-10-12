@@ -54,7 +54,7 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
       const [name, value] = part.toLowerCase().split("=");
       if (name === "delay" && value && Number.isFinite(Number(value))) delayMs = Math.max(0, Number(value));
       else if (name === "limit") limitSec = value && Number.isFinite(Number(value)) ? Math.max(1, Number(value)) : 30;
-      else if (name === "helper") helpers = value && Number.isFinite(Number(value)) ? Math.max(0, Math.min(4, Math.round(Number(value)))) : 1;
+      else if (name === "helper") helpers = value && Number.isFinite(Number(value)) ? Math.max(0, Math.min(10, Math.round(Number(value)))) : 1;
       else if (name === "stream") stream = value && Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 12;
       else if (name) flags.add(name);
     }

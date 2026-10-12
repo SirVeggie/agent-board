@@ -17,6 +17,8 @@ test("fakePlan reads the worker prompt and directives", () => {
   assert.equal(fakePlan("[fake:stream=3, delay=0]").stream, 3);
   assert.equal(fakePlan("[fake:limit=5]").limitSec, 5);
   assert.equal(fakePlan("[fake:limit]").limitSec, 30);
+  assert.equal(fakePlan("[fake:helper=10]").helpers, 10);
+  assert.equal(fakePlan("[fake:helper=11]").helpers, 10);
 });
 
 function sink(): RunSink & { texts: string[] } {
