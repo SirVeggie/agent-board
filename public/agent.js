@@ -138,7 +138,7 @@
     if (provider === "codex" && a.id === "ask") return CODEX_ASK;
     if (provider === "codex" && a.id === "edits") return CODEX_EDITS;
     if (provider === "codex" && a.id === "auto") return CODEX_REVIEW;
-    if (a.id === "auto" && provider === "pi") return "Like Edits, plus read-only commands and tests without asking";
+    if (a.id === "auto" && provider === "pi") return "Workspace edits run automatically; the configured classifier reviews commands and asks when unsure or unavailable. Commands have no OS sandbox.";
     if (a.id === "auto" && provider !== "claude") return "Claude only";
     return a.detail;
   }

@@ -3,12 +3,28 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PiProvider, builtinTools, isReadOnlyCommand, modelRateSnapshot, sourceModelCost, sourceProviderId, splitPiModel } from "./providers/pi.js";
+import { PiProvider, builtinTools, modelRateSnapshot, sourceModelCost, sourceProviderId, splitPiModel } from "./providers/pi.js";
 import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
 import type { Prefs } from "./prefs.js";
 import type { Thread } from "./types.js";
 import { normalizeSource } from "./openaiSources.js";
 import type { RunSink, SessionContext } from "./providers/provider.js";
+
+test("Native Auto review sends every command and edit to host approval", async () => {
+  const provider = new PiProvider();
+  const session = provider.createSession({ id: "review-test", provider: "pi", approval: "auto", mode: "code", cwd: process.cwd(), scope: { kind: "global", ref: null } } as Thread, {
+    approval: async (_id, req) => { requests.push(req); return { optionId: "reject" }; },
+  } as SessionContext) as unknown as { gate(event: unknown): Promise<{ block?: boolean } | undefined>; dispose(): void };
+  const requests: import("./providers/provider.js").ApprovalRequest[] = [];
+  try {
+    for (const command of ["git status", "npm test", "git branch --edit-description", "echo ok\nrm -rf x"]) {
+      assert.equal((await session.gate({ toolName: "bash", toolCallId: "command", input: { command } }))?.block, true);
+      assert.equal(requests.at(-1)?.detail, command);
+    }
+    assert.equal((await session.gate({ toolName: "write", toolCallId: "write", input: { path: "file.txt", content: "x" } }))?.block, true);
+    assert.deepEqual(requests.at(-1)?.paths, [path.join(process.cwd(), "file.txt")]);
+  } finally { session.dispose(); provider.dispose(); }
+});
 
 test("openai threads and prefs move to Pi", () => {
   const thread = { provider: "openai", model: "lmstudio/qwen/qwen3-8b", nativeId: "resp_1" } as unknown as Thread;
@@ -79,18 +95,6 @@ test("Native turn freezes rate snapshots, deduplicates messages and retains zero
   assert.equal(latest.estimatedCostUsd, 0);
   assert.equal(saved.costUsd, 0.00004);
   assert.equal(latest.costRecords?.length, 1);
-});
-
-test("isReadOnlyCommand lets reads, git queries and tests through", () => {
-  for (const cmd of ["ls -la", "git status", "git log --oneline -5", "git diff HEAD~1", "cat a.txt | grep foo", "npm test", "npx tsc --noEmit", "git branch", "git branch -a", "sed -n 1,20p x.ts", "find src -name '*.ts'", "git remote -v"]) {
-    assert.equal(isReadOnlyCommand(cmd), true, cmd);
-  }
-});
-
-test("isReadOnlyCommand refuses writes, chains with writes, redirection and substitution", () => {
-  for (const cmd of ["rm -rf x", "git push", "git commit -m x", "ls && rm x", "echo hi > a.txt", "cat $(which node)", "echo `id`", "sed -i s/a/b/ x", "find . -delete", "find . -exec rm {} ;", "git branch -D old", "git remote add x y", "npm install", "", "lsof"]) {
-    assert.equal(isReadOnlyCommand(cmd), false, cmd);
-  }
 });
 
 test("splitPiModel splits at the first slash; model ids keep theirs", () => {

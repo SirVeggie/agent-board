@@ -14,6 +14,12 @@ export const JEV_DEFAULT_MODEL = "jev-latest";
  */
 export const ML_FEATURES: MlFeature[] = [
   {
+    id: "native-review",
+    label: "Native auto review",
+    hint: "Native threads set to Auto review send shell commands and user message context to this classifier. Only confident low-risk verdicts run automatically; unavailable or uncertain review asks for approval. Native commands have no OS sandbox.",
+    default: true,
+  },
+  {
     id: "hooks",
     label: "Hook questions",
     hint: "Hook rules of the kind Question (Agent settings, Hooks) ask the classifier about messages, agent output and tool calls. Off: those rules never match.",

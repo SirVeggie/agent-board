@@ -118,77 +118,6 @@ export function builtinTools(mode: Thread["mode"], off: string[] = []): string[]
   return CODE_TOOLS.filter((name) => !off.includes(name));
 }
 
-/** Programs (with their first argument where it matters) that only read, for the "auto" approval level. */
-const READ_ONLY_COMMANDS = [
-  "ls",
-  "dir",
-  "pwd",
-  "cat",
-  "head",
-  "tail",
-  "wc",
-  "echo",
-  "grep",
-  "rg",
-  "which",
-  "where",
-  "type",
-  "file",
-  "stat",
-  "du",
-  "df",
-  "tree",
-  "sort",
-  "uniq",
-  "cut",
-  "diff",
-  "git status",
-  "git log",
-  "git diff",
-  "git show",
-  "git branch",
-  "git rev-parse",
-  "git ls-files",
-  "git blame",
-  "git remote",
-  "git worktree list",
-  "node --version",
-  "npm --version",
-  "npm ls",
-  "npm view",
-  "npm test",
-  "npm run test",
-  "npm run build",
-  "npx tsc",
-  "pnpm test",
-  "yarn test",
-  "cargo check",
-  "cargo test",
-  "go test",
-  "go vet",
-  "pytest",
-  "python -m pytest",
-];
-
-/**
- * Whether a shell command only reads (or runs the project's tests or build), so the "auto" level
- * runs it without asking. Strict: no redirection or substitution, and every part of a pipe or
- * chain has to be on the list.
- */
-export function isReadOnlyCommand(command: string): boolean {
-  const cmd = command.trim();
-  if (!cmd || /[<>`]|\$\(/.test(cmd)) return false;
-  const parts = cmd.split(/&&|\|\||;|\|/).map((part) => part.trim().replace(/\s+/g, " "));
-  return parts.every((part) => {
-    if (!part) return false;
-    if (/^find\b/.test(part)) return !/\s-(exec|execdir|delete|ok|fprint)/.test(part);
-    if (/^sed\b/.test(part)) return /^sed -n\b/.test(part) && !/\s-i/.test(part);
-    if (/^git branch\b/.test(part)) return !/\s-(d|D|m|M|c|C|f)\b|--delete|--move|--force/.test(part);
-    if (/^git remote\b/.test(part)) return /^git remote( -v| show\b|$)/.test(part);
-    return READ_ONLY_COMMANDS.some((prefix) => part === prefix || part.startsWith(`${prefix} `));
-  });
-}
-
 /** Whether `target` is inside `root` (both absolute). */
 function inside(root: string, target: string): boolean {
   const rel = path.relative(root, target);
@@ -808,7 +737,6 @@ class PiSession implements ProviderSession {
       const target = path.resolve(this.cwd(), str(input.path) ?? "");
       if (sink) await sink.beforeWrite(event.toolCallId, target).catch(() => undefined);
       const within = inside(this.cwd(), target);
-      if (this.thread.approval === "auto" && within) return undefined;
       const rel = within ? path.relative(this.cwd(), target) || target : target;
       req = {
         toolId: event.toolCallId,
@@ -823,7 +751,6 @@ class PiSession implements ProviderSession {
       };
     } else {
       const command = str(input.command) ?? "";
-      if (this.thread.approval === "auto" && isReadOnlyCommand(command)) return undefined;
       req = {
         toolId: event.toolCallId,
         tool: "execute",

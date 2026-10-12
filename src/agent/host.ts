@@ -94,6 +94,7 @@ import type {
 import { isProviderId, noPages } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { LIFT_OPTION, canLower, ceilingReason, classifyCeiling, lowerApproval, lowered, type TurnCeiling } from "./ceiling.js";
+import { reviewNativeCommand } from "./nativeReview.js";
 import { injectionDetectors } from "./injection.js";
 
 export type { Prefs } from "./prefs.js";
@@ -325,7 +326,7 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
   if (t?.approval === "full" && allow) {
     return Promise.resolve({ optionId: allow.id });
   }
-  if (t?.approval === "edits" && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move") && editsInsideWorkspace(t, req.paths)) {
+  if ((t?.approval === "edits" || (t?.provider === "pi" && t.approval === "auto")) && allow && (req.tool === "edit" || req.tool === "delete" || req.tool === "move") && editsInsideWorkspace(t, req.paths)) {
     return Promise.resolve({ optionId: allow.id });
   }
   return null;
@@ -3441,7 +3442,7 @@ export class AgentHost {
         await host.rememberBefore(run, thread(), file, true);
       },
       approval(req: ApprovalRequest, signal) {
-        const decide = (req: ApprovalRequest): Promise<ApprovalDecision> => {
+        const decide = async (req: ApprovalRequest): Promise<ApprovalDecision> => {
           const t = thread();
           // A lowered turn answers from the lowered level (sessionThread), like its provider does.
           const auto = autoApproval(t && host.sessionThread(t), req);
@@ -3450,6 +3451,20 @@ export class AgentHost {
           if (req.toolId && run.hooks.approved.has(req.toolId)) {
             // The user approved this very call a moment ago, when the hook asked.
             if (allow) return Promise.resolve({ optionId: allow.id });
+          }
+          if (t?.provider === "pi" && host.sessionThread(t).approval === "auto" && req.tool === "execute" && !req.humanOnly && allow) {
+            const workspace = t.worktree?.path ?? t.cwd;
+            const review = await reviewNativeCommand(
+              (state, questions, options) => host.hookBackend.decide(state, questions, options),
+              req.detail ?? "", workspace, run.hooks.lastUser,
+            );
+            if (run.cancelled || signal?.aborted || host.runs.get(threadId) !== run) throw new Error("Auto review cancelled.");
+            // Recheck after the asynchronous review: settings may have changed while it waited.
+            const current = thread();
+            if (review.allowed && current?.provider === "pi" && host.sessionThread(current).approval === "auto" && (current.worktree?.path ?? current.cwd) === workspace) {
+              return { optionId: allow.id };
+            }
+            req = { ...req, detail: [req.detail, review.reason].filter(Boolean).join("\n\n") };
           }
           // What a hook or a native review wants asked is asked at the thread's own level too.
           const ceiling = run.turn.ceiling && !run.turn.ceiling.lifted && allow && !req.humanOnly ? run.turn.ceiling : null;

@@ -144,3 +144,36 @@ test("Edits checks delete and every move target; Full still grants outside edits
   assert.equal((await sink.approval({ ...request, humanOnly: false, paths: [path.join(outside, "existing.txt")] })).optionId, "retry");
   assert.equal(host.threadDetail(id)?.items.some((it) => it.kind === "approval"), false);
 });
+
+test("Native Auto review grants confident commands and asks on failed review", async () => {
+  const { id, thread, sink } = running("auto");
+  thread.provider = "pi";
+  const internals = host as unknown as { runs: Map<string, any> };
+  internals.runs.get(id).hooks = { lastUser: "Check status", approved: new Set() };
+  host.hookBackend = {
+    maySend: () => true,
+    decide: async () => ({ ok: true, answers: { safe: { type: "yesno", yes: 0.99 } }, source: "fake", model: "fake", ms: 0, cached: false, usage: { inputTokens: 0, outputTokens: 0 } }),
+  };
+  const command: ApprovalRequest = { tool: "execute", title: "Run command", detail: "git status", options: request.options };
+  assert.equal((await sink.approval(command)).optionId, "retry");
+  assert.equal(host.threadDetail(id)?.items.some((item) => item.kind === "approval"), false);
+  host.hookBackend.decide = async () => ({ ok: false, error: "disabled", message: "off", ms: 0 });
+  const pending = sink.approval(command);
+  await new Promise((resolve) => setImmediate(resolve));
+  const item = host.threadDetail(id)?.items.find((item) => item.kind === "approval" && item.status === "pending");
+  assert.ok(item && item.kind === "approval");
+  assert.match(item.detail ?? "", /unavailable, disabled, or timed out/);
+  host.resolveApproval(item.requestId, "deny");
+  assert.equal((await pending).optionId, "deny");
+});
+
+test("Native Auto review checks junction targets rather than lexical workspace paths", async () => {
+  const { id, thread, sink } = running("auto");
+  thread.provider = "pi";
+  assert.equal((await sink.approval({ ...request, humanOnly: false, paths: ["existing.txt"] })).optionId, "retry");
+  const pending = sink.approval({ ...request, humanOnly: false, paths: ["node_modules/existing.txt"] });
+  const item = host.threadDetail(id)?.items.find((item) => item.kind === "approval" && item.status === "pending");
+  assert.ok(item && item.kind === "approval");
+  host.resolveApproval(item.requestId, "deny");
+  assert.equal((await pending).optionId, "deny");
+});
