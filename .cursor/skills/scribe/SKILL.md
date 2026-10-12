@@ -542,6 +542,32 @@ and have the submit button call `scribe.reply` with the answers and a one-line s
 - Each click sends again and adds a new comment. Name fields so they read well as labels (`approach`, `notes`), and leave unanswered ones empty: empty values are skipped.
 - `page_patch` with `replyTo` (and no edits) wires an existing page; `replyTo: null` clears it.
 
+### Asking the classifier: scribe.ml
+
+A page can put small typed questions about its own text to the classifier the user set up (Settings → Classifier): which labels fit a card, how urgent a note is, whether an entry belongs in a list. It answers in well under a second and costs far less than an agent chat, so use it for sorting and suggesting, not for writing text.
+
+```js
+const caps = await scribe.ml.capabilities();
+// { ok, available, reason?: "denied" | "disabled" | "no_source", permission: "allow" | "deny" | "ask",
+//   types: ["yesno", "choice", "score"], limits: { stateChars, questions, perMinute, perHour } }
+const result = await scribe.ml.decide({
+  state: { title: card.title, description: card.description },   // text, or a small object or array
+  questions: {
+    bug: { type: "yesno", instructions: 'Should this card have the label "Bug"?' },
+    priority: { type: "choice", instructions: "How urgent is this?", options: { unspecified: "It does not say", low: null, high: "Should be done soon" } },
+    effort: { type: "score", instructions: "How much work is it?", levels: ["minutes", "hours", "days"] },
+  },
+});
+if (result.ok) result.answers.bug;   // { type: "yesno", yes: 0.93 }
+```
+
+- Answers come back under the question ids: `{ type: "yesno", yes }` (probability of yes), `{ type: "choice", choice, probabilities, confidence }`, `{ type: "score", score, probabilities, confidence }` (1 is the first level; it can fall between levels). Pick your own thresholds, and give a choice an option for "it does not say" so the classifier is not forced to pick.
+- `decide` never rejects. A failure is `{ ok: false, error, message }` and the page carries on without an answer: `denied` (no permission), `disabled` (Pages is off in Settings), `no_source` (no classifier set up), `input_too_large`, `rate_limited` (with `retryAfterMs`), `busy`, `invalid_request`, `timeout`, `unavailable`. Do not retry in a loop.
+- It needs the page's `ml.decide` permission (asks by default). `decide` itself never prompts, so it can run from `scribe.onChange`: ask up front, inside a click, with `scribe.permissions.request("ml.decide")` (a switch in the page's settings is the usual place), and show `capabilities().reason` when it would not go through.
+- Limits per page: 20,000 characters of state, 32 questions a call, 30 calls a minute and 300 an hour, two calls at once. Send the one card or note being judged, not the whole state. Ask about several things in one call rather than one call each.
+- The page never learns which source or model answered, and cannot pick one. With a hosted source the text leaves this PC, which is what the permission tells the user.
+- Treat an answer as a suggestion: show it and let the user take it (the Kanban board's label and priority chips), and check that the thing asked about has not changed before you store the answer. Every open window runs the page's code, so write the result in a way that is safe to repeat.
+
 ## Waiting for user input
 
 `page_wait` is a single blocked call. The page logs a **named event** when the thing you care about happens; you wait for that name. Typing, `scribe.set`, and `scribe.bind` do **not** wake you. Optional `where` matches fields on each event's `data` (compared as text), e.g. `{ column: "grok issues" }` on a Kanban `card_ready`.

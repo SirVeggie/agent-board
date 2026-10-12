@@ -619,6 +619,28 @@
     border: 1px dashed rgba(139, 149, 168, .55);
   }
   .label-add:hover, .label-add.open { color: var(--text); border-color: var(--text); }
+  /* What the classifier suggests for a card: dashed until the user takes it. */
+  .suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 7px; }
+  .suggest-row.hidden { display: none; }
+  .suggest-lead { color: var(--muted); font-size: 11px; margin-right: 2px; }
+  .suggest-chip {
+    --chip: #8b95a8;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    border: 1px dashed color-mix(in srgb, var(--chip) 70%, transparent);
+  }
+  .suggest-chip button { display: inline-flex; align-items: center; gap: 4px; height: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; }
+  .suggest-chip .suggest-yes { padding-left: 7px; border-radius: 999px 0 0 999px; }
+  .suggest-chip .suggest-no { padding: 0 6px 0 4px; border-radius: 0 999px 999px 0; color: var(--muted); }
+  .suggest-chip .sw { width: 7px; height: 7px; border-radius: 50%; background: var(--chip); }
+  .suggest-chip .suggest-yes:hover { text-decoration: underline; }
+  .suggest-chip .suggest-no:hover { color: var(--text); }
+  .side .suggest-row { margin-top: 8px; }
+  .setting .txt .setting-warn { display: block; margin-top: 4px; color: #e0b34a; }
+  .setting .txt .setting-warn:empty { display: none; }
   .menu .menu-search { width: 100%; margin-bottom: 4px; }
   .menu .pick-row {
     display: flex;
@@ -1111,6 +1133,7 @@
           <div>
             <div class="section-label" style="margin-top:4px">Labels</div>
             <div class="label-picks" id="mLabels"></div>
+            <div class="suggest-row hidden" id="mSuggest"></div>
           </div>
           <div>
             <div class="section-label" style="margin-top:4px">Blocked by</div>
@@ -1158,6 +1181,10 @@
       <label class="setting">
         <span class="txt"><b>Show done date on cards</b><span>Cards that are done show when they were completed.</span></span>
         <input class="switch" id="sShowDoneDate" type="checkbox">
+      </label>
+      <label class="setting">
+        <span class="txt"><b>Suggest labels and priority</b><span>While the board is open, a new or edited card's title and description go to the classifier from Scribe's settings. What it suggests shows on the card as chips you accept or dismiss.</span><span class="setting-warn" id="sSuggestNote"></span></span>
+        <input class="switch" id="sSuggest" type="checkbox">
       </label>
       <div class="confirm-row">
         <button class="ghost" id="settingsClose" type="button">Close</button>
@@ -1303,7 +1330,7 @@
   var galleryEl = $("gallery"), coverToggle = $("coverToggle"), coverSwitch = $("coverSwitch");
   var commentsEl = $("comments"), commentBox = $("commentBox");
   var mColumn = $("mColumn"), mPriority = $("mPriority"), mDue = $("mDue"), mAssignee = $("mAssignee");
-  var mLabels = $("mLabels"), mLinks = $("mLinks"), mLinkAdd = $("mLinkAdd"), mReview = $("mReview"), mTimes = $("mTimes");
+  var mLabels = $("mLabels"), mSuggest = $("mSuggest"), mLinks = $("mLinks"), mLinkAdd = $("mLinkAdd"), mReview = $("mReview"), mTimes = $("mTimes");
   var hintEl = $("hint"), archiveEl = $("archive"), archiveBody = $("archiveBody");
   var lightbox = $("lightbox"), lightboxImg = $("lightboxImg"), fileEl = $("file");
 
@@ -1991,12 +2018,14 @@
     scheduleWorkers();
   }
   function render() {
+    suggestScan();
     cancelPaint();
     if (drag) return;
     renderBookkeeping();
     renderDom();
   }
   function renderLater() {
+    suggestScan();
     if (drag) return;
     renderBookkeeping();
     if (paintTimer !== null) return;
@@ -2233,6 +2262,8 @@
     titleEl.appendChild(titleText);
     li.appendChild(titleEl);
     li.appendChild(creatorElement(c));
+    var suggested = suggestionRow(c, labelMap);
+    if (suggested) li.appendChild(suggested);
 
     var badges = el("div", "badges");
     var t = dueTime(c.due);
@@ -3107,6 +3138,9 @@
     $("mAssigneeClear").classList.toggle("hidden", !str(c.assignee).trim());
 
     renderCardLabels(c);
+    var suggested = suggestionRow(c, null);
+    mSuggest.replaceChildren.apply(mSuggest, suggested ? Array.prototype.slice.call(suggested.childNodes) : []);
+    mSuggest.classList.toggle("hidden", !suggested);
 
     mLinks.replaceChildren();
     c.blockedBy.forEach(function (bid) {
@@ -4276,17 +4310,214 @@
     });
   }
 
+  // ---------- suggested labels and priority ----------
+  // With the board's setting on, a card that is created or whose title or description changes
+  // while this board is open is put to the classifier (scribe.ml): one yes/no question per label
+  // the card lacks, and one choice for its priority when it has none. Watching the state covers
+  // every way a card arrives or changes: this page, another window, an agent's action. The answer
+  // is kept on the card as card.suggest ({ labels?, priority?, no? }) and shown as chips; only the
+  // user's click turns one into a label or a priority.
+  var SUGGEST_WAIT_MS = 1500;
+  /** More cards than this changing at once is an import or a restore, not someone writing cards. */
+  var SUGGEST_BULK = 8;
+  var SUGGEST_LABELS = 30, SUGGEST_SHOWN = 3, SUGGEST_YES = 0.75, SUGGEST_PRIORITY = 0.6;
+  var SUGGEST_TEXT = 8000;
+  var PRIORITY_NAMES = ["unspecified", "low", "medium", "high", "urgent"];
+  var PRIORITY_OPTIONS = {
+    unspecified: "The card does not say how urgent or important it is",
+    low: "Nice to have; can wait a long time",
+    medium: "Ordinary work to do in its turn",
+    high: "Important; should be done soon",
+    urgent: "Something is broken or blocked and needs attention now"
+  };
+  var suggestSeen = null, suggestTimers = {}, suggestQueue = [], suggestBusy = false;
+  /** suggestDenied: this PC refused the permission; suggestAsking: the user is being asked for it. */
+  var suggestDenied = false, suggestAsking = false;
+
+  function suggestOn() {
+    return Boolean(settings().suggest) && Boolean(scribe.ml) && !suggestDenied;
+  }
+  /** Find the cards that are new or whose text changed since the last look. The first look only takes stock. */
+  function suggestScan() {
+    var first = !suggestSeen, next = {}, changed = [];
+    allCards().forEach(function (c) {
+      var was = suggestSeen && suggestSeen[c.id];
+      next[c.id] = { title: c.title, description: c.description };
+      if (!first && (!was || was.title !== c.title || was.description !== c.description)) changed.push(c.id);
+    });
+    suggestSeen = next;
+    if (!changed.length || changed.length > SUGGEST_BULK || !suggestOn()) return;
+    changed.forEach(function (id) {
+      // Typing saves as it goes: ask once it has been quiet for a moment.
+      clearTimeout(suggestTimers[id]);
+      suggestTimers[id] = setTimeout(function () {
+        delete suggestTimers[id];
+        if (suggestQueue.indexOf(id) === -1) suggestQueue.push(id);
+        suggestNext();
+      }, SUGGEST_WAIT_MS);
+    });
+  }
+  function suggestQuestions(c) {
+    var no = arr(c.suggest && c.suggest.no);
+    var questions = {}, ids = {};
+    labels().filter(function (l) {
+      return str(l.name).trim() && c.labels.indexOf(l.id) === -1 && no.indexOf(l.id) === -1;
+    }).slice(0, SUGGEST_LABELS).forEach(function (l, i) {
+      var about = str(l.description).trim().slice(0, 500);
+      ids["label" + i] = l.id;
+      questions["label" + i] = {
+        type: "yesno",
+        instructions: 'Should this card have the label "' + str(l.name).trim().slice(0, 100) + '"?' + (about ? " The label means: " + about : "")
+      };
+    });
+    if (!c.priority && no.indexOf("priority") === -1) {
+      questions.priority = { type: "choice", instructions: "How urgent is the work this card describes?", options: PRIORITY_OPTIONS };
+    }
+    if (!Object.keys(questions).length) return null;
+    return { state: { title: c.title, description: str(c.description).slice(0, SUGGEST_TEXT) }, questions: questions, ids: ids, title: c.title, description: c.description };
+  }
+  /** One card at a time; a failure leaves the card as it is. */
+  function suggestNext() {
+    if (suggestBusy) return;
+    var id, ask = null;
+    while (!ask && suggestQueue.length) {
+      id = suggestQueue.shift();
+      var c = card(id);
+      ask = c && !c.archived && suggestOn() ? suggestQuestions(c) : null;
+    }
+    if (!ask) return;
+    suggestBusy = true;
+    var done = function (result) {
+      suggestBusy = false;
+      if (result && result.ok) suggestStore(id, ask, result.answers || {});
+      else if (result && result.error === "denied") {
+        // Not allowed on this PC: stop asking until the switch is turned on again.
+        suggestDenied = true;
+        suggestQueue = [];
+        setHint("Card suggestions are off: this board isn't allowed to use the classifier (tab menu: Permissions…).", true);
+      } else if (result && ["rate_limited", "disabled", "no_source"].indexOf(result.error) !== -1) suggestQueue = [];
+      suggestNext();
+    };
+    scribe.ml.decide({ state: ask.state, questions: ask.questions }).then(done, function () { done(null); });
+  }
+  function suggestStore(id, ask, answers) {
+    var c = card(id);
+    // The card changed while the classifier was answering: drop this answer, the newer text gets its own.
+    if (!c || c.archived || c.title !== ask.title || c.description !== ask.description) return;
+    var known = {};
+    labels().forEach(function (l) { known[l.id] = true; });
+    var picks = Object.keys(ask.ids).map(function (q) {
+      var a = answers[q];
+      return { id: ask.ids[q], yes: a && a.type === "yesno" ? Number(a.yes) || 0 : 0 };
+    }).filter(function (p) {
+      return p.yes >= SUGGEST_YES && known[p.id] && c.labels.indexOf(p.id) === -1;
+    }).sort(function (a, b) { return b.yes - a.yes; }).slice(0, SUGGEST_SHOWN).map(function (p) { return p.id; });
+    var level = 0, a = answers.priority;
+    if (ask.questions.priority && !c.priority && a && a.type === "choice") {
+      var at = PRIORITY_NAMES.indexOf(a.choice);
+      if (at > 0 && Number(a.probabilities && a.probabilities[a.choice]) >= SUGGEST_PRIORITY) level = at;
+    }
+    var next = {};
+    if (picks.length) next.labels = picks;
+    if (level) next.priority = level;
+    var no = arr(c.suggest && c.suggest.no);
+    if (no.length) next.no = no;
+    if (JSON.stringify(next) === JSON.stringify(c.suggest || {})) return;
+    // Only this field is written, so nothing else on the card can be overwritten by a late answer.
+    var path = "cards/id=" + c.id + "/suggest";
+    scribe.update([Object.keys(next).length ? { op: "set", path: path, value: next } : { op: "remove", path: path }]);
+    render();
+  }
+  /** Accept (accept true) or dismiss one suggestion: a label id, or "priority". A dismissed one is not offered again. */
+  function settleSuggestion(id, what, accept) {
+    updateCard(id, function (x) {
+      var s = Object.assign({}, x.suggest);
+      if (what === "priority") {
+        var level = clamp(Math.floor(Number(s.priority) || 0), 0, 4);
+        if (accept && level && !x.priority) x.priority = level;
+        delete s.priority;
+      } else {
+        var exists = labels().some(function (l) { return l.id === what; });
+        if (accept && exists && x.labels.indexOf(what) === -1) x.labels = x.labels.concat([what]);
+        s.labels = arr(s.labels).filter(function (y) { return y !== what; });
+        if (!s.labels.length) delete s.labels;
+      }
+      if (!accept) s.no = arr(s.no).filter(function (y) { return y !== what; }).concat([what]);
+      if (Object.keys(s).length) x.suggest = s;
+      else delete x.suggest;
+      return x;
+    });
+  }
+  function suggestChip(cardId, what, text, color) {
+    var chip = el("span", "suggest-chip");
+    if (color) chip.style.setProperty("--chip", color);
+    // A tile is kept while it looks the same, listeners included: this keeps two like-named labels apart.
+    chip.dataset.what = what;
+    var yes = el("button", "suggest-yes");
+    yes.type = "button";
+    yes.appendChild(el("span", "sw"));
+    yes.appendChild(document.createTextNode(text));
+    yes.setAttribute("aria-label", "Accept suggestion: " + text);
+    yes.dataset.tooltip = what === "priority" ? "Set this priority" : "Add this label";
+    yes.addEventListener("click", function (e) { e.stopPropagation(); settleSuggestion(cardId, what, true); });
+    var no = el("button", "suggest-no", "×");
+    no.type = "button";
+    no.setAttribute("aria-label", "Dismiss suggestion: " + text);
+    no.dataset.tooltip = "Dismiss";
+    no.addEventListener("click", function (e) { e.stopPropagation(); settleSuggestion(cardId, what, false); });
+    chip.appendChild(yes);
+    chip.appendChild(no);
+    return chip;
+  }
+  /**
+   * The chips for what a card is offered now, or null: labels that still exist and the card lacks,
+   * a priority while it has none. byId: labels by id, when the caller has them.
+   */
+  function suggestionRow(c, byId) {
+    var s = c.suggest;
+    if (!s || typeof s !== "object" || !settings().suggest) return null;
+    if (!byId) {
+      byId = {};
+      labels().forEach(function (l) { byId[l.id] = l; });
+    }
+    var found = arr(s.labels).map(function (id) { return c.labels.indexOf(id) === -1 ? byId[id] : null; }).filter(Boolean);
+    var level = c.priority ? 0 : clamp(Math.floor(Number(s.priority) || 0), 0, 4);
+    if (!found.length && !level) return null;
+    var row = el("div", "suggest-row");
+    row.appendChild(el("span", "suggest-lead", "Suggested"));
+    found.forEach(function (l) { row.appendChild(suggestChip(c.id, l.id, l.name, l.color)); });
+    if (level) row.appendChild(suggestChip(c.id, "priority", PRIORITIES[level] + " priority", ""));
+    return row;
+  }
+
   // ---------- settings ----------
   var settingsBtn = $("settingsBtn"), settingsBack = $("settingsBack");
-  var sHideAddColumn = $("sHideAddColumn"), sShowDoneDate = $("sShowDoneDate");
+  var sHideAddColumn = $("sHideAddColumn"), sShowDoneDate = $("sShowDoneDate"), sSuggest = $("sSuggest"), sSuggestNote = $("sSuggestNote");
   function renderSettings() {
     var s = settings();
     sHideAddColumn.checked = Boolean(s.hideAddColumn);
     sShowDoneDate.checked = Boolean(s.showDoneDate);
+    if (!suggestAsking) sSuggest.checked = Boolean(s.suggest);
+  }
+  var SUGGEST_BLOCKED = {
+    denied: "This board isn't allowed to use the classifier here. Change it from the tab menu: Permissions…",
+    disabled: "Pages are switched off under Classifier in Scribe's settings.",
+    no_source: "No classifier is set up yet. Add one under Classifier in Scribe's settings."
+  };
+  /** Say under the switch why no suggestions will come, when that is so. */
+  function checkSuggestions() {
+    if (!settings().suggest) return;
+    if (!scribe.ml) { sSuggestNote.textContent = "Restart Scribe to use suggestions."; return; }
+    scribe.ml.capabilities().then(function (caps) {
+      if (!settings().suggest) return;
+      sSuggestNote.textContent = caps && caps.ok && !caps.available ? SUGGEST_BLOCKED[caps.reason] || "The classifier is not available." : "";
+    });
   }
   function openSettings() {
     closeMenu();
+    sSuggestNote.textContent = "";
     renderSettings();
+    checkSuggestions();
     settingsBack.classList.remove("hidden");
     settingsBtn.classList.add("on");
     $("settingsClose").focus();
@@ -4313,6 +4544,28 @@
   });
   sHideAddColumn.addEventListener("change", function () { saveSetting("hideAddColumn", sHideAddColumn.checked); });
   sShowDoneDate.addEventListener("change", function () { saveSetting("showDoneDate", sShowDoneDate.checked); });
+  // Switching it on is where the user is asked to let this board use the classifier; no later call asks.
+  sSuggest.addEventListener("change", function () {
+    sSuggestNote.textContent = "";
+    if (!sSuggest.checked) return saveSetting("suggest", false);
+    if (!scribe.ml || !scribe.permissions) {
+      sSuggest.checked = false;
+      sSuggestNote.textContent = "Restart Scribe to use suggestions.";
+      return;
+    }
+    suggestAsking = true;
+    scribe.permissions.request("ml.decide").then(function (answer) {
+      suggestAsking = false;
+      if (answer && answer.ok && answer.granted) {
+        suggestDenied = false;
+        saveSetting("suggest", true);
+        checkSuggestions();
+      } else {
+        sSuggest.checked = false;
+        sSuggestNote.textContent = "Suggestions stay off until you allow this board to use the classifier.";
+      }
+    });
+  });
   // Capture phase, so Esc closes only the settings and not the card or archive behind them.
   window.addEventListener("keydown", function (e) {
     if (e.key !== "Escape" || settingsBack.classList.contains("hidden") || confirmDone) return;

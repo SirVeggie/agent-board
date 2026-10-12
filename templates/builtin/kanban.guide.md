@@ -51,6 +51,7 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             due?, assignee?, checklist: [{ id, text, done }],
             comments: [{ id, by, at, text }], images: [{ id, name, data }],  // by: "user" | assignee name | "agent"
             blockedBy: [cardId], status?, claim?, thread?, from?, archived?,
+            suggest?: { labels?: [labelId], priority?, no?: [labelId | "priority"] },  // the page's; leave it alone
             cover?, createdAt, createdBy?, createdThread?, movedAt, doneAt?,
             usage?: { turns, inputTokens?, outputTokens?, at?, thread? } }]  // last worker chat; page writes it
 nextNum: number
@@ -74,3 +75,4 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?, workerInstructions?,    
 - `workerLog` is the board's own run log (starts, pauses, merges, usage-limit waits). End-of-chat lines include `usage` when the daemon reported totals. Leave it alone; read it with `logs`.
 - `from` is the last agent column the card entered. Sweep, `release` (no `to`), and Request changes send it back there when there is more than one agent column.
 - Keep `archived` cards; they are the user's archive.
+- `suggest` holds what the classifier suggested for a card (board setting "Suggest labels and priority", `settings.suggest`): labels and a priority the user has not taken yet, and in `no` the ones they dismissed. The board asks about a card that is created or whose title or description changes while the board is open in a window, however it got there (the UI or your `create` / `update`), and shows the answer as chips; only the user's click applies one. Don't write `suggest` and don't treat it as the card's labels or priority. A label may carry a `description` (set it with `page_update`): it is added to the question asked about that label.
