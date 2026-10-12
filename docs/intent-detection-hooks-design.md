@@ -2,6 +2,18 @@
 
 Design for card #478, 12 October 2026. No runtime code was changed. Builds on the earlier classification design (#246, `docs/classification-api-design.md`), whose form was never answered, so nothing from it exists in code yet.
 
+## Decisions (user, 12 October 2026)
+
+These override the recommendations below where they differ.
+
+- **Backend:** the Jev API. "Local" means a Jev-API-compatible server the user hosts, reached through the same setting with another base URL. So the settings hold several saved classifier sources (name, base URL, key, model) with one marked default, like model sources. A bundled local model pack is not planned.
+- **What may be sent:** everything (user messages, agent text and thinking, tool calls, tool results), each behind its own switch, all on by default, since a "remote" source may be running on this machine.
+- **Hooks:** a separate card, and version 1 includes gating (ask and block before tool calls) and the keyword-rules list in settings, not only observing.
+- **Creating screen:** a small hint first, the full cover once a page is confirmed. The confirmation should come mainly from the agent itself: the floating chat's instructions tell it to announce a new page before writing it (a small `page_intent` tool call with the title), which the hooks pick up as a rule with no classifier and few false positives. The classifier on the user's message only drives the hint. The existing `page_show` detection and the HTML file-write rule stay as further confirmations.
+- **Lowering permissions:** soft ceiling; the user is asked when the agent needs more.
+- **Classifier slow or down:** fail open.
+- **After page intent:** injection scanning, search rerank, kanban label suggestions through the page API.
+
 ## Summary
 
 **Recommendation: three layers, built in this order, each as its own card.**
