@@ -336,6 +336,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       document.querySelector('main')!.append(pool);
       for (const { el } of frames.values()) pool.append(el);
       const original = frames.get(state.activeId).el;
+      for (const animation of original.getAnimations()) animation.finish();
       const width = original.getBoundingClientRect().width;
       const target = state.tabs.find((tab: any) => tab.id !== state.activeId).id;
       await views.open(target, 'split');
@@ -347,13 +348,64 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       });
       const entering = frames.get(target).el.getAnimations().length > 0;
       views.closeSplit();
-      return { width, samples, entering, cancelled: original.getAnimations().length === 0 };
+      await Promise.resolve();
+      const closing = original.getAnimations()[0];
+      closing.pause();
+      const closeSamples = [0, 120, 240].map(time => {
+        closing.currentTime = time;
+        return original.getBoundingClientRect().width;
+      });
+      closing.currentTime = 120;
+      const interruptedWidth = original.getBoundingClientRect().width;
+      await views.open(target, 'split');
+      const reopenedWidth = original.getBoundingClientRect().width;
+      const cancelled = closing.playState === 'idle';
+      for (const node of document.querySelectorAll('[data-pane]')) for (const animation of node.getAnimations()) animation.finish();
+      views.closeSplit();
+      await Promise.resolve();
+      for (const animation of original.getAnimations()) animation.finish();
+      return { width, samples, entering, closeSamples, interruptedWidth, reopenedWidth, cancelled };
     });
     assert.ok(Math.abs(motion.samples[0] - motion.width) < 1);
     assert.ok(motion.samples[0] > motion.samples[1] && motion.samples[1] > motion.samples[2]);
     assert.ok(Math.abs(motion.samples[2] - area.width / 2) < 1);
     assert.equal(motion.entering, true);
+    assert.ok(Math.abs(motion.closeSamples[0] - motion.samples[2]) < 1);
+    assert.ok(motion.closeSamples[0] < motion.closeSamples[1] && motion.closeSamples[1] < motion.closeSamples[2]);
+    assert.ok(Math.abs(motion.closeSamples[2] - motion.width) < 1);
+    assert.ok(Math.abs(motion.interruptedWidth - motion.reopenedWidth) < 1);
     assert.equal(motion.cancelled, true);
+    const stackedClose = await page.evaluate(async () => {
+      const { views, frames, state } = (window as any).dragTest;
+      const target = state.tabs.find((tab: any) => tab.id !== state.activeId).id;
+      await views.open(target, 'split');
+      (document.querySelector('[aria-label="Stack panes"]') as HTMLButtonElement).click();
+      views.focusPane('b');
+      const remaining = frames.get(target).el;
+      const before = remaining.getBoundingClientRect();
+      (document.querySelector('.pane-head[data-pane="a"] [aria-label="Close pane"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+      const animation = remaining.getAnimations()[0];
+      animation.pause(); animation.currentTime = 0;
+      const start = remaining.getBoundingClientRect();
+      animation.currentTime = 240;
+      const end = remaining.getBoundingClientRect();
+      animation.finish();
+      return { beforeTop: before.top, startTop: start.top, beforeHeight: before.height, startHeight: start.height, endHeight: end.height, kept: frames.get(target).el === remaining };
+    });
+    assert.ok(Math.abs(stackedClose.beforeTop - stackedClose.startTop) < 1);
+    assert.ok(Math.abs(stackedClose.beforeHeight - stackedClose.startHeight) < 1);
+    assert.ok(stackedClose.endHeight > stackedClose.startHeight);
+    assert.equal(stackedClose.kept, true);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await page.evaluate(async () => {
+      const { views, frames, state } = (window as any).dragTest;
+      await views.open(state.tabs.find((tab: any) => tab.id !== state.activeId).id, 'split');
+      views.closeSplit();
+      await Promise.resolve();
+      return frames.get(state.activeId).el.getAnimations().length;
+    }), 0);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     const peekMotion = await page.evaluate(async () => {
       const { views, frames, state } = (window as any).dragTest;
       const target = state.tabs.find((tab: any) => tab.id !== state.activeId).id;
@@ -554,7 +606,16 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
         for (const animation of animations) animation.currentTime = time;
         return [original.getBoundingClientRect().width, draft.getBoundingClientRect().width];
       });
-      return { originalWidth, draftWidths, samples, originalKept: frames.get('original').el === original };
+      const openingDraftWidths = [...draftWidths];
+      views.closeSplit();
+      await Promise.resolve();
+      const closing = draft.getAnimations()[0];
+      closing.pause();
+      const closeWidths = [0, 120, 240].map(time => {
+        closing.currentTime = time;
+        return draft.getBoundingClientRect().width;
+      });
+      return { originalWidth, draftWidths: openingDraftWidths, samples, closeWidths, originalKept: frames.get('original').el === original };
     });
     assert.ok(activeMotion.draftWidths.length > 0);
     assert.ok(activeMotion.draftWidths.every((width: number) => Math.abs(width - 550) < 1));
@@ -563,6 +624,9 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     assert.ok(activeMotion.samples[0][0] > activeMotion.samples[1][0] && activeMotion.samples[1][0] > activeMotion.samples[2][0]);
     assert.ok(Math.abs(activeMotion.samples[2][0] - 550) < 1);
     assert.equal(activeMotion.originalKept, true);
+    assert.ok(Math.abs(activeMotion.closeWidths[0] - 550) < 1);
+    assert.ok(activeMotion.closeWidths[0] < activeMotion.closeWidths[1] && activeMotion.closeWidths[1] < activeMotion.closeWidths[2]);
+    assert.ok(Math.abs(activeMotion.closeWidths[2] - activeMotion.originalWidth) < 1);
   } finally {
     await browser.close();
   }

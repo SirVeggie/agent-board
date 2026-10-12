@@ -609,9 +609,9 @@ window.createViews = function createViews(host) {
   }
 
   /** Resize the existing page in place; moving pooled iframes would reload them. */
-  function animateSplitOpening(previousBoxes, split) {
+  function animateSplitLayout(previousBoxes, split) {
     const options = { duration: 240, easing: getComputedStyle(mainEl).getPropertyValue("--ease").trim() || "ease" };
-    for (const node of mainEl.querySelectorAll("[data-pane], .split-divider")) {
+    for (const node of mainEl.querySelectorAll('[data-pane], .split-divider, [data-role="primary"], .newpage')) {
       if (node.hidden || node.classList.contains("inactive")) continue;
       const before = previousBoxes.get(node);
       const after = node.getBoundingClientRect();
@@ -621,7 +621,7 @@ window.createViews = function createViews(host) {
           { left: `${parseFloat(style.left) + before.left - after.left}px`, top: `${parseFloat(style.top) + before.top - after.top}px`, width: `${before.width}px`, height: `${before.height}px` },
           { left: style.left, top: style.top, width: style.width, height: style.height },
         ], options));
-      } else {
+      } else if (split) {
         const offset = split.dir === "col" ? "translateY(16px)" : "translateX(16px)";
         // A cold frame reveals its content after load. An opacity keyframe captured here
         // would otherwise override that reveal, then snap to visible when it finishes.
@@ -686,9 +686,16 @@ window.createViews = function createViews(host) {
     const active = host.activeTab();
     const split = active ? activeSplit() : null;
     const layoutKey = split ? JSON.stringify([host.spaceId(), split.dir, stopsFor(split), split.panes.map(frameIdOf)]) : "";
-    if (layoutKey !== splitLayoutKey) stopSplitAnimation();
-    const openingSplit = split && !mainEl.classList.contains("has-split") && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const hadSplit = mainEl.classList.contains("has-split");
+    const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const openingSplit = split && !hadSplit && motion;
+    const closingSplit = !split && hadSplit && motion;
     const previousBoxes = new Map();
+    if (closingSplit) {
+      for (const node of mainEl.querySelectorAll("[data-pane]")) {
+        if (!node.hidden && !node.classList.contains("inactive")) previousBoxes.set(node, node.getBoundingClientRect());
+      }
+    }
     if (openingSplit) {
       for (const id of host.frameIds()) {
         const node = host.frame(id).el;
@@ -697,6 +704,8 @@ window.createViews = function createViews(host) {
       const draft = mainEl.querySelector(".newpage:not([hidden])");
       if (draft) previousBoxes.set(draft, draft.getBoundingClientRect());
     }
+    // Capture the displayed size before cancelling an interrupted opening or closing.
+    if (layoutKey !== splitLayoutKey) stopSplitAnimation();
     splitLayoutKey = layoutKey;
     const inPane = (target) => Boolean(split && target) && paneIndex(split, frameIdOf(target)) !== -1;
     if (inPane(peekTarget())) {
@@ -763,10 +772,10 @@ window.createViews = function createViews(host) {
     renderPeekChrome(top);
     dropUnusedUrlFrames();
     deliverAnchor();
-    if (openingSplit) {
+    if (openingSplit || closingSplit) {
       // app.js assigns the New page's pane immediately after layout returns.
       queueMicrotask(() => {
-        if (splitLayoutKey === layoutKey) animateSplitOpening(previousBoxes, split);
+        if (splitLayoutKey === layoutKey) animateSplitLayout(previousBoxes, split);
       });
     }
   }
