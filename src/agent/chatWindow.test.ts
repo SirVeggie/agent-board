@@ -50,7 +50,7 @@ test("the chat moves to a window of its own and back", async (t) => {
     const main = await context.newPage();
     main.on("pageerror", (error) => errors.push(error.message));
     await load(main, "http://chat.test/", "");
-    const popOut = main.getByRole("button", { name: "Open in its own window", exact: true });
+    const popOut = main.getByRole("button", { name: "Open as a window", exact: true });
 
     // From the sidebar: the thread and what was written go along, and the sidebar closes.
     await main.evaluate(() => {
@@ -73,7 +73,7 @@ test("the chat moves to a window of its own and back", async (t) => {
       const { S, full } = (window as any).chatTest;
       return [S.fullOpen, S.dockShown, full.root.hidden, full.view.threadId, full.view.input.value, (window as any).scribeChat.escape(), S.fullOpen];
     }), [true, false, false, "one", "Unsent message", false, true]);
-    assert.equal(await child.getByRole("button", { name: "Open in its own window", exact: true }).count(), 0);
+    assert.equal(await child.getByRole("button", { name: "Open as a window", exact: true }).count(), 0);
     // A reload shows the thread again, without the text that was already handed over.
     assert.deepEqual(await child.evaluate(() => (window as any).scribePopout.chatHandoff()), { threadId: "one", draft: null, composer: null });
 

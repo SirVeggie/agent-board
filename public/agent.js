@@ -2110,7 +2110,7 @@
       acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings", false));
       acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread (Ctrl+Shift+K)"));
       if (!SOLO && window.scribePopout?.supported && (this.variant === "side" || this.variant === "full")) {
-        acts.append(button(icon("popout"), "ag-icon-btn", () => popOutChat(), "Open in its own window"));
+        acts.append(button(icon("popout"), "ag-icon-btn", () => popOutChat(), "Open as a window"));
       }
       if (this.variant === "side") {
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L)"));
