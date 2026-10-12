@@ -1587,11 +1587,13 @@ export async function startMcp(): Promise<void> {
 
   // The agent browser and page_ask are for Scribe chat threads only; other MCP clients have their own.
   if (process.env.SCRIBE_THREAD) {
-    registerBrowserTools(server);
+    // Tool groups the thread's custom mode turns off (customModes.ts).
+    const off = new Set((process.env.SCRIBE_TOOLS_OFF ?? "").split(","));
+    if (!off.has("browser")) registerBrowserTools(server);
     if (pages) registerAsk(server);
     registerWebRequest(server);
-    registerThreadTools(server);
-    registerHelperTools(server);
+    if (!off.has("threads")) registerThreadTools(server);
+    if (!off.has("helpers")) registerHelperTools(server);
     registerMemoryTools(server);
   }
 

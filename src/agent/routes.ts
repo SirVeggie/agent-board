@@ -12,7 +12,7 @@ import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope 
 import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, setServerEnabled, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
-import { workspaceKey } from "./prefs.js";
+import { workspaceKey, type ThreadPatch } from "./prefs.js";
 import { hookCoverage } from "./hooks.js";
 import { copySkill, createSkill, readHarnessFile, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
@@ -800,8 +800,8 @@ function parseScope(value: unknown): ThreadScope {
   return { kind: "global", ref: null };
 }
 
-function threadPatch(body: Record<string, unknown>): Partial<Thread> {
-  const patch: Partial<Thread> = {};
+function threadPatch(body: Record<string, unknown>): ThreadPatch {
+  const patch: ThreadPatch = {};
   if (typeof body.title === "string") patch.title = body.title;
   if (isProviderId(body.provider)) patch.provider = body.provider;
   if (typeof body.model === "string" && body.model) patch.model = body.model;
@@ -810,6 +810,9 @@ function threadPatch(body: Record<string, unknown>): Partial<Thread> {
     patch.modelParams = Object.fromEntries(Object.entries(body.modelParams).map(([k, v]) => [k, String(v)]));
   }
   if (body.mode === "code" || body.mode === "ask" || body.mode === "plan" || body.mode === "board") patch.mode = body.mode;
+  // Picking a built-in mode leaves the custom one.
+  if (typeof body.customMode === "string" && body.customMode) patch.customMode = body.customMode;
+  else if (body.customMode === null || patch.mode) patch.customMode = null;
   if (body.approval === "ask" || body.approval === "edits" || body.approval === "auto" || body.approval === "full") patch.approval = body.approval;
   const web = parseWebAccess(body.web);
   if (web) patch.web = web;

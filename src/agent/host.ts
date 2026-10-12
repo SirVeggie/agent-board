@@ -56,7 +56,8 @@ import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverMode
 import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
-import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
+import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
+import { cleanCustomModes, modeKeepsServer, modeOff, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
@@ -841,6 +842,8 @@ export class AgentHost {
       memory: saved.memory !== false,
       hookRules: savedRules(saved.hookRules),
       disabledModes: cleanDisabledModes(saved.disabledModes),
+      customModes: cleanCustomModes(saved.customModes),
+      customMode: typeof saved.customMode === "string" ? saved.customMode : null,
       hiddenWorkspaces: Array.isArray(saved.hiddenWorkspaces) ? saved.hiddenWorkspaces.filter((dir) => typeof dir === "string") : [],
     };
   }
@@ -859,13 +862,36 @@ export class AgentHost {
       this.ruleDetectors = null;
     }
     if (patch.disabledModes !== undefined) next.disabledModes = cleanDisabledModes(patch.disabledModes);
+    if (patch.customModes !== undefined) next.customModes = cleanCustomModes(patch.customModes);
+    if (!next.customModes.some((mode) => mode.id === next.customMode)) next.customMode = null;
     if (patch.searxngUrl !== undefined) {
       next.searxngUrl = cleanSearxngUrl(patch.searxngUrl);
       if (patch.searxngUrl && !next.searxngUrl) throw new Error("The SearXNG address must be an http(s) URL.");
     }
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     this.db.setSetting("prefs", next);
+    if (patch.customModes !== undefined) this.refreshCustomModes(next);
     return next;
+  }
+
+  /**
+   * An edited custom mode applies to the threads in it at once. A deleted one leaves its threads as
+   * they are: taking limits away is the user's call, by picking another mode there.
+   */
+  private refreshCustomModes(prefs: Prefs): void {
+    for (const thread of this.threads.values()) {
+      const mode = thread.custom && prefs.customModes.find((m) => m.id === thread.custom!.id);
+      if (!mode) continue;
+      const custom = threadCustom(mode);
+      if (JSON.stringify(custom) === JSON.stringify(thread.custom)) continue;
+      thread.custom = custom;
+      if (modeOff(thread, "web")) thread.web = "off";
+      thread.updatedAt = Date.now();
+      this.db.saveThread(thread);
+      this.effectivePermissions.delete(thread.id);
+      this.sessions.get(thread.id)?.update(this.sessionThread(thread));
+      this.emit({ type: "agent_thread", thread: this.view(thread) });
+    }
   }
 
   // ---------- Native harness model sources ----------
@@ -1072,7 +1098,7 @@ export class AgentHost {
       // In Scribe's own list, so the view can change it.
       editable: true,
       active: active.has(name),
-      ...(active.has(name) ? {} : { why: server.enabled === false ? "Turned off" : `Not given to ${thread.mode === "board" ? "Pages" : thread.mode} threads` }),
+      ...(active.has(name) ? {} : { why: server.enabled === false ? "Turned off" : !modeKeepsServer(thread, name) ? `Left out by the ${thread.custom?.name} mode` : `Not given to ${thread.mode === "board" ? "Pages" : thread.mode} threads` }),
     }));
     // Keeper inherited from Claude Code's config: in no Scribe layer, but the thread gets it.
     for (const server of active.values()) {
@@ -1137,7 +1163,7 @@ export class AgentHost {
   }
 
   /** remember: false for threads a page starts (board workers), so they leave the user's defaults alone. */
-  createThread(input: Partial<Thread> & { scope?: ThreadScope }, { remember = true }: { remember?: boolean } = {}): ThreadView {
+  createThread(input: ThreadPatch & { scope?: ThreadScope }, { remember = true }: { remember?: boolean } = {}): ThreadView {
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
     // A draft thread (saved unsent) leaves the spare for the thread the user goes on to start.
@@ -1162,14 +1188,14 @@ export class AgentHost {
   }
 
   /** Persist a draft's visible settings as the defaults for the next new thread. */
-  rememberDraft(input: Partial<Thread> & { scope?: ThreadScope }): Prefs {
+  rememberDraft(input: ThreadPatch & { scope?: ThreadScope }): Prefs {
     const thread = this.draftThread(input);
     this.rememberChoices(thread, settingPatch(thread));
     return this.prefs();
   }
 
   /** A thread with defaults filled in, not stored. createThread and warmDraft agree on it, so a warmed spare matches. */
-  private draftThread(input: Partial<Thread> & { scope?: ThreadScope }): Thread {
+  private draftThread(input: ThreadPatch & { scope?: ThreadScope }): Thread {
     const prefs = this.prefs();
     const provider = input.provider ?? prefs.provider;
     const scope: ThreadScope = input.scope ?? { kind: "global", ref: null };
@@ -1184,6 +1210,11 @@ export class AgentHost {
             : prefs.scopeWorkspaces[scopeKey] ?? prefs.recentWorkspaces[0] ?? null;
     const model = input.model ?? prefs.models[provider] ?? "default";
     const choice = modelChoice(prefs, provider, model);
+    const scoped = scope.kind === "page" || scope.kind === "folder";
+    // A custom mode named for the thread, else the last one picked when nothing says which mode.
+    const customId = input.customMode !== undefined ? input.customMode : input.mode === undefined && !scoped ? prefs.customMode : null;
+    const picked = input.custom ? undefined : prefs.customModes.find((mode) => mode.id === customId);
+    const custom = input.custom ?? (picked ? threadCustom(picked) : undefined);
     const now = Date.now();
     const thread: Thread = {
       id: `th_${crypto.randomBytes(6).toString("hex")}`,
@@ -1193,9 +1224,11 @@ export class AgentHost {
       model,
       effort: input.effort !== undefined ? input.effort : choice.effort,
       modelParams: input.modelParams ?? choice.modelParams,
-      mode: input.mode ?? (scope.kind === "page" || scope.kind === "folder" ? "board" : prefs.mode),
-      approval: input.approval ?? approvalFor(prefs, provider),
-      web: input.web ?? prefs.web,
+      mode: picked?.base ?? input.mode ?? (scoped ? "board" : prefs.mode),
+      ...(custom ? { custom } : {}),
+      approval: input.approval ?? picked?.approval ?? approvalFor(prefs, provider),
+      // A mode without web tools keeps web off whatever the thread's setting says.
+      web: custom?.off.includes("web") ? "off" : input.web ?? picked?.web ?? prefs.web,
       scope,
       cwd: cwd ?? null,
       useWorktree: input.useWorktree ?? (cwd ? prefs.worktrees[workspaceKey(cwd)] ?? false : false),
@@ -1232,7 +1265,7 @@ export class AgentHost {
     return pageThreadWorkspace(rows, pageId);
   }
 
-  updateThread(id: string, patch: Partial<Thread>): ThreadView {
+  updateThread(id: string, patch: ThreadPatch): ThreadView {
     const thread = this.requireThread(id);
     const next: Thread = { ...thread };
     if (typeof patch.title === "string" && patch.title.trim()) {
@@ -1262,8 +1295,18 @@ export class AgentHost {
     if (patch.effort !== undefined) next.effort = patch.effort;
     if (patch.modelParams && typeof patch.modelParams === "object") next.modelParams = { ...next.modelParams, ...patch.modelParams };
     if (patch.mode) next.mode = patch.mode;
+    if (patch.customMode === null) delete next.custom;
+    else if (patch.customMode) {
+      const mode = this.prefs().customModes.find((m) => m.id === patch.customMode);
+      if (!mode) throw new Error("That custom mode no longer exists.");
+      next.mode = mode.base;
+      next.custom = threadCustom(mode);
+      if (mode.approval) next.approval = mode.approval;
+      if (mode.web) next.web = mode.web;
+    }
     if (patch.approval) next.approval = patch.approval;
     if (patch.web) next.web = patch.web;
+    if (modeOff(next, "web")) next.web = "off";
     if (patch.cwd !== undefined) {
       const cwd = patch.cwd ? path.normalize(patch.cwd) : null;
       if (cwd !== thread.cwd && this.runs.has(id)) throw new Error("Stop the running turn before changing the workspace.");
@@ -1286,7 +1329,7 @@ export class AgentHost {
     if (patch.draft !== undefined) next.draft = patch.draft;
     // An archived thread is done with its agent browser.
     if (next.archived && !thread.archived) void closeThreadBrowser(id);
-    if (next.provider !== thread.provider || next.mode !== thread.mode || next.approval !== thread.approval || next.cwd !== thread.cwd || next.web !== thread.web || JSON.stringify(next.scope) !== JSON.stringify(thread.scope)) this.effectivePermissions.delete(id);
+    if (next.provider !== thread.provider || next.mode !== thread.mode || next.custom !== thread.custom || next.approval !== thread.approval || next.cwd !== thread.cwd || next.web !== thread.web || JSON.stringify(next.scope) !== JSON.stringify(thread.scope)) this.effectivePermissions.delete(id);
     next.updatedAt = Date.now();
     this.threads.set(id, next);
     this.db.saveThread(next);
@@ -1336,7 +1379,7 @@ export class AgentHost {
   }
 
   /** Model, effort, mode, and workspace picks become the defaults for new threads. */
-  private rememberChoices(thread: Thread, patch: Partial<Thread>): void {
+  private rememberChoices(thread: Thread, patch: ThreadPatch): void {
     const next = prefsPatchFromChoices(this.prefs(), thread, patch);
     if (Object.keys(next).length) this.setPrefs(next);
   }
@@ -1563,7 +1606,7 @@ export class AgentHost {
   private scopeInfo(thread: Thread): ScopeInfo {
     const info = this.scopePages(thread);
     if (this.prefs().searxngUrl) info.webSearch = true;
-    if (this.prefs().helpers && !thread.helperOf) info.helpers = true;
+    if (this.prefs().helpers && !thread.helperOf && !modeOff(thread, "helpers")) info.helpers = true;
     if (this.prefs().memory) info.memories = memoriesFor(this.memories(), this.memoryWorkspace(thread));
     if (thread.provider === "claude") {
       const have = new Set(serversForThread(thread).map((s) => s.name));
@@ -2060,6 +2103,7 @@ export class AgentHost {
   async requestWeb(threadId: string, call: WebCall, opts: { importance?: WebImportance; reason?: string; signal?: AbortSignal } = {}): Promise<{ allowed: boolean; message?: string }> {
     const thread = this.threads.get(threadId);
     if (!thread) return { allowed: false, message: "Unknown thread." };
+    if (modeOff(thread, "web")) return { allowed: false, message: `This thread's mode (${thread.custom?.name}) has no web access. Carry on without it.` };
     if (webCallAllowed(call, thread.web, this.prefs().webAllowlist, thread.webGrants)) return { allowed: true };
     if (this.takeWebPass(threadId, call)) return { allowed: true };
     const run = this.runs.get(threadId);
@@ -2124,6 +2168,7 @@ export class AgentHost {
   async preRequestWeb(threadId: string, call: WebCall, opts: { importance?: WebImportance; reason?: string; signal?: AbortSignal }): Promise<{ allowed: boolean; message: string }> {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("web_request only works in Scribe chat threads.");
+    if (modeOff(thread, "web")) return { allowed: false, message: `This thread's mode (${thread.custom?.name}) has no web access. Carry on without it.` };
     if (webCallAllowed(call, thread.web, this.prefs().webAllowlist, thread.webGrants)) return { allowed: true, message: "Already allowed: make the call." };
     const result = await this.requestWeb(threadId, call, opts);
     if (!result.allowed) return { allowed: false, message: result.message ?? "Not allowed." };
@@ -2581,6 +2626,8 @@ export class AgentHost {
         ...(opts.effort ? { effort: opts.effort } : {}),
         // Recheck the boundary: the parent mode may have changed while approval was pending.
         mode: this.helperMode(now, opts.mode),
+        // A helper is held to what its parent's mode takes away.
+        ...(now.custom ? { custom: now.custom } : {}),
         approval: now.approval,
         web: now.web,
         // A helper for files and commands gets no page tools; one of a Pages thread works on the same pages.
@@ -4393,6 +4440,7 @@ export class AgentHost {
       effort: source.effort,
       modelParams: source.modelParams,
       mode: source.mode,
+      ...(source.custom ? { custom: source.custom } : {}),
       approval: source.approval,
       web: source.web,
       scope: source.scope,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cursorToolsOff, customKey, modeOff, scribeToolsOff } from "../customModes.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -147,17 +148,20 @@ export function modelSelection(thread: Pick<Thread, "model" | "effort" | "modelP
 }
 
 /** Built-in tools for a thread: an allowlist (tools) or what to drop from the default set (disallowedTools). */
-export function toolLists(thread: Pick<Thread, "mode" | "web">, hostShell = false): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
+export function toolLists(thread: Pick<Thread, "mode" | "web" | "custom">, hostShell = false): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
   const web = thread.web === "on" ? WEB_TOOLS : [];
-  if (thread.mode === "board") return { tools: ["mcp", "updateTodos", "readTodos", ...web] };
-  if (thread.mode === "ask") return { tools: [...ASK_TOOLS, "mcp", ...web] };
+  // A custom mode's tool groups come off either list.
+  const off = cursorToolsOff(thread);
+  const keep = (tools: ToolName[]) => tools.filter((name) => !off.includes(name));
+  if (thread.mode === "board") return { tools: keep(["mcp", "updateTodos", "readTodos", ...web]) };
+  if (thread.mode === "ask") return { tools: keep([...ASK_TOOLS, "mcp", ...web]) };
   // Not "mcp": that would take the custom tools, the host shell among them, away too.
-  return { disallowedTools: [...NO_ANSWER_TOOLS, ...(hostShell ? (["shell"] as ToolName[]) : []), ...(thread.web === "on" ? [] : WEB_TOOLS)] };
+  return { disallowedTools: [...new Set([...NO_ANSWER_TOOLS, ...(hostShell ? (["shell"] as ToolName[]) : []), ...(thread.web === "on" ? [] : WEB_TOOLS), ...off])] };
 }
 
 /** Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be asked. */
-export function wantsHostShell(thread: Pick<Thread, "mode" | "approval">, enabled: boolean): boolean {
-  return enabled && (thread.mode === "code" || thread.mode === "plan") && (thread.approval === "ask" || thread.approval === "edits");
+export function wantsHostShell(thread: Pick<Thread, "mode" | "approval" | "custom">, enabled: boolean): boolean {
+  return enabled && !modeOff(thread, "shell") && (thread.mode === "code" || thread.mode === "plan") && (thread.approval === "ask" || thread.approval === "edits");
 }
 
 export class CursorProvider implements AgentProvider {
@@ -371,7 +375,7 @@ export class CursorProvider implements AgentProvider {
 /** A spare is bound to what its agent was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web, thread.approval, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
+  return JSON.stringify([where, thread.mode, customKey(thread), thread.web, thread.approval, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
 }
 
 /**
@@ -386,7 +390,9 @@ class BoardTools {
     private spec: SessionContext["boardMcp"],
     readonly threadId: string,
     /** Page tools; off for a thread with no Scribe scope. */
-    readonly pages = true
+    readonly pages = true,
+    /** Tool groups the thread's custom mode turns off (SCRIBE_TOOLS_OFF). */
+    readonly toolsOff: Record<string, string> = {}
   ) {}
 
   tools(): Promise<Record<string, SDKCustomTool>> {
@@ -399,7 +405,7 @@ class BoardTools {
 
   private async open(): Promise<Record<string, SDKCustomTool>> {
     const client = new Client({ name: "scribe-cursor", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "cursor", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }) };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "cursor", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }), ...this.toolsOff };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();
@@ -575,7 +581,7 @@ class CursorSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /**
@@ -644,7 +650,7 @@ class CursorSession implements ProviderSession {
   private async options(): Promise<AgentOptions> {
     const t = this.thread;
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
-    this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope));
+    this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope), scribeToolsOff(t));
     // Scribe runs these itself, so its hooks can hold them (the board tools ask from their own process, see mcp.ts).
     const own: Record<string, SDKCustomTool> = await this.userTools();
     const searchUrl = t.web !== "on" ? (this.ctx.webSearchUrl?.() ?? "") : "";
@@ -689,7 +695,7 @@ class CursorSession implements ProviderSession {
 
   private async open(key: string): Promise<SDKAgent> {
     this.closeAgent();
-    if (this.board && (this.board.threadId !== this.thread.id || this.board.pages === noPages(this.thread.scope))) {
+    if (this.board && (this.board.threadId !== this.thread.id || this.board.pages === noPages(this.thread.scope) || JSON.stringify(this.board.toolsOff) !== JSON.stringify(scribeToolsOff(this.thread)))) {
       this.board.close();
       this.board = null;
     }

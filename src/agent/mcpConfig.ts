@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { modeKeepsServer } from "./customModes.js";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -265,8 +266,8 @@ export function resolveServer(name: string, layer: string, server: McpServer): R
   };
 }
 
-/** The servers a thread gets: enabled, allowed in its mode, from the global list and its workspace's. */
-export function serversForThread(thread: Pick<Thread, "cwd" | "worktree" | "mode">, file: McpFile = readMcpFile(), home: string | null = os.homedir()): ResolvedMcpServer[] {
+/** The servers a thread gets: enabled, allowed in its mode (and kept by its custom mode), from the global list and its workspace's. */
+export function serversForThread(thread: Pick<Thread, "cwd" | "worktree" | "mode" | "custom">, file: McpFile = readMcpFile(), home: string | null = os.homedir()): ResolvedMcpServer[] {
   const workspace = threadWorkspace(thread);
   const servers = mergedServers(file, workspace);
   const keeperConfigured = [file, ...layersFor(file, workspace)].some((layer) => Object.hasOwn(layer.mcpServers, "keeper"));
@@ -275,7 +276,7 @@ export function serversForThread(thread: Pick<Thread, "cwd" | "worktree" | "mode
     if (keeper) servers.push(keeper);
   }
   return servers
-    .filter(({ server }) => server.enabled !== false && serverModes(server).includes(thread.mode))
+    .filter(({ name, server }) => server.enabled !== false && serverModes(server).includes(thread.mode) && modeKeepsServer(thread, name))
     .flatMap(({ name, layer, server }) => resolveServer(name, layer, server) ?? []);
 }
 

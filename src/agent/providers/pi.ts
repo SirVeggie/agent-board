@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { customKey, piToolsOff, scribeToolsOff } from "../customModes.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentSession, AgentSessionEvent, ExtensionAPI, ModelRuntime, ToolCallEvent, ToolCallEventResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -107,10 +108,11 @@ export function splitPiModel(id: string): { provider: string; model: string } | 
 }
 
 /** Pi's built-in tools for a thread's mode; Plan starts read-only and gets the rest when its plan is accepted. */
-export function builtinTools(mode: Thread["mode"]): string[] {
+export function builtinTools(mode: Thread["mode"], off: string[] = []): string[] {
   if (mode === "board") return [];
   if (mode === "ask" || mode === "plan") return READ_TOOLS;
-  return CODE_TOOLS;
+  // A custom mode's tool groups (piToolsOff) come off the code set.
+  return CODE_TOOLS.filter((name) => !off.includes(name));
 }
 
 /** Programs (with their first argument where it matters) that only read, for the "auto" approval level. */
@@ -419,7 +421,7 @@ export class PiProvider implements AgentProvider {
 /** A spare is bound to what its session was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
+  return JSON.stringify([where, thread.mode, customKey(thread), thread.web, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
 }
 
 /** The board MCP server's tools as Pi custom tools: one MCP client per session, started with the thread's id so card claims point at it. */
@@ -431,7 +433,9 @@ class BoardTools {
     private spec: SessionContext["boardMcp"],
     readonly threadId: string,
     /** Page tools; off for a thread with no Scribe scope. */
-    readonly pages = true
+    readonly pages = true,
+    /** Tool groups the thread's custom mode turns off (SCRIBE_TOOLS_OFF). */
+    readonly toolsOff: Record<string, string> = {}
   ) {}
 
   tools(): Promise<ToolDefinition[]> {
@@ -444,7 +448,7 @@ class BoardTools {
 
   private async open(): Promise<ToolDefinition[]> {
     const client = new Client({ name: "scribe-pi", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "pi", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }) };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "pi", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }), ...this.toolsOff };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();
@@ -568,7 +572,7 @@ class PiSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /** Who answers an approval: the running turn, else the host from the thread's rules. */
@@ -633,7 +637,7 @@ class PiSession implements ProviderSession {
 
   /** The tools Scribe adds to Pi: the board's, the web fetch, questions, todos, and Plan mode's exit_plan. */
   private async customTools(): Promise<ToolDefinition[]> {
-    this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope));
+    this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread));
     const tools = [...(await this.board.tools()), ...(await this.userTools())];
     const searchUrl = this.ctx.webSearchUrl?.() ?? "";
     const noSearch = searchUrl ? "" : " Web search is not available.";
@@ -760,7 +764,7 @@ class PiSession implements ProviderSession {
     if (!decision.accepted) return text(`The user did not accept the plan${decision.note ? `: ${decision.note}` : "."} Revise it and present it again with exit_plan.`);
     this.planAccepted = true;
     const session = this.session;
-    if (session) session.setActiveToolsByName([...new Set([...session.getActiveToolNames().filter((n) => n !== "exit_plan"), ...CODE_TOOLS])]);
+    if (session) session.setActiveToolsByName([...new Set([...session.getActiveToolNames().filter((n) => n !== "exit_plan"), ...builtinTools("code", piToolsOff(this.thread))])]);
     sink.modeChanged?.("code");
     return text(`The user accepted the plan${decision.note ? ` with a note: ${decision.note}` : ""}. You can edit files and run commands now: implement it.`);
   }
@@ -854,7 +858,7 @@ class PiSession implements ProviderSession {
 
   private async open(key: string): Promise<AgentSession> {
     this.closeSession();
-    if (this.board && (this.board.threadId !== this.thread.id || this.board.pages === noPages(this.thread.scope))) {
+    if (this.board && (this.board.threadId !== this.thread.id || this.board.pages === noPages(this.thread.scope) || JSON.stringify(this.board.toolsOff) !== JSON.stringify(scribeToolsOff(this.thread)))) {
       this.board.close();
       this.board = null;
     }
@@ -899,7 +903,7 @@ class PiSession implements ProviderSession {
       resourceLoader,
       sessionManager,
       // Pi's tools list is an allowlist: Plan mode needs the Code tools in it to switch them on when its plan is accepted.
-      tools: [...builtinTools(plan ? "code" : this.thread.mode), ...custom.map((t) => t.name)],
+      tools: [...builtinTools(plan ? "code" : this.thread.mode, piToolsOff(this.thread)), ...custom.map((t) => t.name)],
       customTools: custom,
     });
     if (plan) session.setActiveToolsByName([...READ_TOOLS, ...custom.map((t) => t.name)]);

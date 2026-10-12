@@ -1,4 +1,5 @@
 import { codexPermissions, permissionBoundaryProblem, permissionSummary, scribeToolAvailability, workerPermissionProblem, type EffectivePermissions } from "../effectivePermissions.js";
+import { codexReadOnly, customKey, scribeToolsOff } from "../customModes.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -384,8 +385,8 @@ export async function fetchCodexPlanUsage(): Promise<unknown> {
 }
 
 /** Ask / Plan / Pages stay read-only; Full access drops the sandbox; otherwise workspace-write. */
-export function sandboxFor(thread: Pick<Thread, "mode" | "approval">): SandboxMode {
-  if (thread.mode === "ask" || thread.mode === "plan" || thread.mode === "board") return "read-only";
+export function sandboxFor(thread: Pick<Thread, "mode" | "approval" | "custom">): SandboxMode {
+  if (thread.mode === "ask" || thread.mode === "plan" || thread.mode === "board" || codexReadOnly(thread)) return "read-only";
   if (thread.approval === "full") return "danger-full-access";
   return "workspace-write";
 }
@@ -425,7 +426,7 @@ export function windowsSandboxConfig(sandbox: SandboxMode, cwd: string, platform
   };
 }
 
-export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web">, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
+export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web" | "custom">, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
   const effort = thread.effort && thread.effort in EFFORT_LABELS ? (thread.effort as ModelReasoningEffort) : undefined;
   const sandbox = sandboxFor(thread);
   return {
@@ -438,7 +439,7 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
     config: {
       ...(effort ? { model_reasoning_effort: effort } : {}),
       web_search: thread.web === "on" ? "live" : "disabled",
-      "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code",
+      "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code" && !codexReadOnly(thread),
       ...windowsSandboxConfig(sandbox, cwd, platform),
     },
   };
@@ -457,7 +458,7 @@ export function turnStartOverrides(thread: Pick<Thread, "model" | "effort">): { 
 }
 
 /** The board MCP server, registered as Codex MCP server `scribe`. */
-export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: string, pages: boolean): NonNullable<CodexOptions["config"]> {
+export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: string, pages: boolean, toolsOff: Record<string, string> = {}): NonNullable<CodexOptions["config"]> {
   return {
     mcp_servers: {
       scribe: {
@@ -468,6 +469,7 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
           SCRIBE_THREAD: threadId,
           SCRIBE_PROVIDER: "codex",
           ...(pages ? {} : { SCRIBE_PAGES: "off" }),
+          ...toolsOff,
         },
       },
     },
@@ -689,7 +691,7 @@ function apiKeyOption(): Pick<CodexOptions, "apiKey"> {
 
 function spareKey(thread: Thread, ctx: SessionContext): string {
   const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
-  return JSON.stringify([where, thread.mode, thread.web, thread.approval, noPages(thread.scope)]);
+  return JSON.stringify([where, thread.mode, customKey(thread), thread.web, thread.approval, noPages(thread.scope)]);
 }
 
 function toolKind(item: ThreadItem): ToolKind {
@@ -898,7 +900,7 @@ export class CodexSession implements ProviderSession {
   /** Reconnect identity. Model and effort stay off this key so a picker change reuses the thread. */
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
   }
 
   private asker(): BridgeAsk | undefined {
@@ -954,7 +956,7 @@ export class CodexSession implements ProviderSession {
         ...threadOptions(this.thread, this.cwd()),
         developerInstructions: this.instructions,
         config: {
-          ...mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope)),
+          ...mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread)),
           ...threadOptions(this.thread, this.cwd()).config as RpcRecord,
         },
       };

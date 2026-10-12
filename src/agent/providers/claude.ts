@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { claudeToolsOff, customKey, scribeToolsOff } from "../customModes.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -462,7 +463,7 @@ export class ClaudeProvider implements AgentProvider {
 
 /** What a running Claude process cannot change: its tools, folder, and instructions (which follow the scope). */
 function claudeSpareKey(thread: Thread): string {
-  return JSON.stringify([thread.mode, thread.web, thread.cwd, thread.scope.kind, thread.scope.ref]);
+  return JSON.stringify([thread.mode, customKey(thread), thread.web, thread.cwd, thread.scope.kind, thread.scope.ref]);
 }
 
 export function permissionModeFor(thread: Pick<Thread, "mode" | "approval">): PermissionMode {
@@ -657,7 +658,7 @@ class ClaudeSession implements ProviderSession {
 
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.id, thread.mode, thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers())]);
+    return JSON.stringify([thread.id, thread.mode, customKey(thread), thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers())]);
   }
 
   update(thread: Thread): void {
@@ -713,7 +714,7 @@ class ClaudeSession implements ProviderSession {
     const webTools = ["WebSearch", "WebFetch"];
     const { command, args } = this.ctx.boardMcp;
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
-    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, SCRIBE_PROVIDER: "claude", ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}) };
+    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, SCRIBE_PROVIDER: "claude", ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}), ...scribeToolsOff(thread) };
     const permissionMode = permissionModeFor(thread);
     const userServers = this.userServers();
     // Servers set to run without asking; the rest go through canUseTool like any tool.
@@ -795,6 +796,13 @@ class ClaudeSession implements ProviderSession {
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers];
       // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
       options.disallowedTools = ["EnterWorktree", "ExitWorktree"];
+    }
+    // A custom mode's tool groups: gone from the model's tool list, whatever the approval level.
+    const off = claudeToolsOff(thread);
+    if (off.length) {
+      if (Array.isArray(options.tools)) options.tools = options.tools.filter((name) => !off.includes(name));
+      options.allowedTools = options.allowedTools?.filter((name) => !off.includes(name));
+      options.disallowedTools = [...(options.disallowedTools ?? []), ...off];
     }
     return options;
   }

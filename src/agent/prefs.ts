@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope, WebAccess } from "./types.js";
 import type { HookRule } from "./hooks.js";
+import type { CustomMode } from "./customModes.js";
 import { DEFAULT_WEB_ALLOWLIST } from "./webAccess.js";
 
 export type ModelChoice = { effort: string | null; modelParams: Record<string, string> };
@@ -19,6 +20,10 @@ export type Prefs = {
   mode: ThreadMode;
   /** Modes skipped by the cycle hotkey; still available in the mode selector. */
   disabledModes: ThreadMode[];
+  /** The user's own modes (customModes.ts), shown under the built-in ones. */
+  customModes: CustomMode[];
+  /** The custom mode last picked, by id; new threads start in it. Null after a built-in mode was picked. */
+  customMode: string | null;
   approval: ApprovalPolicy;
   /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
   approvals: Partial<Record<ProviderId, ApprovalPolicy>>;
@@ -78,6 +83,8 @@ export const DEFAULT_PREFS: Prefs = {
   modelSettings: {},
   mode: "code",
   disabledModes: [],
+  customModes: [],
+  customMode: null,
   approval: "ask",
   approvals: {},
   web: "on",
@@ -130,12 +137,16 @@ export function seedModelSettings(saved: Partial<Prefs>): Prefs["modelSettings"]
   return seeded;
 }
 
+/** A change to a thread's settings. customMode picks one of the user's modes by id (null: back to the plain built-in mode). */
+export type ThreadPatch = Partial<Thread> & { customMode?: string | null };
+
 type ChoiceThread = {
   provider: ProviderId;
   model: string;
   effort: string | null;
   modelParams: Record<string, string>;
   mode: ThreadMode;
+  custom?: Thread["custom"];
   approval: ApprovalPolicy;
   web: WebAccess;
   scope: ThreadScope;
@@ -144,7 +155,7 @@ type ChoiceThread = {
 };
 
 /** Every setting a new thread should inherit, for rememberChoices. */
-export function settingPatch(thread: ChoiceThread): Partial<Thread> {
+export function settingPatch(thread: ChoiceThread): ThreadPatch {
   return {
     provider: thread.provider,
     model: thread.model,
@@ -162,7 +173,7 @@ export function settingPatch(thread: ChoiceThread): Partial<Thread> {
  * Prefs keys to write so the next new thread matches `thread`, given which fields `patch` changed.
  * Empty object means nothing to store.
  */
-export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch: Partial<Thread>): Partial<Prefs> {
+export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch: ThreadPatch): Partial<Prefs> {
   const next: Partial<Prefs> = {};
   if (patch.model || patch.provider) {
     next.provider = thread.provider;
@@ -176,7 +187,10 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
       [modelKey(thread.provider, thread.model)]: { effort: thread.effort, modelParams: { ...thread.modelParams } },
     };
   }
-  if (patch.mode && thread.scope.kind !== "page" && thread.scope.kind !== "folder") next.mode = thread.mode;
+  if ((patch.mode || patch.customMode !== undefined) && thread.scope.kind !== "page" && thread.scope.kind !== "folder") {
+    next.mode = thread.mode;
+    next.customMode = thread.custom?.id ?? null;
+  }
   if (patch.approval) {
     next.approval = thread.approval;
     const seeded: Prefs["approvals"] = { ...prefs.approvals };

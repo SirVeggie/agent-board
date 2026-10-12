@@ -19,6 +19,15 @@ export function isProviderId(value: unknown): value is ProviderId {
 /** What the agent may touch. Chosen per thread; the provider maps it onto its own tools and modes. */
 export type ThreadMode = "code" | "ask" | "plan" | "board";
 
+/** A thread's copy of its custom mode (customModes.ts): the tool groups it turns off, the MCP servers it keeps, and its instructions. */
+export type ThreadCustomMode = {
+  id: string;
+  name: string;
+  off: import("./customModes.js").ModeCapability[];
+  mcp: "all" | "none" | string[];
+  instructions: string;
+};
+
 /** How tool calls that need permission are answered. */
 export type ApprovalPolicy = "ask" | "edits" | "auto" | "full";
 
@@ -52,6 +61,8 @@ export type Thread = {
   /** Extra model parameters, e.g. Cursor's { fast: "false", context: "300k" }. */
   modelParams: Record<string, string>;
   mode: ThreadMode;
+  /** The custom mode picked for the thread (customModes.ts): what it takes away from `mode`, as of when it was picked or last edited. */
+  custom?: ThreadCustomMode;
   approval: ApprovalPolicy;
   /** Web search and fetch tools: any site, the allowlist in prefs only, or none. */
   web: WebAccess;

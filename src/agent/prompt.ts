@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { customInstructions } from "./customModes.js";
 import os from "node:os";
 import path from "node:path";
 import { BOARD_MCP } from "./providers/cursor.js";
@@ -97,6 +98,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       lines.push("", "Mode: Code. You can read and edit files and run commands in the workspace, subject to the user's approval settings.");
       break;
   }
+  lines.push(...customInstructions(thread));
   if (thread.provider === "codex" && thread.mode !== "board") {
     lines.push("Files: prefer the scribe MCP read_file for routine text reads, list_files for recursive file discovery (optional glob), and grep_files for content searches (pattern, optional glob, fixedStrings and ignoreCase), instead of shell commands. All accept path, a 1-based offset and limit, and return nextOffset for continuation. Searches skip .git and node_modules unless targeted directly; includeHidden includes hidden entries. Reads and searches cover the workspace, Scribe-recorded worktree links and this thread's attachments, with resolved link targets checked. Code mode with Full access permits outside reads. A denied read or search does not authorize bypassing the scope through a shell.");
   }
