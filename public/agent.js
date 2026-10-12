@@ -5836,9 +5836,14 @@
             }
             return;
           }
+          closeMenu();
+          const snap = this.view.takeChat();
+          if (S.fullOpen) leaveFull("side");
+          sidebar.view.closeHelper();
+          sidebar.view.giveChat(snap);
           if (id) setCurrent(id);
+          if (sidebar.listOpen) sidebar.toggleList();
           sidebar.setOpen(true);
-          if (id) sidebar.view.setThread(id);
         }, "Open in the sidebar"),
         button(icon("close"), "ag-icon-btn small dock-close", () => this.setShown(false), "Hide (Esc)", false)
       );
