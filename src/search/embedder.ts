@@ -71,6 +71,14 @@ export class SearchEmbedder implements Embedder {
       this.idle.unref();
     }
   }
+  /** Wait for native library handles to close before replacing a pack on Windows. */
+  async stopAndWait(): Promise<void> {
+    const child = this.child;
+    if (!child) return;
+    const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+    this.stop();
+    await exited;
+  }
   /** Stops immediately on disable/shutdown, and can restart on the next enabled request. */
   stop(error = new Error("Search embedder stopped")): void {
     if (this.idle) clearTimeout(this.idle);

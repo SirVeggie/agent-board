@@ -103,6 +103,8 @@ test("real IPC embeds offline, preserves document order, loads vision lazily and
     assert.ok(query instanceof Float32Array);
     assert.equal(query[0], "task: search result | query: hello".length);
     assert.equal(query[3], 0);
+    await embedder.stopAndWait();
+    assert.equal(embedder.running, false);
     const items = [{ title: "long", text: "x".repeat(5990) }, ...Array.from({ length: 70 }, (_, i) => ({ title: String(i), text: "y".repeat(i) }))];
     const vectors = await embedder.embedDocuments(items);
     assert.deepEqual(vectors.map(v => v[0]), items.map(it => Math.min(6000, `title: ${it.title} | text: ${it.text}`.length)));

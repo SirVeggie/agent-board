@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import express, { Router } from "express";
 import { detectSearchPack, searchEnabled, searchPackDir, setSearchEnabled } from "./pack.js";
 import { searchEmbedder } from "./embedder.js";
-import { refreshSearchIndex, searchIndex } from "./service.js";
+import { refreshSearchIndex, searchIndex, setSearchPackReplacing } from "./service.js";
+import { installSearchPack, MAX_PACK_ZIP_BYTES } from "./install.js";
 import { store } from "../store.js";
 import { AGENT_CLIENT, CLIENT_HEADER } from "../config.js";
 import { assetUrl } from "../assets.js";
@@ -17,6 +18,7 @@ import { RERANK_BUDGET_MS, RERANK_FEATURE, RERANK_TOP_K, rerankHits, type Rerank
 const MAX_QUERY_IMAGE_BYTES = 20 * 1024 * 1024;
 /** The palette asks for 8; an agent's library_search may ask for more. */
 const MAX_HITS = 30;
+let installingPack = false;
 
 export function searchRouter(ml: () => MlService = mlService): Router {
   const router = Router();
@@ -98,6 +100,7 @@ export function searchRouter(ml: () => MlService = mlService): Router {
     } catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   router.post("/settings", (req, res) => {
+    if (installingPack) { res.status(409).json({ error: "A search pack installation is in progress" }); return; }
     try {
       if (typeof req.body?.enabled !== "boolean") throw new Error("enabled must be a boolean");
       setSearchEnabled(req.body.enabled);
@@ -105,6 +108,26 @@ export function searchRouter(ml: () => MlService = mlService): Router {
       refreshSearchIndex();
       res.json(status());
     } catch (err) { res.status(400).json({ error: (err as Error).message }); }
+  });
+  router.post("/install", async (req, res) => {
+    if (installingPack) { res.status(409).json({ error: "A search pack installation is already in progress" }); return; }
+    if (!req.is("application/zip") || Number(req.get("content-length")) > MAX_PACK_ZIP_BYTES) {
+      res.status(400).json({ error: "Choose a search pack ZIP smaller than 2 GiB" }); return;
+    }
+    installingPack = true;
+    try {
+      await installSearchPack(req, undefined, async () => {
+        setSearchPackReplacing(true);
+        searchIndex.pause();
+        await searchEmbedder.stopAndWait();
+      });
+      res.json(status());
+    } catch (err) { if (!res.headersSent && !res.destroyed) res.status(400).json({ error: (err as Error).message }); }
+    finally {
+      installingPack = false;
+      setSearchPackReplacing(false);
+      refreshSearchIndex();
+    }
   });
   router.post("/open-folder", (_req, res) => {
     try {

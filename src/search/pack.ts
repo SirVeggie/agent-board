@@ -24,7 +24,7 @@ export function detectSearchPack(root = dataDir(), platform = process.platform, 
   try { raw = JSON.parse(fs.readFileSync(path.join(folder, "pack.json"), "utf8")); }
   catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return result("not-installed", "Not installed");
-    return result("invalid", "Cannot read pack.json. Unzip the search pack again.");
+    return result("invalid", "Cannot read pack.json. Install the search pack again.");
   }
   if (!raw || typeof raw !== "object") return result("invalid", "Invalid pack.json");
   const p = raw as SearchPack;

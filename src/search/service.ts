@@ -41,7 +41,10 @@ export const searchIndex = new SearchIndex(dataDir, {
 }, searchEmbedder);
 
 let attached = false;
+let replacingPack = false;
+export function setSearchPackReplacing(value: boolean): void { replacingPack = value; }
 export function refreshSearchIndex(): void {
+  if (replacingPack) { searchIndex.pause(); return; }
   if (!attached) {
     attached = true;
     store.on("tab_upserted", (tab: { id: string }) => searchIndex.schedule(tab.id));

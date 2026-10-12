@@ -118,7 +118,7 @@
   const SIDEBAR_TAB_KEY = "scribe.sidebarTab";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.0.3";
+  const BOARD_VERSION = "3.0.4";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -1465,11 +1465,14 @@
 
   const searchSwitch = document.getElementById("search-enabled");
   const searchPackStatus = document.getElementById("search-pack-status");
+  const searchInstallPack = document.getElementById("search-install-pack");
+  const searchPackFile = document.getElementById("search-pack-file");
+  let installingSearchPack = false;
   function renderSearchSettings(result) {
     semanticStatus = result;
-    searchPackStatus.textContent = result.message;
+    if (!installingSearchPack) searchPackStatus.textContent = result.message;
     document.getElementById("search-pack-folder").textContent = result.folder;
-    searchSwitch.disabled = result.status !== "ready";
+    searchSwitch.disabled = installingSearchPack || result.status !== "ready";
     searchSwitch.setAttribute("aria-checked", String(result.enabled));
   }
   async function searchSettingsRequest(endpoint, body) {
@@ -1489,6 +1492,33 @@
   document.getElementById("search-open-folder").addEventListener("click", async () => {
     try { await searchSettingsRequest("open-folder", {}); }
     catch (err) { searchPackStatus.textContent = err.message; }
+  });
+  searchInstallPack.addEventListener("click", () => searchPackFile.click());
+  searchPackFile.addEventListener("change", async () => {
+    const file = searchPackFile.files[0];
+    searchPackFile.value = "";
+    if (!file || installingSearchPack) return;
+    if (file.size > 2 * 1024 ** 3) { searchPackStatus.textContent = "Choose a search pack ZIP smaller than 2 GiB"; return; }
+    installingSearchPack = true;
+    searchInstallPack.disabled = true;
+    searchSwitch.disabled = true;
+    searchPackStatus.textContent = "Installing search pack…";
+    let error;
+    try {
+      const response = await fetch("/api/search/install", { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Cannot install search pack");
+      installingSearchPack = false;
+      renderSearchSettings(result);
+    } catch (err) { error = err.message; }
+    finally {
+      installingSearchPack = false;
+      searchInstallPack.disabled = false;
+      if (error) {
+        try { renderSearchSettings(await searchSettingsRequest("status")); } catch {}
+        searchPackStatus.textContent = error;
+      }
+    }
   });
   // The classifier's check of search results (#520): the same switch as Classifier, Features, where its source is set up.
   const rerankSwitch = document.getElementById("search-rerank");
@@ -4473,7 +4503,7 @@
         ? "Switch it on in Settings → Search."
         : status === "wrong-version" || status === "invalid"
           ? `The search pack can't be used: ${semanticStatus.message}.`
-          : "It needs the optional search pack: unzip it into the folder shown in Settings → Search, then switch it on there.";
+          : "It needs the optional search pack: install its ZIP in Settings → Search, then switch it on there.";
     return semanticInfoRow("Search by meaning is off", `${how} Enter opens Settings.`, true);
   }
 
