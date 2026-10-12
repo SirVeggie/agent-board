@@ -673,6 +673,11 @@
       render();
       return;
     }
+    if (msg.type === "page_permission") {
+      if (msg.value !== "allow" && (msg.perm === "audio.microphone" ||
+        (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id);
+      return;
+    }
     if (msg.type === "folders") {
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       renderChrome();
@@ -2929,6 +2934,8 @@
       el.sandbox = SANDBOX;
       el.classList.add("frame-loading");
       el.addEventListener("load", () => {
+        el.dataset.audioGeneration = String((Number(el.dataset.audioGeneration) || 0) + 1);
+        cancelPageAudio(tab.id);
         el.dataset.loaded = "1";
         el.classList.remove("frame-loading");
       });
@@ -2985,6 +2992,7 @@
    * step the frame through old revisions instead of going to the previous tab.
    */
   function loadFrame(el, tab) {
+    cancelPageAudio(tab.id);
     delete el.dataset.loaded;
     el.allow = tab.embedUrl ? EMBED_ALLOW : "";
     const url = viewUrl(tab);
@@ -3002,6 +3010,7 @@
   }
 
   function discardFrame(id) {
+    cancelPageAudio(id);
     const entry = frames.get(id);
     if (!entry) {
       return;
@@ -3019,6 +3028,7 @@
       popoutTitle.textContent = chatChild ? "Agent chat" : tab?.title || "";
     }
     views.layout();
+    checkPageAudioVisibility();
     // The New page screen stands in for a blank page's frame, in whichever pane the page is.
     const blank = isBlank(tab) ? tab : views.besidePages().find(isBlank) || null;
     const cover = !blank && tab && pageIntent?.origin === tab.id ? tab : null;
@@ -4140,6 +4150,132 @@
       .catch((err) => failed(String(err?.message || err)));
   }
 
+  const pageAudioSessions = new Map();
+  let pageAudioActive = null;
+  const audioStop = document.createElement("button");
+  audioStop.type = "button"; audioStop.className = "page-audio-stop";
+  audioStop.textContent = "Stop recording"; audioStop.hidden = true;
+  audioStop.addEventListener("click", () => {
+    if (pageAudioActive?.capture) pageAudioActive.capture.stop();
+    else if (pageAudioActive) cancelPageAudio(pageAudioActive.tabId);
+  });
+  document.querySelector("header.chrome")?.append(audioStop);
+  function pageAudioVisible(id) { return !document.hidden && views.shownIds().has(id) && !!frames.get(id)?.el.isConnected; }
+  function paintPageAudio() {
+    audioStop.hidden = !pageAudioActive;
+    document.documentElement?.classList.toggle("page-audio-recording", !!pageAudioActive);
+    for (const el of tabsEl.querySelectorAll(".tab")) {
+      let marker = el.querySelector(".tab-recording");
+      if (el.dataset.id === pageAudioActive?.tabId) {
+        if (!marker) { marker = document.createElement("span"); marker.className = "tab-recording";
+          marker.textContent = "●"; marker.setAttribute("aria-label", "Recording"); el.prepend(marker); }
+      } else marker?.remove();
+    }
+  }
+  function cancelPageAudio(id) {
+    const session = pageAudioSessions.get(id);
+    if (!session) return;
+    session.cancelled = true; session.controller.abort(); session.capture?.cancel();
+    window.scribeAudio?.cancel(session.owner);
+    pageAudioSessions.delete(id);
+    if (pageAudioActive === session) pageAudioActive = null;
+    paintPageAudio();
+  }
+  function checkPageAudioVisibility() {
+    for (const [id] of pageAudioSessions) if (!pageAudioVisible(id)) cancelPageAudio(id);
+  }
+  document.addEventListener("visibilitychange", checkPageAudioVisibility);
+  setInterval(checkPageAudioVisibility, 100);
+  async function onPageAudio(event) {
+    const deadline = Date.now() + 110000;
+    const data = event.data, id = frameIdByWindow(event.source), tab = id ? findAnyTab(id) : null;
+    const reply = result => {
+      const transfer = result?.buffer instanceof ArrayBuffer ? [result.buffer] : [];
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, event.origin, transfer);
+    };
+    const api = window.scribeAudio;
+    try {
+      if (!tab || tab.embedUrl || !api) return reply({ ok: false, error: "not_a_page" });
+      const opts = { language: typeof data.language === "string" ? data.language.slice(0, 20) : undefined,
+        prompt: typeof data.prompt === "string" ? data.prompt.slice(0, 2000) : undefined, tabId: id };
+      if (data.op === "available") { await api.refresh(); return reply(api.available()); }
+      if (data.op === "stop" || data.op === "cancel") {
+        const session = pageAudioSessions.get(id);
+        if (!session || session.id !== data.sessionId || session.source !== event.source) return reply({ ok: false, error: "cancelled" });
+        if (data.op === "cancel") { cancelPageAudio(id); return reply({ ok: true }); }
+        session.capture?.stop();
+        const result = await session.ended;
+        if (session.cancelled) return reply({ ok: false, error: "cancelled" });
+        if (result.ok && result.blob) return reply({ ok: true, buffer: await result.blob.arrayBuffer(), mimeType: result.blob.type, durationMs: result.durationMs });
+        return reply(result);
+      }
+      if (!["listen", "record", "transcribe"].includes(data.op)) return reply({ ok: false, error: "unknown_op" });
+      if (data.op !== "transcribe" && !frameActivated(id)) return reply({ ok: false, error: "no_gesture" });
+      if (data.op !== "transcribe" && !pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
+      const entry = frames.get(id), revision = entry.revision, generation = entry.el.dataset?.audioGeneration;
+      const need = data.op === "listen" ? [{ perm: "audio.microphone" }, { perm: "audio.transcribe" }]
+        : { perm: data.op === "record" ? "audio.microphone" : "audio.transcribe" };
+      // Uploaded clips can run without a gesture once granted; prompting still needs a click.
+      if (data.op === "transcribe" && !frameActivated(id)) {
+        const grants = await window.scribePermissions.query(tab);
+        if (grants.permissions?.find(p => p.id === "audio.transcribe")?.value !== "allow")
+          return reply({ ok: false, error: "denied", permission: "audio.transcribe" });
+      }
+      const permission = await window.scribePermissions.ensure(tab, need);
+      if (!permission.ok) return reply(permission);
+      if (frames.get(id) !== entry || entry.revision !== revision || entry.el.dataset?.audioGeneration !== generation) return reply({ ok: false, error: "cancelled" });
+      if (data.op === "transcribe") {
+        if (!(data.buffer instanceof ArrayBuffer) || data.buffer.byteLength > 25 * 1024 * 1024) return reply({ ok: false, error: "too_large" });
+        return reply(await api.transcribe(new Blob([data.buffer], { type: data.mimeType }), opts));
+      }
+      if (!pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
+      if (pageAudioActive) return reply({ ok: false, error: "busy" });
+      if (!api.available().mic) return reply({ ok: false, error: "no_mic" });
+      if (data.op === "listen") { await api.refresh(); if (!api.available().stt) return reply({ ok: false, error: "no_source" }); }
+      if (frames.get(id) !== entry || entry.revision !== revision || entry.el.dataset?.audioGeneration !== generation) return reply({ ok: false, error: "cancelled" });
+      if (Date.now() > deadline) return reply({ ok: false, error: "timeout" });
+      if (!pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
+      if (pageAudioActive) return reply({ ok: false, error: "busy" });
+      cancelPageAudio(id);
+      const session = { id: crypto.randomUUID(), tabId: id, mode: data.op, owner: { kind: "page", tabId: id }, source: event.source,
+        controller: new AbortController(), cancelled: false, capture: null, ended: null };
+      pageAudioSessions.set(id, session); pageAudioActive = session; paintPageAudio();
+      const emit = payload => { if (!session.cancelled) event.source?.postMessage({ type: "scribe-audio-event", sessionId: session.id, ...payload }, event.origin); };
+      try {
+        const pendingTimer = setTimeout(() => {
+          if (pageAudioSessions.get(id) === session) cancelPageAudio(id);
+        }, Math.max(1, deadline - Date.now()));
+        try {
+          session.capture = await api.capture({ owner: session.owner,
+            maxMs: Number.isFinite(data.maxMs) ? Math.min(300000, Math.max(1, data.maxMs)) : 300000,
+            onLevel: level => emit({ level }), onState: state => emit({ state }) });
+        } finally { clearTimeout(pendingTimer); }
+        if (session.cancelled || !pageAudioVisible(id)) {
+          session.capture.cancel();
+          if (pageAudioSessions.get(id) === session) cancelPageAudio(id);
+          return reply({ ok: false, error: "cancelled" });
+        }
+        const started = Date.now(); let durationMs;
+        session.ended = session.capture.ended.then(async blob => {
+          durationMs = Date.now() - started;
+          if (pageAudioActive === session) pageAudioActive = null; paintPageAudio();
+          if (session.cancelled) return { ok: false, error: "cancelled" };
+          if (data.op === "record") return { ok: true, blob, durationMs };
+          emit({ state: "transcribing" });
+          return api.transcribe(blob, { ...opts, signal: session.controller.signal });
+        }).catch(() => ({ ok: false, error: "cancelled" })).then(result => {
+          if (pageAudioActive === session) pageAudioActive = null; paintPageAudio();
+          emit({ state: result.ok ? "stopped" : "cancelled" }); return result;
+        });
+        reply({ ok: true, sessionId: session.id });
+      } catch (err) {
+        if (pageAudioSessions.get(id) === session) cancelPageAudio(id);
+        reply({ ok: false, error: session.cancelled ? "cancelled" : err.audioError || "no_mic", message: err.message,
+          ...(err.audioError === "denied" ? { permission: "audio.microphone" } : {}) });
+      }
+    } catch { reply({ ok: false, error: "unavailable" }); }
+  }
+
   /**
    * scribe.preview from a page: the page sends the files' bytes, shown here in the shared viewer.
    * Like scribe.agent, it needs the click or key press to have reached the board.
@@ -5161,6 +5297,8 @@
       onPagePermissions(event);
     } else if (event.data?.type === "scribe-ml") {
       onPageMl(event);
+    } else if (event.data?.type === "scribe-audio") {
+      onPageAudio(event);
     } else if (event.data?.type === "scribe-reply") {
       onPageReply(event);
     } else if (event.data?.type === "scribe-title") {

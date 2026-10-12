@@ -145,6 +145,25 @@
    * explicit: the page asked for it with scribe.permissions.request, after a click.
    */
   async function ensure(tab, need, { explicit = false } = {}) {
+    if (Array.isArray(need)) {
+      // A listen request asks for the microphone and transcription in a single dialog.
+      const defs = await list(tab.id).catch(() => []);
+      const pending = [];
+      for (const item of need) {
+        const result = (await request("POST", tab.id, "/check", item)).result;
+        if (result === "deny") return { ok: false, error: "denied", permission: item.perm };
+        if (result === "ask") {
+          const def = defs.find(p => p.id === item.perm);
+          if (!def) return { ok: false, error: "denied", permission: item.perm };
+          pending.push({ def, item });
+        }
+      }
+      if (!pending.length) return { ok: true };
+      const answer = await prompt(tab, { label: pending.map(p => p.def.label).join(" and "),
+        detail: pending.map(p => p.def.detail).join(" ") }, { perm: pending.map(p => p.item.perm).join("+") }, explicit);
+      if (answer) for (const p of pending) await remember(tab, p.def, p.item, answer);
+      return answer === "allow" ? { ok: true } : { ok: false, error: "denied", permission: pending[0].item.perm };
+    }
     const denied = { ok: false, error: "denied", permission: need.perm };
     let result;
     try {

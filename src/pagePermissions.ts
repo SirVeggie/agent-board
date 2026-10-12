@@ -26,6 +26,16 @@ export type PermissionDef = {
 
 export const PAGE_PERMISSIONS: PermissionDef[] = [
   {
+    id: "audio.microphone", label: "Use the microphone",
+    detail: "Record after a click while this page is visible. Scribe shows a recording indicator and stop control.",
+    default: "ask", risky: true,
+  },
+  {
+    id: "audio.transcribe", label: "Turn speech into text",
+    detail: "Send audio to the speech-to-text source in Settings. With a hosted source, the audio leaves this PC.",
+    default: "ask", risky: false,
+  },
+  {
     id: "agent.chat",
     label: "Agent chats when you click",
     detail: "Start and continue its own agent chats after you click or press a key on the page. Pages and Ask mode only: no files or shell.",

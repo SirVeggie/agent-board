@@ -1,10 +1,11 @@
 import express, { Router } from "express";
 import fs from "node:fs/promises";
-import { shellOrigins } from "../config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, shellOrigins } from "../config.js";
 import { AudioService, MAX_AUDIO_BYTES } from "./service.js";
+import type { PageAudio } from "./page.js";
 
-/** A later page API supplies this defence-in-depth check. No page calls are accepted without it. */
-export function audioRouter(service: AudioService, pagePermission?: (tabId: string) => boolean | Promise<boolean>): Router {
+/** Shell-only uploads; page calls also pass the permission and rate-limit gate. */
+export function audioRouter(service: AudioService, pagePermission?: PageAudio): Router {
   const router = Router();
   router.use((req, res, next) => {
     const origin = req.get("origin");
@@ -20,7 +21,11 @@ export function audioRouter(service: AudioService, pagePermission?: (tabId: stri
   router.post("/transcriptions", express.raw({ type: "audio/*", limit: MAX_AUDIO_BYTES }), async (req, res) => {
     const tab = req.get("x-scribe-tab");
     try {
-      if (tab && (!pagePermission || !await pagePermission(tab))) { res.status(403).json({ ok: false, error: "permission", message: "This page cannot transcribe audio." }); return; }
+      if (tab) {
+        const gate = req.get(CLIENT_HEADER) === AGENT_CLIENT || !pagePermission ? { ok: false, error: "denied", permission: "audio.transcribe" }
+          : pagePermission.check(tab);
+        if (!gate.ok) { res.status(403).json(gate); return; }
+      }
       res.json(await service.transcribe(new Blob([req.body], { type: req.get("content-type") }), {
         language: typeof req.query.language === "string" ? req.query.language.slice(0, 20) : undefined,
         prompt: typeof req.query.prompt === "string" ? req.query.prompt.slice(0, 2000) : undefined,

@@ -16,8 +16,19 @@
   }
   function device() { try { return localStorage.getItem("scribe.audio.device") || ""; } catch { return ""; } }
   function setDevice(id) { try { localStorage.setItem("scribe.audio.device", id); } catch { /* browser storage disabled */ } }
-  async function capture({ owner, maxMs = 300000, onLevel = () => {}, onState = () => {} } = {}) {
-    if (active) throw new Error("The microphone is already recording.");
+  async function capture(opts = {}) {
+    // Web Locks share the device reservation across the shell's windows, including pending prompts.
+    if (!navigator.locks) return captureLocal(opts);
+    return new Promise((resolve, reject) => {
+      navigator.locks.request("scribe-microphone", { ifAvailable: true }, async lock => {
+        if (!lock) { reject(Object.assign(new Error("The microphone is already recording."), { audioError: "busy" })); return; }
+        try { const session = await captureLocal(opts); resolve(session); await session.ended.catch(() => {}); }
+        catch (err) { reject(err); }
+      }).catch(reject);
+    });
+  }
+  async function captureLocal({ owner, maxMs = 300000, onLevel = () => {}, onState = () => {} } = {}) {
+    if (active) throw Object.assign(new Error("The microphone is already recording."), { audioError: "busy" });
     if (!available().mic) throw new Error("Microphone recording is unavailable in this browser.");
     const token = { cancel: () => { token.cancelled = true; }, owner, cancelled: false };
     active = token;
@@ -76,7 +87,7 @@
       const message = err.name === "NotAllowedError" || err.name === "SecurityError" ? "Microphone blocked for this site. Allow it in your browser’s site permissions."
         : err.name === "NotFoundError" || err.name === "OverconstrainedError" ? "No microphone found. Check the device selected in Settings → Audio."
         : err.name === "NotReadableError" ? "Cannot open the microphone. Check whether another app is using it." : err.message;
-      throw new Error(message);
+      throw Object.assign(new Error(message), { audioError: err.audioError || (err.name === "NotAllowedError" || err.name === "SecurityError" ? "denied" : "no_mic") });
     }
   }
   async function transcribe(blob, opts = {}) {

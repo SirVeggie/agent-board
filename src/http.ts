@@ -52,6 +52,7 @@ import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 import { searchRouter } from "./search/routes.js";
 import { mlRouter } from "./ml/routes.js";
 import { audioRouter } from "./audio/routes.js";
+import { PageAudio } from "./audio/page.js";
 import { AudioService } from "./audio/service.js";
 import { shellAssets } from "./shellAssets.js";
 import { appearanceRouter } from "./appearance.js";
@@ -161,7 +162,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter());
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
-  app.use("/api/audio", audioRouter(new AudioService({ sources: () => agentHost?.modelSources() ?? [] })));
+  app.use("/api/audio", audioRouter(new AudioService({ sources: () => agentHost?.modelSources() ?? [] }), new PageAudio(id => store.pagePermissions(id))));
   app.use(noteAgentSession);
   app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));
@@ -1337,6 +1338,7 @@ export async function startHttp(): Promise<http.Server> {
     }
     try {
       const grants = store.setPagePermission(req.params.id, String(req.body?.perm ?? ""), value, req.body?.folders);
+      broadcast({ type: "page_permission", id: req.params.id, perm: String(req.body?.perm ?? ""), value });
       res.json({ permissions: permissionViews(grants) });
     } catch (err) {
       const message = (err as Error).message;

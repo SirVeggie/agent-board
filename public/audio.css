@@ -11,3 +11,8 @@
 .ag-mic span:empty { display: none; }
 @keyframes audio-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ag-mic[data-state="transcribing"]::before { animation: none; } }
+/* The shell owns this marker and stop control, outside the page's frame. */
+.tab-recording { color: #e45454; padding-right: 5px; }
+.page-audio-stop { color: var(--text); white-space: nowrap; }
+.page-audio-stop[hidden] { display: none; }
+html.popout:not(.desktop).page-audio-recording .chrome { display: flex !important; }

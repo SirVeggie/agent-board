@@ -1454,6 +1454,49 @@ export const BOARD_BRIDGE_JS = `
     }
   };
 
+  // ---------- audio ----------
+  var audioSessions = {};
+  window.addEventListener("message", function (event) {
+    if (event.source !== parent || event.data?.type !== "scribe-audio-event") return;
+    var data = event.data, session = audioSessions[data.sessionId];
+    if (!session) return;
+    if (data.level !== undefined && typeof session.onlevel === "function") { try { session.onlevel(data.level); } catch (_) {} }
+    if (data.state && typeof session.onstate === "function") { try { session.onstate(data.state); } catch (_) {} }
+  });
+  function audioResult(result) {
+    if (result && result.ok && result.buffer) {
+      result.blob = new Blob([result.buffer], { type: result.mimeType });
+      delete result.buffer;
+    }
+    return result;
+  }
+  function startAudio(op, opts) {
+    if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
+    opts = opts || {};
+    return askBoard({ type: "scribe-audio", op: op, language: opts.language, prompt: opts.prompt, maxMs: opts.maxMs }, 120000).then(function (result) {
+      if (!result.ok) return result;
+      var session = { ok: true, onlevel: null, onstate: null,
+        stop: function () { return askBoard({ type: "scribe-audio", op: "stop", sessionId: result.sessionId }, 90000).then(audioResult); },
+        cancel: function () { return askBoard({ type: "scribe-audio", op: "cancel", sessionId: result.sessionId }, 30000); }
+      };
+      audioSessions = {}; audioSessions[result.sessionId] = session;
+      return session;
+    });
+  }
+  var audio = {
+    listen: function (opts) { return startAudio("listen", opts); },
+    record: function (opts) { return startAudio("record", opts); },
+    transcribe: function (blob, opts) {
+      if (!(blob instanceof Blob) || !blob.type.startsWith("audio/")) return Promise.resolve({ ok: false, error: "invalid_audio" });
+      if (blob.size > 25 * 1024 * 1024) return Promise.resolve({ ok: false, error: "too_large" });
+      opts = opts || {};
+      return blob.arrayBuffer().then(function (buffer) {
+        return askBoard({ type: "scribe-audio", op: "transcribe", buffer: buffer, mimeType: blob.type, language: opts.language, prompt: opts.prompt }, 120000);
+      }).catch(function () { return { ok: false, error: "invalid_audio" }; });
+    },
+    available: function () { return askBoard({ type: "scribe-audio", op: "available" }, 30000); }
+  };
+
   // ---------- reply ----------
   /**
    * Send this form's answers where the agent that made the page pointed it (page_show replyTo), e.g.
@@ -1514,6 +1557,7 @@ export const BOARD_BRIDGE_JS = `
     preview: preview,
     agent: agent,
     ml: ml,
+    audio: audio,
     permissions: permissions,
     /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
     ops: {
