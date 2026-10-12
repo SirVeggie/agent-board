@@ -36,7 +36,7 @@
 .orb-settings h2 { margin: 0; font-size: 15px; color: var(--heading); }
 .orb-settings-help { border-radius: 50%; width: 24px; height: 24px; padding: 0; }
 .orb-settings-body { display: flex; flex-direction: column; gap: 4px; padding: 0 18px; }
-.orb-settings .setting-row { gap: 16px; padding: 4px 0; }
+.orb-settings .setting-row { padding: 4px 0; }
 .orb-settings .select-wrap { width: 190px; max-width: 55%; }
 .orb-settings-colors { display: flex; gap: 6px; }
 .orb-settings-colors input { width: 36px; height: 30px; padding: 2px; cursor: pointer; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
@@ -49,5 +49,5 @@
 .orb-settings-actions button:first-child { margin-right: auto; }
 .orb-settings-actions button.primary { background: var(--accent-soft); color: var(--heading); }
 .orb-settings-actions button.primary:hover { background: rgba(var(--accent-rgb), 0.28); }
-.orb-settings-error { font-size: 12px; color: var(--muted); margin: 0; }
+.orb-settings-error { font-size: 12px; color: var(--danger); margin: 0; }
 .orb-settings-error:empty { display: none; }

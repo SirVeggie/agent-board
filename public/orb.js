@@ -269,7 +269,8 @@ gl_FragColor=c;
     dialog.append(heading, body);
     const selects = [];
     function row(label, control) {
-      const wrap = node("label", null, "setting-row");
+      // Select rows stay a div: a label would send clicks on its text to the hidden select.
+      const wrap = node(control.tagName === "SELECT" ? "div" : "label", null, "setting-row");
       if (control.matches("select, input")) control.setAttribute("aria-label", label);
       wrap.append(node("span", label), control); body.append(wrap);
       if (control.tagName === "SELECT") selects.push(window.createSelect(control));
