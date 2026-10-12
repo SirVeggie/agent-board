@@ -44,6 +44,7 @@
     probes: new Map(),
     error: "",
     loading: 0,
+    contextLoading: 0,
   };
   try {
     Object.assign(S.pick, JSON.parse(localStorage.getItem(LS.pick) || "{}"));
@@ -51,7 +52,7 @@
     /* keep the defaults */
   }
 
-  let root, body, heading, controls, nav;
+  let root, body, heading, controls, nav, renderedSection;
 
   function el(tag, cls, text) {
     const node = document.createElement(tag);
@@ -389,10 +390,7 @@
     const repick = (patch) => {
       Object.assign(S.pick, patch);
       localStorage.setItem(LS.pick, JSON.stringify(S.pick));
-      S.context = null;
       S.measure = null;
-      S.skills = null;
-      render();
       void loadContext();
     };
     row.append(
@@ -1137,7 +1135,6 @@
         track(RANGES, S.days, (days) => {
           S.days = days;
           localStorage.setItem(LS.days, String(days));
-          S.stats = null;
           render();
           void loadStats();
         }, "Range")
@@ -1150,7 +1147,20 @@
     close.dataset.tooltip = "Close (Esc)";
     controls.append(close);
     const scroll = body.scrollTop;
-    body.replaceChildren(...RENDER[section.id]());
+    // Keep the previous context visible while its replacement loads. Its actions must wait
+    // for data matching the new provider/mode/workspace; the pickers remain usable.
+    const thread = S.context?.thread;
+    const contextPending = S.contextLoading || (thread && (thread.provider !== S.pick.provider || thread.mode !== S.pick.mode || thread.cwd !== S.pick.cwd));
+    if (contextPending && renderedSection === section.id && body.firstElementChild?.classList.contains("hx-pickers")) {
+      body.firstElementChild.replaceWith(pickers());
+    } else {
+      body.replaceChildren(...RENDER[section.id]());
+    }
+    renderedSection = section.id;
+    if (contextPending && ["context", "mcp", "skills"].includes(section.id)) {
+      for (const child of body.children) if (!child.classList.contains("hx-pickers")) child.inert = true;
+    }
+    if (S.error) body.prepend(empty(S.error));
     body.scrollTop = scroll;
     root.classList.toggle("loading", S.loading > 0);
   }
@@ -1168,20 +1178,30 @@
     }
   }
 
+  let statsRequest = 0, contextRequest = 0;
   const loadStats = () => load(async () => {
-    S.stats = await api("GET", `/harness/stats${S.days ? `?days=${S.days}` : ""}`);
+    const request = ++statsRequest;
+    const stats = await api("GET", `/harness/stats${S.days ? `?days=${S.days}` : ""}`);
+    if (request === statsRequest) S.stats = stats;
   });
 
   const loadContext = () => load(async () => {
+    const request = ++contextRequest;
     const pick = { ...S.pick };
-    const [context, skills] = await Promise.all([
-      api("POST", "/harness/context", { provider: pick.provider, mode: pick.mode, cwd: pick.cwd, scope: { kind: "global", ref: null } }),
-      api("GET", `/harness/skills${pick.cwd ? `?cwd=${encodeURIComponent(pick.cwd)}` : ""}`),
-    ]);
-    if (pick.provider !== S.pick.provider || pick.mode !== S.pick.mode || pick.cwd !== S.pick.cwd) return;
-    S.context = context;
-    S.skills = skills.skills;
-    S.skillFolders = skills.folders || [];
+    S.contextLoading = request;
+    render();
+    try {
+      const [context, skills] = await Promise.all([
+        api("POST", "/harness/context", { provider: pick.provider, mode: pick.mode, cwd: pick.cwd, scope: { kind: "global", ref: null } }),
+        api("GET", `/harness/skills${pick.cwd ? `?cwd=${encodeURIComponent(pick.cwd)}` : ""}`),
+      ]);
+      if (request !== contextRequest) return;
+      S.context = context;
+      S.skills = skills.skills;
+      S.skillFolders = skills.folders || [];
+    } finally {
+      if (S.contextLoading === request) S.contextLoading = 0;
+    }
   });
 
   const loadMemories = () => load(async () => {

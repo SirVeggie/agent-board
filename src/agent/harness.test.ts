@@ -5,6 +5,74 @@ import path from "node:path";
 import { test } from "node:test";
 import { discoverSkills, harnessStats, instructionSections, mcpCall, promptTokens, skillFrontmatter } from "./harness.js";
 import type { Item, Thread, Turn } from "./types.js";
+import { launchChromium } from "../chromium.js";
+
+test("harness keeps content while filters load and ignores superseded responses", async (t) => {
+  let browser;
+  try { browser = await launchChromium({ headless: true, args: [], purpose: "Harness filter test" }); }
+  catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    const pending = new Map<string, () => Promise<void>>();
+    const waitForRequest = async (key: string) => {
+      const deadline = Date.now() + 5000;
+      while (!pending.has(key) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.ok(pending.has(key), `request ${key} arrived`);
+    };
+    let hold = false;
+    await page.route("http://harness.test/**", async (route) => {
+      const url = new URL(route.request().url());
+      const endpoint = url.pathname;
+      let data: any = {};
+      let key = "";
+      if (endpoint.endsWith("/stats")) {
+        key = url.searchParams.get("days") || "all";
+        data = { totals: { toolCalls: 1 }, toolKinds: [], tools: [{ name: `tool-${key}`, provider: "claude", calls: 1 }], skills: [] };
+      } else if (endpoint.endsWith("/context")) {
+        data = { thread: route.request().postDataJSON() };
+        key = data.thread.provider;
+      } else if (endpoint.endsWith("/skills")) {
+        data = { skills: [{ name: "Kept skill", providers: ["claude"], scope: "user", indexTokens: 1, bodyTokens: 1, files: 0 }], folders: [] };
+      } else if (endpoint.endsWith("/memories")) data = { memories: [] };
+      const fulfill = () => route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+      if (hold && key) pending.set(key, fulfill);
+      else await fulfill();
+    });
+    await page.goto("http://harness.test/");
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("tools"));
+    await page.getByText("tool-30", { exact: true }).waitFor();
+    hold = true;
+    await page.getByRole("button", { name: "7 days", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="Range"] [aria-pressed="true"]')?.textContent === "7 days");
+    assert.equal(await page.getByText("tool-30", { exact: true }).count(), 1);
+    assert.equal(await page.locator(".hx-body").getByText("Loading…", { exact: true }).count(), 0);
+    await page.getByRole("button", { name: "90 days", exact: true }).click();
+    await waitForRequest("7");
+    await waitForRequest("90");
+    await pending.get("90")!();
+    await page.getByText("tool-90", { exact: true }).waitFor();
+    await pending.get("7")!();
+    await page.waitForFunction(() => !document.querySelector(".agent-harness.loading"));
+    assert.equal(await page.getByText("tool-90", { exact: true }).count(), 1);
+
+    await page.getByRole("button", { name: "Skills", exact: true }).click();
+    await page.getByText("Kept skill", { exact: true }).waitFor();
+    await page.evaluate(() => { (window as any).keptCard = document.querySelector(".hx-body .hx-card"); });
+    await page.getByRole("group", { name: "Provider", exact: true }).getByRole("button", { name: "Codex", exact: true }).click();
+    assert.equal(await page.getByText("Kept skill", { exact: true }).count(), 1);
+    assert.equal(await page.evaluate(() => document.querySelector(".hx-body .hx-card") === (window as any).keptCard), true);
+    assert.equal(await page.locator(".hx-body .hx-card").first().evaluate(node => (node as HTMLElement).inert), true);
+    await waitForRequest("codex");
+    await pending.get("codex")!();
+    await page.waitForFunction(() => !document.querySelector(".hx-body .hx-card[inert]"));
+    assert.equal(await page.getByText("For Codex Code threads", { exact: true }).count(), 1);
+  } finally { await browser.close(); }
+});
 
 const thread = (id: string, over: Partial<Thread> = {}): Thread =>
   ({ id, title: id, provider: "claude", model: "opus", mode: "code", scope: { kind: "global", ref: null }, ...over }) as Thread;
