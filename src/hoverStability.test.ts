@@ -170,6 +170,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const S = { threads: new Map(), filter: 'all', search: '', hidePageThreads: false };
       const LS = { filter: 'filter', hidePage: 'hidePage', compact: 'compact' };
       const compactThreads = () => localStorage.getItem(LS.compact) === '1';
+      const hiddenWorkspaceKeys = () => new Set(), inHiddenWorkspace = () => false, prefs = () => ({});
       const movedBanners = () => [], renderLists = () => renderThreadList(document.querySelector('#threads'), {});
       ${agent.slice(agent.indexOf('  function renderThreadList('), agent.indexOf('  /** The line under a thread', agent.indexOf('  function renderThreadList(')))}
       const modelInfo = () => ({ label: 'Model', efforts: [] }), providerIcon = icon;
