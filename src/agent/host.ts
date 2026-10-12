@@ -483,12 +483,6 @@ export class AgentHost {
     (this.providers.codex as CodexProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.codex", []));
     for (const thread of this.db.listThreads()) {
       if (migrateOpenaiThread(thread)) this.db.saveThread(thread);
-      // Helpers started in a worktree before #544 were scoped to the worktree folder, which listed it as a workspace.
-      const tree = thread.helperOf ? thread.worktree : undefined;
-      if (tree && thread.scope.kind === "workspace" && thread.scope.ref && workspaceKey(thread.scope.ref) === workspaceKey(tree.path)) {
-        thread.scope = { kind: "workspace", ref: tree.home };
-        this.db.saveThread(thread);
-      }
       this.threads.set(thread.id, thread);
       // A turn cannot survive a daemon restart: mark leftovers as cancelled, and send the thread on once Scribe is up.
       const turns = this.db.listTurns(thread.id);

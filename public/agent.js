@@ -868,9 +868,12 @@
     return out.slice(0, 3);
   }
 
-  /** Disk folder a thread belongs to: workspace scope, else its working directory. */
+  /**
+   * Disk folder a thread belongs to: the one it works in (the main checkout's, for a worktree), else
+   * its workspace scope. Keep in step with threadFolder in src/agent/host.ts.
+   */
   function workspaceDir(t) {
-    return t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : homeDir(t);
+    return homeDir(t) || (t.scope?.kind === "workspace" ? t.scope.ref : null) || null;
   }
 
   /** Workspace folders the user hid (the group's menu in the thread list), by dirKey. */
