@@ -5827,8 +5827,15 @@
         this.scopeBtn,
         el("span", "dock-top-sep"),
         button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)"),
-        !SOLO && button(icon("expand"), "ag-icon-btn small", () => {
+        button(icon("expand"), "ag-icon-btn small", () => {
           const id = this.view.threadId;
+          if (SOLO) {
+            if (id) {
+              window.scribePopout.request({ type: "open-thread", id });
+              window.scribePopout.focusMain();
+            }
+            return;
+          }
           if (id) setCurrent(id);
           sidebar.setOpen(true);
           if (id) sidebar.view.setThread(id);
@@ -8936,6 +8943,12 @@
     showPageThread(id, "sidebar", { reveal: true });
     return true;
   }
+
+  window.scribePopout?.onRequest((request) => {
+    if (!SOLO && request?.type === "open-thread" && typeof request.id === "string") {
+      openThread(request.id);
+    }
+  });
 
   /** Palette (`=` prefix) and anything else that wants the same match as the thread-menu search. */
   function searchThreads(query, { limit = 40 } = {}) {
