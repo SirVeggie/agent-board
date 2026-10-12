@@ -2255,6 +2255,8 @@
       // The scroll shrinks while the queue dock opens; stay at the bottom through it.
       this.stickRo.observe(this.scroll);
       this.root.addEventListener("click", (event) => onLinkClick(event));
+      this.root.addEventListener("auxclick", (event) => onLinkClick(event));
+      this.root.addEventListener("mousedown", preventLinkAutoscroll);
     }
 
     thread() {
@@ -3735,11 +3737,15 @@
     pageChip(page) {
       const chip = el("span", "ag-page-chip", page.title);
       chip.setAttribute("role", "link");
-      chip.addEventListener("click", (event) => {
+      const open = (event) => {
+        if (event.type === "auxclick" && event.button !== 1) return;
         event.preventDefault();
         event.stopPropagation();
         app()?.openLink(page.ref, event, { mode: "peek" });
-      });
+      };
+      chip.addEventListener("click", open);
+      chip.addEventListener("auxclick", open);
+      chip.addEventListener("mousedown", (event) => { if (event.button === 1) event.preventDefault(); });
       return chip;
     }
 
@@ -3954,11 +3960,14 @@
       const open = (event) => app()?.openLink(it.page.key, event, { mode: "peek" });
       const pageLink = el("a", "ag-board-link", pageTitle);
       pageLink.tabIndex = 0;
-      pageLink.addEventListener("click", (event) => {
+      const onOpen = (event) => {
+        if (event.type === "auxclick" && event.button !== 1) return;
         event.preventDefault();
         event.stopPropagation();
         open(event);
-      });
+      };
+      pageLink.addEventListener("click", onOpen);
+      pageLink.addEventListener("auxclick", onOpen);
       if (it.status !== "pending") {
         node.classList.add("done");
         const answered = it.status === "answered";
@@ -5689,6 +5698,7 @@
   const mdCtx = { resolvePages: (targets) => app()?.resolvePages?.(targets) || {} };
 
   function onLinkClick(event) {
+    if (event.defaultPrevented || (event.type === "auxclick" ? event.button !== 1 : event.button !== 0)) return;
     const board = event.target.closest?.(".ag-board-link");
     if (board) {
       event.preventDefault();
@@ -5700,6 +5710,10 @@
       event.preventDefault();
       app()?.openLink(web.dataset.webHref, event);
     }
+  }
+
+  function preventLinkAutoscroll(event) {
+    if (event.button === 1 && event.target.closest?.(".ag-board-link, a.ag-web-link")) event.preventDefault();
   }
 
   /* ---------- thread list ---------- */
@@ -6421,6 +6435,8 @@
       this.view.root = root;
       window.addEventListener("scribe:orb-appearance", () => this.renderSweep());
       this.view.root.addEventListener("click", (event) => onLinkClick(event));
+      this.view.root.addEventListener("auxclick", (event) => onLinkClick(event));
+      this.view.root.addEventListener("mousedown", preventLinkAutoscroll);
       this.feed.addEventListener("click", () => this.setExpanded(true));
       this.apply();
       document.addEventListener("pointerdown", (event) => this.collapseOutside(event.target), true);

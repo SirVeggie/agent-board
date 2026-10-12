@@ -1458,12 +1458,12 @@ window.createViews = function createViews(host) {
     }
 
     if (mode === "tab") {
-      if (source.role === "peek") {
+      if (!background && source.role === "peek") {
         setPeek(null);
       }
       if (target.id === active) {
         host.render();
-        flash(frameId);
+        if (!background) flash(frameId);
         return { ok: true, mode, id: target.id, alreadyVisible: true };
       }
       navigate(target.id, { background });
@@ -1665,7 +1665,7 @@ window.createViews = function createViews(host) {
     if (!event) {
       return null;
     }
-    if (event.ctrlKey || event.metaKey) {
+    if (event.button === 1 || event.ctrlKey || event.metaKey) {
       return "tab";
     }
     if (event.shiftKey) {

@@ -5250,7 +5250,7 @@
     closed: () => state.closed,
     folders: () => state.folders,
     connected: () => state.connected,
-    openLink: (target, event, { anchor = "", mode = null } = {}) => views.open(target, views.modeFromEvent(event) || mode, { anchor }),
+    openLink: (target, event, { anchor = "", mode = null } = {}) => views.open(target, views.modeFromEvent(event) || mode, { anchor, background: event?.button === 1 }),
     resolvePages: (targets) => views.resolve(targets),
     showNotice,
     confirm: confirmDelete,

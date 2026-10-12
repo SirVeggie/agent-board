@@ -3,6 +3,53 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
+import { BOARD_BRIDGE_JS } from "./bridge.js";
+
+test("page links send middle-click opens to background tabs", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Middle-click links test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    await page.route("http://links.test/**", route => route.fulfill({ contentType: "text/html", body:
+      route.request().url().endsWith("/frame")
+        ? `<a data-scribe-open="scribe:target#card=12" data-scribe-mode="peek"><span>Target</span></a><script>window.__SCRIBE_BOOT__={id:'source',capture:true};</script><script>${BOARD_BRIDGE_JS}</script>`
+        : '<iframe src="/frame"></iframe>'
+    }));
+    await page.goto("http://links.test/");
+    await page.evaluate(() => {
+      (window as any).opens = [];
+      window.addEventListener("message", event => {
+        if (event.data.type === "scribe-open") (window as any).opens.push(event.data);
+        if (event.data.reqId) (event.source as Window).postMessage({
+          type: event.data.type + "-result", reqId: event.data.reqId, ok: true, pages: {}
+        }, "*");
+      });
+    });
+    const link = page.frameLocator("iframe").locator("a span");
+    await link.click({ button: "middle" });
+    await page.waitForFunction(() => (window as any).opens.length === 1);
+    assert.deepEqual(await page.evaluate(() => (window as any).opens.map(({ target, mode, background, anchor }: any) => ({ target, mode, background, anchor }))),
+      [{ target: "scribe:target", mode: "tab", background: true, anchor: "card=12" }]);
+    await link.click({ modifiers: ["Control"] });
+    await page.waitForFunction(() => (window as any).opens.length === 2);
+    assert.equal(await page.evaluate(() => (window as any).opens[1].background), false);
+    await link.click();
+    await page.waitForFunction(() => (window as any).opens.length === 3);
+    assert.equal(await page.evaluate(() => (window as any).opens[2].mode), "peek");
+    await link.click({ button: "right" });
+    assert.equal(await page.evaluate(() => (window as any).opens.length), 3);
+    assert.equal(page.context().pages().length, 1);
+  } finally {
+    await browser.close();
+  }
+});
 
 test("peeks stay with their tab; split panes can be focused, arranged and replaced by pointer drag", async (t) => {
   let browser;
@@ -57,6 +104,9 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const shown = () => [...views.shownIds()].sort().join(",");
       const observations: Record<string, unknown> = {};
       await views.open("c", "peek");
+      const middleMode = views.modeFromEvent({ button: 1, shiftKey: true, altKey: true });
+      await views.open("b", middleMode, { background: true, source: { role: "peek" } });
+      observations.backgroundFromPeek = [active, shown(), middleMode];
       await views.open("d", "peek", { source: { role: "peek" } });
       const originalFrame = frames.get("d")!.el;
       select("b");
@@ -175,6 +225,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       return observations;
     });
     assert.deepEqual(result, {
+      backgroundFromPeek: ["a", "a,c", "tab"],
       otherTab: "b", escapeOtherTab: false, originalTab: "a,d", sameFrame: true, back: "a,c",
       firstSpace: "a,c", otherSpaceSameTab: "a",
       split: ["ad", "a", "a"], selectChangesFocusedPane: ["bd", "a"],

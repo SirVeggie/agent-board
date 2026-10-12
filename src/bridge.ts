@@ -614,7 +614,7 @@ export const BOARD_BRIDGE_JS = `
 
   /** Ctrl/Cmd navigates, Shift splits, Alt peeks. Null when no modifier picks a mode. */
   function modeFromEvent(event) {
-    if (event.ctrlKey || event.metaKey) {
+    if (event.button === 1 || event.ctrlKey || event.metaKey) {
       return "tab";
     }
     if (event.shiftKey) {
@@ -776,16 +776,15 @@ export const BOARD_BRIDGE_JS = `
     return link;
   }
 
-  // Shift+mousedown extends the text selection before the click opens the split. Cancel it on
-  // links only, so Shift+click elsewhere still selects text.
+  // Cancel middle-button autoscroll and Shift selection on handled links only.
   document.addEventListener("mousedown", function (event) {
-    if (event.button === 0 && event.shiftKey && handledLink(event.target)) {
+    if ((event.button === 1 || (event.button === 0 && event.shiftKey)) && handledLink(event.target)) {
       event.preventDefault();
     }
   }, true);
 
-  document.addEventListener("click", function (event) {
-    if (event.defaultPrevented || event.button !== 0) {
+  function onLinkClick(event) {
+    if (event.defaultPrevented || (event.type === "auxclick" ? event.button !== 1 : event.button !== 0)) {
       return;
     }
     var link = handledLink(event.target);
@@ -794,7 +793,7 @@ export const BOARD_BRIDGE_JS = `
     }
     event.preventDefault();
     var mode = modeFromEvent(event) || cleanMode(link.el.getAttribute("data-scribe-mode"));
-    open(link.target, { mode: mode }).then(function (result) {
+    open(link.target, { mode: mode, background: event.button === 1 }).then(function (result) {
       if (!result || result.error === "no_gesture" || result.error === "timeout" || result.error === "no_board") {
         return;
       }
@@ -804,7 +803,9 @@ export const BOARD_BRIDGE_JS = `
         recheckLinks();
       }
     });
-  }, false);
+  }
+  document.addEventListener("click", onLinkClick, false);
+  document.addEventListener("auxclick", onLinkClick, false);
 
   /** Mark links to pages that don't exist, and fill in empty link text with the page's title. */
   var labelQueued = false;
