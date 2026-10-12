@@ -1,17 +1,21 @@
 import crypto from "node:crypto";
 import { workspaceKey } from "./prefs.js";
+import { isProviderId, type Thread } from "./types.js";
 
 /**
  * Shared agent memory (#104): short notes that every Scribe chat gets in its instructions, whatever
- * its provider, so a correction given to one agent reaches the next. A memory is global, or belongs
- * to a workspace folder (and the folders below it). Agents save them with memory_save; the user
+ * its provider, so a correction given to one agent reaches the next. A memory is global, belongs
+ * to a workspace folder (and below it), or is private to a provider (Native: a source). Agents save them with memory_save; the user
  * reads and edits them under Agent settings. Kept as one list under the "memories" setting.
  */
 export type Memory = {
   id: string;
-  scope: "global" | "workspace";
+  scope: "global" | "workspace" | "provider";
   /** The workspace folder, for scope "workspace". */
   workspace?: string;
+  /** Owning provider; Native (pi) also requires its model source. */
+  provider?: string;
+  source?: string;
   text: string;
   /** "user", or the provider of the agent that saved it. */
   by: string;
@@ -28,6 +32,18 @@ export const MEMORY_PROMPT_CHARS = 12_000;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === "object" && !Array.isArray(v);
 
+export type MemoryOwner = { provider: string; source?: string };
+
+/** Native model ids start with their source, including src- for configured endpoints. */
+export function memoryOwner(thread: Pick<Thread, "provider" | "model">): MemoryOwner {
+  const slash = thread.model.indexOf("/");
+  return { provider: thread.provider, ...(thread.provider === "pi" && slash > 0 && slash < thread.model.length - 1 ? { source: thread.model.slice(0, slash) } : {}) };
+}
+
+function validOwner(owner: MemoryOwner): boolean {
+  return isProviderId(owner.provider) && (owner.provider !== "pi" || Boolean(owner.source?.trim()));
+}
+
 /** The saved list, without entries that do not parse. */
 export function cleanMemories(raw: unknown): Memory[] {
   if (!Array.isArray(raw)) return [];
@@ -35,10 +51,14 @@ export function cleanMemories(raw: unknown): Memory[] {
   for (const m of raw) {
     if (!isRecord(m) || typeof m.id !== "string" || typeof m.text !== "string" || !m.text.trim()) continue;
     const workspace = m.scope === "workspace" && typeof m.workspace === "string" && m.workspace ? m.workspace : null;
+    const owner = { provider: typeof m.provider === "string" ? m.provider : "", ...(typeof m.source === "string" ? { source: m.source } : {}) };
+    // Never widen a malformed private memory into a shared one.
+    if (m.scope === "provider" && !validOwner(owner)) continue;
     const at = typeof m.updatedAt === "number" ? m.updatedAt : 0;
     out.push({
       id: m.id,
-      scope: workspace ? "workspace" : "global",
+      scope: m.scope === "provider" ? "provider" : workspace ? "workspace" : "global",
+      ...(m.scope === "provider" ? { provider: owner.provider, ...(owner.provider === "pi" ? { source: owner.source } : {}) } : {}),
       ...(workspace ? { workspace } : {}),
       text: m.text,
       by: typeof m.by === "string" && m.by ? m.by : "user",
@@ -50,8 +70,9 @@ export function cleanMemories(raw: unknown): Memory[] {
   return out;
 }
 
-/** Whether a memory applies in a workspace folder: global ones always, a workspace's in it and below it. */
-export function memoryApplies(memory: Memory, workspace: string | null): boolean {
+/** Shared memories follow workspace scope; private ones require the matching provider/source. */
+export function memoryApplies(memory: Memory, workspace: string | null, owner?: MemoryOwner): boolean {
+  if (memory.scope === "provider") return Boolean(owner && validOwner(owner) && memory.provider === owner.provider && (owner.provider !== "pi" || memory.source === owner.source));
   if (memory.scope === "global") return true;
   if (!workspace || !memory.workspace) return false;
   const at = workspaceKey(workspace);
@@ -59,12 +80,12 @@ export function memoryApplies(memory: Memory, workspace: string | null): boolean
   return at === home || at.startsWith(`${home}/`);
 }
 
-/** The memories for a workspace folder (null: global ones only), newest first. */
-export function memoriesFor(memories: Memory[], workspace: string | null): Memory[] {
-  return memories.filter((m) => memoryApplies(m, workspace)).sort((a, b) => b.updatedAt - a.updatedAt);
+/** Applicable memories, newest first. Without an owner, private memories are omitted. */
+export function memoriesFor(memories: Memory[], workspace: string | null, owner?: MemoryOwner): Memory[] {
+  return memories.filter((m) => memoryApplies(m, workspace, owner)).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export type MemoryInput = { id?: string; text: string; scope: "global" | "workspace"; workspace?: string | null; by: string; thread?: string };
+export type MemoryInput = { id?: string; text: string; scope: Memory["scope"]; workspace?: string | null; provider?: string; source?: string; by: string; thread?: string };
 
 /**
  * Add a memory, or replace the text (and scope) of the one with input.id. Returns the new list and
@@ -75,13 +96,16 @@ export function saveMemory(memories: Memory[], input: MemoryInput, now = Date.no
   if (!text) throw new Error("A memory needs text.");
   if (text.length > MEMORY_MAX_CHARS) throw new Error(`A memory is at most ${MEMORY_MAX_CHARS} characters (this one has ${text.length}). Keep it to one fact, or split it.`);
   if (input.scope === "workspace" && !input.workspace) throw new Error("A workspace memory needs a workspace folder.");
-  const place = input.scope === "workspace" ? { scope: "workspace" as const, workspace: input.workspace! } : { scope: "global" as const };
-  const samePlace = (m: Memory) => m.scope === place.scope && (place.scope === "global" || workspaceKey(m.workspace ?? "") === workspaceKey(place.workspace));
+  if (input.scope === "provider" && !validOwner({ provider: input.provider ?? "", source: input.source })) throw new Error("A provider memory needs a provider and, for Native, a specific source. Pick a Native model first.");
+  const place = input.scope === "provider"
+    ? { scope: "provider" as const, provider: input.provider!, ...(input.provider === "pi" ? { source: input.source! } : {}) }
+    : input.scope === "workspace" ? { scope: "workspace" as const, workspace: input.workspace! } : { scope: "global" as const };
+  const samePlace = (m: Memory) => m.scope === place.scope && (place.scope === "global" || (place.scope === "provider" ? m.provider === place.provider && m.source === place.source : workspaceKey(m.workspace ?? "") === workspaceKey(place.workspace)));
   let existing = input.id ? memories.find((m) => m.id === input.id) : undefined;
   if (input.id && !existing) throw new Error(`No memory ${input.id}.`);
   existing ??= memories.find((m) => samePlace(m) && m.text === text);
   if (existing) {
-    const { workspace: _old, ...rest } = existing;
+    const { workspace: _old, provider: _provider, source: _source, ...rest } = existing;
     const memory: Memory = { ...rest, ...place, text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), updatedAt: now };
     return { memories: memories.map((m) => (m.id === memory.id ? memory : m)), memory, created: false };
   }
@@ -96,7 +120,7 @@ export function memoryBlock(memories: Memory[], max = MEMORY_PROMPT_CHARS): stri
   let used = 0;
   let left = 0;
   for (const m of memories) {
-    const line = `- [${m.id}] (${m.scope === "global" ? "global" : "workspace"}) ${m.text.replaceAll("</memories>", "</ memories>").replace(/\n+/g, "\n  ")}`;
+    const line = `- [${m.id}] (${m.scope === "provider" ? `provider: ${m.provider}${m.source ? `/${m.source}` : ""}` : m.scope}) ${m.text.replaceAll("</memories>", "</ memories>").replace(/\n+/g, "\n  ")}`;
     if (lines.length && used + line.length > max) {
       left += 1;
       continue;

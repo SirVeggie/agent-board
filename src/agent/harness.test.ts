@@ -76,6 +76,55 @@ test("harness keeps content while filters load and ignores superseded responses"
 
 const thread = (id: string, over: Partial<Thread> = {}): Thread =>
   ({ id, title: id, provider: "claude", model: "opus", mode: "code", scope: { kind: "global", ref: null }, ...over }) as Thread;
+
+test("memory editor preserves Native source on edit and keeps the chosen scope for new memories", async (t) => {
+  let browser;
+  try { browser = await launchChromium({ headless: true, args: [], purpose: "Memory scope editor test" }); }
+  catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    const writes: any[] = [];
+    const memories = [{ id: "private", text: "Local source rule", scope: "provider", provider: "pi", source: "src-local", by: "user", updatedAt: 1 }];
+    await page.route("http://memory.test/**", async (route) => {
+      const request = route.request();
+      const endpoint = new URL(request.url()).pathname;
+      let data: any = {};
+      if (endpoint.includes("/memories")) {
+        if (request.method() !== "GET") {
+          const body = request.postDataJSON();
+          writes.push(body);
+          if (request.method() === "PUT") Object.assign(memories[0], body);
+        }
+        data = { memories, targets: [{ provider: "codex", label: "Codex" }, { provider: "pi", source: "src-local", label: "Native: Local" }] };
+      } else if (endpoint.endsWith("/context")) data = { thread: request.postDataJSON() };
+      else if (endpoint.endsWith("/stats")) data = { totals: {}, toolKinds: [], tools: [], skills: [] };
+      else if (endpoint.endsWith("/skills")) data = { skills: [], folders: [] };
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto("http://memory.test/");
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("memories"));
+    await page.getByText("Local source rule", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    const edit = page.locator(".ag-perm-set .ag-mem-form");
+    assert.equal(await edit.getByRole("combobox", { name: "Applies to" }).inputValue(), 'provider:["pi","src-local"]');
+    await edit.getByRole("textbox", { name: "Memory", exact: true }).fill("Updated local rule");
+    await edit.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByText("Updated local rule", { exact: true }).waitFor();
+    assert.deepEqual(writes[0], { text: "Updated local rule", scope: "provider", provider: "pi", source: "src-local" });
+    const add = page.locator(".ag-mem-form");
+    await add.getByRole("combobox", { name: "Applies to" }).selectOption({ label: "Codex only" });
+    await add.getByRole("textbox", { name: "Memory", exact: true }).fill("Codex helper rule");
+    await add.getByRole("button", { name: "Add", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".ag-mem-input")?.value === "");
+    assert.deepEqual(writes[1], { text: "Codex helper rule", scope: "provider", provider: "codex" });
+    assert.equal(await add.getByRole("combobox", { name: "Applies to" }).inputValue(), 'provider:["codex",""]');
+  } finally { await browser.close(); }
+});
 const turn = (id: string, threadId: string, over: Partial<Turn> = {}): Turn => ({ id, threadId, seq: 1, status: "done", model: "opus", effort: null, mode: "code", startedAt: 1000, ...over });
 const tool = (id: string, threadId: string, turnId: string, over: Record<string, unknown> = {}): Item =>
   ({ id, threadId, turnId, seq: 1, createdAt: 1000, kind: "tool", toolId: id, name: "Bash", tool: "execute", title: "Bash", status: "done", startedAt: 1000, endedAt: 1500, ...over }) as Item;

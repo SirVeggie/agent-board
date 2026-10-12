@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { cleanMemories, memoriesFor, memoryBlock, saveMemory, MEMORY_MAX_CHARS, type Memory } from "./memory.js";
+import { cleanMemories, memoriesFor, memoryBlock, memoryOwner, saveMemory, MEMORY_MAX_CHARS, type Memory } from "./memory.js";
 import { threadInstructions } from "./prompt.js";
 import type { Thread } from "./types.js";
 
@@ -107,4 +107,64 @@ test("the user's edits from settings, and the switch that turns memory off", () 
   assert.throws(() => host.memoryOp(thread.id, "list", {}), /turned off/);
   host.setPrefs({ memory: true });
   assert.equal(host.prefs().memory, true);
+});
+
+test("provider memories stay private through persistence, deduplication and scope changes", () => {
+  let list: Memory[] = [];
+  for (const owner of [{ provider: "codex" }, { provider: "claude" }, { provider: "pi", source: "src-local" }, { provider: "pi", source: "openrouter" }]) {
+    list = saveMemory(list, { text: "Use your own models for helpers.", scope: "provider", ...owner, by: "user" }).memories;
+  }
+  assert.equal(list.length, 4);
+  assert.deepEqual(cleanMemories(JSON.parse(JSON.stringify(list))), list);
+  assert.equal(memoriesFor(list, repo).length, 0);
+  for (const m of list) {
+    assert.deepEqual(memoriesFor(list, other, { provider: m.provider!, source: m.source }), [m]);
+  }
+  assert.equal(memoriesFor(list, null, { provider: "pi" }).length, 0);
+  const edited = saveMemory(list, { id: list[2].id, text: "Shared now.", scope: "global", by: "user" }).memory;
+  assert.equal(edited.provider, undefined);
+  assert.equal(edited.source, undefined);
+  assert.throws(() => saveMemory([], { text: "Private", scope: "provider", provider: "pi", by: "user" }), /specific source/);
+  assert.deepEqual(cleanMemories([{ id: "broken", scope: "provider", provider: "pi", text: "Must never be global" }]), []);
+  assert.deepEqual(memoryOwner({ provider: "pi", model: "openrouter/anthropic/claude" }), { provider: "pi", source: "openrouter" });
+  assert.deepEqual(memoryOwner({ provider: "pi", model: "default" }), { provider: "pi" });
+});
+
+test("memory tools enforce provider and Native source ownership, including guessed ids", () => {
+  const writer = host.createThread({ provider: "codex", scope: { kind: "workspace", ref: repo } });
+  const saved = host.memoryOp(writer.id, "save", { text: "Only Codex helpers.", scope: "provider", provider: "claude" }) as { saved: Memory };
+  assert.equal(saved.saved.provider, "codex");
+  const peer = host.createThread({ provider: "codex", scope: { kind: "workspace", ref: other } });
+  const outsider = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: repo } });
+  assert.equal((host.memoryOp(peer.id, "list", { q: "Only Codex" }) as { memories: Memory[] }).memories.length, 1);
+  assert.deepEqual((host.memoryOp(outsider.id, "list", { q: "Only Codex" }) as { memories: Memory[] }).memories, []);
+  assert.throws(() => host.memoryOp(outsider.id, "save", { id: saved.saved.id, text: "stolen", scope: "global" }), /another workspace or provider/);
+  assert.throws(() => host.memoryOp(outsider.id, "delete", { id: saved.saved.id }), /No memory/);
+  assert.equal((host.memoryOp(peer.id, "save", { id: saved.saved.id, text: "Edited by peer." }) as { saved: Memory }).saved.scope, "provider");
+  const scopeInfo = (host as any).scopeInfo(peer);
+  assert.match(threadInstructions(peer as unknown as Thread, scopeInfo), /Edited by peer/);
+  assert.doesNotMatch(threadInstructions(outsider as unknown as Thread, (host as any).scopeInfo(outsider)), /Edited by peer/);
+  host.memoryOp(peer.id, "delete", { id: saved.saved.id });
+
+  const sourceA = host.createThread({ provider: "pi", model: "src-one/model-a", scope: { kind: "workspace", ref: repo } });
+  const sourcePeer = host.createThread({ provider: "pi", model: "src-one/model-b", scope: { kind: "workspace", ref: other } });
+  const sourceB = host.createThread({ provider: "pi", model: "src-two/model-a", scope: { kind: "workspace", ref: repo } });
+  const native = host.memoryOp(sourceA.id, "save", { text: "Source one only.", scope: "provider", source: "src-two" }) as { saved: Memory };
+  assert.equal(native.saved.source, "src-one");
+  assert.equal((host.memoryOp(sourcePeer.id, "list", { q: "Source one" }) as { memories: Memory[] }).memories.length, 1);
+  assert.deepEqual((host.memoryOp(sourceB.id, "list", { q: "Source one" }) as { memories: Memory[] }).memories, []);
+  assert.throws(() => host.memoryOp(sourceB.id, "save", { id: native.saved.id, text: "stolen" }), /provider\/source/);
+  assert.throws(() => host.memoryOp(sourceB.id, "delete", { id: native.saved.id }), /No memory/);
+  host.memoryOp(sourcePeer.id, "delete", { id: native.saved.id });
+});
+
+test("user memory editor retains private ownership and lists Native source targets", () => {
+  const made = host.saveUserMemory(null, { text: "Local endpoint rule.", scope: "provider", provider: "pi", source: "src-local" });
+  assert.equal(made.scope, "provider");
+  const changed = host.saveUserMemory(made.id, { text: "Updated rule.", scope: "provider", provider: "pi", source: "src-local" });
+  assert.equal(changed.source, "src-local");
+  assert.ok(host.memoryTargets().some((t) => t.source === "src-local"));
+  assert.throws(() => host.saveUserMemory(null, { text: "No broad Native scope.", scope: "provider", provider: "pi" }), /specific source/);
+  assert.equal(host.saveUserMemory(made.id, { text: "Shared rule.", workspace: repo }).provider, undefined);
+  host.deleteMemory(made.id);
 });

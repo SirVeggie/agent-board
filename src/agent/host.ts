@@ -63,7 +63,7 @@ import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
-import { cleanMemories, memoriesFor, memoryApplies, saveMemory, type Memory } from "./memory.js";
+import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, saveMemory, type Memory } from "./memory.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -373,6 +373,8 @@ function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
 
 type RunState = {
   turn: Turn;
+  /** Actual Native source after model resolution, including default/fallback models. */
+  memoryOwner?: ReturnType<typeof memoryOwner>;
   textItem: Item | null;
   reasoningItem: Item | null;
   tools: Map<string, Item>;
@@ -1125,7 +1127,7 @@ export class AgentHost {
       leftOut,
       duplicates,
       own: ownContext(thread, { claudeHooks: this.prefs().claudeHooks }),
-      memories: this.prefs().memory ? memoriesFor(this.memories(), this.memoryWorkspace(thread)).length : 0,
+      memories: this.prefs().memory ? memoriesFor(this.memories(), this.memoryWorkspace(thread), memoryOwner(thread)).length : 0,
     };
   }
 
@@ -1616,7 +1618,7 @@ export class AgentHost {
     const info = this.scopePages(thread);
     if (this.prefs().searxngUrl) info.webSearch = true;
     if (this.prefs().helpers && !thread.helperOf && !modeOff(thread, "helpers")) info.helpers = true;
-    if (this.prefs().memory) info.memories = memoriesFor(this.memories(), this.memoryWorkspace(thread));
+    if (this.prefs().memory) info.memories = memoriesFor(this.memories(), this.memoryWorkspace(thread), this.runs.get(thread.id)?.memoryOwner ?? memoryOwner(thread));
     if (thread.provider === "claude") {
       const have = new Set(serversForThread(thread).map((s) => s.name));
       const leftOut = claudeOwnServers(threadWorkspace(thread)).filter((name) => !have.has(name));
@@ -2517,6 +2519,21 @@ export class AgentHost {
     return cleanMemories(this.db.getSetting<unknown>("memories", []));
   }
 
+  /** Targets for the user's memory editor, without fetching models or credentials. */
+  memoryTargets(): Array<{ provider: string; source?: string; label: string }> {
+    const sources = new Map(this.modelSources().map((s) => [`src-${s.id}`, s.name]));
+    const models = [...this.cachedModels("pi").map((m) => m.id), this.prefs().models.pi, ...[...this.threads.values()].filter((t) => t.provider === "pi").map((t) => t.model)];
+    for (const model of models.filter((m): m is string => Boolean(m))) {
+      const owner = memoryOwner({ provider: "pi", model });
+      if (owner.source && !sources.has(owner.source)) sources.set(owner.source, owner.source);
+    }
+    for (const m of this.memories()) if (m.provider === "pi" && m.source && !sources.has(m.source)) sources.set(m.source, m.source);
+    return [
+      { provider: "claude", label: "Claude" }, { provider: "cursor", label: "Cursor" }, { provider: "codex", label: "Codex" },
+      ...[...sources].map(([source, label]) => ({ provider: "pi", source, label: `Native: ${label}` })),
+    ];
+  }
+
   /** The folder a thread's workspace memories belong to: its workspace, or the main checkout for a worktree. None in Pages mode. */
   private memoryWorkspace(thread: Thread): string | null {
     if (thread.mode === "board") return null;
@@ -2528,7 +2545,7 @@ export class AgentHost {
     const input = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const workspace = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : null;
     if (workspace && !path.isAbsolute(workspace)) throw new Error("The workspace must be an absolute folder path.");
-    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), text: typeof input.text === "string" ? input.text : "", scope: workspace ? "workspace" : "global", workspace, by: "user" });
+    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), text: typeof input.text === "string" ? input.text : "", scope: input.scope === "provider" ? "provider" : workspace ? "workspace" : "global", workspace, provider: typeof input.provider === "string" ? input.provider : undefined, source: typeof input.source === "string" ? input.source : undefined, by: "user" });
     this.db.setSetting("memories", saved.memories);
     return saved.memory;
   }
@@ -2541,7 +2558,7 @@ export class AgentHost {
 
   /**
    * memory_list, memory_save and memory_delete from a chat's MCP. A chat sees and changes the global
-   * memories and those of its own workspace; each change leaves a note in the chat, so the user sees
+   * memories, those of its own workspace and its own provider/source; each change leaves a note in the chat, so the user sees
    * what their agents keep.
    */
   memoryOp(threadId: string, op: string, body: Record<string, unknown>): Record<string, unknown> {
@@ -2549,8 +2566,9 @@ export class AgentHost {
     if (!thread) throw new Error("Memory only works in Scribe chat threads.");
     if (!this.prefs().memory) throw new Error("Shared memory is turned off in Agent settings. Carry on without it.");
     const workspace = this.memoryWorkspace(thread);
+    const owner = this.runs.get(threadId)?.memoryOwner ?? memoryOwner(thread);
     const all = this.memories();
-    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
+    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), ...(m.provider ? { provider: m.provider } : {}), ...(m.source ? { source: m.source } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
     const note = (text: string) => {
       const run = this.runs.get(threadId);
       if (run) this.closeBlocks(run);
@@ -2558,15 +2576,16 @@ export class AgentHost {
     };
     if (op === "list") {
       const words = queryWords(body.q);
-      const memories = memoriesFor(all, workspace).filter((m) => words.every((w) => m.text.toLowerCase().includes(w)));
+      const memories = memoriesFor(all, workspace, owner).filter((m) => words.every((w) => m.text.toLowerCase().includes(w)));
       return { ...(workspace ? { workspace } : {}), memories: memories.map(row) };
     }
     if (op === "save") {
       const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : undefined;
       const old = id ? all.find((m) => m.id === id) : undefined;
-      if (old && !memoryApplies(old, workspace)) throw new Error(`Memory ${id} belongs to another workspace.`);
-      const scope = body.scope === "global" ? "global" : body.scope === "workspace" || workspace ? "workspace" : "global";
-      if (scope === "workspace" && !workspace) throw new Error("This thread has no workspace folder, so it can only save global memories.");
+      if (old && !memoryApplies(old, workspace, owner)) throw new Error(`Memory ${id} belongs to another workspace or provider/source.`);
+      if (body.scope !== undefined && !["global", "workspace", "provider"].includes(String(body.scope))) throw new Error("Memory scope must be global, workspace or provider.");
+      const scope = body.scope === "provider" ? "provider" : body.scope === "global" ? "global" : body.scope === "workspace" || workspace ? "workspace" : "global";
+      if (scope === "workspace" && !workspace && !old) throw new Error("This thread has no workspace folder. Use global or provider scope.");
       // A change keeps the memory where it is (a parent workspace's stays the parent's) unless scope says otherwise.
       const keep = old && typeof body.scope !== "string" ? old : null;
       const saved = saveMemory(all, {
@@ -2574,17 +2593,20 @@ export class AgentHost {
         text: typeof body.text === "string" ? body.text : "",
         scope: keep ? keep.scope : scope,
         workspace: keep ? keep.workspace : workspace,
+        // Ownership comes from the authenticated thread, never tool arguments.
+        provider: owner.provider,
+        source: owner.source,
         by: thread.provider,
         thread: threadId,
       });
       this.db.setSetting("memories", saved.memories);
-      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${saved.memory.scope === "global" ? "all chats" : `chats in ${saved.memory.workspace}`}): ${saved.memory.text}`);
+      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${saved.memory.scope === "provider" ? `only ${saved.memory.provider}${saved.memory.source ? `/${saved.memory.source}` : ""} chats` : saved.memory.scope === "global" ? "all chats" : `chats in ${saved.memory.workspace}`}): ${saved.memory.text}`);
       return { saved: row(saved.memory), created: saved.created, note: "Chats get it in their instructions from their next message. The user can edit or remove it under Agent settings, Memories." };
     }
     if (op === "delete") {
       const id = typeof body.id === "string" ? body.id.trim() : "";
       const old = all.find((m) => m.id === id);
-      if (!old || !memoryApplies(old, workspace)) throw new Error(`No memory ${id || "(no id)"} in this thread's scopes. memory_list shows them.`);
+      if (!old || !memoryApplies(old, workspace, owner)) throw new Error(`No memory ${id || "(no id)"} in this thread's scopes. memory_list shows them.`);
       this.db.setSetting("memories", all.filter((m) => m.id !== id));
       note(`Deleted a memory: ${old.text}`);
       return { deleted: id };
@@ -3045,6 +3067,10 @@ export class AgentHost {
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
     if (!run.cancelled && !setupError) {
       try {
+        if (thread.provider === "pi" && this.prefs().memory) {
+          const model = await (this.providers.pi as PiProvider).resolveModel(thread.model);
+          run.memoryOwner = { provider: "pi", ...(model ? { source: model.provider } : {}) };
+        }
         const session = this.session(thread);
         session.update(this.sessionThread(thread));
         const pageEdits = this.pageEditPrefix(thread, turn.id);

@@ -36,6 +36,7 @@
     skills: null,
     skillFolders: [],
     memories: null,
+    memoryTargets: [],
     /** The memory being edited, and the text typed for a new one, kept across renders. */
     memEdit: null,
     memDraft: { text: "", workspace: "" },
@@ -946,7 +947,10 @@
     setTimeout(() => name.focus(), 0);
   }
 
-  /** A text box and a scope picker; workspace "" is every chat. */
+  const memoryTargetKey = (value) => JSON.stringify([value.provider, value.source || ""]);
+  const memoryTargetLabel = (value) => S.memoryTargets.find((t) => t.provider === value.provider && (t.source || "") === (value.source || ""))?.label || `${PROVIDER_LABEL[value.provider] || value.provider}${value.source ? `: ${value.source}` : ""}`;
+
+  /** A text box and a scope picker. */
   function memoryForm(value, submitLabel, submit, { cancel, onInput } = {}) {
     const box = el("textarea", "ag-input ag-mem-input");
     box.rows = 2;
@@ -957,15 +961,23 @@
     scope.setAttribute("aria-label", "Applies to");
     const dirs = [...new Map([value.workspace, S.pick.cwd, ...(S.config?.prefs?.recentWorkspaces || []), ...(S.memories || []).map((m) => m.workspace)].filter(Boolean).map((dir) => [dirKey(dir), dir])).values()];
     scope.append(new Option("Every chat", ""));
-    for (const dir of dirs) scope.append(new Option(dir, dir));
-    scope.value = value.workspace || "";
-    const changed = () => onInput?.({ text: box.value, workspace: scope.value });
+    for (const dir of dirs) scope.append(new Option(dir, `workspace:${dir}`));
+    for (const target of S.memoryTargets) scope.append(new Option(`${target.label} only`, `provider:${memoryTargetKey(target)}`));
+    scope.value = value.scope === "provider" ? `provider:${memoryTargetKey(value)}` : value.workspace ? `workspace:${value.workspace}` : "";
+    const draft = () => {
+      if (scope.value.startsWith("provider:")) {
+        const [provider, source] = JSON.parse(scope.value.slice(9));
+        return { text: box.value, scope: "provider", provider, ...(source ? { source } : {}) };
+      }
+      return { text: box.value, workspace: scope.value.startsWith("workspace:") ? scope.value.slice(10) : null };
+    };
+    const changed = () => onInput?.(draft());
     box.addEventListener("input", changed);
     scope.addEventListener("change", changed);
     const go = async () => {
       if (!box.value.trim()) return box.focus();
       try {
-        await submit({ text: box.value, workspace: scope.value || null });
+        await submit(draft());
       } catch (err) {
         notice(err.message);
       }
@@ -988,7 +1000,7 @@
   function memoryRow(memory) {
     if (S.memEdit === memory.id) {
       return memoryForm(
-        { text: memory.text, workspace: memory.workspace || "" },
+        memory,
         "Save",
         async (body) => {
           await api("PUT", `/memories/${memory.id}`, body);
@@ -1030,7 +1042,7 @@
     if (!S.memories) return [empty(S.error || "Loading…")];
     const node = card(
       "Shared memory",
-      "Short notes that every chat gets in its instructions, whatever its provider: corrections you gave, mistakes to avoid, facts about a project. Agents save them as they work. A workspace's memories reach chats in that folder and below it. Changes apply from a thread's next message."
+      "Global memories reach every chat; workspace memories reach that folder and below it. Provider memories reach only that provider, or that source in Native. Changes apply from the next message."
     );
     if (S.config?.prefs?.memory === false) node.append(el("p", "ag-source-error", "Memory is off in Agent settings: chats get none of these and cannot save any."));
     node.append(
@@ -1039,7 +1051,7 @@
         "Add",
         async (body) => {
           await api("POST", "/memories", body);
-          S.memDraft = { text: "", workspace: S.memDraft.workspace };
+          S.memDraft = { ...S.memDraft, text: "" };
           await loadMemories();
         },
         { onInput: (draft) => (S.memDraft = draft) }
@@ -1048,8 +1060,8 @@
     if (!S.memories.length) node.append(empty("Nothing saved yet."));
     const groups = new Map();
     for (const memory of [...S.memories].sort((a, b) => b.updatedAt - a.updatedAt)) {
-      const key = memory.workspace ? dirKey(memory.workspace) : "";
-      if (!groups.has(key)) groups.set(key, { title: memory.workspace || "Every chat", items: [] });
+      const key = memory.scope === "provider" ? `provider:${memoryTargetKey(memory)}` : memory.workspace ? `workspace:${dirKey(memory.workspace)}` : "";
+      if (!groups.has(key)) groups.set(key, { title: memory.scope === "provider" ? `${memoryTargetLabel(memory)} only` : memory.workspace || "Every chat", items: [] });
       groups.get(key).items.push(memory);
     }
     for (const key of [...groups.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))) {
@@ -1205,7 +1217,9 @@
   });
 
   const loadMemories = () => load(async () => {
-    S.memories = (await api("GET", "/memories")).memories || [];
+    const result = await api("GET", "/memories");
+    S.memories = result.memories || [];
+    S.memoryTargets = result.targets || [];
   });
 
   async function refresh() {
