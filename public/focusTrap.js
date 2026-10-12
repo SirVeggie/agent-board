@@ -39,12 +39,26 @@
   }
 
   function bind(root, { initial } = {}) {
+    // Opening a dialog with a shortcut is not keyboard navigation. Keep its
+    // initial focus, but wait for a navigation key before showing an outline.
+    const onNavigate = (event) => {
+      if (!event.altKey && !event.ctrlKey && !event.metaKey &&
+          ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+        root.classList.remove("scribe-focus-pending");
+      }
+    };
     const onKey = (event) => trapTab(event, root);
+    root.addEventListener("keydown", onNavigate, true);
     root.addEventListener("keydown", onKey);
     if (!root.contains(document.activeElement)) {
+      root.classList.add("scribe-focus-pending");
       (initial || focusables(root)[0])?.focus({ preventScroll: true });
     }
-    return () => root.removeEventListener("keydown", onKey);
+    return () => {
+      root.removeEventListener("keydown", onNavigate, true);
+      root.removeEventListener("keydown", onKey);
+      root.classList.remove("scribe-focus-pending");
+    };
   }
 
   window.scribeFocusTrap = { focusables, trapTab, bind };

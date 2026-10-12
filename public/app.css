@@ -1982,6 +1982,11 @@ kbd {
   box-shadow: 0 0 0 1px rgba(255, 143, 143, 0.7);
 }
 
+/* Automatic dialog focus gets an outline once keyboard navigation begins. */
+.scribe-focus-pending :focus {
+  outline: none !important;
+}
+
 .settings {
   position: fixed;
   inset: 0;
