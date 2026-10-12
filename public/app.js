@@ -1452,6 +1452,7 @@
     { label: "Navigation", sections: [settingsSections[1], settingsSections[2]] },
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
     { label: "Classifier", sections: window.scribeMlSettings.sections },
+    { label: "Audio", sections: window.scribeAudioSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Import / Export", sections: [settingsSections[6]] },
   ], {
@@ -1541,11 +1542,13 @@
     catch (err) { searchPackStatus.textContent = err.message; rerankSwitch.disabled = false; }
   });
   window.scribeMlSettings.init({ confirm: confirmDelete, view: renderRerankSetting });
-  function openSettings() {
+  function openSettings(category) {
     if (isPaletteOpen()) {
       closePalette();
     }
     settingsCategories.open();
+    if (category === "Audio") settingsCategories.select(4);
+    window.scribeAudioSettings.refresh();
     searchSwitch.disabled = true;
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     window.scribeMlSettings.refresh();

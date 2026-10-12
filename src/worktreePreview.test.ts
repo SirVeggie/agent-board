@@ -50,7 +50,8 @@ test("preview serves current registered public files and confines requests to th
     assert.equal(index.status, 200);
     assert.equal(index.text, shell, "serves the actual worktree shell without a copied fixture");
     const assets = [...shell.matchAll(/(?:src|href)="([^" ]+)"/g)].map(match => match[1]);
-    for (const asset of assets.filter(url => /\.(css|js|svg)(\?|$)/.test(url) && !url.startsWith("/vendor/"))) {
+    // Generated daemon bootstraps and vendored libraries remain on the daemon origin.
+    for (const asset of assets.filter(url => /\.(css|js|svg)(\?|$)/.test(url) && !url.startsWith("/vendor/") && !url.startsWith("/api/"))) {
       assert.equal(new URL(asset, base + prefix).pathname.startsWith(prefix), true, asset);
     }
     const css = await request(prefix + "agent.css?v=1");

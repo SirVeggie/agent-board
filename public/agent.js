@@ -2367,6 +2367,7 @@
 
     setThread(id) {
       if (this.threadId === id && id) return;
+      this.audioComposer?.cancel();
       this.closeHelper();
       this.parkComposer();
       this.threadId = id;
@@ -2420,6 +2421,7 @@
 
     /** An empty composer for a new thread. Whatever was being written here is kept (see parkComposer). */
     startDraft(scope, settings = {}) {
+      this.audioComposer?.cancel();
       this.closeHelper();
       this.parkComposer();
       this.threadId = null;
@@ -2489,6 +2491,7 @@
      * unsent new thread, as a draft thread the list marks with a pen.
      */
     parkComposer() {
+      this.audioComposer?.cancel();
       if (this.handedOff) {
         this.handedOff = false;
         return;
@@ -4325,6 +4328,8 @@
         this.warm();
       });
       this.bar = el("div", "ag-bar");
+      window.scribeAudio.notice = notice;
+      this.audioComposer = window.scribeAudio.bindComposer(this);
       this.slash = el("div", "ag-slash");
       this.slash.hidden = true;
       // The send button sits beside the input. The dock places it and the settings bar itself;
@@ -4657,6 +4662,10 @@
         bar.append(web);
       }
       const meter = usageChip(s.provider, this.variant !== "full", s.model);
+      const mic = button("", "ag-pill ag-mic", () => this.audioComposer.toggle(), "Dictate (Ctrl+Shift+Space)", false);
+      mic.append(icon("mic"), el("span"));
+      mic.setAttribute("aria-label", "Dictate (Ctrl+Shift+Space)");
+      bar.append(mic);
       if (meter) bar.append(meter);
       this.ctxMeter = contextMeter(this);
       bar.append(this.ctxMeter);
@@ -4681,6 +4690,7 @@
       }
       tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)"));
       window.scribeSyncChildren(this.bar, [bar]);
+      this.audioComposer.paint();
       this.ctxMeter = this.bar.lastChild;
       window.scribeSyncChildren(this.sendSlot, [tail]);
     }
@@ -6176,6 +6186,7 @@
     },
     apply() {
       if (!this.pane) return;
+      if (!S.sideOpen) this.view.audioComposer?.cancel();
       this.pane.classList.toggle("closed", !S.sideOpen);
       this.pane.toggleAttribute("inert", !S.sideOpen);
       this.pane.setAttribute("aria-hidden", S.sideOpen ? "false" : "true");
@@ -6306,6 +6317,7 @@
     /** Use leaveFull, which moves the chat back to the layout it came from. */
     close() {
       S.fullOpen = false;
+      this.view.audioComposer?.cancel();
       this.root.hidden = true;
       document.body.classList.remove("agent-full-open");
     },
@@ -6430,6 +6442,7 @@
     apply() {
       if (!this.root) return;
       this.root.classList.toggle("shown", S.dockShown);
+      if (!S.dockShown) this.view.audioComposer?.cancel();
       this.root.classList.toggle("expanded", S.dockShown && S.dockExpanded);
       this.renderHandle();
       requestAnimationFrame(() => this.view.autosize());

@@ -33,7 +33,7 @@ test("fork model settings populate after startup and follow provider changes", a
     });
     await page.goto("http://fork.test/");
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["motion.js", "dom-sync.js", "agent-render.js", "settings-ui.js"]) {
+    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js", "settings-ui.js"]) {
       await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     }
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");

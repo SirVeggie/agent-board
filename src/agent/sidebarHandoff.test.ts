@@ -24,7 +24,7 @@ test("floating chats open in the sidebar with their draft and reveal the convers
     }));
     await page.goto("http://handoff.test/");
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["motion.js", "dom-sync.js", "agent-render.js"]) {
+    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) {
       await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     }
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");

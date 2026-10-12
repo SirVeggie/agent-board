@@ -45,7 +45,7 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
         notice.textContent = text;
       } };
     });
-    for (const name of ["motion.js", "dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
     await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.mcpTest = mcpServers;") });
     await page.evaluate(() => (window as any).mcpTest.open());

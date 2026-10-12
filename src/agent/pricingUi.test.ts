@@ -21,7 +21,7 @@ test("model source dialog saves exact custom prices, clears entries and offers e
     });
     await page.goto("http://pricing.test/");
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["motion.js", "dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     const code = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8")
       .replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.pricingTest = editSource;")
       .replace(/async function sourcesChanged\(\) \{[\s\S]*?\n  \}/, "async function sourcesChanged() {}");

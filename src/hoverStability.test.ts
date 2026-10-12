@@ -166,6 +166,8 @@ test("shell updates retain composer pills, thread controls and template rows wit
     const agent = source("../public/agent.js");
     const app = source("../public/app.js");
     await page.addScriptTag({ content: source("../public/agent-render.js") });
+    await page.addScriptTag({ content: source("../public/audio.js") });
+    await page.addScriptTag({ content: source("../public/audio-composer.js") });
     // Load all thread-list helpers in their production closure; replace only shell startup.
     await page.addScriptTag({ content: agent.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
       S.filter = 'all';
@@ -183,6 +185,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const bindHoverTip = () => {}, worktreePendingTip = value => String(value), sendKey = () => 'enter';
       const settings = { provider: 'test', model: 'test', mode: 'plan', cwd: 'workspace', useWorktree: false };
       const view = {
+        audioComposer: { paint() {}, toggle() {} },
         settings: () => settings, thread: () => null, bar: document.querySelector('#bar'), sendSlot: document.querySelector('#tail'),
         renderForkNote() {}, setWorktree(value) { settings.useWorktree = value; },
         ${agent.slice(agent.indexOf('    renderComposerBar() {'), agent.indexOf('\n    /**', agent.indexOf('    renderComposerBar() {')))}
