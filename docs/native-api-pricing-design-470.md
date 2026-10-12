@@ -1,6 +1,16 @@
 # Native API pricing design (#470)
 
-Status: proposal; no runtime implementation. Decision form and investigation: [#470 API pricing design](scribe:native-api-pricing-470). Investigated 2026-10-12.
+Status: first implementation slice selected by the user: fixed overrides and provenance, with reviewed bundled updates/manual overrides. Decision form and investigation: [#470 API pricing design](scribe:native-api-pricing-470). Investigated 2026-10-12. The sections below retain the broader proposal; the implementation notes identify the shipped subset.
+
+## First slice implementation
+
+Source settings now provide exact-model Automatic, Custom fixed and Unknown modes. Custom prices use validated decimal strings in USD per million tokens; cache prices may be blank, while explicit zero is known free usage. Older-client updates preserve pricing; endpoint changes require reconfirmation or clearing. Discovered model-list refreshes retain price entries.
+
+Native freezes the selected rate at the start of each turn and records assistant-message usage with immutable rate snapshots, pricing identity, entry date/freshness and missing-price reasons. Estimates use integer decimal multiplication and are computed independently of the SDK's zero-price sentinel. Repeated message events are deduplicated by object identity. Failed/aborted messages with no billable usage remain unpriced. These records are assistant-message records, not proof of HTTP dispatch or visibility into internal SDK retries; tariff and retry accounting remain the next slice.
+
+Chat shows estimated, provider-reported, recorded or partial cost, with original rate details on hover. Provider adapter amounts are explicitly marked for new Claude/Cursor usage; older records retain unknown origin. Thread/helper totals and Kanban action readers preserve estimated/reported subtotals. Harness shows origins and unpriced-turn coverage in overview, provider/model and heavy-thread rows, including known zero. Existing saved board HTML still has its own older formatter/compactor; no user-owned pages or templates are rewritten by this change.
+
+Freshness is deliberately honest: custom entries have an entry date and a 30-day review indication; catalog verification is Unknown. There is no live price refresh, automatic discount, holiday calendar or general schedule editor in this slice. No historical usage is backfilled or repriced. Reference URL/notes, a user-confirmed verification date and complete request-attempt accounting remain broader proposal items.
 
 ## Current behavior and evidence
 

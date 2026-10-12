@@ -234,8 +234,14 @@
   }
 
   function costText(cost) {
+    if (typeof cost === "object" && cost) {
+      const u = cost;
+      if (!u.pricedTurns) return "Unknown";
+      const origin = u.costPartial || u.unpricedTurns ? "Partial " : u.estimatedCostUsd === u.costUsd && u.reportedCostUsd === undefined ? "Estimated " : u.reportedCostUsd === u.costUsd && u.estimatedCostUsd === undefined ? "Provider-reported " : "Recorded ";
+      return origin + costText(u.costUsd);
+    }
     if (cost > 0 && cost < 0.0001) return "<$0.0001";
-    return cost ? `$${cost.toFixed(cost < 0.01 ? 4 : cost < 0.1 ? 3 : 2)}` : "–";
+    return typeof cost === "number" ? `$${cost.toFixed(cost < 0.01 ? 4 : cost < 0.1 ? 3 : 2)}` : "–";
   }
 
   function renderOverview() {
@@ -251,7 +257,7 @@
         ["Sent to models", tokens(t.prompt), `${pct(t.cached, t.prompt)} read from cache`],
         ["Written by models", tokens(t.output), t.reasoning ? `${tokens(t.reasoning)} reasoning` : ""],
         ["Tool calls", count(t.toolCalls), `${(t.toolCalls / Math.max(1, t.turns)).toFixed(1)} a turn · ${pct(t.toolErrors, t.toolCalls)} failed`],
-        ...(t.costUsd ? [["Cost", costText(t.costUsd), "Includes Native estimates at catalog prices; discounts may lower the bill."]] : []),
+        ["Cost", costText(t), `${t.unpricedTurns || 0} unpriced turns · estimated ${costText(t.estimatedCostUsd)} · provider-reported ${costText(t.reportedCostUsd)}`],
       ])
     );
 
@@ -273,6 +279,7 @@
           { label: "Tools a turn", num: true, get: (r) => (r.toolCalls / Math.max(1, r.turns)).toFixed(1) },
           { label: "Tools failed", num: true, get: (r) => pct(r.toolErrors, r.toolCalls) },
           { label: "Turns failed", num: true, get: (r) => pct(r.errors, r.turns) },
+          { label: "Cost", num: true, get: (r) => costText(r) },
         ],
         stats.providers
       )
@@ -290,7 +297,7 @@
           { label: "Cached", num: true, get: (r) => pct(r.cached, r.prompt) },
           { label: "Written", num: true, get: (r) => tokens(r.output) },
           { label: "Tools a turn", num: true, get: (r) => (r.toolCalls / Math.max(1, r.turns)).toFixed(1) },
-          { label: "Cost", num: true, get: (r) => costText(r.costUsd) },
+          { label: "Cost", num: true, get: (r) => costText(r) },
         ],
         stats.models
       )
@@ -1072,7 +1079,7 @@
               { label: "Tool calls", num: true, get: (r) => count(r.toolCalls) },
               { label: "Sent", num: true, get: (r) => tokens(r.prompt) },
               { label: "Written", num: true, get: (r) => tokens(r.output) },
-              { label: "Cost", num: true, get: (r) => costText(r.costUsd) },
+              { label: "Cost", num: true, get: (r) => costText(r) },
             ],
             stats.heavy,
             {

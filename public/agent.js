@@ -1461,8 +1461,10 @@
     const { panel, close } = modal("ag-source");
     const field = (label, input, hint) => {
       const wrap = el("label", "ag-field");
-      wrap.append(el("span", "ag-field-label", label), input);
-      if (hint) wrap.append(el("span", "ag-muted ag-field-hint", hint));
+      const caption = el("span", "ag-field-label", label);
+      input.setAttribute("aria-label", label);
+      if (hint) { caption.dataset.tooltip = hint; caption.setAttribute("aria-description", hint); }
+      wrap.append(caption, input);
       return wrap;
     };
     const input = (value, placeholder, type = "text") => {
@@ -1485,12 +1487,57 @@
     reasoningBox.checked = Boolean(source?.reasoning);
     const reasoning = el("label", "ag-check");
     reasoning.append(reasoningBox, el("span", null, "Offer reasoning levels (sent as reasoning_effort)"));
+    const priceRows = [];
+    const priceList = el("div");
+    function priceRow(model = "", saved) {
+      const row = el("div", "ag-field");
+      const id = input(model, "Exact model ID, e.g. vendor/model");
+      const mode = el("select", "ag-input");
+      for (const [value, label] of [["automatic", "Automatic"], ["custom", "Custom fixed prices"], ["unknown", "Unknown (no estimate)"]]) {
+        const opt = el("option", null, label); opt.value = value; mode.append(opt);
+      }
+      mode.value = saved?.mode || "automatic";
+      const rates = {};
+      const fields = el("div");
+      for (const [key, label] of [["input", "Uncached input"], ["output", "Output"], ["cacheRead", "Cache read"], ["cacheWrite", "Cache write"]]) {
+        rates[key] = input(saved?.rates?.[key] ?? "", key === "input" || key === "output" ? "Required for custom prices" : "Unknown if blank");
+        rates[key].inputMode = "decimal";
+        fields.append(field(label, rates[key], "USD per 1M tokens. Zero means free; blank cache prices leave those tokens unpriced."));
+      }
+      const sync = () => { fields.hidden = mode.value !== "custom"; };
+      mode.addEventListener("change", sync); sync();
+      const entry = { id, mode, rates };
+      priceRows.push(entry);
+      row.append(field("Model ID", id), field("Pricing", mode), fields);
+      if (saved?.updatedAt) row.append(el("span", "ag-muted", `Prices entered ${new Date(saved.updatedAt).toLocaleDateString()}`));
+      row.append(button("Remove price entry", "ag-btn ghost", () => { priceRows.splice(priceRows.indexOf(entry), 1); row.remove(); }));
+      priceList.append(row);
+    }
+    for (const [model, saved] of Object.entries(source?.pricing || {})) priceRow(model, saved);
+    const reconfirm = el("input"); reconfirm.type = "checkbox";
+    const reconfirmRow = el("label", "ag-check");
+    reconfirmRow.append(reconfirm, el("span", null, "Apply these prices to the changed endpoint"));
+    reconfirmRow.hidden = true;
+    baseUrl.addEventListener("input", () => { reconfirmRow.hidden = !source || baseUrl.value.trim().replace(/\/+$/, "") === source.baseUrl; });
     const error = el("p", "ag-source-error");
     error.hidden = true;
     const save = async () => {
       const body = { name: name.value, baseUrl: baseUrl.value, models: models.value, reasoning: reasoningBox.checked };
       if (key.value.trim()) body.apiKey = key.value.trim();
       try {
+        const pricing = {};
+        const seen = new Set();
+        for (const row of priceRows) {
+          const model = row.id.value.trim();
+          if (!model || seen.has(model)) throw new Error("Price entries need unique, exact model IDs");
+          seen.add(model);
+          if (row.mode.value === "automatic") continue;
+          const entry = { mode: row.mode.value };
+          if (entry.mode === "custom") entry.rates = Object.fromEntries(Object.entries(row.rates).map(([key, node]) => [key, node.value.trim()]));
+          Object.defineProperty(pricing, model, { value: entry, enumerable: true });
+        }
+        body.pricing = pricing;
+        body.pricingConfirmed = reconfirm.checked;
         if (source) await api("PUT", `/model-sources/${encodeURIComponent(source.id)}`, body);
         else await api("POST", "/model-sources", body);
       } catch (err) {
@@ -1526,6 +1573,10 @@
       field("API key", key, source?.hasKey ? "Leave empty to keep the saved key." : "Leave empty for local servers that need none."),
       field("Models", models),
       reasoning,
+      helpHeading("Model prices · USD per 1M tokens", "Automatic uses available catalog prices; verification dates and tariff discounts are unknown. Custom fixed prices replace the whole rate set. Unknown disables estimation. Removing an entry restores Automatic. Changes apply on the next turn; recorded estimates keep their original rates."),
+      priceList,
+      button("Add model price", "ag-btn", () => priceRow()),
+      reconfirmRow,
       error,
       actions
     );
@@ -3667,7 +3718,17 @@
       }
       const usage = turn.usage || {};
       if (usage.plan?.length) parts.append(el("span", null, usage.plan.map((w) => `${planPct(w.used)} of ${planWindowShort(w)}`).join(" · ")));
-      else if (usage.costUsd) parts.append(el("span", null, `$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`));
+      else if (usage.costUsd !== undefined || usage.costRecords?.length) {
+        const label = usage.costUsd === undefined ? "Cost unknown" : `${usage.costPartial ? "Partial" : usage.estimatedCostUsd !== undefined ? "Estimated" : usage.reportedCostUsd !== undefined ? "Provider-reported" : "Recorded"} $${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`;
+        const cost = el("span", null, label);
+        const detail = () => (usage.costRecords || []).map((r) => {
+          const rates = r.rate.rates ? Object.entries(r.rate.rates).map(([key, price]) => `${key}: $${price}`).join(", ") : "No prices";
+          return `${r.rate.provider}/${r.rate.model} · ${r.rate.origin} · ${rates} per 1M tokens\n${r.rate.endpoint || ""}\n${r.rate.updatedAt ? "Entered " + new Date(r.rate.updatedAt).toLocaleDateString() + (Date.now() - r.rate.updatedAt > 30 * 86400000 ? "; review prices" : "") : "Verification date unknown"}${r.rate.origin === "catalog" ? "; tariff discounts not applied" : ""}${r.missing.length ? "\n" + r.missing.join("; ") : ""}`;
+        }).join("\n\n") || (usage.reportedCostUsd !== undefined ? "Amount supplied by the provider adapter." : "Recorded cost; rate and origin unavailable.");
+        cost.setAttribute("aria-description", detail());
+        bindHoverTip(cost, () => noteTip(detail()));
+        parts.append(cost);
+      }
       if (usage.outputTokens) parts.append(el("span", null, `${fmtTokens((usage.inputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0))} in · ${fmtTokens(usage.outputTokens)} out`));
       parts.append(el("span", "ag-muted", modelLabel(S.threads.get(turn.threadId)?.provider, turn.model)));
       foot.append(parts);
