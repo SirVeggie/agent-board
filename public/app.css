@@ -355,6 +355,37 @@ html[data-theme="cream"] .palette-chip.location-content {
   background-color: rgba(127, 127, 127, 0.65);
 }
 
+/* The native scrolling surface stays intact; only its gutter is replaced. */
+.overlay-scroll-surface { scrollbar-width: none !important; scrollbar-gutter: auto !important; }
+.overlay-scroll-surface::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.overlay-scrollbar {
+  position: fixed;
+  z-index: calc(var(--z-popover) + 1);
+  pointer-events: none;
+  opacity: 0.08;
+  transition: opacity 240ms ease;
+}
+.overlay-scrollbar[hidden] { display: none; }
+.overlay-scrollbar.active { opacity: 0.65; transition-duration: 90ms; }
+.overlay-scrollbar.dragging { opacity: 0.85; }
+.overlay-scrollbar-thumb {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  border-radius: 99px;
+  background: rgba(127, 127, 127, 0.8);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  min-width: 12px;
+  min-height: 12px;
+}
+.overlay-scrollbar.vertical .overlay-scrollbar-thumb { width: 12px; }
+.overlay-scrollbar.horizontal .overlay-scrollbar-thumb { height: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .overlay-scrollbar { transition: none; }
+}
+html.fx-off .overlay-scrollbar { transition: none; }
+
 html, body {
   margin: 0;
   height: 100%;
