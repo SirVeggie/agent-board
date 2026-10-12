@@ -322,6 +322,8 @@
     popoutTitle.className = "popout-title";
     popoutTitle.setAttribute("data-tauri-drag-region", "");
     document.querySelector(".chrome").appendChild(popoutTitle);
+    // The rest of .actions is hidden here; Edit template values still belongs to the page.
+    popoutTitle.after(templateEditBtn);
   }
 
   const hoverCard = window.createHoverCard({

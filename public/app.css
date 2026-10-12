@@ -3508,6 +3508,12 @@ html.popout .chrome {
   height: 38px;
 }
 
+html.popout #template-edit {
+  flex-shrink: 0;
+  height: 26px;
+  margin: 0 8px;
+}
+
 html.popout:not(.desktop) .chrome,
 html.popout:not(.desktop) .chrome-edge,
 html.popout .brand,
