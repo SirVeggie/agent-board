@@ -5,6 +5,7 @@
  * with the window visible and focused. Idle, a static CSS tint can stand in, which needs no GPU.
  */
 (() => {
+  const appearanceStorage = window.scribeAppearance || localStorage;
   /** Settings keys, also written by the Layout switches in app.js. */
   const ANIM_KEY = "scribe.auroraEdge";
   const IDLE_KEY = "scribe.auroraIdle";
@@ -47,7 +48,7 @@ gl_FragColor=vec4(col*a,a);}`;
   // Starts somewhere along the drift, so each window doesn't open on the same frame.
   let time = Math.random() * 400;
 
-  const setting = (key) => localStorage.getItem(key) !== "0";
+  const setting = (key) => appearanceStorage.getItem(key) !== "0";
   const focused = () => !document.hidden && document.hasFocus();
 
   const loop = window.scribeGL?.loop((dt) => {

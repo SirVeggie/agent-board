@@ -360,6 +360,7 @@ export type BoardEvent =
       reset?: boolean;
     }
   | { type: "spaces"; spaces: SpacesView }
+  | { type: "appearance"; settings: Record<string, string>; revision: number }
   | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean }
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }

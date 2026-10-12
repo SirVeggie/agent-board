@@ -7,6 +7,7 @@
  * frame otherwise.
  */
 (() => {
+  const appearanceStorage = window.scribeAppearance || localStorage;
   /** Settings keys, also written by the Layout tracks in app.js. */
   const STYLE_KEY = "scribe.chromeFx";
   const WHEN_KEY = "scribe.chromeFxWhen";
@@ -123,9 +124,9 @@ gl_FragColor=outc(acc/max(a,1e-3),a*(.4+.4*u_busy));}`;
   }
 
   function render() {
-    const stored = localStorage.getItem(WHEN_KEY);
+    const stored = appearanceStorage.getItem(WHEN_KEY);
     when = stored === "busy" || stored === "always" ? stored : "idle-still";
-    mount(localStorage.getItem(STYLE_KEY) || "wash");
+    mount(appearanceStorage.getItem(STYLE_KEY) || "wash");
     if (!fx) {
       loop.stop();
       return;

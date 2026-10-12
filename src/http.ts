@@ -52,6 +52,7 @@ import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 import { searchRouter } from "./search/routes.js";
 import { mlRouter } from "./ml/routes.js";
 import { shellAssets } from "./shellAssets.js";
+import { appearanceRouter } from "./appearance.js";
 import { contentOriginGate, isContentHost } from "./contentOrigin.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
@@ -155,6 +156,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/agent", agentRouter(agentHost));
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use(express.json({ limit: "6mb" }));
+  app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter());
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
   app.use(noteAgentSession);

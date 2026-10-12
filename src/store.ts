@@ -2077,6 +2077,15 @@ export class BoardStore extends EventEmitter {
 
   /* ---------- Spaces ---------- */
 
+  readAppearance(): Record<string, string> {
+    return this.db?.readAppearance() ?? {};
+  }
+
+  writeAppearance(settings: Record<string, string>): void {
+    if (!this.db) throw new Error("Database is not loaded");
+    this.db.writeAppearance(settings);
+  }
+
   spacesView(): SpacesView {
     const live = this.liveStrip();
     return {

@@ -6,6 +6,7 @@
  * (the creating screen), then dissolves into that page.
  */
 (() => {
+  const appearanceStorage = window.scribeAppearance || localStorage;
   const FILE_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2h7.5l3.5 3.5V14h-11z" fill="currentColor"/></svg>';
   const BUILTIN_SVG =
@@ -182,7 +183,7 @@ return glow(c,e);}`;
 
   /** The backgrounds the user left on in Settings; all of them when nothing valid is stored. */
   function chosen() {
-    const ids = (localStorage.getItem(BG_KEY) || "").split(",").filter((id) => STYLES[id]);
+    const ids = (appearanceStorage.getItem(BG_KEY) || "").split(",").filter((id) => STYLES[id]);
     return ids.length ? ids : Object.keys(STYLES);
   }
 
@@ -485,7 +486,7 @@ return glow(c,e);}`;
     }
 
     function updateBackdrop(provider = host.provider?.()) {
-      const colors = localStorage.getItem(PROVIDER_KEY) !== "0" && provider ? window.scribeOrb?.colors(provider) : null;
+      const colors = appearanceStorage.getItem(PROVIDER_KEY) !== "0" && provider ? window.scribeOrb?.colors(provider) : null;
       root.classList.toggle("provider-colors", Boolean(colors));
       if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
       else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));

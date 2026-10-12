@@ -26,7 +26,7 @@ test("content origin serves the injected tooltip script while rejecting other sh
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type")!, /javascript/);
     assert.equal(await response.text(), fs.readFileSync(path.join(publicDir, "tooltip.js"), "utf8"));
-    for (const url of ["/app.js", "/app.css", "/vendor/marked.js", "/api/tabs", "/api/agent/threads", "/tooltip.js/extra", "/Tooltip.js"]) {
+    for (const url of ["/app.js", "/app.css", "/vendor/marked.js", "/api/tabs", "/api/agent/threads", "/api/appearance", "/api/appearance/bootstrap.js", "/tooltip.js/extra", "/Tooltip.js"]) {
       assert.equal((await fetch(base + url)).status, 403, url);
     }
     for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {

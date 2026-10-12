@@ -311,6 +311,15 @@ export class BoardDb {
     }
   }
 
+  readAppearance(): Record<string, string> {
+    const row = this.db.prepare("SELECT v FROM meta WHERE k = ?").get("appearance") as { v: string } | undefined;
+    return row ? JSON.parse(row.v) : {};
+  }
+
+  writeAppearance(settings: Record<string, string>): void {
+    this.metaStmt.run("appearance", JSON.stringify(settings));
+  }
+
   load(): {
     activeId: string | null;
     /** The spaces JSON from meta, if any (src/spaces.ts parses it). */

@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="./agent.css?v=33">
   <link rel="stylesheet" href="./harness.css?v=2">
   <link rel="stylesheet" href="./orb.css?v=2">
+  <script src="/api/appearance/bootstrap.js"></script>
+  <script src="./appearance.js"></script>
   <script>
     (() => {
       // Settings saved before the rename from Agent Board keep working.
@@ -24,7 +26,8 @@
       if (localStorage.getItem("scribe.refreshOverlay") === "0") {
         document.documentElement.classList.add("no-refresh-overlay");
       }
-      if (localStorage.getItem("scribe.uiEffects") === "0") document.documentElement.classList.add("fx-off");
+      const appearanceStorage = window.scribeAppearance || localStorage;
+      if (appearanceStorage.getItem("scribe.uiEffects") === "0") document.documentElement.classList.add("fx-off");
       // A page in a window of its own (popout.js): no tab strip or sidebars from the first paint.
       if (new URLSearchParams(location.search).has("popout")) {
         document.documentElement.classList.add("popout");
@@ -32,7 +35,7 @@
           document.documentElement.classList.add("desktop");
         }
       }
-      if (localStorage.getItem("scribe.tightSmall") !== "0") {
+      if (appearanceStorage.getItem("scribe.tightSmall") !== "0") {
         document.documentElement.classList.add("tight-small");
       }
       if (localStorage.getItem("scribe.showClear") === "0") {
@@ -44,7 +47,7 @@
       if (localStorage.getItem("scribe.librarySide") === "left") {
         document.documentElement.dataset.librarySide = "left";
       }
-      const theme = localStorage.getItem("scribe.theme");
+      const theme = appearanceStorage.getItem("scribe.theme");
       if (["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(theme)) {
         document.documentElement.dataset.theme = theme;
       }

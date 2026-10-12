@@ -1,5 +1,6 @@
 /** Dock appearance experiment. Remove this module and its settings hook to return to the CSS orb. */
 (() => {
+  const appearanceStorage = window.scribeAppearance || localStorage;
   const PALETTES = {
     ocean: ["#061a33", "#0b5e8a", "#22b8cf", "#d6f6ff"],
     ember: ["#2a0a06", "#a8321a", "#f08a2c", "#ffe1a6"],
@@ -38,10 +39,14 @@
   }
   function read() {
     let saved;
-    try { saved = JSON.parse(localStorage.getItem(KEY)); } catch {}
+    try { saved = JSON.parse(appearanceStorage.getItem(KEY)); } catch {}
     return Object.fromEntries(Object.keys(PROVIDERS).map(p => [p, clean(saved?.[p], p)]));
   }
   let settings = read();
+  window.addEventListener("scribe:appearance", () => {
+    settings = read();
+    window.dispatchEvent(new Event("scribe:orb-appearance"));
+  });
   const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
   const FRAG = `precision highp float;
 uniform vec2 u_res;uniform float u_time;uniform float u_energy;uniform float u_prov;uniform float u_bleed;
@@ -324,7 +329,7 @@ gl_FragColor=c;
     action("Reset provider", () => { draft[provider] = defaults(provider); paint(); });
     action("Cancel", () => dialog.close());
     action("Save", () => {
-      try { localStorage.setItem(KEY, JSON.stringify(draft)); }
+      try { appearanceStorage.setItem(KEY, JSON.stringify(draft)); }
       catch { error.textContent = "Could not save these settings on this device."; return; }
       settings = draft; window.dispatchEvent(new Event("scribe:orb-appearance")); dialog.close();
     });

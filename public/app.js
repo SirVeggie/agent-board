@@ -1,4 +1,5 @@
 (() => {
+  const appearanceStorage = window.scribeAppearance || localStorage;
   const tabsEl = document.getElementById("tabs");
   const emptyEl = document.getElementById("empty");
   const startupEl = document.getElementById("startup");
@@ -117,7 +118,7 @@
   const SIDEBAR_TAB_KEY = "scribe.sidebarTab";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.0.2";
+  const BOARD_VERSION = "3.0.3";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -450,7 +451,7 @@
   });
 
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
-  applyTheme(loadTheme());
+  applyTheme(loadTheme(), false);
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
   applyFlag(showClearToggle, SHOW_CLEAR_KEY, true);
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
@@ -477,6 +478,17 @@
   applyFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY, true);
   applyFlag(pageIntentToggle, PAGE_INTENT_KEY, true);
   renderPalettePrefixSettings();
+  window.addEventListener("scribe:appearance", () => {
+    applyTheme(loadTheme(), false);
+    for (const [control, key] of [[tightSmallToggle, TIGHT_SMALL_KEY], [uiFxToggle, UI_FX_KEY], [auroraEdgeToggle, AURORA_EDGE_KEY], [auroraIdleToggle, AURORA_IDLE_KEY], [newPageProviderToggle, NEWPAGE_PROVIDER_KEY]]) {
+      applyFlag(control, key, true);
+    }
+    document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
+    document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));
+    renderChromeFx();
+    renderNewPageBgs();
+    for (const event of ["scribe:ui-fx", "scribe:aurora", "scribe:chrome-fx", "scribe:newpage-bg"]) window.dispatchEvent(new Event(event));
+  });
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
   bindSettingHint(
     document.getElementById("ui-fx-label"),
@@ -600,6 +612,10 @@
   }
 
   function applyEvent(msg) {
+    if (msg.type === "appearance") {
+      window.scribeAppearance?.receive(msg.settings, msg.revision);
+      return;
+    }
     if (typeof msg.type === "string" && msg.type.startsWith("agent_")) {
       dispatchEvent(new CustomEvent("scribe:agent-event", { detail: msg }));
       return;
@@ -1172,7 +1188,7 @@
   }
 
   function paneSide(key) {
-    return localStorage.getItem(key) === "left" ? "left" : "right";
+    return appearanceStorage.getItem(key) === "left" ? "left" : "right";
   }
 
   function applyPaneSideAttr(attr, side) {
@@ -1185,7 +1201,7 @@
 
   function setPaneSide(attr, key, side) {
     const value = side === "left" ? "left" : "right";
-    localStorage.setItem(key, value);
+    appearanceStorage.setItem(key, value);
     applyPaneSideAttr(attr, value);
   }
 
@@ -1218,7 +1234,7 @@
     if (!track) {
       return;
     }
-    const stored = localStorage.getItem(key);
+    const stored = appearanceStorage.getItem(key);
     const current = options.some((item) => item.id === stored) ? stored : options[0].id;
     track.replaceChildren();
     for (const item of options) {
@@ -1227,7 +1243,7 @@
       btn.textContent = item.name;
       btn.setAttribute("aria-pressed", String(item.id === current));
       btn.addEventListener("click", () => {
-        localStorage.setItem(key, item.id);
+        appearanceStorage.setItem(key, item.id);
         renderChoiceTrack(track, options, key, event);
         window.dispatchEvent(new Event(event));
       });
@@ -1238,7 +1254,7 @@
   /** A track where any number of options can be on, but never none. */
   function renderNewPageBgs() {
     const track = document.getElementById("newpage-bgs");
-    const stored = (localStorage.getItem(NEWPAGE_BG_KEY) || "").split(",");
+    const stored = (appearanceStorage.getItem(NEWPAGE_BG_KEY) || "").split(",");
     let on = NEWPAGE_BGS.map((item) => item.id).filter((id) => stored.includes(id));
     if (!on.length) on = NEWPAGE_BGS.map((item) => item.id);
     track.replaceChildren();
@@ -1250,7 +1266,7 @@
       btn.addEventListener("click", () => {
         const next = on.includes(item.id) ? on.filter((id) => id !== item.id) : [...on, item.id];
         if (!next.length) return;
-        localStorage.setItem(NEWPAGE_BG_KEY, next.join(","));
+        appearanceStorage.setItem(NEWPAGE_BG_KEY, next.join(","));
         renderNewPageBgs();
         window.dispatchEvent(new Event("scribe:newpage-bg"));
       });
@@ -1273,7 +1289,7 @@
   }
 
   function loadTheme() {
-    const stored = localStorage.getItem(THEME_KEY);
+    const stored = appearanceStorage.getItem(THEME_KEY);
     if (THEMES.some((theme) => theme.id === stored)) {
       return stored;
     }
@@ -1294,10 +1310,10 @@
     document.head.appendChild(link);
   }
 
-  function applyTheme(id) {
+  function applyTheme(id, persist = true) {
     const theme = THEMES.find((item) => item.id === id) || THEMES[0];
     document.documentElement.dataset.theme = theme.id;
-    localStorage.setItem(THEME_KEY, theme.id);
+    if (persist) appearanceStorage.setItem(THEME_KEY, theme.id);
     applyFavicon(theme.icon);
     highlightThemeOptions();
   }
@@ -1331,7 +1347,7 @@
   }
 
   function applyFlag(el, key, fallback = false) {
-    const stored = localStorage.getItem(key);
+    const stored = appearanceStorage.getItem(key);
     const on = stored == null ? fallback : stored === "1";
     el.setAttribute("aria-checked", on ? "true" : "false");
   }
@@ -1343,7 +1359,7 @@
   function toggleFlag(el, key) {
     const on = !flagOn(el);
     el.setAttribute("aria-checked", on ? "true" : "false");
-    localStorage.setItem(key, on ? "1" : "0");
+    appearanceStorage.setItem(key, on ? "1" : "0");
     if (el === smoothScrollToggle && !on) {
       stopTabScroll();
     }
