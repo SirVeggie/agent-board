@@ -1622,10 +1622,10 @@
     pattern.focus();
   }
 
-  /* ---------- Custom modes (Agent settings, Chat) ---------- */
+  /* ---------- Custom modes (Agent harness, Modes) ---------- */
 
-  /** Add (mode null) or edit one of the user's modes. */
-  async function editCustomMode(mode) {
+  /** Add (mode null) or edit one of the user's modes. changed runs once it is saved or removed. */
+  async function editCustomMode(mode, changed) {
     const all = customModes();
     const { panel, close } = modal("ag-source ag-mode");
     const field = (label, control, hint) => {
@@ -1716,7 +1716,7 @@
         return;
       }
       close();
-      agentSettings.renderCustomModes();
+      changed?.();
       for (const view of views()) view.renderComposerBar();
     };
     const save = () => {
@@ -4793,7 +4793,7 @@
       }
       // A deleted mode: the thread keeps what it took away until another mode is picked.
       if (s.custom && !custom.some((m) => m.id === s.custom.id)) items.push({ label: s.custom.name, detail: `Deleted. ${customDetail(s.custom, s.mode)}`, checked: true, disabled: true });
-      items.push({ separator: true }, { label: "Edit modes…", icon: "gear", run: () => agentSettings.open() });
+      items.push({ separator: true }, { label: "Edit modes…", icon: "gear", run: () => window.scribeHarness?.open("modes") });
       openMenu(anchor, items, { width: 290 });
     }
 
@@ -9223,20 +9223,6 @@
         )
       );
 
-      const modes = el("section", "settings-section");
-      this.customModeList = el("div", "ag-hook-rules");
-      const modeActions = el("div", "settings-actions");
-      modeActions.append(button("Add mode", "ag-btn", () => void editCustomMode(null)));
-      modes.append(
-        helpHeading(
-          "Custom modes",
-          "A mode of your own builds on Code, Ask, Plan or Pages: it takes tools and MCP servers away from the agent, adds instructions, and sets the approval and web a thread starts with. It appears in the mode menu under the built-in ones, and board workers can use it. Editing a mode applies to the threads already in it."
-        ),
-        this.customModeList,
-        modeActions
-      );
-      this.renderCustomModes();
-
       const hooks = el("section", "settings-section");
       this.hookList = el("div", "ag-hook-rules");
       const hookActions = el("div", "settings-actions");
@@ -9277,10 +9263,10 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, lower, helpers, memory, hooks, coverage, sources, usage, chat, modes, keys);
+      panel.append(title, providers, sdks, cursor, lower, helpers, memory, hooks, coverage, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
-        { label: "Chat", sections: [chat, modes] },
+        { label: "Chat", sections: [chat] },
         { label: "Memory", sections: [memory] },
         { label: "Helper agents", sections: [helpers] },
         { label: "Hooks", sections: [hooks, coverage] },
@@ -9340,18 +9326,6 @@
         table.append(tr);
       }
       this.hookCoverage.replaceChildren(table);
-    },
-    renderCustomModes() {
-      if (!this.customModeList) return;
-      this.customModeList.replaceChildren();
-      if (!customModes().length) this.customModeList.append(el("div", "ag-muted", "None yet."));
-      for (const mode of customModes()) {
-        const row = el("div", "setting-row ag-hook-rule");
-        const label = el("span", "ag-hook-text");
-        label.append(el("strong", null, mode.name), el("span", "ag-muted", ` · ${customDetail(mode, mode.base)}`));
-        row.append(label, button("Edit", "ag-btn small", () => void editCustomMode(mode)));
-        this.customModeList.append(row);
-      }
     },
     renderCycleModes() {
       for (const [id, control] of this.modeButtons || []) {
@@ -9495,7 +9469,6 @@
       if (!this.categories) return;
       this.renderStatus();
       this.renderCycleModes();
-      this.renderCustomModes();
       void this.renderSources();
       void this.renderHooks();
       this.renderSummarizer();
@@ -10656,7 +10629,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

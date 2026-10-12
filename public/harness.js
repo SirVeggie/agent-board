@@ -21,6 +21,7 @@
     { id: "tools", label: "Tool use" },
     { id: "mcp", label: "MCP servers" },
     { id: "skills", label: "Skills" },
+    { id: "modes", label: "Modes" },
     { id: "memories", label: "Memories" },
     { id: "threads", label: "Heaviest threads" },
   ];
@@ -1094,9 +1095,36 @@
     return [node];
   }
 
-  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, memories: renderMemories, threads: renderThreads };
+  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, memories: renderMemories, threads: renderThreads };
   /** Sections whose numbers depend on the range. */
   const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills"]);
+
+  /** The user's own modes: presets on a built-in mode. The editor is the chat's (agent.js). */
+  function renderModes() {
+    const node = card(
+      "Custom modes",
+      "A mode of your own builds on Code, Ask, Plan or Pages: it takes tools and MCP servers away from the agent, adds instructions, and sets the approval and web a thread starts with. It appears in the chat's mode menu under the built-in ones, and board workers can use it. Editing a mode applies to the threads already in it."
+    );
+    const edit = (mode) => chat()?.editCustomMode(mode, render);
+    node.append(button("New mode…", "hx-btn", () => edit(null)));
+    const modes = chat()?.customModes() || [];
+    if (!modes.length) node.append(empty("None yet."));
+    else {
+      node.append(
+        table(
+          [
+            { label: "Mode", get: (r) => el("strong", null, r.name) },
+            { label: "What it is", get: (r) => chat().customDetail(r, r.base) },
+            { label: "MCP servers", get: (r) => (Array.isArray(r.mcp) ? r.mcp.join(", ") || "None" : r.mcp === "none" ? "None" : "All") },
+            { label: "Instructions", get: (r) => (r.instructions.trim() ? `≈ ${tokens(Math.ceil(r.instructions.length / 4))} tokens` : "–") },
+          ],
+          modes,
+          { onRow: edit }
+        )
+      );
+    }
+    return [node];
+  }
 
   function render() {
     if (!root || root.hidden) return;
