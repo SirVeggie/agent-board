@@ -6137,8 +6137,8 @@
       wtBox.checked = Boolean(w.worktree);
       wtBox.addEventListener("change", function () { set({ worktree: wtBox.checked }); });
       wt.appendChild(wtBox);
-      wt.appendChild(document.createTextNode(compact ? "Git worktree per agent" : "Give each agent a git worktree of its own"));
-      row("", wt, "Each agent branches from the latest work, rebases before it ends, and the board then merges its branch back, so the main checkout stays current. A merge that doesn't go through goes back to the agent to fix; if it still fails, the worker pauses and the card comes back to its ready column, blocked.");
+      wt.appendChild(document.createTextNode("Use git worktree"));
+      row("", wt);
       if (!compact) {
         var approvals = opts.approvals || [];
         row("Approval", enhanced(workerSelect([["", "Default" + (defaults.approval ? " (" + labelOf(approvals, defaults.approval) + ")" : "")]].concat(approvals.map(function (a) { return [a.id, a.label]; })), str(w.approval), "Approval", function (v) { set({ approval: v }); })));
