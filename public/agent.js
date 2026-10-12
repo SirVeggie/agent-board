@@ -500,6 +500,7 @@
     for (const [provider, data] of models) {
       if (data?.models?.length) S.config.models[provider] = data.models;
     }
+    agentSettings.renderSummarizer();
     renderAll();
   }
 
@@ -9086,15 +9087,10 @@
         })
       );
       const forkSummaries = el("section", "settings-section");
-      forkSummaries.append(helpHeading("Summaries for forks", "A fork starting a fresh session carries the earlier thread's first and last messages and a summary of the rest. The destination provider writes that summary. Using the same provider does not guarantee cache reuse or available quota."));
+      forkSummaries.append(helpHeading("Summaries for forks", "A fork starting a fresh session carries the earlier thread's first and last messages and a summary of the rest. The destination provider writes that summary."));
+      this.forkSummaryRows = el("div");
+      forkSummaries.append(this.forkSummaryRows);
       this.forkSummarizers = new Map();
-      for (const provider of PROVIDERS) {
-        if (!providerAvailable(provider)) continue;
-        forkSummaries.append(settingRow(PROVIDER_LABEL[provider] || provider, this.forkSummarizerButton(provider), {
-          id: `ag-fork-summarizer-${provider}-label`,
-          hint: "Choose a summary model from this provider, or use the destination thread's model. This applies when the fork cannot continue the original provider session.",
-        }));
-      }
       const utilities = el("section", "settings-section");
       utilities.append(el("h3", null, "Utility agent"), settingRow("Main utility agent", this.summarizerButton(), {
         id: "ag-summarizer-label",
@@ -9464,7 +9460,6 @@
         })));
         openMenu(b, items, { search: true, width: 300, placeholder: "Search models" });
       });
-      this.renderSummarizer();
       return b;
     },
     /** The palette's AI search model; picks from every available provider's models. */
@@ -9499,6 +9494,23 @@
       return b;
     },
     renderSummarizer() {
+      // Settings mount before config arrives; provider rows must follow later loads too.
+      if (this.forkSummaryRows) {
+        for (const [provider, b] of this.forkSummarizers) {
+          if (providerAvailable(provider)) continue;
+          b.closest(".setting-row").remove();
+          this.forkSummarizers.delete(provider);
+        }
+        for (const provider of PROVIDERS) {
+          if (!providerAvailable(provider)) continue;
+          const b = this.forkSummarizers.get(provider) || this.forkSummarizerButton(provider);
+          const row = b.closest(".setting-row") || settingRow(PROVIDER_LABEL[provider] || provider, b, {
+            id: `ag-fork-summarizer-${provider}-label`,
+            hint: "Choose a summary model from this provider, or use the destination thread's model. This applies when the fork cannot continue the original provider session.",
+          });
+          this.forkSummaryRows.append(row);
+        }
+      }
       for (const [provider, b] of this.forkSummarizers || []) {
         const model = prefs().forkSummarizers?.[provider];
         b.replaceChildren(providerIcon(provider), el("span", null, model ? modelInfo(provider, model)?.label || model : "Use destination thread's model"));
