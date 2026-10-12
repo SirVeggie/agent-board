@@ -90,6 +90,7 @@ import type {
   Usage,
 } from "./types.js";
 import { isProviderId, noPages } from "./types.js";
+import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
@@ -180,6 +181,8 @@ type QueuedMessage = {
   from?: "page" | "scribe" | "agent" | "hook";
   /** A Kanban card the board sent this about (a comment on it, or Continue). */
   card?: CardRef;
+  /** Typed into the floating chat over a page (pageIntent.ts). */
+  dock?: boolean;
 };
 
 /** The Kanban card a board message is about: its number and the board page it is on. */
@@ -233,7 +236,9 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
           ? "<context>\nSent by one of the user's Scribe hooks, which matched something in this turn. Not typed by the user just now.\n</context>\n\n"
         : msg.from === "agent"
           ? "<context>\nA brief from the agent this helper thread works for, not typed by the user. Your final reply goes back to that agent.\n</context>\n\n"
-          : "";
+          : msg.dock && !noPages(thread.scope)
+            ? `<context>\n${PAGE_INTENT_NOTE}\n</context>\n\n`
+            : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
   const recap = !thread.rewind?.recap
@@ -365,6 +370,8 @@ type RunState = {
   hooks: {
     /** The user's message this turn answers, as context for classifier questions. */
     lastUser: string;
+    /** That message came from the floating chat (Chunk.dock). */
+    dock: boolean;
     /** Tool calls whose tool_call event has fired. */
     called: Set<string>;
     /** Tool calls a gate held (toolGate), so their approval request is not gated a second time. */
@@ -392,7 +399,7 @@ export type PageAskResult =
 /** A workspace folder that is gone, and the folder Scribe thinks it became (same file id), if any. */
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent" | "hook"; card?: CardRef };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -431,7 +438,7 @@ export class AgentHost {
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
   /** Detectors beside the user's rules (hooks.ts). Features built on hooks add theirs here. */
-  readonly detectors: Detector[] = [];
+  readonly detectors: Detector[] = pageIntentDetectors();
   private ruleDetectors: Detector[] | null = null;
   /** The decision service hooks ask; tests put a fake in its place. */
   hookBackend: { decide: HookDecide; maySend(kind: SendKind): boolean } = {
@@ -1768,6 +1775,7 @@ export class AgentHost {
       context,
       ...(input.from ? { from: input.from } : {}),
       ...(input.card ? { card: input.card } : {}),
+      ...(input.dock && !input.from ? { dock: true } : {}),
     };
     if (!input.from && thread.draft) {
       // The user sent what they had left in the composer.
@@ -2787,7 +2795,7 @@ export class AgentHost {
     } else {
       this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
     }
-    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } };
+    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
@@ -3327,8 +3335,20 @@ export class AgentHost {
     return { rules: this.prefs().hookRules, classifier: view.sources.length > 0 && view.features.some((feature) => feature.id === HOOKS_FEATURE && feature.on) };
   }
 
-  private hookChunk(thread: Thread, turnId: string | null, event: HookEvent, lastUser: string, part: Pick<Chunk, "text"> & Partial<Chunk>): Chunk {
-    return { event, threadId: thread.id, turnId, provider: thread.provider, mode: thread.mode, worker: this.unattended(thread.id), ...(lastUser ? { lastUser } : {}), ...part };
+  private hookChunk(thread: Thread, run: RunState | undefined, event: HookEvent, part: Pick<Chunk, "text"> & Partial<Chunk>): Chunk {
+    const lastUser = run?.hooks.lastUser;
+    return {
+      event,
+      threadId: thread.id,
+      turnId: run?.turn.id ?? null,
+      provider: thread.provider,
+      mode: thread.mode,
+      worker: this.unattended(thread.id),
+      ...(lastUser ? { lastUser } : {}),
+      ...(run?.hooks.dock ? { dock: true } : {}),
+      ...(thread.cwd ? { cwd: thread.cwd } : {}),
+      ...part,
+    };
   }
 
   /**
@@ -3338,7 +3358,7 @@ export class AgentHost {
   private observe(threadId: string, run: RunState, event: HookEvent, part: () => Pick<Chunk, "text"> & Partial<Chunk>): void {
     const thread = this.threads.get(threadId);
     if (!thread || thread.hooksOff || this.hooks.idle(event)) return;
-    const chunk = this.hookChunk(thread, run.turn.id, event, run.hooks.lastUser, part());
+    const chunk = this.hookChunk(thread, run, event, part());
     if (!chunk.text.trim()) return;
     const { found, open } = this.hooks.rules(chunk);
     this.applyFindings(chunk, run, found, false);
@@ -3349,7 +3369,15 @@ export class AgentHost {
     // A hook's own note to the agent is not a prompt to detect on, or one rule could feed itself.
     if (msg.from === "hook" || !msg.text) return;
     // Only what was typed or sent: not the page context or memory blocks Scribe adds around it.
-    this.observe(threadId, run, "prompt", () => ({ text: clipChunk(msg.text), itemId: item.id }));
+    // A message steered into the turn says where it was typed itself.
+    this.observe(threadId, run, "prompt", () => ({ text: clipChunk(msg.text), itemId: item.id, dock: Boolean(msg.dock), ...this.openPage(threadId, msg) }));
+  }
+
+  /** The page a floating-chat message is typed over: the classifier's context for the page-intent question. */
+  private openPage(threadId: string, msg: QueuedMessage): { page?: string } {
+    const thread = this.threads.get(threadId);
+    const title = msg.dock && thread ? this.scopeInfo(thread).page?.title : "";
+    return title ? { page: title.slice(0, 200) } : {};
   }
 
   /** A text or thinking block closed. */
@@ -3373,7 +3401,7 @@ export class AgentHost {
     this.observe(item.threadId, run, "tool_call", () => ({
       text: toolCallText(item),
       itemId: item.id,
-      tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title, ...(item.paths ? { paths: item.paths } : {}) },
+      tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title, ...(item.paths ? { paths: item.paths } : {}), ...(item.input !== undefined ? { input: item.input } : {}) },
     }));
   }
 
@@ -3410,6 +3438,8 @@ export class AgentHost {
           turnId: chunk.turnId,
           ...(chunk.itemId ? { itemId: chunk.itemId } : {}),
           name: action.name,
+          ...(action.stage ? { stage: action.stage } : {}),
+          ...(action.title ? { title: action.title } : {}),
           detector: finding.detector,
           event: chunk.event,
           ...(chunk.early ? { early: true } : {}),
@@ -3481,7 +3511,7 @@ export class AgentHost {
    */
   private approvalGate(threadId: string, run: RunState, req: ApprovalRequest): Promise<{ kind: "block" | "ask"; reason: string } | null> | null {
     const thread = this.threads.get(threadId);
-    if (!thread || thread.hooksOff || this.hooks.idle("tool_call")) return null;
+    if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true)) return null;
     // Scribe's board tools are held where the daemon runs them (toolGate).
     if (req.boardTool || holdsAll(thread.provider) || (req.toolId && run.hooks.gated.has(req.toolId))) return null;
     return this.heldApproval(thread, run, req);
@@ -3497,7 +3527,7 @@ export class AgentHost {
       run.hooks.waiting.delete(req.toolId!);
       found = waiting.found;
     } else {
-      const chunk = this.hookChunk(thread, run.turn.id, "tool_call", run.hooks.lastUser, {
+      const chunk = this.hookChunk(thread, run, "tool_call", {
         text: item?.kind === "tool" ? toolCallText(item) : toolCallText({ name: req.title, detail: req.detail, paths: req.paths }),
         ...(item ? { itemId: item.id } : {}),
         tool: { ...(req.toolId ? { toolId: req.toolId } : {}), name: item?.kind === "tool" ? item.name : req.title, kind: req.tool, title: req.title },
@@ -3517,7 +3547,7 @@ export class AgentHost {
    */
   async toolGate(threadId: string, call: ToolGateCall, signal?: AbortSignal): Promise<ToolGateResult> {
     const thread = this.threads.get(threadId);
-    if (!thread || thread.hooksOff || this.hooks.idle("tool_call")) return { allowed: true };
+    if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true)) return { allowed: true };
     const run = this.runs.get(threadId);
     if (call.toolId) run?.hooks.gated.add(call.toolId);
     const waiting = call.toolId ? run?.hooks.waiting.get(call.toolId) : undefined;
@@ -3526,7 +3556,7 @@ export class AgentHost {
       run!.hooks.waiting.delete(call.toolId!);
     }
     const item = call.toolId ? run?.tools.get(call.toolId) : undefined;
-    const chunk = this.hookChunk(thread, run?.turn.id ?? null, "tool_call", run?.hooks.lastUser ?? "", {
+    const chunk = this.hookChunk(thread, run, "tool_call", {
       text: toolCallText(call),
       ...(item ? { itemId: item.id } : {}),
       tool: { ...(call.toolId ? { toolId: call.toolId } : {}), name: call.name, kind: call.tool, ...(call.title ? { title: call.title } : {}), ...(call.paths ? { paths: call.paths } : {}) },

@@ -425,8 +425,11 @@ export type AgentEvent =
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn }
   | { type: "agent_turn_deleted"; threadId: string; id: string }
-  /** A hook's signal action: a detector matched a chunk of the turn (hooks.ts). The agent is unaffected. */
-  | { type: "agent_intent"; threadId: string; turnId: string | null; itemId?: string; name: string; detector: string; event: string; early?: boolean; confidence?: number }
+  /**
+   * A hook's signal action: a detector matched a chunk of the turn (hooks.ts). The agent is unaffected.
+   * Page-creation intent (pageIntent.ts) is name "page_create" with stage "hint" or "confirmed", and the new page's title when the agent gave one.
+   */
+  | { type: "agent_intent"; threadId: string; turnId: string | null; itemId?: string; name: string; stage?: string; title?: string; detector: string; event: string; early?: boolean; confidence?: number }
   /** The thread's agent browser opened, navigated, or closed (view null). */
   | { type: "agent_browser"; threadId: string; view: BrowserView | null };
 

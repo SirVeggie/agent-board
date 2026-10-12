@@ -31,7 +31,7 @@ export type Chunk = {
   itemId?: string;
   /** What detectors match: the message, the block's text, or the call's name, title, detail and input. */
   text: string;
-  tool?: { toolId?: string; name: string; kind: ToolKind; title?: string; paths?: string[] };
+  tool?: { toolId?: string; name: string; kind: ToolKind; title?: string; paths?: string[]; input?: unknown };
   /** A text block's opening, before the block has closed. Only detectors with `early` see it. */
   early?: boolean;
   provider: ProviderId;
@@ -40,11 +40,17 @@ export type Chunk = {
   worker: boolean;
   /** The user's last message, as context for classifier questions. */
   lastUser?: string;
+  /** The turn's message was sent from the floating chat over a page. */
+  dock?: boolean;
+  /** The title of the page the thread belongs to, as context for classifier questions. */
+  page?: string;
+  /** The thread's workspace folder, when it has one. */
+  cwd?: string;
 };
 
 export type Action =
   /** Tell the UI (the agent_intent event); the agent is unaffected. */
-  | { kind: "signal"; name: string }
+  | { kind: "signal"; name: string; stage?: string; title?: string }
   /** A badge on the transcript item. */
   | { kind: "flag"; label?: string }
   /** Tell the agent, by steering the text into the running turn. */
@@ -63,7 +69,11 @@ export type Detector = {
   on: readonly HookEvent[];
   /** Also runs on a text block's opening (see Chunk.early). */
   early?: boolean;
-  where?: { worker?: boolean; modes?: ThreadMode[]; providers?: ProviderId[] };
+  /** Only ever signals or flags, so no tool call is held for it. */
+  observing?: boolean;
+  where?: { worker?: boolean; dock?: boolean; modes?: ThreadMode[]; providers?: ProviderId[] };
+  /** The Classifier feature switch its questions go under (Settings, Classifier). Default: Hook questions. */
+  feature?: string;
   /** Synchronous: keyword, regex, tool name. A Hit or "pass" settles it; null leaves it to `ask`. */
   rule?: (chunk: Chunk) => Hit | "pass" | null;
   /** Questions for the decision service, asked only when the rule did not settle it. */
@@ -102,6 +112,7 @@ function applies(detector: Detector, chunk: Chunk): boolean {
   const where = detector.where;
   if (!where) return true;
   if (where.worker !== undefined && where.worker !== chunk.worker) return false;
+  if (where.dock !== undefined && where.dock !== Boolean(chunk.dock)) return false;
   if (where.modes && !where.modes.includes(chunk.mode)) return false;
   if (where.providers && !where.providers.includes(chunk.provider)) return false;
   return true;
@@ -132,9 +143,9 @@ export function verdict(found: Finding[]): { kind: "block"; finding: Finding } |
 export class HookPipeline {
   constructor(private deps: HookDeps) {}
 
-  /** True when no detector could match this event, so the host can skip building a chunk. */
-  idle(event: HookEvent): boolean {
-    return !this.deps.detectors().some((d) => d.on.includes(event));
+  /** True when no detector could match this event, so the host can skip building a chunk. `gating`: none that could hold a call. */
+  idle(event: HookEvent, gating = false): boolean {
+    return !this.deps.detectors().some((d) => d.on.includes(event) && !(gating && d.observing));
   }
 
   /** True when some detector wants a text block's opening (Chunk.early). */
@@ -146,11 +157,11 @@ export class HookPipeline {
    * The synchronous half: every matching detector's rule. `open` are the detectors whose rule did
    * not settle it and that have questions for the classifier.
    */
-  rules(chunk: Chunk): { found: Finding[]; open: Detector[] } {
+  rules(chunk: Chunk, gating = false): { found: Finding[]; open: Detector[] } {
     const found: Finding[] = [];
     const open: Detector[] = [];
     for (const detector of this.deps.detectors()) {
-      if (!applies(detector, chunk)) continue;
+      if (!applies(detector, chunk) || (gating && detector.observing)) continue;
       let settled: Hit | "pass" | null = null;
       if (detector.rule) {
         try {
@@ -166,13 +177,24 @@ export class HookPipeline {
   }
 
   /**
-   * The asynchronous half: all open detectors' questions in one request. Never throws; a timeout,
-   * a switched-off service or a failing backend gives no findings (fail open).
+   * The asynchronous half: the open detectors' questions, one request per Classifier feature. Never
+   * throws; a timeout, a switched-off service or a failing backend gives no findings (fail open).
    */
   async classify(chunk: Chunk, open: Detector[], budgetMs: number): Promise<Finding[]> {
-    const decide = this.deps.decide;
     const kind = SEND_KIND[chunk.event];
-    if (!decide || !open.length || !chunk.text.trim() || this.deps.maySend?.(kind) === false) return [];
+    if (!this.deps.decide || !open.length || !chunk.text.trim() || this.deps.maySend?.(kind) === false) return [];
+    const features = new Map<string, Detector[]>();
+    for (const detector of open) {
+      const feature = detector.feature ?? HOOKS_FEATURE;
+      features.set(feature, [...(features.get(feature) ?? []), detector]);
+    }
+    const found = await Promise.all([...features].map(([feature, detectors]) => this.classifyFeature(chunk, feature, detectors, budgetMs)));
+    return found.flat();
+  }
+
+  private async classifyFeature(chunk: Chunk, feature: string, open: Detector[], budgetMs: number): Promise<Finding[]> {
+    const decide = this.deps.decide!;
+    const kind = SEND_KIND[chunk.event];
     const questions: MlQuestions = {};
     const asked: Array<{ detector: Detector; prefix: string; ids: string[] }> = [];
     open.forEach((detector, index) => {
@@ -193,6 +215,7 @@ export class HookPipeline {
       event: chunk.event,
       mode: chunk.mode,
       ...(chunk.tool ? { tool: chunk.tool.name } : {}),
+      ...(chunk.page ? { openPage: chunk.page } : {}),
       content: chunk.text,
       ...(withUser ? { userMessage: chunk.lastUser!.slice(0, 4000) } : {}),
     };
@@ -202,7 +225,7 @@ export class HookPipeline {
     });
     let result: DecideResult | null = null;
     try {
-      result = await Promise.race([decide(state, questions, { feature: HOOKS_FEATURE, sends: withUser ? [kind, "messages"] : [kind], timeoutMs: budgetMs }), late]);
+      result = await Promise.race([decide(state, questions, { feature, sends: withUser ? [kind, "messages"] : [kind], timeoutMs: budgetMs }), late]);
     } catch (err) {
       this.deps.log?.(`Hook classifier call failed: ${(err as Error).message}`);
     } finally {
@@ -228,10 +251,10 @@ export class HookPipeline {
 
   /**
    * Rules, then the classifier within the budget: what a gate waits for. A rule that already blocks
-   * settles the call, so the classifier is not asked.
+   * settles the call, so the classifier is not asked. Observing detectors are left to the transcript's own hook.
    */
   async evaluate(chunk: Chunk, budgetMs = GATE_BUDGET_MS): Promise<Finding[]> {
-    const { found, open } = this.rules(chunk);
+    const { found, open } = this.rules(chunk, true);
     if (!open.length || found.some((f) => f.action.kind === "block")) return found;
     return [...found, ...(await this.classify(chunk, open, budgetMs))];
   }

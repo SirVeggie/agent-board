@@ -451,7 +451,7 @@ export function agentRouter(host: AgentHost): express.Router {
       if (total > MAX_MESSAGE_BYTES) throw new Error(`A message's files must add up to under ${MAX_MESSAGE_BYTES / 1024 / 1024} MB`);
       const context = Array.isArray(body.context) ? (body.context.filter(isPlainRecord) as ContextChip[]) : [];
       // The board sends from: "page" for messages a page's own code sent through board.agent.
-      return host.send(req.params.id, { text: String(body.text ?? ""), images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}) });
+      return host.send(req.params.id, { text: String(body.text ?? ""), images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}) });
     })
   );
 

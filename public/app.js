@@ -166,6 +166,11 @@
    * origin is the page that was in front when it began, which the creating screen covers.
    */
   let pageIntent = null;
+  /** The floating chat's turn may be about to write a new page (the classifier's guess): { turnId, origin }. Its page stays usable. */
+  let pageHint = null;
+  /** The turn whose creating screen the user clicked away: nothing more of that turn brings it back. */
+  let pageIntentDismissed = null;
+  const pageHintEl = document.getElementById("page-hint");
   const NEWPAGE_BGS = [
     { id: "nebula", name: "Nebula" },
     { id: "stardust", name: "Stardust" },
@@ -431,7 +436,10 @@
     openChat: () => window.scribeChat?.shortcut("dock"),
     provider: () => window.scribeChat?.dockProvider?.(),
     intent: (id) => (pageIntent?.origin === id ? pageIntent : null),
-    dismissIntent: () => endPageIntent(),
+    dismissIntent: () => {
+      pageIntentDismissed = pageIntent?.turnId || null;
+      endPageIntent();
+    },
   });
   const trash = window.createTrash({
     showNotice,
@@ -484,7 +492,7 @@
   );
   bindSettingHint(
     document.getElementById("page-intent-label"),
-    "When an agent in the floating chat starts writing a new page, the page in front gives way to a New page background until the new page opens. Click the screen to get the page back."
+    "When an agent in the floating chat starts writing a new page, the page in front gives way to a New page background until the new page opens. Click the screen to get the page back. Before that, a glow at the page's edge shows a message that looks like it asks for a page (Settings, Classifier)."
   );
   bindSettingHint(
     document.getElementById("chrome-fx-label"),
@@ -2953,6 +2961,11 @@
     else if (cover) newPageView.render(cover, true);
     else if (tab) newPageView.replace(tab, frames.get(tab.id)?.el);
     else newPageView.render(null);
+    const hinted = !blank && !cover && tab && pageHint?.origin === tab.id;
+    pageHintEl.hidden = !hinted;
+    const hintPane = hinted ? views.paneOf(tab.id) : "";
+    if (hintPane) pageHintEl.dataset.pane = hintPane;
+    else delete pageHintEl.dataset.pane;
   }
 
   function endPageIntent() {
@@ -2969,12 +2982,23 @@
       if (pageIntent && !pageIntent.ending) pageIntent.ending = setTimeout(endPageIntent, PAGE_INTENT_GRACE_MS);
       return;
     }
+    if (intent.turnId && intent.turnId === pageIntentDismissed) return;
     if (pageIntent?.itemId === intent.itemId) {
       pageIntent.title = intent.title;
+    } else if (pageIntent && !pageIntent.ending && intent.turnId && pageIntent.turnId === intent.turnId) {
+      // The same page, now seen as its page_show call: the screen stays over the page it began on.
+      pageIntent.itemId = intent.itemId;
+      pageIntent.title = intent.title || pageIntent.title;
     } else {
       clearTimeout(pageIntent?.ending);
-      pageIntent = flagOn(pageIntentToggle) && !childId && state.activeId ? { itemId: intent.itemId, title: intent.title, origin: state.activeId, ending: 0 } : null;
+      pageIntent = flagOn(pageIntentToggle) && !childId && state.activeId ? { itemId: intent.itemId, turnId: intent.turnId || null, title: intent.title, origin: state.activeId, ending: 0 } : null;
     }
+    renderFrames();
+  }
+
+  /** The floating chat's turn looks like it will write a new page, or that guess is over. */
+  function onPageHint(hint) {
+    pageHint = hint && flagOn(pageIntentToggle) && !childId && state.activeId ? { turnId: hint.turnId, origin: state.activeId } : null;
     renderFrames();
   }
 
@@ -5076,9 +5100,13 @@
   });
   pageIntentToggle.addEventListener("click", () => {
     toggleFlag(pageIntentToggle, PAGE_INTENT_KEY);
-    if (!flagOn(pageIntentToggle)) endPageIntent();
+    if (!flagOn(pageIntentToggle)) {
+      endPageIntent();
+      onPageHint(null);
+    }
   });
   window.addEventListener("scribe:page-intent", (event) => onPageIntent(event.detail));
+  window.addEventListener("scribe:page-hint", (event) => onPageHint(event.detail));
   auroraEdgeToggle.addEventListener("click", () => toggleFlag(auroraEdgeToggle, AURORA_EDGE_KEY));
   auroraIdleToggle.addEventListener("click", () => toggleFlag(auroraIdleToggle, AURORA_IDLE_KEY));
   clearBtn.addEventListener("click", async () => {

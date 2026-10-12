@@ -207,6 +207,17 @@ export async function startMcp(): Promise<void> {
     }
   };
 
+  // Only Scribe's own chats have a creating screen to start (src/agent/pageIntent.ts).
+  if (process.env.SCRIBE_THREAD) {
+    pageTool(
+      "page_intent",
+      "Announce a new page before you write it, so Scribe can show its creating screen over the open page while you work. Call it only when the message says it was sent from the floating chat, and only for a new page the user will look at: not for a background page, and not for a change to an existing page. Send it in the same step as your first other tool call; it returns at once and its result needs no reply.",
+      { title: z.string().max(200).describe("The new page's title, as you will pass it to page_show.") },
+      { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      async () => jsonResult({ ok: true })
+    );
+  }
+
   pageTool(
     "page_show",
     "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to skip focus and the strip for a new page (created in the Library with a Library blip); an already-open tab stays in the background with an unread blip; an already-closed page stays closed with a Library blip. Use background when creating a page the user will open from a link rather than look at now. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files into the workspace. Pass html (a full document or fragment), or htmlPath to a local HTML file — in Code mode, write a large page to a temp file and pass htmlPath so it is not pasted as a tool argument. Mutually exclusive. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",

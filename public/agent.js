@@ -632,6 +632,7 @@
         // A hook's signal (hooks.ts): for whatever part of the shell acts on that kind of intent.
         const { type: _type, ...intent } = msg;
         window.dispatchEvent(new CustomEvent("scribe:agent-intent", { detail: intent }));
+        dock.onIntent(intent);
         return;
       }
       case "agent_browser": {
@@ -5091,7 +5092,8 @@
           this.renderAll();
         }
         this.stick = true;
-        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context });
+        // dock: the host watches a floating-chat turn for a new page on its way (pageIntent.ts).
+        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, ...(this.variant === "dock" ? { dock: true } : {}) });
         for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         this.renderContext();
       } catch (err) {
@@ -5152,6 +5154,12 @@
     if (page?.name !== "page_show") return null;
     if (page.ref && app()?.resolvePages?.([page.ref])?.[page.ref]) return null;
     return { title: typeof item.input.title === "string" ? item.input.title.trim() : "" };
+  }
+
+  /** A finished page_show call that put a page in front of the user. */
+  function shownPageCall(item) {
+    if (item.kind !== "tool" || item.parentToolId || (item.status !== "done" && item.status !== "error")) return false;
+    return pageTool(item)?.name === "page_show" && !(isRecord(item.input) && item.input.background === true);
   }
 
   function isRecord(value) {
@@ -6136,6 +6144,7 @@
     starts: new Map(),
     /** The page_show call writing a new page in this chat: { itemId, threadId, title }. */
     pageIntent: null,
+    pageHint: null,
     mount() {
       const main = document.querySelector(".workspace main");
       if (!main) return;
@@ -6569,14 +6578,39 @@
       if (!intent && !prev) return;
       if (intent && prev && prev.itemId === intent.itemId && prev.title === intent.title) return;
       this.pageIntent = intent;
+      if (intent) this.setPageHint(null);
       window.dispatchEvent(new CustomEvent("scribe:page-intent", { detail: intent }));
     },
+    /** The lighter state: this chat's turn may be about to write a new page (the classifier's guess from the message). */
+    setPageHint(hint) {
+      if (!hint && !this.pageHint) return;
+      this.pageHint = hint;
+      window.dispatchEvent(new CustomEvent("scribe:page-hint", { detail: hint }));
+    },
+    /** A hook's page_create signal (pageIntent.ts): a hint from the user's message, or the agent's own word that a page is coming. */
+    onIntent(intent) {
+      if (intent.name !== "page_create" || !intent.turnId || intent.threadId !== this.view.threadId) return;
+      // A classifier answer can come after its turn is over.
+      if (S.details.get(intent.threadId)?.turns.get(intent.turnId)?.status !== "running") return;
+      if (intent.stage === "hint") {
+        if (!this.pageIntent) this.setPageHint({ threadId: intent.threadId, turnId: intent.turnId });
+        return;
+      }
+      if (intent.stage !== "confirmed") return;
+      // A page_show call already on screen knows more (its title, whether the page is new).
+      if (this.pageIntent && !this.pageIntent.announced) return;
+      const title = intent.title || this.pageIntent?.title || "";
+      this.setPageIntent({ itemId: `intent:${intent.turnId}`, threadId: intent.threadId, turnId: intent.turnId, title, announced: true });
+    },
     onItem(item) {
+      const intent = this.pageIntent;
       // Followed by the call, not the thread on show: the chat moves to the new page while it is still being written.
-      if (this.pageIntent?.itemId === item.id || item.threadId === this.view.threadId) {
+      if (intent?.itemId === item.id || item.threadId === this.view.threadId || (intent?.announced && item.threadId === intent.threadId)) {
         const call = newPageCall(item);
-        if (call) this.setPageIntent({ itemId: item.id, threadId: item.threadId, ...call });
-        else if (this.pageIntent?.itemId === item.id) this.setPageIntent(null);
+        if (call) this.setPageIntent({ itemId: item.id, threadId: item.threadId, turnId: item.turnId, title: call.title || (intent?.announced ? intent.title : "") });
+        else if (intent?.itemId === item.id) this.setPageIntent(null);
+        // The announced page has been shown, by a call this chat never saw as a new page (its key was already there by then).
+        else if (intent?.announced && item.threadId === intent.threadId && shownPageCall(item)) this.setPageIntent(null);
       }
       if (item.threadId !== this.view.threadId) return;
       if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan") && item.status === "pending") {
@@ -6593,6 +6627,7 @@
     },
     onTurn(turn) {
       if (turn.status !== "running" && turn.threadId === this.pageIntent?.threadId) this.setPageIntent(null);
+      if (turn.status !== "running" && turn.threadId === this.pageHint?.threadId) this.setPageHint(null);
       if (turn.threadId !== this.view.threadId) return;
       if (turn.status !== "running") this.live = null;
       this.renderHandle();

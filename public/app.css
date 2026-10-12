@@ -3217,6 +3217,7 @@ main.has-split.split-col [data-pane] {
 /* An iframe is a replaced element: with width or height auto it falls back to 300x150 instead of filling its insets. */
 main.has-split #frames iframe[data-pane],
 main.has-split .newpage[data-pane],
+main.has-split .page-hint[data-pane],
 .pane-body {
   top: calc(var(--pane-y) + var(--view-head));
   left: var(--pane-x);
@@ -4494,6 +4495,25 @@ html[data-theme="cream"] .newpage {
 
 .newpage[hidden] {
   display: none;
+}
+
+/* The floating chat's message looks like it asks for a new page: the page's edge glows, and the page stays usable. */
+.page-hint {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-controls);
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(var(--fx-1), 0.5), inset 0 0 36px -6px rgba(var(--fx-1), 0.55), inset 0 0 90px -30px rgba(var(--fx-2), 0.5);
+  animation: page-hint-breathe var(--dur-breathe) ease-in-out infinite alternate;
+}
+
+.page-hint[hidden] {
+  display: none;
+}
+
+@keyframes page-hint-breathe {
+  from { opacity: 0.45; }
+  to { opacity: 1; }
 }
 
 main.blank-page #frames {

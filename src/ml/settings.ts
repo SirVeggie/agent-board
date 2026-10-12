@@ -19,6 +19,12 @@ export const ML_FEATURES: MlFeature[] = [
     hint: "Hook rules of the kind Question (Agent settings, Hooks) ask the classifier about messages, agent output and tool calls. Off: those rules never match.",
     default: true,
   },
+  {
+    id: "page-intent",
+    label: "Page-creation hint",
+    hint: "Each message you send in the floating chat is asked whether answering it needs a new page. On a confident yes the page's edge glows until the agent confirms or the turn ends. Off: the creating screen still starts when the agent announces a page.",
+    default: true,
+  },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
