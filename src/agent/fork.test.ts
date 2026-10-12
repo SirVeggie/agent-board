@@ -30,3 +30,34 @@ test("clip keeps the start", () => {
   assert.equal(clip("abcdef", 3), "abc…");
   assert.equal(clip("abc", 3), "abc");
 });
+
+test("fresh fork dispatches its summary to the destination and reuses the saved result", async () => {
+  const { AgentHost } = await import("./host.js");
+  const { DEFAULT_PREFS } = await import("./prefs.js");
+  const calls: { provider: string; model: string }[] = [];
+  let material = { first: "First", middle: "Middle", last: "Last", reply: "Reply", summary: "" };
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    prefs: () => ({ ...DEFAULT_PREFS, forkSummarizers: { codex: "mini" } }),
+    providers: { claude: { label: "Claude" }, codex: { label: "Codex" } },
+    cachedModels: () => [],
+    forksNatively: () => false,
+    agent: (provider: string) => ({ complete: async (_prompt: string, model: string) => {
+      calls.push({ provider, model });
+      return "Summary";
+    } }),
+    db: { getSetting: () => material, setSetting: (_key: string, value: typeof material) => { material = value; } },
+    addItem: (_thread: string, _turn: string, item: unknown) => item,
+    touch() {}, flushNow() {},
+  });
+  const thread = { id: "fork", provider: "codex", model: "large", nativeId: null };
+  const fork = { provider: "claude", title: "Source", turns: 3 };
+  const run = { turn: { id: "turn" } };
+  assert.match(await host.startFork(thread, fork, run), /Summary of the conversation in between:\nSummary/);
+  assert.deepEqual(calls, [{ provider: "codex", model: "mini" }]);
+  assert.deepEqual(host.forkCarry(thread, fork), { how: "summary", summarizer: "mini (Codex)" });
+  await host.startFork(thread, fork, run);
+  assert.equal(calls.length, 1);
+  // The independent AI search choice keeps using its original provider.
+  await host.summarize("Search question");
+  assert.deepEqual(calls[1], { provider: "claude", model: "haiku" });
+});

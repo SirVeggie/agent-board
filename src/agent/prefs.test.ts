@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey } from "./prefs.js";
+import { cleanForkSummarizers, DEFAULT_PREFS, forkSummaryModel, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey } from "./prefs.js";
 
 const grok = {
   provider: "cursor" as const,
@@ -55,4 +55,19 @@ test("prefs from before per-model settings seed each provider's last model", () 
   const seeded = seedModelSettings({ models: { cursor: "grok" }, efforts: { cursor: "low" }, modelParams: { cursor: { fast: "true" } } });
   assert.deepEqual(seeded, { "cursor:grok": { effort: "low", modelParams: { fast: "true" } } });
   assert.deepEqual(seedModelSettings({ modelSettings: {} }), {});
+});
+
+test("fork summaries follow the destination provider and default to its thread model", () => {
+  const prefs = { ...DEFAULT_PREFS, forkSummarizers: { claude: "haiku", codex: "mini" } };
+  assert.equal(forkSummaryModel(prefs, { provider: "codex", model: "large" }), "mini");
+  assert.equal(forkSummaryModel(prefs, { provider: "cursor", model: "composer" }), "composer");
+  assert.equal(forkSummaryModel({ ...prefs, forkSummarizers: { codex: null } }, { provider: "codex", model: "large" }), "large");
+});
+
+test("legacy summary choices migrate only to their own destination provider", () => {
+  assert.deepEqual(seedForkSummarizers({ summarizer: { provider: "claude", model: "haiku" } }), { claude: "haiku" });
+  assert.deepEqual(seedForkSummarizers({}), {});
+  assert.deepEqual(seedForkSummarizers({ summarizer: DEFAULT_PREFS.summarizer, forkSummarizers: {} }), {});
+  assert.deepEqual(seedForkSummarizers({ summarizer: DEFAULT_PREFS.summarizer, forkSummarizers: { claude: null } }), { claude: null });
+  assert.deepEqual(cleanForkSummarizers({ codex: "mini", cursor: null, pi: 12, claude: "", unknown: "x" }), { codex: "mini", cursor: null });
 });

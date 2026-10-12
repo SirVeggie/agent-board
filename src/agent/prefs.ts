@@ -71,8 +71,10 @@ export type Prefs = {
   favoriteModels: string[];
   /** Last worktree choice per workspace (see workspaceKey), the default for new threads there. */
   worktrees: Record<string, boolean>;
-  /** Writes the summary a fork to another provider starts from. */
+  /** Model for the palette's AI search; retained from the original shared summarizer setting. */
   summarizer: { provider: ProviderId; model: string };
+  /** Fork summary model per destination provider. Null or absent uses the destination thread's model. */
+  forkSummarizers: Partial<Record<ProviderId, string | null>>;
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -102,7 +104,25 @@ export const DEFAULT_PREFS: Prefs = {
   favoriteModels: [],
   worktrees: {},
   summarizer: { provider: "claude", model: "haiku" },
+  forkSummarizers: {},
 };
+
+/** Keep the old explicit choice only for its own provider; other destinations use their chat model. */
+export function seedForkSummarizers(saved: Partial<Prefs>): Prefs["forkSummarizers"] {
+  if (saved.forkSummarizers) return cleanForkSummarizers(saved.forkSummarizers);
+  return saved.summarizer ? cleanForkSummarizers({ [saved.summarizer.provider]: saved.summarizer.model }) : {};
+}
+
+export function cleanForkSummarizers(value: unknown): Prefs["forkSummarizers"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([provider, model]) =>
+    ["claude", "codex", "cursor", "pi"].includes(provider) && (model === null || (typeof model === "string" && model.trim().length > 0))
+  ));
+}
+
+export function forkSummaryModel(prefs: Prefs, thread: Pick<Thread, "provider" | "model">): string {
+  return prefs.forkSummarizers[thread.provider] || thread.model;
+}
 
 /** Ignore malformed or obsolete mode ids in saved preferences and API patches. */
 export function cleanDisabledModes(value: unknown): ThreadMode[] {

@@ -9085,6 +9085,20 @@
           hint: "When you tell an agent to, it can give a task to another provider or model, such as one you host yourself, and check the result. The helper is a thread of its own in the same folder, with the same mode and permissions. You are asked before each new helper unless the thread has Full access.",
         })
       );
+      const forkSummaries = el("section", "settings-section");
+      forkSummaries.append(helpHeading("Summaries for forks", "A fork starting a fresh session carries the earlier thread's first and last messages and a summary of the rest. The destination provider writes that summary. Using the same provider does not guarantee cache reuse or available quota."));
+      this.forkSummarizers = new Map();
+      for (const provider of PROVIDERS) {
+        if (!providerAvailable(provider)) continue;
+        forkSummaries.append(settingRow(PROVIDER_LABEL[provider] || provider, this.forkSummarizerButton(provider), {
+          id: `ag-fork-summarizer-${provider}-label`,
+          hint: "Choose a summary model from this provider, or use the destination thread's model. This applies when the fork cannot continue the original provider session.",
+        }));
+      }
+      forkSummaries.append(settingRow("AI search model", this.summarizerButton(), {
+        id: "ag-summarizer-label",
+        hint: "Answers questions in the palette's ? search using passages from your pages. This choice is separate from fork summaries.",
+      }));
 
       const memory = el("section", "settings-section");
       const memoryOn = switchControl(
@@ -9197,10 +9211,6 @@
           ),
           { id: "ag-reasoning-label" }
         ),
-        settingRow("Summaries for forks", this.summarizerButton(), {
-          id: "ag-summarizer-label",
-          hint: "A fork that starts a new session (another provider) gets the earlier thread's first and last messages, and a summary of the rest written by this model. A small, fast model is enough.",
-        }),
         settingRow(
           "Send messages with",
           choiceTrack(SEND_KEY, sendKey, (id) => {
@@ -9265,12 +9275,12 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, lower, helpers, memory, hooks, coverage, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, lower, helpers, forkSummaries, memory, hooks, coverage, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Memory", sections: [memory] },
-        { label: "Helper agents", sections: [helpers] },
+        { label: "Helpers & forks", sections: [helpers, forkSummaries] },
         { label: "Hooks", sections: [hooks, coverage] },
         { label: "Keys", sections: [keys] },
       ], {
@@ -9430,7 +9440,33 @@
       if (!this.usage || !this.isOpen()) return;
       this.usage.replaceChildren(...["claude", "codex", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
     },
-    /** The model that writes a fork's summary; picks from every available provider's models. */
+    forkSummarizerButton(provider) {
+      const b = el("button", "ag-pill ag-summarizer");
+      b.type = "button";
+      b.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} fork summary model`);
+      this.forkSummarizers.set(provider, b);
+      b.addEventListener("click", () => {
+        const cur = prefs().forkSummarizers?.[provider] || null;
+        const save = async (model) => {
+          try {
+            S.config.prefs = await api("PUT", "/prefs", { forkSummarizers: { [provider]: model } });
+            this.renderSummarizer();
+          } catch (err) { notice(err.message); }
+        };
+        const items = [{ label: "Use destination thread's model", checked: !cur, run: () => save(null) }];
+        items.push(...modelMenuItems(provider, modelsOf(provider), (m) => ({
+          label: m.label,
+          detail: m.id !== m.label ? m.id : m.description,
+          search: m.id,
+          checked: cur === m.id,
+          run: () => save(m.id),
+        })));
+        openMenu(b, items, { search: true, width: 300, placeholder: "Search models" });
+      });
+      this.renderSummarizer();
+      return b;
+    },
+    /** The palette's AI search model; picks from every available provider's models. */
     summarizerButton() {
       const b = el("button", "ag-pill ag-summarizer");
       b.type = "button";
@@ -9461,6 +9497,10 @@
       return b;
     },
     renderSummarizer() {
+      for (const [provider, b] of this.forkSummarizers || []) {
+        const model = prefs().forkSummarizers?.[provider];
+        b.replaceChildren(providerIcon(provider), el("span", null, model ? modelInfo(provider, model)?.label || model : "Use destination thread's model"));
+      }
       if (!this.summarizer) return;
       const cur = prefs()?.summarizer;
       this.summarizer.replaceChildren();

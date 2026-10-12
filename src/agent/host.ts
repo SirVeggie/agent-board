@@ -56,7 +56,7 @@ import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverMode
 import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
-import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
+import { cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, forkSummaryModel, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
 import { cleanCustomModes, modeKeepsServer, modeOff, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -830,6 +830,7 @@ export class AgentHost {
       models: { ...DEFAULT_PREFS.models, ...saved.models },
       modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams },
       modelSettings: seedModelSettings(saved),
+      forkSummarizers: seedForkSummarizers(saved),
       approvals: { ...DEFAULT_PREFS.approvals, ...saved.approvals },
       // Older prefs kept web as a boolean.
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
@@ -850,6 +851,7 @@ export class AgentHost {
 
   setPrefs(patch: Partial<Prefs>): Prefs {
     const next = { ...this.prefs(), ...patch };
+    if (patch.forkSummarizers !== undefined) next.forkSummarizers = { ...this.prefs().forkSummarizers, ...cleanForkSummarizers(patch.forkSummarizers) };
     next.web = parseWebAccess(patch.web) ?? this.prefs().web;
     // null puts back the starting list.
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
@@ -4519,16 +4521,17 @@ export class AgentHost {
 
   private forkCarry(thread: Thread, fork: NonNullable<Thread["fork"]>): ThreadView["carry"] {
     if (this.forksNatively(thread, fork)) return { how: "native" };
-    return { how: "summary", ...(fork.turns > 2 ? { summarizer: this.summarizerLabel() } : {}) };
+    return { how: "summary", ...(fork.turns > 2 ? { summarizer: this.summarizerLabel(thread) } : {}) };
   }
 
-  private summarizerLabel(): string {
-    const { provider, model } = this.prefs().summarizer;
+  private summarizerLabel(thread: Thread): string {
+    const provider = thread.provider;
+    const model = forkSummaryModel(this.prefs(), thread);
     const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
     return `${label} (${this.providers[provider].label})`;
   }
 
-  /** One completion with the fork summarizer's model; the palette's AI search (#245) uses it too. */
+  /** One completion with the palette's AI search model (#245). */
   async summarize(prompt: string, signal?: AbortSignal): Promise<{ text: string; model: string }> {
     const { provider, model } = this.prefs().summarizer;
     const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
@@ -4560,8 +4563,9 @@ export class AgentHost {
     const material = this.db.getSetting<ForkMaterial | null>(`fork:${threadId}`, null);
     if (!material) return "";
     if (material.middle && !material.summary) {
-      const { provider, model } = this.prefs().summarizer;
-      const label = this.summarizerLabel();
+      const provider = thread.provider;
+      const model = forkSummaryModel(this.prefs(), thread);
+      const label = this.summarizerLabel(thread);
       const notice = this.addItem(threadId, run.turn.id, { kind: "notice", level: "info", text: `Summarizing “${fork.title}” with ${label}…` });
       run.abort = new AbortController();
       try {
