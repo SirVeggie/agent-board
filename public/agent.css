@@ -4760,7 +4760,9 @@ button.dock-handle kbd {
 }
 
 .ag-ws-used-label {
+  margin: 0;
   font-size: 11.5px;
+  font-weight: normal;
   color: var(--muted);
   padding: 2px 4px 6px;
 }

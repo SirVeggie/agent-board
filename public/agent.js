@@ -1402,7 +1402,9 @@
       const used = el("div", "ag-ws-used");
       const withThreads = opts.used === false ? [] : threadWorkspaces();
       if (withThreads.length) {
-        used.append(el("div", "ag-ws-used-label", "Workspaces with threads"));
+        const usedHeading = helpHeading("Workspaces with threads", "Counts include all non-archived threads, including inactive workers and helpers nested under their parent threads. With Show workers off, a workspace containing only inactive workers can be absent from the thread list. Search for the folder path in the Workspaces thread list to find its threads, including workers, helpers, and older threads.");
+        usedHeading.classList.add("ag-ws-used-label");
+        used.append(usedHeading);
         for (const { path: dir, n } of withThreads) {
           const item = button("", "ag-ws-used-item", () => finish(dir), dir);
           item.append(icon("box"), el("span", "ag-ws-used-name", R.basename(dir)), el("span", "ag-ws-used-count", n === 1 ? "1 thread" : `${n} threads`));
