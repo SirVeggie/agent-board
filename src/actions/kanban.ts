@@ -224,7 +224,7 @@ function matchesQuery(c: Card, q: unknown): boolean {
 function findCard(state: BoardState, ref: unknown): Card {
   const text = str(ref).trim().replace(/^#/, "");
   if (!text) {
-    throw new ActionError("card is required: its number (12 or \"#12\") or id");
+    throw new ActionError('args.card is required (card number or id). Put card inside args, e.g. {"action":"get","args":{"card":12}}.');
   }
   const list = cards(state);
   const found = /^\d+$/.test(text) ? list.find((c) => c.num === Number(text)) : list.find((c) => c.id === text);
