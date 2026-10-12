@@ -9095,9 +9095,10 @@
           hint: "Choose a summary model from this provider, or use the destination thread's model. This applies when the fork cannot continue the original provider session.",
         }));
       }
-      forkSummaries.append(settingRow("AI search model", this.summarizerButton(), {
+      const utilities = el("section", "settings-section");
+      utilities.append(el("h3", null, "Utility agent"), settingRow("Main utility agent", this.summarizerButton(), {
         id: "ag-summarizer-label",
-        hint: "Answers questions in the palette's ? search using passages from your pages. This choice is separate from fork summaries.",
+        hint: "Handles palette AI search. If unavailable or out of usage, tries Cursor, Claude, Codex, then Native using their fork-summary models (or their last chat model when no summary model is set).",
       }));
 
       const memory = el("section", "settings-section");
@@ -9280,7 +9281,7 @@
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Memory", sections: [memory] },
-        { label: "Helpers & forks", sections: [helpers, forkSummaries] },
+        { label: "Helpers & utilities", sections: [helpers, utilities, forkSummaries] },
         { label: "Hooks", sections: [hooks, coverage] },
         { label: "Keys", sections: [keys] },
       ], {
@@ -9471,6 +9472,7 @@
       const b = el("button", "ag-pill ag-summarizer");
       b.type = "button";
       this.summarizer = b;
+      b.setAttribute("aria-label", "Main utility agent");
       b.addEventListener("click", () => {
         const cur = prefs().summarizer || {};
         const items = [];

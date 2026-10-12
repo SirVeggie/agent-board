@@ -4531,11 +4531,39 @@ export class AgentHost {
     return `${label} (${this.providers[provider].label})`;
   }
 
-  /** One completion with the palette's AI search model (#245). */
+  /** Utility completion, falling back to providers' fork-summary models when usage runs out. */
   async summarize(prompt: string, signal?: AbortSignal): Promise<{ text: string; model: string }> {
-    const { provider, model } = this.prefs().summarizer;
-    const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
-    return { text: await this.agent(provider).complete(prompt, model, signal), model: label };
+    const prefs = this.prefs();
+    const primary = prefs.summarizer;
+    const choices = [primary, ...(["cursor", "claude", "codex", "pi"] as const)
+      .filter((provider) => provider !== primary.provider)
+      .map((provider) => ({ provider, model: forkSummaryModel(prefs, { provider, model: prefs.models[provider] || "default" }) }))];
+    let lastError: unknown = new Error("No utility agent is available.");
+    for (const { provider, model } of choices) {
+      signal?.throwIfAborted();
+      const agent = this.agent(provider);
+      if (!(await agent.status()).available) continue;
+      signal?.throwIfAborted();
+      const limits = this.liveLimits()[provider];
+      if (limits?.ordinaryUsageAllowed === false || limits?.status === "rejected" ||
+          (provider === "claude" && !limits?.overage && limits?.windows.some((w) =>
+            ["five_hour", "seven_day"].includes(w.id) && w.utilization >= 1))) continue;
+      const startedAt = Date.now();
+      try {
+        const text = await agent.complete(prompt, model, signal);
+        signal?.throwIfAborted();
+        const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
+        return { text, model: label };
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (usageLimitResetsAt(message, this.liveLimits()[provider], startedAt, Date.now()) === undefined &&
+            !/rate.?limit|quota.*exceed|insufficient.quota|resource.exhausted|\b429\b/i.test(message)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 
   /**

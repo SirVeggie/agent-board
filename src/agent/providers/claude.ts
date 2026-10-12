@@ -372,8 +372,11 @@ export class ClaudeProvider implements AgentProvider {
     try {
       for await (const msg of q) {
         if (msg.type !== "result") continue;
-        if (msg.subtype === "success") return msg.result;
-        throw new Error(`Claude stopped: ${msg.subtype}`);
+        if (msg.subtype === "success") {
+          if (msg.is_error) throw new Error(msg.result || "Claude reported an error");
+          return msg.result;
+        }
+        throw new Error(msg.errors?.join("\n") || `Claude stopped: ${msg.subtype}`);
       }
       throw new Error("Claude sent no answer");
     } finally {

@@ -71,7 +71,7 @@ export type Prefs = {
   favoriteModels: string[];
   /** Last worktree choice per workspace (see workspaceKey), the default for new threads there. */
   worktrees: Record<string, boolean>;
-  /** Model for the palette's AI search; retained from the original shared summarizer setting. */
+  /** Main utility agent (palette AI search); retains the original setting key and saved choice. */
   summarizer: { provider: ProviderId; model: string };
   /** Fork summary model per destination provider. Null or absent uses the destination thread's model. */
   forkSummarizers: Partial<Record<ProviderId, string | null>>;

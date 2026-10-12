@@ -40,8 +40,9 @@ test("fresh fork dispatches its summary to the destination and reuses the saved 
     prefs: () => ({ ...DEFAULT_PREFS, forkSummarizers: { codex: "mini" } }),
     providers: { claude: { label: "Claude" }, codex: { label: "Codex" } },
     cachedModels: () => [],
+    liveLimits: () => ({}),
     forksNatively: () => false,
-    agent: (provider: string) => ({ complete: async (_prompt: string, model: string) => {
+    agent: (provider: string) => ({ status: async () => ({ available: true }), complete: async (_prompt: string, model: string) => {
       calls.push({ provider, model });
       return "Summary";
     } }),
