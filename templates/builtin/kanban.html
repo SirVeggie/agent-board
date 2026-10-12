@@ -5907,6 +5907,7 @@
         group.appendChild(bar);
       }
       var details = [name];
+      var quotas = [];
       if (!limits) details.push(!workerLimitsLoaded && !workerLimitsError && scribe.agent && scribe.agent.limits ? "Loading…" : "Usage limits unavailable");
       else {
         if (limits.at) details.push("Updated " + new Date(limits.at).toLocaleString());
@@ -5916,12 +5917,15 @@
         if (limits.overage) details.push("Extra usage billing active");
         windows.forEach(function (w) {
           var quota = workerQuotaWindow(provider, w);
-          details.push(w.label + ": " + (quota.percent == null ? "Unavailable" : quota.percent + "% used") + (quota.reset ? " · " + quota.reset : ""));
+          var text = w.label + ": " + (quota.percent == null ? "Unavailable" : quota.percent + "% used") + (quota.reset ? " · " + quota.reset : "");
+          details.push(text);
+          quotas.push({ text: text, percent: quota.percent });
         });
         if (!windows.length && !limits.detail && (!limits.availability || limits.availability === "available")) details.push("No usage windows reported");
       }
       group.setAttribute("aria-label", name + (percent == null ? " usage limits unavailable" : " · " + main.label + " · " + percent + "% used"));
       group.dataset.tooltip = details.join("\n");
+      group.dataset.tooltipQuotas = JSON.stringify(quotas);
       group.setAttribute("aria-description", details.join("\n"));
       return group;
     });

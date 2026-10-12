@@ -14,6 +14,11 @@
       z-index: 2147483647;
     }
     .scribe-tooltip[hidden] { display: none; }
+    .scribe-tooltip-quota { margin-top: 8px; }
+    .scribe-tooltip-quota progress { display: block; width: 100%; height: 5px; margin-top: 4px; appearance: none; border: 0; border-radius: 3px; overflow: hidden; background: var(--border, #41454e); }
+    .scribe-tooltip-quota progress::-webkit-progress-bar { background: var(--border, #41454e); }
+    .scribe-tooltip-quota progress::-webkit-progress-value { background: var(--quota-color); }
+    .scribe-tooltip-quota progress::-moz-progress-bar { background: var(--quota-color); }
   `;
   document.head.append(style);
   const tip = document.createElement("div");
@@ -43,6 +48,30 @@
     if (!anchor?.isConnected || !anchor.dataset.tooltip || anchor.hasAttribute("data-rich-tooltip")) return hide();
     window.dispatchEvent(new CustomEvent("scribe-tooltip-show", { detail: { anchor } }));
     tip.textContent = anchor.dataset.tooltip;
+    // Optional structured quota rows; build DOM nodes so provider text stays plain text.
+    if (anchor.dataset.tooltipQuotas) {
+      try {
+        const quotas = JSON.parse(anchor.dataset.tooltipQuotas);
+        const lines = anchor.dataset.tooltip.split("\n");
+        tip.replaceChildren();
+        for (const line of lines) {
+          const quota = quotas.find(row => row.text === line);
+          const row = document.createElement("div");
+          row.textContent = line;
+          if (quota && Number.isFinite(quota.percent)) {
+            row.className = "scribe-tooltip-quota";
+            const percent = Math.max(0, Math.min(100, quota.percent));
+            row.style.setProperty("--quota-color", percent >= 90 ? "var(--danger, #ef8585)" : percent >= 75 ? "var(--ag-warn, #e8c47a)" : "var(--ag-ok, #8fd19e)");
+            const bar = document.createElement("progress");
+            bar.max = 100;
+            bar.value = percent;
+            bar.setAttribute("aria-label", line);
+            row.append(bar);
+          }
+          tip.append(row);
+        }
+      } catch { tip.textContent = anchor.dataset.tooltip; }
+    }
     tip.hidden = false;
     if (tip.showPopover && !tip.matches(":popover-open")) tip.showPopover();
     const ids = new Set((anchor.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
@@ -116,6 +145,6 @@
     }
     if (anchor && !tip.hidden && records.some(record => record.type === "attributes" && record.target === anchor)) show();
     else if (anchor && !anchor.isConnected) hide();
-  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["title", "data-tooltip", "data-rich-tooltip"] });
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["title", "data-tooltip", "data-tooltip-quotas", "data-rich-tooltip"] });
   window.scribeTooltip = { hide };
 })();

@@ -65,6 +65,9 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     assert.match(await tip.innerText(), /Included: 91% used/);
     assert.match(await tip.innerText(), /Auto: 30% used/);
     assert.match(await tip.innerText(), /API: 80% used/);
+    assert.deepEqual(await tip.locator('progress').evaluateAll(bars => bars.map(bar => (bar as HTMLProgressElement).value)), [91, 30, 80]);
+    assert.deepEqual(await tip.locator('.scribe-tooltip-quota').evaluateAll(rows => rows.map(row => (row as HTMLElement).style.getPropertyValue('--quota-color'))),
+      ['var(--danger, #ef8585)', 'var(--ag-ok, #8fd19e)', 'var(--ag-warn, #e8c47a)']);
     await codex.focus();
     await tip.getByText(/Weekly: 50% used/).waitFor();
     await page.locator('#workersBtn').click();
