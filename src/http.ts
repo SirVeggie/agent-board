@@ -50,6 +50,7 @@ import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
 import { searchRouter } from "./search/routes.js";
+import { mlRouter } from "./ml/routes.js";
 import { shellAssets } from "./shellAssets.js";
 import { contentOriginGate, isContentHost } from "./contentOrigin.js";
 import { searchEmbedder } from "./search/embedder.js";
@@ -155,6 +156,7 @@ export async function startHttp(): Promise<http.Server> {
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use(express.json({ limit: "6mb" }));
   app.use("/api/search", searchRouter());
+  app.use("/api/ml", mlRouter());
   app.use(noteAgentSession);
   app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));

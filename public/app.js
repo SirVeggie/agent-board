@@ -1424,6 +1424,7 @@
     { label: "Appearance", sections: [settingsSections[0], settingsSections[5]] },
     { label: "Navigation", sections: [settingsSections[1], settingsSections[2]] },
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
+    { label: "Classifier", sections: window.scribeMlSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Import / Export", sections: [settingsSections[6]] },
   ], {
@@ -1465,6 +1466,7 @@
     try { await searchSettingsRequest("open-folder", {}); }
     catch (err) { searchPackStatus.textContent = err.message; }
   });
+  window.scribeMlSettings.init({ confirm: confirmDelete });
   function openSettings() {
     if (isPaletteOpen()) {
       closePalette();
@@ -1472,6 +1474,7 @@
     settingsCategories.open();
     searchSwitch.disabled = true;
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
+    window.scribeMlSettings.refresh();
   }
 
   function closeSettings() {

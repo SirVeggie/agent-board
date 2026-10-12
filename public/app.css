@@ -4820,3 +4820,31 @@ html { backdrop-filter: var(--blur-none); }
   .refresh-overlay-line { opacity: .5; }
   .newpage-intent-word { background-position: 50% 0; }
 }
+
+/* Settings → Classifier (ml-settings.js) */
+.ml-source { gap: 10px; }
+.ml-source input[type="radio"] { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
+.ml-source-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ml-source-detail { font-size: 12px; color: var(--muted); }
+.ml-source button { flex: 0 0 auto; }
+.ml-status:empty { display: none; }
+.ml-status { margin: 8px 2px; overflow-wrap: anywhere; }
+.ml-source-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 2px 12px; }
+.ml-source-form[hidden] { display: none; }
+.ml-field { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.ml-field > span { flex: 0 0 76px; color: var(--muted); }
+.ml-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font: inherit;
+}
+.ml-field input:focus { outline: none; box-shadow: 0 0 0 1px var(--accent-ring); }
+.ml-form-error { margin: 0; color: var(--danger); }
+.ml-grow { flex: 1 1 auto; }
+.ml-source-form button.primary { background: var(--accent-soft); color: var(--heading); }
