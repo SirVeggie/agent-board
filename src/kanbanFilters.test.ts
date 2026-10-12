@@ -180,6 +180,11 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
       scribe.state.settings.workers.c = { name: 'New worker', color: '#ffffff' };
       scribe.changed();
     });
+    // State changes queue a render; wait for the rows rather than reading the previous frame.
+    await page.waitForFunction(expected => {
+      const names = [...document.querySelectorAll('#workersPop .wrow .nm')].map(node => node.textContent);
+      return JSON.stringify(names) === JSON.stringify(expected);
+    }, ['Luna', 'Sol', 'New worker']);
     assert.deepEqual(await workerNames(), ['Luna', 'Sol', 'New worker']);
     await page.evaluate(() => (window as any).scribe.agent.changedLimits({ codex: { at: Date.now(), ordinaryUsageAllowed: true,
       windows: [{ id: 'codex:codex:primary', label: '5-hour', utilization: 0.25, resetsAt: Date.now() + 3600000 }] } }));
