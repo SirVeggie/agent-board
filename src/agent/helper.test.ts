@@ -161,6 +161,20 @@ test("new helpers inherit or reduce file mode and follow-ups retain the selected
   assert.equal(host.getThread(String(result.thread))!.mode, "ask");
 });
 
+test("a helper of a thread in a worktree keeps the user's folder as its workspace", async () => {
+  host.setPrefs({ helpers: true });
+  const id = host.createThread({ provider: "codex", mode: "code", approval: "full", cwd: dir, scope: { kind: "global", ref: null } }).id;
+  const tree = path.join(dir, "worktrees", "helper-tree");
+  fs.mkdirSync(tree, { recursive: true });
+  const threads = (host as unknown as { threads: Map<string, Thread> }).threads;
+  threads.set(id, { ...threads.get(id)!, cwd: tree, useWorktree: true, worktree: { home: dir, repo: dir, path: tree, branch: "agent/helper-tree", base: "master", baseCommit: "abc", links: [], createdAt: Date.now() } });
+  const result = await host.runHelper(id, { task: "inspect the files", provider: "pi" });
+  const helper = host.getThread(String(result.thread))!;
+  assert.equal(helper.cwd, tree);
+  assert.equal(helper.worktree?.path, tree);
+  assert.deepEqual(helper.scope, { kind: "workspace", ref: dir });
+});
+
 test("helpers cannot raise file mode or cross the Pages tool boundary", async () => {
   host.setPrefs({ helpers: true });
   for (const mode of ["code", "plan", "ask", "board"] as const) {
