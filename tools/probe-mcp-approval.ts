@@ -2,6 +2,8 @@
  * Live probe for #583. Codex asks before an MCP tool without a read-only annotation runs
  * (mcpServer/elicitation/request, _meta.codex_approval_kind); a declined request reaches the
  * model as "user rejected MCP tool call". Declines the first request and accepts the next.
+ * PROBE_SANDBOX=read-only PROBE_POLICY=never is Pages mode with Full access: Codex refuses the tool
+ * without asking. PROBE_APPROVE=1 adds default_tools_approval_mode "approve", as Scribe's chats do.
  * Uses scratch Scribe data and an ephemeral Codex thread.
  */
 import assert from "node:assert/strict";
@@ -75,11 +77,12 @@ try {
     await rpc.call("initialize", { clientInfo: { name: "scribe-approval-probe", version: "1" }, capabilities: { experimentalApi: true } });
     rpc.notify("initialized");
     const started = await rpc.call("thread/start", {
-      cwd, sandbox: "workspace-write", approvalPolicy: "on-request", approvalsReviewer: "user", ephemeral: true,
+      cwd, sandbox: process.env.PROBE_SANDBOX ?? "workspace-write", approvalPolicy: process.env.PROBE_POLICY ?? "on-request", approvalsReviewer: "user", ephemeral: true,
       developerInstructions: "This is a dedicated MCP acceptance test. Use only the scribe page_show tool. Do not run shell commands or other tools.",
       config: { web_search: "disabled", mcp_servers: { scribe: {
         command: process.execPath, args: ["--import", pathToFileURL(path.resolve("node_modules/tsx/dist/loader.mjs")).href, path.resolve("src/index.ts")],
         env: { SCRIBE_HOME: env.SCRIBE_HOME, SCRIBE_PORT: env.SCRIBE_PORT, SCRIBE_THREAD: created.thread.id, SCRIBE_PROVIDER: "codex" },
+        ...(process.env.PROBE_APPROVE ? { default_tools_approval_mode: "approve" } : {}),
       } } },
     }) as { thread: { id: string } };
     await rpc.call("turn/start", { threadId: started.thread.id, input: [{ type: "text",
@@ -88,11 +91,21 @@ try {
     assert.equal(completion.error, undefined, completion.error?.message);
     assert.equal((completion.params?.turn as { status: string })?.status, "completed");
     const shows = tools.filter((item) => item.type === "mcpToolCall" && item.tool === "page_show");
-    assert.equal(elicitations.length, 2, "Expected one approval request per page_show call");
-    assert.equal(shows.length, 2, "Expected exactly two page_show calls");
-    assert.match(JSON.stringify(shows[0]), /user rejected MCP tool call/);
-    assert.match(JSON.stringify(shows[1].result), /approval-probe/);
-    console.log("PASS: a declined approval request is reported as a user rejection; an accepted one runs the tool.");
+    if (process.env.PROBE_APPROVE) {
+      assert.equal(elicitations.length, 0, "A pre-approved server must not be asked about");
+      assert.match(JSON.stringify(shows[0]?.result), /approval-probe/);
+      console.log("PASS: with default_tools_approval_mode approve, page_show runs without an approval request.");
+    } else if (process.env.PROBE_POLICY === "never") {
+      assert.equal(elicitations.length, 0);
+      assert.match(JSON.stringify(shows[0]), /requires approval, but approval policy is never/);
+      console.log("PASS: approvals never under a sandbox refuses the tool without asking.");
+    } else {
+      assert.equal(elicitations.length, 2, "Expected one approval request per page_show call");
+      assert.equal(shows.length, 2, "Expected exactly two page_show calls");
+      assert.match(JSON.stringify(shows[0]), /user rejected MCP tool call/);
+      assert.match(JSON.stringify(shows[1].result), /approval-probe/);
+      console.log("PASS: a declined approval request is reported as a user rejection; an accepted one runs the tool.");
+    }
   } finally { clearTimeout(timer); }
 } finally {
   rpc?.close();

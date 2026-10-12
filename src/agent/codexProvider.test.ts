@@ -98,6 +98,8 @@ test("mcpConfig registers the board server as scribe with the thread id", () => 
   assert.equal(server.env.SCRIBE_THREAD, "th_abc");
   assert.equal(server.env.SCRIBE_PROVIDER, "codex");
   assert.equal(server.env.SCRIBE_PAGES, undefined);
+  // Codex must not ask about Scribe's own tools: with approvals "never" under a sandbox it refuses instead (#583).
+  assert.equal((server as { default_tools_approval_mode?: string }).default_tools_approval_mode, "approve");
 
   const none = mcpConfig({ boardMcp: { command: "node", args: [], env: {} } }, "th_none", false);
   const env = (none.mcp_servers as { scribe: { env: Record<string, string> } }).scribe.env;

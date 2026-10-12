@@ -486,6 +486,9 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
           ...(pages ? {} : { SCRIBE_PAGES: "off" }),
           ...toolsOff,
         },
+        // Scribe gates its own tools (mode limits, hooks). Left to ask, Codex refuses the unannotated
+        // ones outright when approvals are "never" under a sandbox, as in Pages mode with Full access.
+        default_tools_approval_mode: "approve",
       },
     },
   };
