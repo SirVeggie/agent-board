@@ -84,7 +84,14 @@ test("a thread on a blank New page is told that the page it shows takes that pag
 test("worktree threads with a linked node_modules are told how to change dependencies", () => {
   const wt = (links: string[]) =>
     ({ provider: "claude", mode: "code", cwd: "/wt", scope: { kind: "global", ref: null }, worktree: { home: "/repo", repo: "/repo", path: "/wt", branch: "agent/x", base: "master", baseCommit: "abc", links, createdAt: 0 } }) as Thread;
-  assert.match(threadInstructions(wt(["node_modules"]), {}), /npm install --package-lock-only/);
+  const instructions = threadInstructions(wt(["node_modules"]), {});
+  assert.match(instructions, /even with --package-lock-only: npm can still change node_modules\/\.package-lock\.json through the link/);
+  assert.match(instructions, /verify node_modules is a link and remove only that link/);
+  assert.match(instructions, /cmd \/c rmdir node_modules/);
+  assert.match(instructions, /rm node_modules/);
+  assert.match(instructions, /never a recursive delete/);
+  assert.match(instructions, /Then edit package\.json and run `npm install --package-lock-only --ignore-scripts`/);
+  assert.doesNotMatch(instructions, /only rewrites package-lock\.json/);
   assert.doesNotMatch(threadInstructions(wt([]), {}), /package-lock-only/);
 });
 
