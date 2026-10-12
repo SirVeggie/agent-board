@@ -10,7 +10,7 @@ import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
 import { CodexSession, readCodexPlanUsage, syncAuthFiles, guardianDenialEvent } from "./providers/codex.js";
 import type { ApprovalDecision, ApprovalRequest, RunSink, SessionContext } from "./providers/provider.js";
-import { FALLBACK_MODELS, gitCommonDir, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides, windowsSandboxConfig } from "./providers/codex.js";
+import { FALLBACK_MODELS, gitCommonDir, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides, turnPermissionOverrides, windowsSandboxConfig } from "./providers/codex.js";
 import { codexPermissions, permissionBoundaryProblem, scribeToolAvailability, workerPermissionProblem } from "./effectivePermissions.js";
 import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
@@ -671,6 +671,99 @@ test("Codex applies a same-session model change on the next turn/start without r
   f.f.emit({ id: cleared.id, result: { turn: { id: "turn-3" } } });
   assert.equal((await reset).status, "done");
   f.session.dispose();
+});
+
+test("Codex approval changes and warm-ups reuse one connection and verify each policy before work", async () => {
+  const f = sessionFixture(null, "full");
+  try {
+    const first = await f.start({ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "never", approvalsReviewer: "user" });
+    f.complete();
+    await first.run;
+    const connection = f.f;
+    let turnNumber = 1;
+    for (const approval of ["ask", "edits", "auto", "full", "ask"] as const) {
+      const updated = { ...thread({ approval }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread;
+      f.session.update(updated);
+      await f.session.warm("Scribe instructions");
+      const previousTurns = connection.sent.filter(m => m.method === "turn/start").length;
+      const previousUpdates = connection.sent.filter(m => m.method === "thread/settings/update").length;
+      const run = f.session.run({ text: "continue", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
+      await tick();
+      const permission = turnPermissionOverrides(updated, "/work");
+      if (connection.sent.filter(m => m.method === "thread/settings/update").length > previousUpdates) {
+        const update = connection.sent.filter(m => m.method === "thread/settings/update").at(-1)!;
+        assert.deepEqual(update.params, { threadId: "native-thread", ...permission });
+        connection.emit({ id: update.id, result: {} });
+        await tick();
+        assert.equal(connection.sent.filter(m => m.method === "turn/start").length, previousTurns);
+        connection.emit({ method: "thread/settings/updated", params: { threadId: "native-thread", threadSettings: permission } });
+        await tick();
+      }
+      assert.equal(f.f, connection);
+      assert.equal(connection.sent.filter(m => m.method === "initialize").length, 1);
+      assert.equal(connection.sent.filter(m => m.method === "thread/resume").length, 0);
+      const turn = connection.sent.filter(m => m.method === "turn/start").at(-1)!;
+      assert.equal(connection.sent.filter(m => m.method === "turn/start").length, previousTurns + 1);
+      assert.deepEqual(turn.params?.sandboxPolicy, permission.sandboxPolicy);
+      assert.equal(turn.params?.approvalsReviewer, permission.approvalsReviewer);
+      assert.equal(turn.params?.approvalPolicy, permission.approvalPolicy);
+      const id = `turn-${++turnNumber}`;
+      connection.emit({ id: turn.id, result: { turn: { id } } });
+      connection.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id, status: "completed" } } });
+      assert.equal((await run).status, "done");
+    }
+  } finally { f.session.dispose(); }
+});
+
+test("Codex policy update errors or broader observations stop before the next turn", async () => {
+  for (const scenario of ["error", "broader", "missing", "cancel"] as const) {
+    const f = sessionFixture(null, "full");
+    try {
+      const first = await f.start({ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "never", approvalsReviewer: "user" });
+      f.complete();
+      await first.run;
+      f.session.update({ ...thread(), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread);
+      const run = f.session.run({ text: "continue", images: [], documents: [], instructions: "Scribe instructions" }, f.sink);
+      await tick();
+      const update = f.f.sent.find(m => m.method === "thread/settings/update")!;
+      if (scenario === "error") f.f.emit({ id: update.id, error: { message: "unsupported update" } });
+      else if (scenario === "cancel") await f.session.cancel();
+      else {
+        f.f.emit({ id: update.id, result: {} });
+        f.f.emit({ method: "thread/settings/updated", params: { threadId: "native-thread", threadSettings: scenario === "missing" ? {} : { sandboxPolicy: { type: "dangerFullAccess" }, approvalPolicy: "on-request", approvalsReviewer: "user" } } });
+      }
+      const outcome = await run;
+      assert.equal(outcome.status, scenario === "cancel" ? "cancelled" : "error");
+      if (scenario !== "cancel") assert.match(outcome.error!, scenario === "error" ? /unsupported/ : scenario === "missing" ? /did not confirm/ : /broader/);
+      assert.equal(f.f.sent.filter(m => m.method === "turn/start").length, 1);
+    } finally { f.session.dispose(); }
+  }
+});
+
+test("Codex per-turn sandbox keeps mode restrictions, networking and worktree git writes", () => {
+  for (const mode of ["code", "ask", "plan", "board"] as const) {
+    for (const approval of ["ask", "edits", "auto", "full"] as const) {
+      const overrides = turnPermissionOverrides(thread({ mode, approval, web: "off" }), process.cwd());
+      const sandbox = overrides.sandboxPolicy as Record<string, unknown>;
+      assert.equal(sandbox.type, mode !== "code" ? "readOnly" : approval === "full" ? "dangerFullAccess" : "workspaceWrite");
+      if (sandbox.type !== "dangerFullAccess") assert.equal(sandbox.networkAccess, false);
+      if (sandbox.type === "workspaceWrite" && process.platform === "win32") assert.ok((sandbox.writableRoots as string[]).includes(gitCommonDir(process.cwd())!));
+    }
+  }
+  const config = threadOptions(thread({ approval: "full" }), process.cwd(), "win32").config as Record<string, unknown>;
+  assert.equal(config["windows.sandbox"], "unelevated");
+});
+
+test("Codex turn overrides retain custom mode read-only restrictions at every approval level", () => {
+  for (const off of ["edit", "shell"] as const) {
+    for (const approval of ["ask", "edits", "auto", "full"] as const) {
+      const limited = { ...thread({ approval }), custom: { id: "cm_test", name: "Limited", off: [off], mcp: "all" as const, instructions: "" } };
+      assert.deepEqual(turnPermissionOverrides(limited, "/work").sandboxPolicy, { type: "readOnly", networkAccess: false });
+      const config = threadOptions(limited, "/work", "win32").config as Record<string, unknown>;
+      assert.equal(config["sandbox_workspace_write.network_access"], false);
+      assert.equal(config["windows.sandbox"], undefined);
+    }
+  }
 });
 
 test("Codex user input answers include freeform notes; unsupported permission grants fail closed", async () => {

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isSdkAgentId, mapModels, modelSelection, toolLists, wantsHostShell } from "./providers/cursor.js";
+import { CursorProvider, isSdkAgentId, mapModels, modelSelection, toolLists, wantsHostShell } from "./providers/cursor.js";
+import type { Thread } from "./types.js";
+import type { SessionContext } from "./providers/provider.js";
 
 const models = mapModels([
   {
@@ -68,4 +70,40 @@ test("host shell: only Code and Plan threads that ask, and it drops the built-in
   const lists = toolLists({ mode: "code", web: "on" }, true).disallowedTools!;
   assert.ok(lists.includes("shell"));
   assert.ok(!lists.includes("mcp"));
+});
+
+test("Cursor retains an open agent across equivalent approval levels, but closes it for review or shell changes", () => {
+  for (const mode of ["code", "board"] as const) {
+    for (const hostShell of [false, true]) {
+      const thread = { id: "cursor-policy", nativeId: null, mode, web: "off", approval: "ask", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread;
+      const session = new CursorProvider().createSession(thread, { scratchDir: "/scratch", cursorHostShell: () => hostShell } as SessionContext);
+      // Install an already-open agent without credentials, subprocesses or a model run.
+      const opened = session as unknown as { key(): string; agentKey: string | null; agent: { close(): void } | null };
+      let closes = 0;
+      try {
+        opened.agentKey = opened.key();
+        opened.agent = { close() { closes++; } };
+        session.update({ ...thread, approval: "edits" });
+        assert.equal(closes, 0);
+        session.update({ ...thread, approval: "auto" });
+        assert.equal(closes, mode === "code" && hostShell ? 1 : 0);
+        if (opened.agent) {
+          session.update({ ...thread, approval: "full" });
+          assert.equal(closes, mode === "code" ? 1 : 0);
+        }
+        // Full -> Ask must also rebuild agents outside Pages mode.
+        session.update({ ...thread, approval: "full" });
+        opened.agentKey = opened.key();
+        opened.agent = { close() { closes++; } };
+        const before = closes;
+        session.update(thread);
+        assert.equal(closes - before, mode === "code" ? 1 : 0);
+        opened.agentKey = opened.key();
+        opened.agent = { close() { closes++; } };
+        const beforeCustom = closes;
+        session.update({ ...thread, custom: { id: "cm_test", name: "Limited", off: ["edit"], mcp: "all", instructions: "" } });
+        assert.equal(closes - beforeCustom, 1);
+      } finally { session.dispose(); }
+    }
+  }
 });

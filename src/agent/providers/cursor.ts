@@ -159,6 +159,11 @@ export function toolLists(thread: Pick<Thread, "mode" | "web" | "custom">, hostS
   return { disallowedTools: [...new Set([...NO_ANSWER_TOOLS, ...(hostShell ? (["shell"] as ToolName[]) : []), ...(thread.web === "on" ? [] : WEB_TOOLS), ...off])] };
 }
 
+/** The creation-time review setting; the SDK has no per-send override. */
+export function cursorAutoReview(thread: Pick<Thread, "mode" | "approval">): boolean {
+  return thread.mode !== "board" && thread.approval !== "full";
+}
+
 /** Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be asked. */
 export function wantsHostShell(thread: Pick<Thread, "mode" | "approval" | "custom">, enabled: boolean): boolean {
   return enabled && !modeOff(thread, "shell") && (thread.mode === "code" || thread.mode === "plan") && (thread.approval === "ask" || thread.approval === "edits");
@@ -581,7 +586,9 @@ class CursorSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, customKey(t), t.web, t.approval, this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
+    // The SDK fixes Auto-review at open time. Ask/Edits/Auto share that setting;
+    // hostShell below still reconnects when an approval change changes the tool setup.
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, cursorAutoReview(t), this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /**
@@ -675,7 +682,7 @@ class CursorSession implements ProviderSession {
         store: await store(),
         // Pages: nothing from Cursor's own config, so a user MCP server can't bring file tools in.
         settingSources: t.mode === "board" ? [] : ["user", "project"],
-        autoReview: t.mode === "board" ? false : t.approval !== "full",
+        autoReview: cursorAutoReview(t),
         customTools,
         // Subagents get the same tool restrictions as the thread, and with the host shell no shell of their own.
         subagentInherit: hostShell ? { resourceProviderOptions: { suppressDefaultShellExecutor: true } } : {},

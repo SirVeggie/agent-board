@@ -440,7 +440,8 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
       ...(effort ? { model_reasoning_effort: effort } : {}),
       web_search: thread.web === "on" ? "live" : "disabled",
       "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code" && !codexReadOnly(thread),
-      ...windowsSandboxConfig(sandbox, cwd, platform),
+      // Keep Windows ready for a later sandboxed turn after Full access.
+      ...windowsSandboxConfig(thread.mode === "code" && !codexReadOnly(thread) ? "workspace-write" : sandbox, cwd, platform),
     },
   };
 }
@@ -454,6 +455,20 @@ export function turnStartOverrides(thread: Pick<Thread, "model" | "effort">): { 
   return {
     model: thread.model && thread.model !== "default" ? thread.model : null,
     effort: thread.effort && thread.effort in EFFORT_LABELS ? thread.effort : null,
+  };
+}
+
+/** Explicit policies replace sticky turn settings, including a previous Full access turn. */
+export function turnPermissionOverrides(thread: Pick<Thread, "mode" | "approval" | "web" | "custom">, cwd: string): RpcRecord {
+  const sandbox = sandboxFor(thread);
+  const gitDir = process.platform === "win32" ? gitCommonDir(cwd) : null;
+  return {
+    approvalPolicy: thread.approval === "full" ? "never" : "on-request",
+    approvalsReviewer: thread.approval === "auto" ? "auto_review" : "user",
+    sandboxPolicy: sandbox === "danger-full-access" ? { type: "dangerFullAccess" }
+      : sandbox === "read-only" ? { type: "readOnly", networkAccess: false }
+      : { type: "workspaceWrite", writableRoots: gitDir ? [gitDir] : [],
+        networkAccess: thread.web === "on" && thread.mode === "code", excludeTmpdirEnvVar: false, excludeSlashTmp: false },
   };
 }
 
@@ -820,6 +835,8 @@ export class CodexSession implements ProviderSession {
   private outputs = new Map<string, string>();
   private sessionKey: string | null = null;
   private effectivePermissions: EffectivePermissions | null = null;
+  private permissionKey: string | null = null;
+  private settingsUpdated: ((settings: RpcRecord) => void) | null = null;
   private permissionNotice: string | null = null;
   private nativeId: string | null;
   private reported: string | null = null;
@@ -897,10 +914,10 @@ export class CodexSession implements ProviderSession {
     return this.thread.cwd;
   }
 
-  /** Reconnect identity. Model and effort stay off this key so a picker change reuses the thread. */
+  /** Model, effort and approvals are turn settings; changes reuse the connection. */
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, customKey(t), t.web, t.approval, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? [])]);
   }
 
   private asker(): BridgeAsk | undefined {
@@ -973,6 +990,7 @@ export class CodexSession implements ProviderSession {
       if (!isPlainRecord(result) || !isPlainRecord(result.thread) || typeof result.thread.id !== "string") throw new Error("Invalid Codex thread response");
       this.nativeId = result.thread.id;
       this.effectivePermissions = codexPermissions(result, options);
+      this.permissionKey = JSON.stringify(turnPermissionOverrides(this.thread, this.cwd()));
       this.ctx.permissions?.(this.thread.id, this.effectivePermissions);
       this.sessionKey = key;
     } catch (error) {
@@ -1056,6 +1074,38 @@ export class CodexSession implements ProviderSession {
 
   private async streamTurn(payload: RpcRecord[], sink: RunSink): Promise<TurnResult> {
     await this.ensureHandle();
+    const permissions = turnPermissionOverrides(this.thread, this.cwd());
+    const permissionKey = JSON.stringify(permissions);
+    if (permissionKey !== this.permissionKey) {
+      // The start response has no policy observation. Update first and await the native
+      // settings notification so worker preflight never relies on a previous turn's policy.
+      const signal = this.abort!.signal;
+      let timeout: NodeJS.Timeout | undefined;
+      let abort!: () => void;
+      const observed = new Promise<RpcRecord>((resolve, reject) => {
+        this.settingsUpdated = resolve;
+        abort = () => reject(new Error("Codex settings update cancelled"));
+        signal.addEventListener("abort", abort, { once: true });
+        timeout = setTimeout(() => reject(new Error("Codex did not report updated permissions")), APP_SERVER_TIMEOUT_MS);
+        timeout.unref?.();
+        if (signal.aborted) abort();
+      });
+      try {
+        const [, settings] = await Promise.all([
+          this.rpc!.call("thread/settings/update", { threadId: this.nativeId, ...permissions }), observed,
+        ]);
+        this.effectivePermissions = codexPermissions(settings, threadOptions(this.thread, this.cwd()));
+        if (this.effectivePermissions.sandbox === "unknown" || this.effectivePermissions.approval !== permissions.approvalPolicy
+          || this.effectivePermissions.reviewer !== permissions.approvalsReviewer) {
+          throw new Error("Codex did not confirm the requested turn permissions");
+        }
+        this.permissionKey = permissionKey;
+      } finally {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", abort);
+        this.settingsUpdated = null;
+      }
+    }
     if (this.nativeId) {
       sink.nativeId(this.nativeId);
       this.reported = this.nativeId;
@@ -1102,7 +1152,7 @@ export class CodexSession implements ProviderSession {
     this.nativeTurnCompleted = false;
     const done = new Promise<TurnResult>((resolve) => { this.finishTurn = resolve; });
     const result = await this.rpc!.call("turn/start", {
-      threadId: this.nativeId, input: payload, ...turnStartOverrides(this.thread),
+      threadId: this.nativeId, input: payload, ...turnStartOverrides(this.thread), ...permissions,
     });
     if (!isPlainRecord(result) || !isPlainRecord(result.turn) || typeof result.turn.id !== "string") throw new Error("Invalid Codex turn response");
     // A completion notification can arrive before the turn/start response.
@@ -1169,6 +1219,10 @@ export class CodexSession implements ProviderSession {
       return;
     }
     const sink = this.sink;
+    if (message.method === "thread/settings/updated" && p.threadId === this.nativeId && isPlainRecord(p.threadSettings)) {
+      this.settingsUpdated?.(p.threadSettings);
+      return;
+    }
     if (!sink || (p.threadId && p.threadId !== this.nativeId)) return;
     if (p.turnId && this.activeTurn && p.turnId !== this.activeTurn) return;
     switch (message.method) {
