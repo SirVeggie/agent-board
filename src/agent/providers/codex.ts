@@ -1481,7 +1481,31 @@ export class CodexSession implements ProviderSession {
     }
     // Unsupported permission grants and MCP elicitations fail closed, never silently grant access.
     if (message.method === "item/permissions/requestApproval") { rpc.reply(id, { permissions: {}, scope: "turn" }); return; }
-    if (message.method === "mcpServer/elicitation/request") { rpc.reply(id, { action: "decline", content: null, _meta: null }); return; }
+    if (message.method === "mcpServer/elicitation/request") {
+      const meta = isPlainRecord(p._meta) ? p._meta : {};
+      const server = typeof p.serverName === "string" ? p.serverName : "MCP";
+      if (meta.codex_approval_kind !== "mcp_tool_call") {
+        // Codex tells the agent "user rejected" for any decline, so say who declined.
+        sink.notice("warn", `Scribe declined a request for input from the ${server} MCP server: it cannot show MCP forms. The agent is told the user rejected it.`);
+        rpc.reply(id, { action: "decline", content: null, _meta: null });
+        return;
+      }
+      // Codex asks this way before an MCP tool without a read-only annotation runs, Scribe's page tools included.
+      const session = Array.isArray(meta.persist) && meta.persist.includes("session");
+      const decision = await sink.approval({
+        tool: "mcp", boardTool: server === "scribe",
+        title: `${server} MCP tool`,
+        detail: [p.message, isPlainRecord(meta.tool_params) ? compactReviewText(JSON.stringify(meta.tool_params), 600) : ""]
+          .filter((value) => typeof value === "string" && value).join("\n"),
+        options: [{ id: "accept", label: "Allow once", kind: "allow_once" },
+          ...(session ? [{ id: "acceptForSession", label: "Allow for this session", kind: "allow_always" as const }] : []),
+          { id: "decline", label: "Decline", kind: "reject_once" }],
+      }, signal).catch(() => ({ optionId: "cancel" }));
+      rpc.reply(id, decision.optionId === "accept" || decision.optionId === "acceptForSession"
+        ? { action: "accept", content: {}, _meta: decision.optionId === "acceptForSession" ? { persist: "session" } : null }
+        : { action: decision.optionId === "decline" ? "decline" : "cancel", content: null, _meta: null });
+      return;
+    }
     rpc.reject(id, `Unsupported Codex request: ${message.method}`);
   }
 

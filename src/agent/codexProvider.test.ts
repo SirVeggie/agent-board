@@ -801,6 +801,38 @@ test("Codex user input answers include freeform notes; unsupported permission gr
   f.session.dispose();
 });
 
+test("Codex MCP tool approval requests reach Scribe's approval, and only other requests are declined", async () => {
+  const f = sessionFixture();
+  const requests: Array<{ boardTool?: boolean; title: string; detail?: string; options: string[] }> = [];
+  f.sink.approval = async (req) => {
+    requests.push({ boardTool: req.boardTool, title: req.title, detail: req.detail, options: req.options.map((option) => option.id) });
+    // The host answers its own board tools without asking (autoApproval).
+    return { optionId: req.boardTool ? "accept" : requests.length === 2 ? "acceptForSession" : "decline" };
+  };
+  const { run } = await f.start();
+  const ask = (id: string, serverName: string, _meta: unknown) => f.f.emit({ id, method: "mcpServer/elicitation/request", params: {
+    threadId: "native-thread", turnId: "turn-1", serverName, mode: "form", _meta, message: `Allow the ${serverName} MCP server to run tool "t"?`, requestedSchema: { type: "object", properties: {} } } });
+  const approval = { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_params: { key: "demo" } };
+  ask("board", "scribe", approval);
+  ask("session", "other", approval);
+  ask("declined", "other", { codex_approval_kind: "mcp_tool_call" });
+  ask("form", "other", null);
+  await tick();
+  const result = (id: string) => f.f.sent.find((message) => message.id === id)?.result;
+  assert.deepEqual(result("board"), { action: "accept", content: {}, _meta: null });
+  assert.deepEqual(result("session"), { action: "accept", content: {}, _meta: { persist: "session" } });
+  assert.deepEqual(result("declined"), { action: "decline", content: null, _meta: null });
+  assert.deepEqual(result("form"), { action: "decline", content: null, _meta: null });
+  assert.deepEqual(requests.map((req) => req.boardTool), [true, false, false]);
+  assert.deepEqual(requests.map((req) => req.options), [["accept", "acceptForSession", "decline"], ["accept", "acceptForSession", "decline"], ["accept", "decline"]]);
+  assert.match(requests[1]!.detail!, /Allow the other MCP server[\s\S]*"key":"demo"/);
+  // Only the form Scribe cannot show is declined by Scribe itself, and it says so.
+  assert.deepEqual(f.seen.notices.filter((notice) => /declined/.test(notice.text)).map((notice) => notice.level), ["warn"]);
+  f.complete();
+  await run;
+  f.session.dispose();
+});
+
 function bridgeFixture(approve: ResolvedMcpServer["approve"]) {
   const server: ResolvedMcpServer = { name: "files", layer: "global", transport: "stdio", command: "files-mcp", args: [], env: {}, headers: {}, approve };
   const calls: unknown[] = [];
