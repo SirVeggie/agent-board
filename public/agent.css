@@ -5671,3 +5671,18 @@ html.tight-small .agent-full {
 .ag-toast-more:hover {
   color: var(--text);
 }
+
+/* Custom mode editor (Agent settings, Chat). */
+.ag-mode .ag-modal-panel {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.ag-mode-text {
+  min-height: 96px;
+  padding-top: 7px;
+  resize: vertical;
+}
+
+.ag-mode .ag-mcp-modes[hidden] {
+  display: none;
+}

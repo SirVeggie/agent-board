@@ -4991,6 +4991,7 @@
     if (w.effort) parts.push(str(w.effort));
     if (w.fast === "true") parts.push("fast");
     parts.push(MODE_LABELS[mode] || mode);
+    if (str(w.customMode)) parts.push("custom mode");
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (FOLDER_MODES[mode] && w.worktree) parts.push("worktree");
     if (w.web === "limited") parts.push("web limited");
@@ -5236,6 +5237,7 @@
     if (w.fast === "true") opts.fast = true;
     else if (w.fast === "false") opts.fast = false;
     else if (str(w.fast)) { delete opts.fast; opts.modelParams = { fast: str(w.fast) }; }
+    if (str(w.customMode)) opts.customMode = w.customMode;
     if (FOLDER_MODES[mode]) {
       opts.cwd = w.cwd;
       if (w.approval) opts.approval = w.approval;
@@ -6458,9 +6460,18 @@
     }
     var mode = workerMode(w);
     row("Mode", enhanced(workerSelect((opts.modes || []).map(function (m) { return [m.id, m.label]; }), mode, "Mode", function (v) {
-      set({ mode: v });
+      // A custom mode belongs to the mode it is built on.
+      set({ mode: v, customMode: "" });
       rebuild();
     })), ((opts.modes || []).filter(function (m) { return m.id === mode; })[0] || {}).detail);
+    var customs = (opts.customModes || []).filter(function (m) { return m.base === mode; });
+    if (customs.length || str(w.customMode)) {
+      var customIds = customs.map(function (m) { return m.id; });
+      var customList = [["", "None"]].concat(customs.map(function (m) { return [m.id, m.label]; }));
+      if (str(w.customMode) && customIds.indexOf(str(w.customMode)) < 0) customList.push([str(w.customMode), "Deleted mode"]);
+      row("Custom mode", enhanced(workerSelect(customList, str(w.customMode), "Custom mode", function (v) { set({ customMode: v }); })),
+        "One of your own modes from Agent settings that builds on this mode: it takes tools away from the agent and adds its instructions.");
+    }
     if (FOLDER_MODES[mode]) {
       var folderRow = el("div", "row");
       var folder = el("input", "field");

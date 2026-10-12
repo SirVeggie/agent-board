@@ -100,7 +100,7 @@ test("Claude createSession leaves the spare when a different thread sends first"
   const provider = new ClaudeProvider();
   const spare = new FakeSession("th_a");
   const a = thread({ id: "th_a" });
-  const key = JSON.stringify([a.mode, a.web, a.cwd, a.scope.kind, a.scope.ref]);
+  const key = JSON.stringify([a.mode, "", a.web, a.cwd, a.scope.kind, a.scope.ref]);
   poolOf(provider).put(key, spare);
   const other = provider.createSession(thread({ id: "th_b" }), ctx());
   assert.notEqual(other, spare);
@@ -116,7 +116,7 @@ test("Cursor createSession leaves the spare when a different thread sends first"
   const sessionCtx = ctx();
   const spare = new FakeSession("th_a");
   const a = thread({ id: "th_a", provider: "cursor" });
-  const key = JSON.stringify([`board:${sessionCtx.scratchDir}`, a.mode, a.web, a.approval, false, sessionCtx.webSearchUrl?.() ?? ""]);
+  const key = JSON.stringify([`board:${sessionCtx.scratchDir}`, a.mode, "", a.web, a.approval, false, sessionCtx.webSearchUrl?.() ?? ""]);
   poolOf(provider).put(key, spare);
   const other = provider.createSession(thread({ id: "th_b", provider: "cursor" }), sessionCtx);
   assert.notEqual(other, spare);

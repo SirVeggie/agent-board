@@ -467,7 +467,7 @@ await scribe.agent.merge(threadId);                        // idle Code thread: 
 await scribe.agent.card(threadId, { card: 12, title, text }); // Kanban: a card comment into the running turn (steered, else queued); { delivered: null } when idle
 await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban Continue: the thread reads the card again and goes on (other pages' threads need a click)
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
-const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, approvals, defaults }
+const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, customModes: [{ id, label, detail, base }] (start({ mode: base, customMode: id })), approvals, defaults }
 const unsubscribe = scribe.agent.onLimits((limits) => paintLimits(limits)); // updates after limits(); call unsubscribe() to stop listening
 const { ok: limitsOk, limits } = await scribe.agent.limits(); // provider plan usage; also subscribes this page to updates
 if (limitsOk) paintLimits(limits);                         // render the initial snapshot

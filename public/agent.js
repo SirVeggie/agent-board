@@ -82,6 +82,16 @@
     { id: "plan", label: "Plan", detail: "Investigate and propose a plan before changing anything" },
     { id: "board", label: "Pages", detail: "Scribe pages and web only, no shell or file edits" },
   ];
+  /** Tool groups a custom mode can turn off (ModeCapability in src/agent/customModes.ts). */
+  const MODE_TOOLS = [
+    { id: "edit", label: "Edit files" },
+    { id: "shell", label: "Shell commands" },
+    { id: "web", label: "Web search and fetch" },
+    { id: "subagents", label: "Subagents" },
+    { id: "helpers", label: "Helper agents" },
+    { id: "browser", label: "Browser tools" },
+    { id: "threads", label: "Read other threads" },
+  ];
   const APPROVALS = [
     { id: "ask", label: "Ask first", detail: "Ask before edits and commands that are not allowlisted" },
     { id: "edits", label: "Auto-edit", detail: "Accept file edits, ask before commands" },
@@ -401,6 +411,29 @@
     } catch {
       return [];
     }
+  }
+
+  /** The user's own modes (Agent settings, Chat). */
+  function customModes() {
+    return prefs().customModes || [];
+  }
+
+  /** One line on a custom mode (or a thread's copy of one): its base mode and what it turns off. */
+  function customDetail(custom, baseId) {
+    const base = MODES.find((m) => m.id === baseId) || MODES[0];
+    const off = MODE_TOOLS.filter((tool) => (custom.off || []).includes(tool.id)).map((tool) => tool.label.toLowerCase());
+    return `${base.label} mode${off.length ? `, without: ${off.join(", ")}` : ""}`;
+  }
+
+  /** Where a provider cannot follow a mode as written. Same rules as providerNotes in src/agent/customModes.ts. */
+  function customModeNotes(off) {
+    const has = (id) => off.includes(id);
+    const notes = [];
+    if (has("edit") && !has("shell")) notes.push("Claude, Cursor and Native: shell commands can still change files.");
+    if (has("edit") && has("shell")) notes.push("Codex keeps its shell for reading, in its read-only sandbox.");
+    else if (has("edit") || has("shell")) notes.push(`Codex cannot turn off ${has("edit") ? "edits" : "the shell"} alone: it runs in its read-only sandbox.`);
+    if (has("subagents")) notes.push("Codex and Native have no subagents to turn off.");
+    return notes;
   }
 
   function prefs() {
@@ -833,6 +866,7 @@
         effort: s.effort,
         modelParams: s.modelParams,
         mode: s.mode,
+        customMode: s.custom?.id ?? null,
         approval: s.approval,
         web: s.web,
         cwd: s.cwd,
@@ -1588,6 +1622,142 @@
     pattern.focus();
   }
 
+  /* ---------- Custom modes (Agent settings, Chat) ---------- */
+
+  /** Add (mode null) or edit one of the user's modes. */
+  async function editCustomMode(mode) {
+    const all = customModes();
+    const { panel, close } = modal("ag-source ag-mode");
+    const field = (label, control, hint) => {
+      const wrap = el("label", "ag-field");
+      const caption = el("span", "ag-field-label", label);
+      control.setAttribute("aria-label", label);
+      if (hint) { caption.dataset.tooltip = hint; caption.setAttribute("aria-description", hint); }
+      wrap.append(caption, control);
+      return wrap;
+    };
+    const select = (options, value) => {
+      const node = el("select", "ag-input");
+      for (const [id, label] of options) {
+        const opt = el("option", null, label);
+        opt.value = id;
+        node.append(opt);
+      }
+      node.value = value;
+      return node;
+    };
+    const checks = (options, isOn) => {
+      const wrap = el("div", "ag-mcp-modes");
+      const boxes = options.map(([id, label]) => {
+        const box = el("input");
+        box.type = "checkbox";
+        box.value = id;
+        box.checked = isOn(id);
+        const row = el("label", "ag-check");
+        row.append(box, el("span", null, label));
+        wrap.append(row);
+        return box;
+      });
+      return { wrap, boxes };
+    };
+    const name = el("input", "ag-input");
+    name.value = mode?.name || "";
+    name.maxLength = 40;
+    name.placeholder = "e.g. Review";
+    const description = el("input", "ag-input");
+    description.value = mode?.description || "";
+    description.maxLength = 200;
+    description.placeholder = "Shown in the mode menu";
+    const base = select(MODES.map((m) => [m.id, `${m.label}: ${m.detail}`]), mode?.base || "code");
+    const off = mode?.off || [];
+    const tools = checks(MODE_TOOLS.map((tool) => [tool.id, tool.label]), (id) => !off.includes(id));
+    const toolsField = el("div", "ag-field");
+    const toolsLabel = el("span", "ag-field-label", "Tools");
+    toolsLabel.dataset.tooltip = "Unticked tools are taken away from the agent in this mode, whatever the approval level. A mode cannot add what its base mode does not have.";
+    toolsLabel.setAttribute("aria-description", toolsLabel.dataset.tooltip);
+    const note = el("p", "ag-muted ag-hook-note");
+    toolsField.append(toolsLabel, tools.wrap, note);
+    const mcp = select([["all", "All that the base mode gets"], ["none", "None"], ["pick", "Only these"]], Array.isArray(mode?.mcp) ? "pick" : mode?.mcp || "all");
+    // Scribe's own MCP list: the global servers and every workspace's.
+    let known = [];
+    try {
+      const { file } = await api("GET", "/mcp");
+      known = [...Object.keys(file?.mcpServers || {}), ...Object.values(file?.workspaces || {}).flatMap((layer) => Object.keys(layer?.mcpServers || {}))];
+    } catch {
+      /* the mode's own picks still show */
+    }
+    const picked = Array.isArray(mode?.mcp) ? mode.mcp : [];
+    const names = [...new Set([...known, ...picked])].sort();
+    const servers = checks(names.map((n) => [n, n]), (n) => picked.includes(n));
+    if (!names.length) servers.wrap.append(el("span", "ag-muted", "No MCP servers set up."));
+    const instructions = el("textarea", "ag-input ag-mode-text");
+    instructions.value = mode?.instructions || "";
+    instructions.placeholder = "e.g. You are a reviewer: report findings, never fix them.";
+    const approval = select([["", "Leave as it is"], ...APPROVALS.map((a) => [a.id, a.label])], mode?.approval || "");
+    const web = select([["", "Leave as it is"], ...WEB_MODES.map((w) => [w.id, w.label])], mode?.web || "");
+    const offNow = () => tools.boxes.filter((box) => !box.checked).map((box) => box.value);
+    const sync = () => {
+      servers.wrap.hidden = mcp.value !== "pick";
+      note.textContent = customModeNotes(offNow()).join(" ");
+      note.hidden = !note.textContent;
+      web.disabled = offNow().includes("web");
+    };
+    mcp.addEventListener("change", sync);
+    for (const box of tools.boxes) box.addEventListener("change", sync);
+    sync();
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const done = async (next) => {
+      try {
+        S.config.prefs = await api("PUT", "/prefs", { customModes: next });
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        return;
+      }
+      close();
+      agentSettings.renderCustomModes();
+      for (const view of views()) view.renderComposerBar();
+    };
+    const save = () => {
+      if (!name.value.trim()) {
+        error.textContent = "Give the mode a name.";
+        error.hidden = false;
+        return;
+      }
+      const edited = {
+        id: mode?.id || `cm_${Math.random().toString(36).slice(2, 10).padEnd(8, "0")}`,
+        name: name.value,
+        description: description.value,
+        base: base.value,
+        off: offNow(),
+        mcp: mcp.value === "pick" ? servers.boxes.filter((box) => box.checked).map((box) => box.value) : mcp.value,
+        instructions: instructions.value,
+        ...(approval.value ? { approval: approval.value } : {}),
+        ...(web.value && !web.disabled ? { web: web.value } : {}),
+      };
+      return done(mode ? all.map((m) => (m.id === mode.id ? edited : m)) : [...all, edited]);
+    };
+    const actions = el("div", "ag-modal-actions");
+    if (mode) actions.append(button("Remove", "ag-btn ghost danger", () => done(all.filter((m) => m.id !== mode.id))));
+    actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn ghost", close), button(mode ? "Save" : "Add", "ag-btn primary", save));
+    panel.append(
+      el("h3", null, mode ? "Edit mode" : "New mode"),
+      field("Name", name),
+      field("Description", description),
+      field("Based on", base, "The built-in mode this one starts from. It keeps that mode's own behaviour, such as Plan's accept step or Pages working without a folder."),
+      toolsField,
+      field("MCP servers", mcp, "Which servers from Scribe's MCP list a thread in this mode gets. Cursor also loads the servers in its own settings."),
+      servers.wrap,
+      field("Instructions", instructions, "Added to what the agent is told in every thread in this mode."),
+      field("Approval when picked", approval, "Set on a thread when this mode is picked. It can still be changed on the thread."),
+      field("Web when picked", web, "Set on a thread when this mode is picked. It can still be changed on the thread, unless the mode turns web tools off."),
+      error,
+      actions
+    );
+    name.focus();
+  }
+
   /* ---------- Native harness model sources ---------- */
 
   /** Add (source null) or edit an endpoint. The API key field only sends a new key; it never shows the old one. */
@@ -2108,15 +2278,20 @@
               : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null;
       const model = d.settings.model || p.models?.[provider] || "default";
       const choice = modelChoice(provider, model, p);
+      const scoped = d.scope.kind === "page" || d.scope.kind === "folder";
+      // The custom mode picked for the draft, else the last one picked when the draft names no mode.
+      const customId = d.settings.customMode !== undefined ? d.settings.customMode : d.settings.mode || scoped ? null : p.customMode;
+      const custom = (customId && customModes().find((m) => m.id === customId)) || null;
       return {
         id: null,
         provider,
         model,
         effort: d.settings.effort !== undefined ? d.settings.effort : choice.effort,
         modelParams: d.settings.modelParams || choice.modelParams,
-        mode: d.settings.mode || (d.scope.kind === "page" || d.scope.kind === "folder" ? "board" : p.mode || "code"),
+        mode: custom ? custom.base : d.settings.mode || (scoped ? "board" : p.mode || "code"),
+        ...(custom ? { custom } : {}),
         approval: d.settings.approval || approvalFor(provider),
-        web: webMode(d.settings.web, webMode(p.web)),
+        web: custom?.off.includes("web") ? "off" : webMode(d.settings.web, webMode(p.web)),
         cwd,
         // Last choice made in this workspace.
         useWorktree: d.settings.useWorktree !== undefined ? d.settings.useWorktree : Boolean(cwd && p.worktrees?.[dirKey(cwd)]),
@@ -2176,6 +2351,7 @@
           effort: cur.effort,
           modelParams: cur.modelParams,
           mode: cur.mode,
+          customMode: cur.custom?.id ?? null,
           approval: cur.approval,
           web: cur.web,
           cwd: cur.cwd,
@@ -3924,7 +4100,7 @@
 
     onThread(thread, prev) {
       if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added) this.renderHeader();
-      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns || JSON.stringify(prev.effectivePermissions) !== JSON.stringify(thread.effectivePermissions)) {
+      if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || JSON.stringify(prev.custom) !== JSON.stringify(thread.custom) || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns || JSON.stringify(prev.effectivePermissions) !== JSON.stringify(thread.effectivePermissions)) {
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
@@ -4207,14 +4383,14 @@
       const s = this.settings();
       const t = this.thread();
       if (t && t.status !== "idle") return;
-      const key = JSON.stringify([this.threadId || `draft:${this.variant}`, s.provider, s.model, s.effort, s.modelParams, s.mode, s.web, s.cwd, s.scope, s.useWorktree]);
+      const key = JSON.stringify([this.threadId || `draft:${this.variant}`, s.provider, s.model, s.effort, s.modelParams, s.mode, s.custom?.id, s.web, s.cwd, s.scope, s.useWorktree]);
       const now = Date.now();
       if (this.lastWarm && this.lastWarm.key === key && now - this.lastWarm.at < 60_000) return;
       this.lastWarm = { key, at: now };
       if (t) {
         api("POST", `/threads/${encodeURIComponent(t.id)}/warm`).catch(() => undefined);
       } else {
-        api("POST", "/warm", { provider: s.provider, model: s.model, effort: s.effort, modelParams: s.modelParams, mode: s.mode, approval: s.approval, web: s.web, cwd: s.cwd, scope: s.scope, useWorktree: Boolean(s.useWorktree) }).catch(() => undefined);
+        api("POST", "/warm", { provider: s.provider, model: s.model, effort: s.effort, modelParams: s.modelParams, mode: s.mode, customMode: s.custom?.id ?? null, approval: s.approval, web: s.web, cwd: s.cwd, scope: s.scope, useWorktree: Boolean(s.useWorktree) }).catch(() => undefined);
       }
     }
 
@@ -4426,8 +4602,8 @@
         bar.append(eff);
       }
       const mode = MODES.find((m) => m.id === s.mode) || MODES[0];
-      const modeBtn = button("", `ag-pill mode-${mode.id}`, (event) => this.modeMenu(event.currentTarget), mode.detail);
-      modeBtn.append(el("span", null, mode.label));
+      const modeBtn = button("", `ag-pill mode-${mode.id}`, (event) => this.modeMenu(event.currentTarget), s.custom ? customDetail(s.custom, mode.id) : mode.detail);
+      modeBtn.append(el("span", null, s.custom ? s.custom.name : mode.label));
       bar.append(modeBtn);
       if (s.mode === "code") {
         const ap = APPROVALS.find((a) => a.id === s.approval) || APPROVALS[0];
@@ -4603,11 +4779,22 @@
 
     modeMenu(anchor) {
       const s = this.settings();
-      openMenu(
-        anchor,
-        MODES.map((m) => ({ label: m.label, detail: m.detail, checked: s.mode === m.id, run: () => this.updateSettings({ mode: m.id }) })),
-        { width: 290 }
-      );
+      const items = MODES.map((m) => ({ label: m.label, detail: m.detail, checked: !s.custom && s.mode === m.id, run: () => this.updateSettings({ mode: m.id, customMode: null }) }));
+      const custom = customModes();
+      if (custom.length || s.custom) items.push({ separator: true });
+      for (const m of custom) {
+        items.push({
+          label: m.name,
+          detail: m.description || customDetail(m, m.base),
+          checked: s.custom?.id === m.id,
+          // The mode's own approval and web are where a thread starts; they can be changed on the thread after.
+          run: () => this.updateSettings({ mode: m.base, customMode: m.id, ...(m.approval ? { approval: m.approval } : {}), ...(m.web ? { web: m.web } : {}) }),
+        });
+      }
+      // A deleted mode: the thread keeps what it took away until another mode is picked.
+      if (s.custom && !custom.some((m) => m.id === s.custom.id)) items.push({ label: s.custom.name, detail: `Deleted. ${customDetail(s.custom, s.mode)}`, checked: true, disabled: true });
+      items.push({ separator: true }, { label: "Edit modes…", icon: "gear", run: () => agentSettings.open() });
+      openMenu(anchor, items, { width: 290 });
     }
 
     approvalMenu(anchor) {
@@ -5081,6 +5268,7 @@
             effort: cur.effort,
             modelParams: cur.modelParams,
             mode: cur.mode,
+            customMode: cur.custom?.id ?? null,
             approval: cur.approval,
             web: cur.web,
             cwd: cur.cwd,
@@ -5557,7 +5745,7 @@
     if (!last) return null;
     const dir = S.filter === "workspaces" ? workspaceDir(last) : null;
     const scope = dir ? { kind: "global", ref: null } : { ...last.scope };
-    const settings = { mode: dir ? "code" : last.mode, web: last.web, cwd: dir || homeDir(last), useWorktree: Boolean(last.useWorktree) };
+    const settings = { mode: dir ? "code" : last.mode, customMode: dir ? null : last.custom?.id ?? null, web: last.web, cwd: dir || homeDir(last), useWorktree: Boolean(last.useWorktree) };
     if (providerAvailable(last.provider)) {
       Object.assign(settings, { provider: last.provider, model: last.model, effort: last.effort, modelParams: { ...(last.modelParams || {}) }, approval: last.approval });
     }
@@ -9035,6 +9223,20 @@
         )
       );
 
+      const modes = el("section", "settings-section");
+      this.customModeList = el("div", "ag-hook-rules");
+      const modeActions = el("div", "settings-actions");
+      modeActions.append(button("Add mode", "ag-btn", () => void editCustomMode(null)));
+      modes.append(
+        helpHeading(
+          "Custom modes",
+          "A mode of your own builds on Code, Ask, Plan or Pages: it takes tools and MCP servers away from the agent, adds instructions, and sets the approval and web a thread starts with. It appears in the mode menu under the built-in ones, and board workers can use it. Editing a mode applies to the threads already in it."
+        ),
+        this.customModeList,
+        modeActions
+      );
+      this.renderCustomModes();
+
       const hooks = el("section", "settings-section");
       this.hookList = el("div", "ag-hook-rules");
       const hookActions = el("div", "settings-actions");
@@ -9075,10 +9277,10 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, lower, helpers, memory, hooks, coverage, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, lower, helpers, memory, hooks, coverage, sources, usage, chat, modes, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
-        { label: "Chat", sections: [chat] },
+        { label: "Chat", sections: [chat, modes] },
         { label: "Memory", sections: [memory] },
         { label: "Helper agents", sections: [helpers] },
         { label: "Hooks", sections: [hooks, coverage] },
@@ -9138,6 +9340,18 @@
         table.append(tr);
       }
       this.hookCoverage.replaceChildren(table);
+    },
+    renderCustomModes() {
+      if (!this.customModeList) return;
+      this.customModeList.replaceChildren();
+      if (!customModes().length) this.customModeList.append(el("div", "ag-muted", "None yet."));
+      for (const mode of customModes()) {
+        const row = el("div", "setting-row ag-hook-rule");
+        const label = el("span", "ag-hook-text");
+        label.append(el("strong", null, mode.name), el("span", "ag-muted", ` · ${customDetail(mode, mode.base)}`));
+        row.append(label, button("Edit", "ag-btn small", () => void editCustomMode(mode)));
+        this.customModeList.append(row);
+      }
     },
     renderCycleModes() {
       for (const [id, control] of this.modeButtons || []) {
@@ -9281,6 +9495,7 @@
       if (!this.categories) return;
       this.renderStatus();
       this.renderCycleModes();
+      this.renderCustomModes();
       void this.renderSources();
       void this.renderHooks();
       this.renderSummarizer();
@@ -9666,6 +9881,8 @@
         ])
       ),
       modes: MODES.map((m) => ({ id: m.id, label: m.label, detail: m.detail, needsFolder: FOLDER_MODES.has(m.id) })),
+      // The user's own modes: start a thread in one with customMode, next to the mode it is based on.
+      customModes: customModes().map((m) => ({ id: m.id, label: m.name, detail: m.description || customDetail(m, m.base), base: m.base })),
       approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail })),
       defaults: provider
         ? {
@@ -9720,6 +9937,9 @@
     if (!provider) return { error: "no_provider" };
     const mode = data.mode || "board";
     if (!PAGE_MODES.has(mode)) return { error: "unknown_mode" };
+    // A custom mode that is gone, or built on another mode, is refused: starting without its limits would be worse.
+    const custom = typeof data.customMode === "string" && data.customMode ? customModes().find((m) => m.id === data.customMode && m.base === mode) : null;
+    if (data.customMode && !custom) return { error: "unknown_mode" };
     // The user's model settings only carry over when the page keeps their provider and model.
     const own = Boolean((data.model && data.model !== "default") || data.provider);
     if (data.model && data.model !== "default" && modelsOf(provider).length && !modelInfo(provider, data.model)) return { error: "unknown_model" };
@@ -9744,8 +9964,9 @@
       effort: data.effort || (own ? null : modelChoice(provider, model, p).effort),
       modelParams,
       mode,
-      approval: data.approval || approvalFor(provider, p),
-      web: webMode(data.web, webMode(p.web)),
+      ...(custom ? { customMode: custom.id } : {}),
+      approval: data.approval || custom?.approval || approvalFor(provider, p),
+      web: webMode(data.web, custom?.web || webMode(p.web)),
       cwd: cwd || null,
       useWorktree: folderMode && data.worktree === true,
       ...(data.helpers === true ? { helpersAllowed: true } : {}),
@@ -10091,6 +10312,7 @@
       effort: s.effort ?? null,
       modelParams: { ...(s.modelParams || {}) },
       mode: s.mode,
+      customMode: s.custom?.id ?? null,
       approval: s.approval,
       web: webMode(s.web),
       cwd: homeDir(s),
@@ -10135,8 +10357,8 @@
       notice("No modes enabled for cycling. Choose modes in Agent settings.");
       return;
     }
-    if (next.id === s.mode) return;
-    await view.updateSettings({ mode: next.id });
+    if (next.id === s.mode && !s.custom) return;
+    await view.updateSettings({ mode: next.id, customMode: null });
     notice(`Mode: ${next.label}`);
   }
 

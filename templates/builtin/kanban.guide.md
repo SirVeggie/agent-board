@@ -58,7 +58,7 @@ nextNum: number
 settings: { hideAddColumn?, showDoneDate?, maxWorkers?, workerInstructions?,    // the user's page settings; leave them alone
             workerLog?: [{ id, at, kind, text, worker?, workerId?, card?, thread?,
                            usage?: { turns, inputTokens?, outputTokens? } }],  // the page's; read with logs
-            workers?: { [workerId]: { name, color?, instructions?, context?, provider?, model?, effort?, fast?, mode?,
+            workers?: { [workerId]: { name, color?, instructions?, context?, provider?, model?, effort?, fast?, mode?, customMode?,
                                       cwd?, approval?, worktree?, web?, show?, helpers?,
                                       threadId?, run?, step?, stop?, merge?, error?, fails?, solo? } } }  // run..solo: the page's
 ```
