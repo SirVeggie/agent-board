@@ -507,6 +507,16 @@ export function dynamicToolContent(content: unknown[]): RpcRecord[] {
   });
 }
 
+type TokenCounts = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; reasoningTokens: number };
+const TOKEN_KEYS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const;
+
+/** An app-server TokenUsageBreakdown as Scribe's counts. */
+function tokenCounts(u: RpcRecord): TokenCounts {
+  return { inputTokens: Number(u.inputTokens) || 0, outputTokens: Number(u.outputTokens) || 0,
+    cacheReadTokens: Number(u.cachedInputTokens) || 0, cacheWriteTokens: Number(u.cacheWriteInputTokens) || 0,
+    reasoningTokens: Number(u.reasoningOutputTokens) || 0 };
+}
+
 export function mapUsage(usage: CodexUsage): Usage {
   return {
     inputTokens: usage.input_tokens,
@@ -829,7 +839,10 @@ export class CodexSession implements ProviderSession {
   private activeTurn: string | null = null;
   private finishTurn: ((result: TurnResult) => void) | null = null;
   private steers = new Map<string, { input: SteerInput; state: "queued" | "sending" | "accepted"; cleanup?: () => void }>();
-  private turnUsage: RpcRecord | null = null;
+  /** Tokens of the model requests in the native turn so far. */
+  private turnUsage: TokenCounts | null = null;
+  /** The native thread's running total at the last report, to take each report's share from. */
+  private usageTotal: TokenCounts | null = null;
   private steerCleanups: Array<() => void> = [];
   private requests = new Map<string | number, AbortController>();
   private outputs = new Map<string, string>();
@@ -984,6 +997,7 @@ export class CodexSession implements ProviderSession {
           if (!/not found|unknown thread|no rollout/i.test((error as Error).message)) throw error;
           this.sink?.notice("warn", "Could not resume the Codex thread; this turn starts a new one without the earlier conversation.");
           this.nativeId = null;
+          this.usageTotal = null;
           result = await rpc.call("thread/start", { ...options, ...dynamicTools });
         }
       } else result = await rpc.call("thread/start", { ...options, ...dynamicTools });
@@ -1238,11 +1252,8 @@ export class CodexSession implements ProviderSession {
         this.nativeTurnCompleted = true;
         this.activeTurn = null;
         if (this.turnUsage) {
-          const u = this.turnUsage;
-          const usage = { inputTokens: Number(u.inputTokens) || 0, outputTokens: Number(u.outputTokens) || 0,
-            cacheReadTokens: Number(u.cachedInputTokens) || 0, cacheWriteTokens: Number(u.cacheWriteInputTokens) || 0,
-            reasoningTokens: Number(u.reasoningOutputTokens) || 0 };
-          for (const key of Object.keys(usage) as Array<keyof typeof usage>) this.runUsage[key] = (this.runUsage[key] ?? 0) + usage[key];
+          const usage = this.turnUsage;
+          for (const key of TOKEN_KEYS) this.runUsage[key] = (this.runUsage[key] ?? 0) + usage[key];
           sink.usage(this.runUsage);
         }
         const error = isPlainRecord(turn.error) ? String(turn.error.message || "Codex turn failed") : undefined;
@@ -1267,9 +1278,30 @@ export class CodexSession implements ProviderSession {
         }
         break;
       }
-      case "thread/tokenUsage/updated":
-        if (isPlainRecord(p.tokenUsage) && isPlainRecord(p.tokenUsage.last)) this.turnUsage = p.tokenUsage.last;
+      case "thread/tokenUsage/updated": {
+        const report = p.tokenUsage;
+        if (!isPlainRecord(report) || !isPlainRecord(report.last)) break;
+        const last = tokenCounts(report.last);
+        // `last` is one model request, `total` the whole native thread: a turn of several requests is the growth of the total.
+        if (isPlainRecord(report.total)) {
+          const total = tokenCounts(report.total);
+          const before = this.usageTotal;
+          this.usageTotal = total;
+          // A report outside a turn (replayed on resume) only sets the total to count from.
+          if (this.activeTurn) {
+            const turn = this.turnUsage ?? tokenCounts({});
+            // A total that went down belongs to another native thread: only this request is known.
+            const base = before && TOKEN_KEYS.every((key) => total[key] >= before[key]) ? before : null;
+            for (const key of TOKEN_KEYS) turn[key] += base ? total[key] - base[key] : last[key];
+            this.turnUsage = turn;
+          }
+        } else this.turnUsage = last;
+        // The last request's input and output are what the next one starts from.
+        const context = Number(report.last.totalTokens) || last.inputTokens + last.outputTokens;
+        const window = Number(report.modelContextWindow) || 0;
+        if (context || window) sink.usage({ ...(context ? { contextTokens: context } : {}), ...(window ? { contextWindow: window } : {}) });
         break;
+      }
       case "item/started":
       case "item/completed": {
         if (!isPlainRecord(p.item)) return;

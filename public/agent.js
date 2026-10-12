@@ -539,6 +539,7 @@
         const detail = { items: data.items, byId: new Map(data.items.map((it) => [it.id, it])), turns: new Map(data.turns.map((t) => [t.id, t])) };
         S.details.set(id, detail);
         S.threads.set(id, data.thread);
+        noteWindows(data.thread.provider, data.turns);
         return detail;
       })
       .catch(() => null)
@@ -4131,19 +4132,28 @@
       if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
       this.schedule();
       if (item.kind === "user") this.renderContext();
+      this.refreshContextMeter();
     }
 
     onTurn(turn) {
       this.dirtyTurns.add(turn.id);
       this.schedule();
-      const u = turn.usage;
-      if (this.ctxMeter?.isConnected && u && (u.contextTokens != null || u.contextWindow != null)) {
-        const next = contextMeter(this);
-        this.ctxMeter.replaceWith(next);
-        this.ctxMeter = next;
-      }
+      this.refreshContextMeter();
       // The strip's run clock starts from the running turn, which can arrive after the thread's status.
       if (this.status && turn.status === "running" && !this.status.querySelector(".ag-clock")) this.renderComposerBar();
+    }
+
+    /** Redraw the context meter when its reading changed; streaming items come in bursts, so at most twice a second. */
+    refreshContextMeter() {
+      if (this.ctxTimer) return;
+      this.ctxTimer = setTimeout(() => {
+        this.ctxTimer = null;
+        if (!this.ctxMeter?.isConnected) return;
+        const next = contextMeter(this);
+        if (next._sig === this.ctxMeter._sig) return;
+        this.ctxMeter.replaceWith(next);
+        this.ctxMeter = next;
+      }, 500);
     }
 
     onDelta(item) {
@@ -7780,19 +7790,71 @@
     return Math.round(parseFloat(m[1]) * (m[2]?.toLowerCase() === "m" ? 1_000_000 : m[2] ? 1000 : 1));
   }
 
-  /** The context of a chat: the latest turn's usage, and the size option when the model has one. */
+  /** Window sizes providers have reported, by provider and model, for chats that have no report of their own yet. */
+  const knownWindows = new Map();
+
+  function noteWindows(provider, turns) {
+    for (const turn of turns) {
+      if (turn.usage?.contextWindow) knownWindows.set(`${provider}:${turn.model}`, turn.usage.contextWindow);
+    }
+  }
+
+  /** Characters an item puts in the model's context. A subagent's own items stay out of it, and shown reasoning is not what the model keeps. */
+  function itemContextChars(item) {
+    if (item.parentToolId) return 0;
+    if (item.kind === "user") return item.dropped ? 0 : (item.text || "").length + (item.images?.length || 0) * 4000;
+    if (item.kind === "text" || item.kind === "plan") return (item.text || "").length;
+    if (item.kind === "tool") {
+      let input = 0;
+      try {
+        input = item.input == null ? (item.detail || "").length : JSON.stringify(item.input).length;
+      } catch {}
+      return input + (item.output || "").length + (item.diff || "").length;
+    }
+    return 0;
+  }
+
+  /**
+   * Tokens of the items the provider has not counted, at four characters a token: everything after the turn
+   * that last reported its context, or after the last summary when no turn has.
+   */
+  function estimateContext(detail, measured) {
+    if (!detail) return 0;
+    let items = detail.items;
+    if (measured) {
+      items = items.filter((item) => {
+        const turn = item.turnId ? detail.turns.get(item.turnId) : null;
+        return turn ? turn.seq > measured.seq : !item.turnId;
+      });
+    } else {
+      const cut = items.findLastIndex((item) => item.kind === "notice" && /summarized the conversation|Context compacted/.test(item.text));
+      if (cut >= 0) items = items.slice(cut + 1);
+    }
+    let chars = 0;
+    for (const item of items) chars += itemContextChars(item);
+    return Math.ceil(chars / 4);
+  }
+
+  /**
+   * The context of a chat: the latest turn's usage, an estimate for what came after it (or for all of it when the
+   * provider reports none, as Cursor), and the size option when the model has one.
+   */
   function contextInfo(view) {
     const s = view.settings();
     const t = view.thread();
     const info = modelInfo(s.provider, s.model);
     const param = info?.params?.find((p) => p.id === CONTEXT_PARAM) || null;
     const size = param ? (s.modelParams?.[CONTEXT_PARAM] ?? param.default) : null;
-    const turns = t ? [...(S.details.get(t.id)?.turns.values() || [])].sort((a, b) => a.seq - b.seq) : [];
-    const last = [...turns].reverse().find((x) => x.usage?.contextWindow || x.usage?.contextTokens);
+    const detail = t ? S.details.get(t.id) : null;
+    const turns = detail ? [...detail.turns.values()].sort((a, b) => a.seq - b.seq) : [];
+    if (t) noteWindows(t.provider, turns);
+    const last = turns.findLast((x) => x.usage?.contextWindow || x.usage?.contextTokens);
     const usage = last?.usage || null;
-    const window = usage?.contextWindow || sizeTokens(size) || 0;
-    const used = usage?.contextTokens || 0;
-    return { s, param, size, usage, used, window, fraction: window ? Math.min(1, used / window) : 0 };
+    const measured = turns.findLast((x) => x.usage?.contextTokens) || null;
+    const window = usage?.contextWindow || sizeTokens(size) || knownWindows.get(`${s.provider}:${s.model}`) || 0;
+    const estimate = estimateContext(detail, measured);
+    const used = (measured?.usage.contextTokens || 0) + estimate;
+    return { s, param, size, usage, used, window, estimate, measured: Boolean(measured), fraction: window ? Math.min(1, used / window) : 0 };
   }
 
   /** A ring that fills as the context does. Click picks the window size where the model has one; hover gives details. */
@@ -7818,7 +7880,8 @@
         { width: 240 }
       );
     });
-    meter.setAttribute("aria-label", ctx.window ? `Context ${percent(ctx.fraction)} of ${tokenCount(ctx.window)}` : "Context");
+    meter.setAttribute("aria-label", ctx.window ? `Context ${ctx.estimate ? "about " : ""}${percent(ctx.fraction)} of ${tokenCount(ctx.window)}` : "Context");
+    meter._sig = `${level}:${ctx.fraction.toFixed(3)}:${ctx.window}:${ctx.param ? ctx.size : ""}`;
     // Two circles: the track and an arc whose dash length is the share in use.
     const r = 6;
     const length = 2 * Math.PI * r;
@@ -7830,14 +7893,19 @@
   function contextTip(ctx) {
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", "Context"));
+    // "~" marks a reading that is partly Scribe's own estimate.
+    const about = ctx.estimate ? "~" : "";
     if (ctx.window && (ctx.used > 0 || ctx.usage?.contextTokens != null)) {
       const row = el("div", `ag-usage-tip-row lvl-${usageLevel(ctx.fraction)}`);
       const bar = el("div", "ag-meter-bar");
       const fill = el("div", "ag-meter-fill");
       fill.style.width = `${Math.round(ctx.fraction * 100)}%`;
       bar.append(fill);
-      row.append(el("span", "ag-usage-tip-label", `${tokenCount(ctx.used)} of ${tokenCount(ctx.window)}`), bar, el("span", "ag-usage-tip-pct", percent(ctx.fraction)));
+      row.append(el("span", "ag-usage-tip-label", `${about}${tokenCount(ctx.used)} of ${tokenCount(ctx.window)}`), bar, el("span", "ag-usage-tip-pct", percent(ctx.fraction)));
       tip.append(row);
+      if (!ctx.measured) tip.append(el("div", "ag-usage-tip-note", ctx.s.provider === "cursor" ? "Estimated from the chat's text: Cursor does not report it." : "Estimated from the chat's text until the next reply."));
+    } else if (ctx.used > 0) {
+      tip.append(el("div", "ag-usage-tip-note", `${about}${tokenCount(ctx.used)} tokens, estimated from the chat's text. The window size shows after the next reply.`));
     } else {
       const note = !ctx.window
         ? "Shows how full the context is after the first reply."

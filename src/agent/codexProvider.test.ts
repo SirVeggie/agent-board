@@ -476,6 +476,27 @@ test("Codex denial approval survives native completion, records one exact retry,
   f.session.dispose();
 });
 
+test("Codex reports the context after each model request and counts every request of a turn", async () => {
+  const f = sessionFixture();
+  const { run } = await f.start();
+  const usages: Array<Record<string, unknown>> = [];
+  f.sink.usage = (usage) => usages.push({ ...usage });
+  const counts = (inputTokens: number, cachedInputTokens: number, outputTokens: number) =>
+    ({ totalTokens: inputTokens + outputTokens, inputTokens, cachedInputTokens, cacheWriteInputTokens: 0, outputTokens, reasoningOutputTokens: 0 });
+  const report = (total: unknown, last: unknown) =>
+    f.f.emit({ method: "thread/tokenUsage/updated", params: { threadId: "native-thread", turnId: "turn-1", tokenUsage: { total, last, modelContextWindow: 272000 } } });
+  report(counts(1000, 0, 50), counts(1000, 0, 50));
+  assert.deepEqual(usages.at(-1), { contextTokens: 1050, contextWindow: 272000 });
+  report(counts(2300, 1000, 80), counts(1300, 1000, 30));
+  assert.deepEqual(usages.at(-1), { contextTokens: 1330, contextWindow: 272000 });
+  // The same report again (Codex repeats it with rate limit updates) adds nothing.
+  report(counts(2300, 1000, 80), counts(1300, 1000, 30));
+  f.complete();
+  assert.deepEqual(await run, { status: "done" });
+  assert.deepEqual(usages.at(-1), { inputTokens: 2300, outputTokens: 80, cacheReadTokens: 1000, cacheWriteTokens: 0, reasoningTokens: 0 });
+  f.session.dispose();
+});
+
 test("Codex Keep denied, cancellation, and override errors never retry", async () => {
   for (const decision of ["keepDenied", "cancel", "error"]) {
     const f = sessionFixture(null, "auto");
