@@ -164,17 +164,17 @@ test("shell updates retain composer pills, thread controls and template rows wit
     await page.addScriptTag({ content: source("../public/dom-sync.js") });
     const agent = source("../public/agent.js");
     const app = source("../public/app.js");
+    await page.addScriptTag({ content: source("../public/agent-render.js") });
+    // Load all thread-list helpers in their production closure; replace only shell startup.
+    await page.addScriptTag({ content: agent.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
+      S.filter = 'all';
+      window.renderHoverThreads = () => renderThreadList(document.querySelector('#threads'), {});
+    `) });
     // Exercise the production renderers with a small host, without starting the shell or a daemon.
     await page.addScriptTag({ content: `
       const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
       const icon = name => el('span', 'icon', name);
       const button = (text, cls, fn, tip) => { const n = el('button', cls); if (typeof text === 'string') n.textContent = text; else n.append(text); n.onclick = fn; if (tip) n.dataset.tooltip = tip; return n; };
-      const S = { threads: new Map(), filter: 'all', search: '', hidePageThreads: false };
-      const LS = { filter: 'filter', hidePage: 'hidePage', compact: 'compact' };
-      const compactThreads = () => localStorage.getItem(LS.compact) === '1';
-      const hiddenWorkspaceKeys = () => new Set(), inHiddenWorkspace = () => false, prefs = () => ({});
-      const movedBanners = () => [], renderLists = () => renderThreadList(document.querySelector('#threads'), {});
-      ${agent.slice(agent.indexOf('  function renderThreadList('), agent.indexOf('  /** The line under a thread', agent.indexOf('  function renderThreadList(')))}
       const modelInfo = () => ({ label: 'Model', efforts: [] }), providerIcon = icon;
       const MODES = [{ id: 'plan', label: 'Plan' }], WEB_MODES = [{ id: 'off', label: 'Off' }];
       const webMode = () => 'off', webEnforced = () => true;
@@ -192,7 +192,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const createFromTemplate = template => window.opened = template;
       ${app.slice(app.indexOf('  function templateRow('), app.indexOf('  function builtinMenu('))}
       window.check = () => {
-        renderLists(); view.renderComposerBar();
+        window.renderHoverThreads(); view.renderComposerBar();
         window.scribeSyncChildren(document.querySelector('#templates'), state.templates.map(t => templateRow(t, false)));
       };
       window.replaceMetadata = () => { state.templates = [{ ...state.templates[0], fields: [{ key: 'new' }] }]; };

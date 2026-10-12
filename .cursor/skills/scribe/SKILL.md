@@ -468,11 +468,15 @@ await scribe.agent.card(threadId, { card: 12, title, text }); // Kanban: a card 
 await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban Continue: the thread reads the card again and goes on (other pages' threads need a click)
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
 const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, approvals, defaults }
+const { limits } = await scribe.agent.limits();            // provider plan usage; also subscribes this page to updates
+const unsubscribe = scribe.agent.onLimits((limits) => paintLimits(limits)); // updates after limits(); call unsubscribe() to stop listening
 const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)
 const { actions } = await scribe.agent.actions();         // the template's right-click agent actions: [{ id, label, description, selection, context }]
 await scribe.agent.runAction("triage-card", { context: { card: "#12 Fix login" } }); // run one from the page's own menu (inside a click)
 await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
 ```
+
+`limits` is keyed by provider. Each report has `at` and `windows` (`id`, `label`, `utilization`, optional `resetsAt`), and may include `availability`, `detail`, `ordinaryUsageAllowed`, and `overage`. Missing providers have no report. Register `onLimits` before calling `limits()` to receive changes during the initial request.
 
 #### Agent runs: let Scribe see a chat through
 

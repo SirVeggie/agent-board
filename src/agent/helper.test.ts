@@ -18,7 +18,7 @@ const asked: Array<{ thread: Thread; input: TurnInput }> = [];
 let hanging = false;
 const helperWaits = new Map<string, () => void>();
 
-type Internals = { providers: Record<string, unknown>; runs: Map<string, unknown>; turns: Map<string, unknown[]>; pending: Map<string, { itemId: string }> };
+type Internals = { providers: Record<string, unknown>; runs: Map<string, unknown>; turns: Map<string, unknown[]>; pending: Map<string, { itemId: string; threadId: string }> };
 
 before(() => {
   store.load();
@@ -79,6 +79,17 @@ function running(id: string): void {
   const turn = { id: `tu_${id}`, threadId: id, seq: 1, status: "running", model: "m", effort: null, mode: "ask", startedAt: Date.now() };
   internals.turns.get(id)?.push(turn);
   internals.runs.set(id, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null });
+}
+
+async function approvalFor(id: string): Promise<{ itemId: string }> {
+  const pending = (host as unknown as Internals).pending;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const request = [...pending.values()].find((item) => item.threadId === id);
+    if (request) return request;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`thread ${id} did not request helper approval`);
 }
 
 test("helpers are refused until the user turns them on", async () => {
@@ -162,12 +173,7 @@ test("helper mode is rechecked if the parent changes while approval is pending",
   running(id);
   const internals = host as unknown as Internals;
   const rejected = assert.rejects(host.runHelper(id, { task: "inspect", provider: "pi", mode: "plan" }), /not allowed from ask mode/);
-  let request: { itemId: string } | undefined;
-  for (let i = 0; i < 100 && !request; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    request = [...internals.pending.values()].at(-1);
-  }
-  assert.ok(request, "the helper awaits approval");
+  const request = await approvalFor(id);
   host.updateThread(id, { mode: "ask" });
   host.resolveApproval(request.itemId, "once");
   await rejected;
@@ -191,21 +197,24 @@ test("an unknown or ambiguous model lists the models to pick from", async () => 
   assert.deepEqual((providers[0].models as Array<{ id: string }>).map((m) => m.id), ["local/qwen-coder", "local/qwen-small"]);
 });
 
-test("without full access the user is asked first, and Allow for this thread sticks", async () => {
+test("without full access the user is asked first, and Allow for this thread sticks", async (t) => {
   host.setPrefs({ helpers: true });
+  // Approval follows provider discovery, which can take longer than the old 10 ms answer timer.
+  const provider = (host as unknown as Internals).providers.pi as { status: () => Promise<unknown> };
+  const status = provider.status;
+  t.mock.method(provider, "status", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    return status();
+  });
   const id = parent("ask");
   await assert.rejects(host.runHelper(id, { task: "x", provider: "pi" }), /cannot be asked/);
   running(id);
-  const internals = host as unknown as Internals;
-  const answer = (optionId: string) =>
-    setTimeout(() => {
-      const req = [...internals.pending.values()].at(-1)!;
-      host.resolveApproval(req.itemId, optionId);
-    }, 10);
-  answer("deny");
-  await assert.rejects(host.runHelper(id, { task: "x", provider: "pi" }), /denied the helper/);
-  answer("thread");
-  assert.equal((await host.runHelper(id, { task: "x", provider: "pi" })).status, "done");
+  const denied = assert.rejects(host.runHelper(id, { task: "x", provider: "pi" }), /denied the helper/);
+  host.resolveApproval((await approvalFor(id)).itemId, "deny");
+  await denied;
+  const allowed = host.runHelper(id, { task: "x", provider: "pi" });
+  host.resolveApproval((await approvalFor(id)).itemId, "thread");
+  assert.equal((await allowed).status, "done");
   assert.equal(host.getThread(id)?.helpersAllowed, true);
   assert.equal((await host.runHelper(id, { task: "y", provider: "pi" })).status, "done");
   // The permissions list takes it back.

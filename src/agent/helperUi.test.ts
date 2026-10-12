@@ -50,8 +50,8 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     });
     // Header icons must be discoverable without seeing their custom hover tips.
     const parent = page.locator(".ag-view-side");
-    for (const name of ["Thread actions", "Agent settings", "New thread (Ctrl+Shift+K)", "Full window (Ctrl+Shift+L)", "Send (Enter)"]) {
-      assert.equal(await parent.getByRole("button", { name, exact: true }).count(), 1);
+    for (const name of ["Thread actions", "Agent settings (Ctrl+Shift+,)", "New thread (Ctrl+Shift+K)", "Full window (Ctrl+Shift+L)", "Send (Enter)"]) {
+      assert.equal(await parent.getByRole("button", { name, exact: true }).count(), 1, name);
     }
     const threadActions = parent.getByRole("button", { name: "Thread actions", exact: true });
     assert.equal(await threadActions.getAttribute("data-tooltip"), "Thread actions");
