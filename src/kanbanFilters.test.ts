@@ -26,11 +26,14 @@ test("Kanban columns load batches independently and retain them through live upd
           columns: [{ id: 'todo', title: 'Todo' }, { id: 'other', title: 'Other' }],
           labels: [], nextNum: 77, settings: {},
           cards: Array.from({ length: 76 }, (_, i) => ({ id: 'c' + (i + 1), num: i + 1,
-            col: i < 55 ? 'todo' : 'other', title: 'Task ' + (i + 1), labels: [], priority: 0 }))
+            col: i < 55 ? 'todo' : 'other', title: 'Task ' + (i + 1), labels: [], priority: 0,
+            ...(i === 0 ? { createdBy: 'Sol', createdThread: 'th_creator', thread: 'th_assignee' } : {}),
+            ...(i === 1 ? { createdBy: 'user' } : {}) }))
         }, local: {},
         set(patch) { Object.assign(this.state, patch); },
         setLocal(patch) { Object.assign(this.local, patch); },
-        onChange(fn) { this.changed = fn; }
+        onChange(fn) { this.changed = fn; },
+        agent: { show(id, options) { window.openedCreator = { id, options }; return Promise.resolve({ ok: true }); } }
       };
     </script>${html}`);
     const todo = page.locator('.cards[data-col="todo"]');
@@ -40,6 +43,13 @@ test("Kanban columns load batches independently and retain them through live upd
     };
     assert.equal(await todo.locator('.card').count(), 20);
     assert.equal(await other.locator('.card').count(), 20);
+    await todo.locator('[data-id="c1"] .card-creator').click();
+    assert.deepEqual(await page.evaluate(() => (window as any).openedCreator), { id: 'th_creator', options: { where: 'sidebar' } });
+    assert.equal(await todo.locator('[data-id="c2"] .card-creator').innerText(), 'Created by you');
+    assert.equal(await todo.locator('[data-id="c3"] .card-creator').innerText(), 'Created by unknown');
+    await todo.locator('[data-id="c1"] .card-title').click();
+    assert.equal(await page.locator('#mTimes .card-creator').innerText(), 'Created by Sol');
+    await page.keyboard.press('Escape');
     assert.equal(await page.locator('.column[data-col="todo"] .col-count').innerText(), '55');
     assert.equal(await todo.locator('[data-id="c21"]').count(), 0);
     const first = await todo.locator('.card').first().elementHandle();

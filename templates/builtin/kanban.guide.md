@@ -51,7 +51,7 @@ cards:   [{ id, num, col, title, description, labels: [labelId], priority,
             due?, assignee?, checklist: [{ id, text, done }],
             comments: [{ id, by, at, text }], images: [{ id, name, data }],  // by: "user" | assignee name | "agent"
             blockedBy: [cardId], status?, claim?, thread?, from?, archived?,
-            cover?, createdAt, movedAt, doneAt?,
+            cover?, createdAt, createdBy?, createdThread?, movedAt, doneAt?,
             usage?: { turns, inputTokens?, outputTokens?, at?, thread? } }]  // last worker chat; page writes it
 nextNum: number
 settings: { hideAddColumn?, showDoneDate?, maxWorkers?, workerInstructions?,    // the user's page settings; leave them alone
@@ -67,6 +67,7 @@ settings: { hideAddColumn?, showDoneDate?, maxWorkers?, workerInstructions?,    
 - Link Scribe pages in a title, description, or comment with their key: `[[scribe:some-page]]` shows the page's title, `[[scribe:some-page|text]]` your own text, `[[peek:scribe:some-page]]` / `[[split:…]]` open it as a peek or beside the board, and `[text](scribe:some-page)` works too. A card on another board (or this one, from a chat reply or another page) is `scribe:board-key#card=12`: `[[scribe:board-key#card=12|#12 on the other board]]` opens that card's dialog. Use keys you created or found with `page_list` / `library_search`.
 - `priority`: 0 none, 1 low, 2 medium, 3 high, 4 urgent. `due`: `"YYYY-MM-DD"`. Times are epoch ms.
 - `thread` is the in-app agent thread that last claimed the card (set by `claim`, kept after `finish`). The card's right-click menu opens it.
+- `createdBy` is the original creator (`"user"` for the person, otherwise the worker or agent name); `createdThread` links to the agent chat that created it. They stay unchanged when the card is assigned or claimed. Older cards without them show an unknown creator.
 - `usage` is the last worker chat's token totals (input, output, rounds), including its helper tree, written when that chat ends. `promptTokens` includes cached input exactly once. With helpers, `main` keeps the main chat's own provider figures and `helpers` gives their normalized totals and `threads` count. `costUsd` includes only reported costs; `costPartial` marks missing costs. Running helpers contribute what they have reported so far. Leave it alone; `list` includes it so cost outliers are easy to spot. Existing boards retain their saved HTML: older copies can strip these breakdown fields when saving usage and keep their old token formatting until their HTML is updated.
 - Images: insert into `cards/num=12/images` with `page_update`, pass the file in `assets`, and write `data: "asset:<file name>"`. The first image is the card's cover unless `cover` is `false` (the card dialog's Show cover switch). `get` (and a `page_state` path to one card) attaches those images so you can see them; a whole-board read does not inline every cover.
 - `paused` on an agent column: workers skip it until the inbox tag is clicked again. Leave it alone; the user toggles it from the tag.

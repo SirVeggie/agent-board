@@ -36,6 +36,34 @@ const card = (state: Record<string, unknown>, num: number) =>
   (state.cards as Array<Record<string, unknown>>).find((c) => c.num === num)!;
 const order = (state: Record<string, unknown>) => (state.cards as Array<{ num: number }>).map((c) => c.num);
 
+test("create records the original worker and chat independently of later claims", () => {
+  const initial = { ...board(), settings: { workers: {
+    sol: { name: "Sol", threadId: "th_sol" },
+    solo: { name: "Opus", solo: { th_solo: { card: 1, at: 1 } } },
+  } } };
+  const created = run(initial, "create", { title: "Reported issue", column: "agent" }, agent({ thread: "th_sol" })).state;
+  assert.equal(card(created, 4).createdBy, "Sol");
+  assert.equal(card(created, 4).createdThread, "th_sol");
+  const claimed = run(created, "claim", { card: 4, assignee: "Other worker" }, agent({ thread: "th_other" })).state;
+  const finished = run(claimed, "finish", { card: 4, summary: "Fixed" }, agent({ thread: "th_other" })).state;
+  assert.equal(card(finished, 4).createdBy, "Sol");
+  assert.equal(card(finished, 4).createdThread, "th_sol");
+  assert.equal(card(finished, 4).thread, "th_other");
+  for (const action of ["list", "get"]) {
+    const result = run(finished, action, action === "get" ? { card: 4 } : {}).result;
+    const row = action === "get" ? result : (result.cards as Array<Record<string, unknown>>).find(c => c.num === 4)!;
+    assert.equal(row.createdBy, "Sol");
+    assert.equal(row.createdThread, "th_sol");
+  }
+  assert.equal(card(run(initial, "create", { title: "Solo issue" }, agent({ thread: "th_solo" })).state, 4).createdBy, "Opus");
+  const external = card(run(board(), "create", { title: "External issue" }).state, 4);
+  assert.equal(external.createdBy, "Claude Code");
+  assert.equal(external.createdThread, undefined);
+  const user = card(run(board(), "create", { title: "My issue" }, { ...agent(), caller: { by: "user" } }).state, 4);
+  assert.equal(user.createdBy, "user");
+  assert.equal(user.createdThread, undefined);
+});
+
 test("list, get and logs preserve helper totals and the main chat breakdown", () => {
   const state = board() as Record<string, unknown>;
   const usage = { turns: 3, inputTokens: 100, promptTokens: 100, outputTokens: 12,

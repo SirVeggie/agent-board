@@ -52,6 +52,9 @@ type Card = {
   from?: string;
   archived?: boolean;
   createdAt?: number;
+  /** Original creator, independent of later assignments and claims. */
+  createdBy?: string;
+  createdThread?: string;
   movedAt?: number;
   doneAt?: number;
 };
@@ -379,6 +382,8 @@ function summary(state: BoardState, card: Card) {
     ...(card.priority ? { priority: card.priority } : {}),
     ...(card.due ? { due: card.due } : {}),
     ...(card.assignee ? { assignee: card.assignee } : {}),
+    ...(card.createdBy ? { createdBy: card.createdBy } : {}),
+    ...(card.createdThread ? { createdThread: card.createdThread } : {}),
     ...(card.status ? { status: card.status } : {}),
     ...(card.claim ? { claim: { holder: card.claim.holder, at: card.claim.at, ...(card.claim.stale ? { stale: true } : {}) } } : {}),
     ...(arr(card.blockedBy).length
@@ -448,7 +453,7 @@ function claimAssignee(args: Record<string, unknown>, ctx: ActionContext): strin
 }
 
 /** Name stored on an agent's comment: the worker on this thread, else the card's assignee. */
-function commentAuthor(state: BoardState, card: Card, ctx: ActionContext): string {
+function commentAuthor(state: BoardState, card: Pick<Card, "assignee">, ctx: ActionContext): string {
   if (ctx.caller.by !== "agent") return "user";
   const thread = str(ctx.caller.thread);
   if (thread) {
@@ -661,6 +666,8 @@ export const kanbanActions: ActionSet = {
           images: [],
           blockedBy: [],
           createdAt: now,
+          createdBy: commentAuthor(state, {}, ctx),
+          ...(ctx.caller.by === "agent" && ctx.caller.thread ? { createdThread: ctx.caller.thread } : {}),
           movedAt: now,
           ...(col.role === "agent" ? { from: col.id } : {}),
           ...(col.role === "done" ? { doneAt: now } : {}),

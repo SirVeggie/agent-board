@@ -378,6 +378,8 @@
   .chip-bar { height: 6px; width: 28px; border-radius: 3px; }
   .card-title { word-break: break-word; }
   .num { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  .card-creator { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  button.card-creator { padding: 0; border: 0; background: none; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
   .badges { display: flex; flex-wrap: wrap; gap: 5px 9px; margin-top: 6px; color: var(--muted); font-size: 11.5px; align-items: center; }
   .badge { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
   .badge.soon { color: var(--warn); }
@@ -2230,6 +2232,7 @@
     titleText.innerHTML = linkText(c.title);
     titleEl.appendChild(titleText);
     li.appendChild(titleEl);
+    li.appendChild(creatorElement(c));
 
     var badges = el("div", "badges");
     var t = dueTime(c.due);
@@ -2317,6 +2320,26 @@
     return li;
   }
 
+  function creatorElement(c) {
+    var name = str(c.createdBy).trim();
+    var text = "Created by " + (name === "user" ? "you" : name || "unknown");
+    var thread = str(c.createdThread).trim();
+    var canOpen = thread && scribe.agent && typeof scribe.agent.show === "function";
+    var node = el(canOpen ? "button" : "div", "card-creator", text);
+    if (canOpen) {
+      node.type = "button";
+      node.dataset.tooltip = "Open the chat that created this card";
+      node.setAttribute("aria-description", node.dataset.tooltip);
+      node.addEventListener("click", function (e) {
+        e.stopPropagation();
+        scribe.agent.show(thread, { where: "sidebar" }).then(function (r) {
+          if (!r || !r.ok) setHint(r && r.error === "not_found" ? "That thread is gone." : "Couldn't open the thread.");
+        });
+      });
+    }
+    return node;
+  }
+
   function openBlockers(c) {
     return c.blockedBy.map(card).filter(function (b) { return b && !b.archived && !isDone(b); });
   }
@@ -2370,7 +2393,7 @@
     var num = Math.max(1, Math.floor(Number(scribe.state.nextNum) || 1));
     var c = {
       id: newId("c"), num: num, col: colId, title: title, description: "", labels: [], priority: 0,
-      checklist: [], comments: [], images: [], blockedBy: [], createdAt: now, movedAt: now
+      checklist: [], comments: [], images: [], blockedBy: [], createdAt: now, createdBy: "user", movedAt: now
     };
     var col = column(colId);
     if (col && col.role === "done") c.doneAt = now;
@@ -3118,6 +3141,7 @@
     if (usageLine) times.push("Last chat " + usageLine);
     if (c.usage && c.usage.main) times.push("Main chat " + formatUsage(c.usage.main));
     mTimes.replaceChildren();
+    mTimes.appendChild(creatorElement(c));
     times.forEach(function (t) { mTimes.appendChild(el("div", null, t)); });
   }
 
@@ -3660,7 +3684,7 @@
       labels: c.labels.slice(), priority: c.priority, due: c.due, assignee: c.assignee,
       checklist: c.checklist.map(function (i) { return { id: newId("ck"), text: i.text, done: false }; }),
       comments: [], images: c.images.map(function (im) { return Object.assign({}, im); }), blockedBy: c.blockedBy.slice(),
-      createdAt: now, movedAt: now
+      createdAt: now, createdBy: "user", movedAt: now
     };
     if (!copy.due) delete copy.due;
     if (!copy.assignee) delete copy.assignee;
