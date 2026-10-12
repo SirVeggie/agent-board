@@ -260,16 +260,20 @@ gl_FragColor=c;
     title.id = "orb-settings-title";
     const help = node("button", "?", "orb-settings-help");
     help.type = "button";
-    help.dataset.tooltip = "Customize each provider's shape, surrounding chat effect, and icon. Icons have separate colours and sizing. Motion runs while the chat is visible, unless animated effects are off or reduced motion is enabled. Changes are saved on this device.";
+    help.dataset.tooltip = "Each provider keeps its own look. Changes are saved on this device.";
     help.setAttribute("aria-label", "About floating chat appearance");
     help.setAttribute("aria-description", help.dataset.tooltip);
     const heading = node("div", null, "orb-settings-heading");
     heading.append(title, help);
-    dialog.append(heading);
+    const body = node("div", null, "orb-settings-body");
+    dialog.append(heading, body);
+    const selects = [];
     function row(label, control) {
       const wrap = node("label", null, "setting-row");
       if (control.matches("select, input")) control.setAttribute("aria-label", label);
-      wrap.append(node("span", label), control); dialog.append(wrap); return control;
+      wrap.append(node("span", label), control); body.append(wrap);
+      if (control.tagName === "SELECT") selects.push(window.createSelect(control));
+      return control;
     }
     function select(options) {
       const sel = node("select");
@@ -301,10 +305,10 @@ gl_FragColor=c;
     const preview = node("div", null, "dock-input orb-settings-preview");
     const orb = node("button", null, "dock-orb"); orb.type = "button"; orb.setAttribute("aria-label", "Appearance preview");
     preview.append(orb, node("span", "Message your agent…", "orb-preview-text"));
-    dialog.append(preview);
+    body.append(preview);
     const busy = node("input"); busy.type = "checkbox";
     row("Preview busy", busy);
-    const error = node("p", null, "orb-settings-error"); error.setAttribute("role", "alert"); dialog.append(error);
+    const error = node("p", null, "orb-settings-error"); error.setAttribute("role", "alert"); body.append(error);
     function paint() {
       const c = draft[provider];
       providers.value = provider; style.value = c.style; symbol.value = c.symbol; bleed.value = c.bleed;
@@ -314,6 +318,7 @@ gl_FragColor=c;
       iconColors.forEach((n,i) => { n.value = c.iconColors[i]; });
       size.value = String(Math.round(c.iconSize * 100)); sizeValue.textContent = size.value + "%";
       size.setAttribute("aria-valuetext", sizeValue.textContent);
+      selects.forEach(s => s.syncSelect());
       previewFx?.setConfig(c, provider);
     }
     providers.addEventListener("change", () => { provider = providers.value; paint(); });
@@ -325,14 +330,14 @@ gl_FragColor=c;
     size.addEventListener("input", () => { draft[provider].iconSize = Number(size.value) / 100; paint(); });
     busy.addEventListener("change", () => { preview.classList.toggle("busy", busy.checked); previewFx?.setBusy(busy.checked); });
     const actions = node("div", null, "orb-settings-actions");
-    function action(text, run) { const b = node("button", text); b.type = "button"; b.addEventListener("click", run); actions.append(b); }
+    function action(text, run, cls) { const b = node("button", text, cls); b.type = "button"; b.addEventListener("click", run); actions.append(b); }
     action("Reset provider", () => { draft[provider] = defaults(provider); paint(); });
     action("Cancel", () => dialog.close());
     action("Save", () => {
       try { appearanceStorage.setItem(KEY, JSON.stringify(draft)); }
       catch { error.textContent = "Could not save these settings on this device."; return; }
       settings = draft; window.dispatchEvent(new Event("scribe:orb-appearance")); dialog.close();
-    });
+    }, "primary");
     dialog.append(actions);
     dialog.addEventListener("close", () => { previewFx?.destroy(); dialog.remove(); }, { once: true });
     dialog.addEventListener("click", e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
