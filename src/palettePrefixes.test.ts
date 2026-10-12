@@ -8,7 +8,21 @@ import {
   parsePaletteQuery,
   prefixTakes,
   serializePalettePrefixes,
+  takePalettePrefix,
 } from "./palettePrefixes.js";
+
+test("takePalettePrefix lifts a prefix out of the typed text", () => {
+  const prefixes = [threads, { id: "ask", prefix: "==" }, { id: "word", prefix: "th" }];
+  assert.deepEqual(takePalettePrefix("=", prefixes), { id: "threads", prefix: "=", rest: "" });
+  assert.deepEqual(takePalettePrefix(" = board ", prefixes), { id: "threads", prefix: "=", rest: "board " });
+  assert.deepEqual(takePalettePrefix("==x", prefixes), { id: "ask", prefix: "==", rest: "x" });
+  assert.equal(takePalettePrefix("board =", prefixes), null);
+  assert.equal(takePalettePrefix("", prefixes), null);
+  // A word prefix waits for its space.
+  assert.equal(takePalettePrefix("th", prefixes), null);
+  assert.equal(takePalettePrefix("this", prefixes), null);
+  assert.deepEqual(takePalettePrefix("th is", prefixes), { id: "word", prefix: "th", rest: "is" });
+});
 
 const threads = { id: "threads", prefix: "=" };
 

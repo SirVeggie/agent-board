@@ -70,6 +70,7 @@
   const paletteEl = document.getElementById("palette");
   const paletteBackdrop = document.getElementById("palette-backdrop");
   const paletteInput = document.getElementById("palette-input");
+  const paletteModeEl = document.getElementById("palette-mode");
   const paletteList = document.getElementById("palette-list");
   const paletteEmpty = document.getElementById("palette-empty");
   const paletteEnterHint = document.getElementById("palette-enter-hint");
@@ -271,6 +272,8 @@
   let paletteReq = 0;
   /** "pages" or a prefix id from PALETTE_PREFIXES. */
   let paletteKind = "pages";
+  /** The prefix mode lifted out of the input and shown as a chip beside it (#573): "pages" when none. */
+  let paletteMode = "pages";
   /** Search by meaning (#372): the pack's state from /api/search/status, read when the palette opens. Null until known. */
   let semanticStatus = null;
   let semanticStatusReq = null;
@@ -3133,32 +3136,24 @@
     return JSON.stringify(out);
   }
 
-  function prefixTakes(text, prefix) {
-    if (!prefix || !text.startsWith(prefix)) {
-      return false;
-    }
-    const next = text[prefix.length];
-    if (next === undefined || /\s/.test(next)) {
-      return true;
-    }
-    return !/[0-9A-Za-z]/.test(prefix[prefix.length - 1]);
-  }
-
-  function parsePaletteQuery(input, prefixes) {
-    const trimmed = String(input ?? "").trim();
-    if (!trimmed) {
-      return { id: "pages", query: "" };
-    }
+  function takePalettePrefix(input, prefixes) {
+    const text = String(input ?? "").trimStart();
     const ranked = prefixes
       .filter((item) => item.prefix)
       .slice()
       .sort((a, b) => b.prefix.length - a.prefix.length);
     for (const item of ranked) {
-      if (prefixTakes(trimmed, item.prefix)) {
-        return { id: item.id, query: trimmed.slice(item.prefix.length).trim(), prefix: item.prefix };
+      if (!text.startsWith(item.prefix)) {
+        continue;
       }
+      const next = text[item.prefix.length];
+      const word = /[0-9A-Za-z]/.test(item.prefix[item.prefix.length - 1]);
+      if (word && (next === undefined || !/\s/.test(next))) {
+        continue;
+      }
+      return { id: item.id, prefix: item.prefix, rest: text.slice(item.prefix.length).trimStart() };
     }
-    return { id: "pages", query: trimmed };
+    return null;
   }
 
   function duplicatePrefixIds(prefixes) {
@@ -4288,6 +4283,7 @@
     closeSettings();
     paletteEl.hidden = false;
     paletteInput.value = "";
+    setPaletteMode("pages");
     paletteIndex = 0;
     loadSemanticStatus();
     showLocalPaletteRows();
@@ -4311,12 +4307,42 @@
     }
   }
 
+  function setPaletteMode(id) {
+    paletteMode = id;
+    const def = id === "pages" ? null : PALETTE_PREFIXES.find((item) => item.id === id);
+    paletteModeEl.textContent = def ? def.label : "";
+    paletteModeEl.hidden = !def;
+  }
+
+  /** What the palette is asked: the mode chip's kind (or pages) and the text in the field. */
+  function paletteQuery() {
+    return { id: paletteMode, query: paletteInput.value.trim() };
+  }
+
+  /**
+   * Lift a typed prefix out of the field into the mode chip (#573). In a mode, the chip's prefix still
+   * counts as typed, so a longer prefix that starts with it (`=` then `=` for `==`) can take over.
+   */
+  function capturePalettePrefix() {
+    const prefixes = currentPalettePrefixes();
+    const held = paletteMode === "pages" ? "" : prefixes.find((item) => item.id === paletteMode)?.prefix || "";
+    const taken = takePalettePrefix(held + paletteInput.value, prefixes);
+    if (!taken || taken.id === paletteMode || taken.prefix.length <= held.length) {
+      return;
+    }
+    const cut = paletteInput.value.length - taken.rest.length;
+    const caret = Math.max(0, (paletteInput.selectionStart ?? paletteInput.value.length) - cut);
+    paletteInput.value = taken.rest;
+    paletteInput.setSelectionRange(caret, caret);
+    setPaletteMode(taken.id);
+  }
+
   function updatePaletteChrome(parsed) {
     const threads = parsed.id === "threads";
     const ai = parsed.id === "ai";
     paletteKind = parsed.id;
     const semantic = parsed.id === "semantic";
-    paletteInput.placeholder = threads ? "Search threads" : "Search every page";
+    paletteInput.placeholder = threads ? "Search threads" : ai ? "Ask about your pages" : semantic ? "Describe what you are looking for" : "Search every page";
     paletteEl
       .querySelector(".palette-panel")
       ?.setAttribute("aria-label", threads ? "Search threads" : ai ? "Ask AI about your pages" : semantic ? "Search pages by meaning" : "Search pages");
@@ -4369,7 +4395,7 @@
   }
 
   async function runPaletteSearch() {
-    const parsed = parsePaletteQuery(paletteInput.value, currentPalettePrefixes());
+    const parsed = paletteQuery();
     updatePaletteChrome(parsed);
     clearTimeout(relatedTimer);
     if (parsed.id === "pages" && !parsed.query) {
@@ -4601,6 +4627,7 @@
     clearPaletteImage();
     paletteImage = { url: URL.createObjectURL(file) };
     paletteInput.value = "";
+    setPaletteMode("pages");
     updatePaletteChrome({ id: "semantic", query: "" });
     paletteInput.placeholder = "Similar images. Type to search by text";
     const queryRow = (title, snippet, extra = {}) => ({ ...semanticInfoRow(title, snippet), thumb: paletteImage?.url, ...extra });
@@ -4808,7 +4835,7 @@
     paletteList.replaceChildren();
     const empty = paletteHits.length === 0;
     paletteEmpty.hidden = !empty;
-    const parsed = parsePaletteQuery(paletteInput.value, currentPalettePrefixes());
+    const parsed = paletteQuery();
     const threads = paletteKind === "threads";
     const semantic = paletteKind === "semantic";
     paletteEmpty.textContent = parsed.query
@@ -4983,8 +5010,8 @@
     }
     if (tab.kind === "ai-recent") {
       aiAsk = { ...tab.item, status: "done" };
-      const prefix = currentPalettePrefixes().find((item) => item.id === "ai")?.prefix || "?";
-      paletteInput.value = `${prefix} ${tab.item.query}`;
+      setPaletteMode("ai");
+      paletteInput.value = tab.item.query;
       runPaletteSearch();
       return;
     }
@@ -5064,7 +5091,7 @@
   window.addEventListener("keydown", onBoardShortcut, true);
   // Keep the empty palette's pending questions current while it is open.
   window.addEventListener("scribe:agent-status", () => {
-    if (isPaletteOpen() && paletteKind === "pages" && !parsePaletteQuery(paletteInput.value, currentPalettePrefixes()).query) {
+    if (isPaletteOpen() && paletteKind === "pages" && !paletteQuery().query) {
       const current = paletteHits[paletteIndex]?.id;
       showLocalPaletteRows();
       const index = paletteHits.findIndex((hit) => hit.id === current);
@@ -5268,14 +5295,36 @@
   });
   paletteInput.addEventListener("input", () => {
     clearPaletteImage();
-    const query = paletteInput.value.trim();
-    if (!query) {
+    const mode = paletteMode;
+    capturePalettePrefix();
+    if (paletteMode !== mode) {
+      clearTimeout(paletteTimer);
+      paletteIndex = 0;
+      runPaletteSearch();
+      return;
+    }
+    if (paletteMode === "pages" && !paletteInput.value.trim()) {
       showLocalPaletteRows();
       return;
     }
     schedulePaletteSearch();
   });
   paletteInput.addEventListener("keydown", (event) => {
+    // A fresh Backspace at the start of the field drops the mode chip; a held one that got there does not.
+    if (
+      event.key === "Backspace" &&
+      !event.repeat &&
+      paletteMode !== "pages" &&
+      paletteInput.selectionStart === 0 &&
+      paletteInput.selectionEnd === 0
+    ) {
+      event.preventDefault();
+      setPaletteMode("pages");
+      clearTimeout(paletteTimer);
+      paletteIndex = 0;
+      runPaletteSearch();
+      return;
+    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       movePalette(1);

@@ -1,5 +1,5 @@
 /**
- * Palette search prefixes (Ctrl+D). public/app.js copies these helpers — keep the two in sync.
+ * Palette search prefixes (Ctrl+D). public/app.js copies the helpers it uses — keep the two in sync.
  * Add a prefix here and in app.js when it ships.
  */
 
@@ -102,6 +102,34 @@ export function parsePaletteQuery(input: string, prefixes: Array<{ id: string; p
     }
   }
   return { id: "pages", query: trimmed };
+}
+
+/**
+ * The prefix to lift out of the input as it is typed (#573): the palette shows it as a mode chip and
+ * keeps only `rest` in the field. Stricter than prefixTakes: a prefix that ends in a letter or digit
+ * is taken only once its space is typed, so `th` is not swallowed on the way to `this`.
+ */
+export function takePalettePrefix(
+  input: string,
+  prefixes: Array<{ id: string; prefix: string }>,
+): { id: string; prefix: string; rest: string } | null {
+  const text = String(input ?? "").trimStart();
+  const ranked = prefixes
+    .filter((item) => item.prefix)
+    .slice()
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const item of ranked) {
+    if (!text.startsWith(item.prefix)) {
+      continue;
+    }
+    const next = text[item.prefix.length];
+    const word = /[0-9A-Za-z]/.test(item.prefix[item.prefix.length - 1]!);
+    if (word && (next === undefined || !/\s/.test(next))) {
+      continue;
+    }
+    return { id: item.id, prefix: item.prefix, rest: text.slice(item.prefix.length).trimStart() };
+  }
+  return null;
 }
 
 export function duplicatePrefixIds(prefixes: Array<{ id: string; prefix: string }>): Set<string> {
