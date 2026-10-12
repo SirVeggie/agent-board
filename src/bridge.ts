@@ -1415,6 +1415,45 @@ export const BOARD_BRIDGE_JS = `
     }
   };
 
+  // ---------- ml ----------
+  // Small typed questions about text of this page's own, answered by the classifier the user set up
+  // in Settings. The page never learns which source answers. Needs the ml.decide permission: ask
+  // for it up front with scribe.permissions.request("ml.decide"); decide() itself never prompts.
+  var ML_ASK_MS = 35000;
+  var ml = {
+    /**
+     * { ok, available, reason?: "denied" | "disabled" | "no_source", permission: "allow" | "deny" | "ask",
+     * types: ["yesno", "choice", "score"], limits: { stateChars, questions, perMinute, perHour } }.
+     */
+    capabilities: function () {
+      return askBoard({ type: "scribe-ml", op: "capabilities" }, 30000);
+    },
+    /**
+     * Ask questions about state (text, or a small object or array): { ok, answers, cached, ms }, with
+     * answers under the question ids: { type: "yesno", yes } | { type: "choice", choice,
+     * probabilities, confidence } | { type: "score", score, probabilities, confidence }. Never
+     * rejects: a failure is { ok: false, error, message } and the page carries on without an answer.
+     * request: { state, questions: { id: { type: "yesno", instructions, criteria? } | { type:
+     * "choice", instructions, options: { name: description | null } } | { type: "score",
+     * instructions, levels } }, timeoutMs? }.
+     */
+    decide: function (request) {
+      request = request || {};
+      var message;
+      try {
+        message = JSON.parse(JSON.stringify({ state: request.state, questions: request.questions }));
+      } catch (err) {
+        return Promise.resolve({ ok: false, error: "invalid_request", message: "state and questions must be JSON" });
+      }
+      message.type = "scribe-ml";
+      message.op = "decide";
+      if (typeof request.timeoutMs === "number") message.timeoutMs = request.timeoutMs;
+      return askBoard(message, ML_ASK_MS).then(function (result) {
+        return result && typeof result.ok === "boolean" ? result : { ok: false, error: "unavailable", message: "No answer from Scribe" };
+      });
+    }
+  };
+
   // ---------- reply ----------
   /**
    * Send this form's answers where the agent that made the page pointed it (page_show replyTo), e.g.
@@ -1474,6 +1513,7 @@ export const BOARD_BRIDGE_JS = `
     resolve: resolve,
     preview: preview,
     agent: agent,
+    ml: ml,
     permissions: permissions,
     /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
     ops: {

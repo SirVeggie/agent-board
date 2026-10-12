@@ -4,7 +4,7 @@ import { isPlainObject } from "./types.js";
 /**
  * What a page's own code may do beyond reading and writing its state. The user grants these per
  * page (tab menu → Permissions…), and the grants stay on this PC: they are not part of a page's
- * HTML, state, or export. Ids are namespaced ("agent.*"); plugins will add theirs ("plugin.<id>").
+ * HTML, state, or export. Ids are namespaced ("agent.*", "ml.*"); plugins will add theirs ("plugin.<id>").
  */
 export type PermissionValue = "allow" | "deny" | "ask";
 
@@ -46,6 +46,14 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
     default: "ask",
     risky: true,
     perFolder: true,
+  },
+  {
+    id: "ml.decide",
+    label: "Ask the classifier",
+    detail: "Send text from this page to the classifier set up in Settings, for example a card's title and description to suggest its labels. With a hosted source, that text leaves this PC.",
+    default: "ask",
+    // The page can only send what it already holds, to the source the user chose, within its limits.
+    risky: false,
   },
 ];
 

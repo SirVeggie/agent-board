@@ -156,7 +156,7 @@ export async function startHttp(): Promise<http.Server> {
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use(express.json({ limit: "6mb" }));
   app.use("/api/search", searchRouter());
-  app.use("/api/ml", mlRouter());
+  app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
   app.use(noteAgentSession);
   app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));

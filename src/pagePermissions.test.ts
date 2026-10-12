@@ -20,6 +20,7 @@ test("permissions without a grant are at their defaults", () => {
       ["agent.chat", "allow"],
       ["agent.unattended", "ask"],
       ["agent.workspace", "ask"],
+      ["ml.decide", "ask"],
     ]
   );
   assert.deepEqual(views.find((v) => v.id === "agent.workspace")?.folders, []);

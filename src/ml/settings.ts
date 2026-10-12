@@ -37,6 +37,12 @@ export const ML_FEATURES: MlFeature[] = [
     hint: "Search by meaning asks about its 20 closest results in one call: does this fit the search? Those that fit move up and the rest are dropped. The search text and the start of each result are sent. If the answer is slow or fails, you get the usual order. Needs Tool results on under what may be sent.",
     default: false,
   },
+  {
+    id: "pages",
+    label: "Pages",
+    hint: "Pages you allow (tab menu, Permissions) ask the classifier about their own content, such as a board suggesting labels for a new card. Each page has its own limits on size and rate. Off: no page gets an answer.",
+    default: true,
+  },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -4056,6 +4056,47 @@
   }
 
   /**
+   * scribe.ml from a page: questions for the classifier about the page's own text. The daemon checks
+   * the page's ml.decide permission and its limits; the page is the one whose frame asked. Nothing
+   * here asks the user: a page asks for the permission with scribe.permissions.request.
+   */
+  function onPageMl(event) {
+    const data = event.data;
+    const reply = (result) => {
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    const failed = (message) => reply({ ok: false, error: "unavailable", message });
+    const frameId = frameIdByWindow(event.source);
+    const tab = frameId ? findAnyTab(frameId) : null;
+    if (!tab || tab.embedUrl) {
+      reply({ ok: false, error: "not_a_page", message: "Only a Scribe page can ask the classifier" });
+      return;
+    }
+    const base = `/api/ml/pages/${encodeURIComponent(tab.id)}`;
+    let request;
+    if (data.op === "capabilities") {
+      request = fetch(`${base}/capabilities`);
+    } else if (data.op === "decide") {
+      request = fetch(`${base}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: data.state, questions: data.questions, timeoutMs: data.timeoutMs }),
+      });
+    } else {
+      reply({ ok: false, error: "unknown_op", message: "Unknown scribe.ml call" });
+      return;
+    }
+    request
+      .then(async (res) => {
+        const body = await res.json().catch(() => null);
+        if (res.ok && body && typeof body.ok === "boolean") reply(body);
+        // A daemon from before scribe.ml answers 404: restart Scribe to get it.
+        else failed(String(body?.error || `HTTP ${res.status}`));
+      })
+      .catch((err) => failed(String(err?.message || err)));
+  }
+
+  /**
    * scribe.preview from a page: the page sends the files' bytes, shown here in the shared viewer.
    * Like scribe.agent, it needs the click or key press to have reached the board.
    */
@@ -5042,6 +5083,8 @@
       onPageAgent(event);
     } else if (event.data?.type === "scribe-permissions") {
       onPagePermissions(event);
+    } else if (event.data?.type === "scribe-ml") {
+      onPageMl(event);
     } else if (event.data?.type === "scribe-reply") {
       onPageReply(event);
     } else if (event.data?.type === "scribe-title") {

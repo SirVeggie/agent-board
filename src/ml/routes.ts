@@ -1,6 +1,11 @@
 import express, { Router } from "express";
-import { shellOrigins } from "../config.js";
+import { AGENT_CLIENT, CLIENT_HEADER, shellOrigins } from "../config.js";
+import type { PermissionGrant } from "../pagePermissions.js";
+import { PageMl } from "./page.js";
 import { mlService, type MlService } from "./service.js";
+
+/** What the page routes need from the daemon: a page's grants (throws for an unknown page). */
+export type MlPageAccess = { grants: (tabId: string) => Map<string, PermissionGrant>; ml?: PageMl };
 
 /**
  * Changes must come from the board shell: JSON (a cross-origin form cannot send it without a
@@ -24,8 +29,13 @@ function shellOnly(req: express.Request, res: express.Response, next: express.Ne
   next();
 }
 
-/** /api/ml/* for the Settings dialog: sources, switches, the Test button and today's usage. */
-export function mlRouter(service: MlService = mlService()): Router {
+/**
+ * /api/ml/* for the Settings dialog: sources, switches, the Test button and today's usage. With
+ * `pages`, also scribe.ml: the board shell calls /pages/:id/* for the page whose frame asked, so the
+ * page is named by the shell and never by the page itself. Agents are kept out like they are from
+ * page permissions.
+ */
+export function mlRouter(service: MlService = mlService(), pages?: MlPageAccess): Router {
   const router = Router();
   router.use(shellOnly);
   const guarded = (fn: (req: express.Request) => unknown) => (req: express.Request, res: express.Response) => {
@@ -48,5 +58,26 @@ export function mlRouter(service: MlService = mlService()): Router {
   router.post("/sources/:source/test", async (req, res) => {
     res.json(await service.test(req.params.source));
   });
+  if (pages) {
+    const ml = pages.ml ?? new PageMl({ service });
+    const forPage = (fn: (tabId: string, grants: Map<string, PermissionGrant>, req: express.Request) => unknown) =>
+      async (req: express.Request, res: express.Response) => {
+        if (req.get(CLIENT_HEADER) === AGENT_CLIENT) {
+          res.status(403).json({ error: "Only the Scribe UI can ask the classifier for a page" });
+          return;
+        }
+        let grants: Map<string, PermissionGrant>;
+        try {
+          grants = pages.grants(String(req.params.id));
+        } catch (err) {
+          res.status(404).json({ error: (err as Error).message });
+          return;
+        }
+        res.json(await fn(String(req.params.id), grants, req));
+      };
+    router.get("/pages/:id/capabilities", forPage((_id, grants) => ml.capabilities(grants)));
+    /** Always 200 for a known page: a failure is the result ({ ok: false, error, message }). */
+    router.post("/pages/:id/decide", forPage((id, grants, req) => ml.decide(id, grants, req.body)));
+  }
   return router;
 }
