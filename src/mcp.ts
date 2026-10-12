@@ -1364,6 +1364,12 @@ export async function startMcp(): Promise<void> {
         .describe(
           "Agent prompts the user can run on pages from this template, from the page's right-click menu, the palette, and the chat's slash menu. Omit to keep the current ones; an empty array removes them (a built-in's local copy then uses the built-in's)."
         ),
+      pin: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether pages from this template open pinned (default true). Keep it for app-like templates the user returns to (a board, a tracker, a dashboard). Pass false for page-like templates the user makes many of (a note, a document), so those pages close with Clear like ordinary pages. Omit to keep the current setting."
+        ),
       syncedWithBuiltin: z
         .boolean()
         .optional()
@@ -1371,7 +1377,7 @@ export async function startMcp(): Promise<void> {
           "For a built-in's local copy with builtinUpdate: pass true once this upsert brings in the built-in's latest changes (template_get the built-in), to clear the flag."
         ),
     },
-    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, agentActions, syncedWithBuiltin }) => {
+    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, agentActions, pin, syncedWithBuiltin }) => {
       const { status, data } = await api("POST", "/api/templates", {
         key,
         title,
@@ -1383,6 +1389,7 @@ export async function startMcp(): Promise<void> {
         stateVersion,
         guide,
         agentActions,
+        pin,
         syncedWithBuiltin,
       });
       if (status >= 400) {
@@ -1450,7 +1457,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "template_open",
-    "Create a pinned page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance. Opening a built-in opens its local copy, creating that copy first if needed.",
+    "Create a page from a template with the given form values. The user usually does this from the sidebar. Use only when they asked you to open an instance. Opening a built-in opens its local copy, creating that copy first if needed.",
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
@@ -1484,8 +1491,8 @@ export async function startMcp(): Promise<void> {
           url: boardUrl(tab.id),
           templateId: template.id,
           note: copiedBuiltin
-            ? `Copied the built-in to the user's templates as ${template.key} and opened a pinned page from that copy.`
-            : "Opened a pinned page from the template.",
+            ? `Copied the built-in to the user's templates as ${template.key} and opened a page from that copy.`
+            : "Opened a page from the template.",
         }),
         tab.id
       );

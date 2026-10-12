@@ -63,6 +63,9 @@ function ensureTemplateBuiltinColumns(db: DatabaseSync): void {
   if (!columns.some((column) => column.name === "agent_actions")) {
     db.exec("ALTER TABLE templates ADD COLUMN agent_actions TEXT");
   }
+  if (!columns.some((column) => column.name === "pin")) {
+    db.exec("ALTER TABLE templates ADD COLUMN pin INTEGER");
+  }
 }
 
 /**

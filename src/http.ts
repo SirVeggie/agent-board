@@ -1336,6 +1336,7 @@ export async function startHttp(): Promise<http.Server> {
         guide: typeof req.body?.guide === "string" ? req.body.guide : undefined,
         agentActions: req.body?.agentActions,
         search: req.body?.search,
+        pin: typeof req.body?.pin === "boolean" ? req.body.pin : undefined,
         syncedWithBuiltin: req.body?.syncedWithBuiltin === true,
       });
       if (!created && viewerOf(req) === "agent") {

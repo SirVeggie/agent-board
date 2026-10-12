@@ -74,6 +74,8 @@ export type Template = {
   /** Agent prompts the user can run on a page made from this template (page menu, palette, chat slash menu). */
   agentActions?: AgentAction[];
   search?: SearchDeclaration;
+  /** False for a page-like template (a note): its pages open unpinned. Unset, the pages open pinned. */
+  pin?: false;
 };
 
 export const AGENT_ACTION_PLACES = ["menu", "palette", "slash"] as const;
@@ -131,6 +133,8 @@ export type TemplateMeta = Omit<Template, "html" | "initialState" | "source" | "
   htmlBytes: number;
   /** The template carries an agent guide (tool results deliver it). */
   hasGuide?: boolean;
+  /** False when pages from this template open unpinned. */
+  pin?: false;
   instanceCount: number;
   /** Key of the built-in this template was copied from. */
   builtinSource?: string;
@@ -491,6 +495,7 @@ export function toTemplateMeta(
     ...(template.guide ? { hasGuide: true } : {}),
     ...(agentActions?.length ? { agentActions } : {}),
     ...(template.search ? { search: template.search } : {}),
+    ...(template.pin === false ? { pin: false } : {}),
   };
 }
 

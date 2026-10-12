@@ -35,6 +35,7 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
         stateVersion: typeof meta.stateVersion === "number" ? meta.stateVersion : undefined,
         agentActions: meta.agentActions,
         search: meta.search,
+        pin: typeof meta.pin === "boolean" ? meta.pin : undefined,
       });
       const guidePath = path.join(dir, `${key}.guide.md`);
       const guide = fs.existsSync(guidePath) ? fs.readFileSync(guidePath, "utf8").trim() : "";
@@ -52,6 +53,7 @@ export function loadBuiltinTemplates(dir = builtinDir): Template[] {
         ...(guide ? { guide } : {}),
         ...(parsed.agentActions?.length ? { agentActions: parsed.agentActions } : {}),
         ...(parsed.search ? { search: parsed.search } : {}),
+        ...(parsed.pin === false ? { pin: false as const } : {}),
         createdAt: mtime,
         updatedAt: mtime,
       });

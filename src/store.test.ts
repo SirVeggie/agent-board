@@ -509,6 +509,24 @@ test("template open creates a pinned bound page and blocks html edits", () => {
   store.closeDb();
 });
 
+test("a template with pin false opens its pages unpinned", () => {
+  const store = loaded();
+  const { template } = store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc</p>", pin: false });
+  assert.equal(store.openFromTemplate(template.key, {}).tab.pinned, false);
+  assert.equal(store.templateMeta(template, 0).pin, false);
+  // An upsert without pin keeps the setting, and it survives a reload.
+  store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc 2</p>" });
+  store.closeDb();
+  const again = loaded();
+  assert.equal(again.openFromTemplate("doc", {}).tab.pinned, false);
+  again.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc 2</p>", pin: true });
+  assert.equal(again.openFromTemplate("doc", {}).tab.pinned, true);
+  // Built-ins: the note is page-like, the board is app-like.
+  assert.equal(again.openFromTemplate("builtin:markdown-note", {}).tab.pinned, false);
+  assert.equal(again.openFromTemplate("builtin:kanban", { title: "Board" }).tab.pinned, true);
+  again.closeDb();
+});
+
 test("patchHtml with html replaces the body but keeps state and events", () => {
   const store = loaded();
   const { tab } = store.upsert({ key: "page", title: "Page", html: "<!DOCTYPE html><p>old</p>", state: { n: 1 } });

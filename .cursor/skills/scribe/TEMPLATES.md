@@ -8,11 +8,11 @@ A template is reusable page HTML plus a form. The user opens instances from the 
 
 | Tool | Purpose |
 | --- | --- |
-| `template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`, `agentActions`) |
+| `template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`, `agentActions`, `pin`) |
 | `template_list` | Names and field schemas (no HTML) |
 | `template_get` | Full HTML and fields |
 | `template_delete` | Remove the template. Existing pages stay, keep last HTML, and become ordinary pages |
-| `template_open` | Open a pinned instance with `values`. Prefer letting the user do this in the UI |
+| `template_open` | Open an instance with `values`. Prefer letting the user do this in the UI |
 
 Reuse the same `key` when updating that template.
 
@@ -33,6 +33,7 @@ If the user wants a changed version of a built-in, `template_get` it and upsert 
 5. Field `type`: `text`, `textarea`, `number`, `select`, `checkbox`. Select needs `options`. Keys must be JS identifiers.
 6. If an agent will read or change the page's state, write a `guide`: markdown with the state shape, the events the page logs and their data, and the rules for editing (which keys to leave alone, how to add an item). Give array items stable `id`s so agents can address them by path, and keep per-viewer things (filters, drafts, the open item) in `scribe.local`. Tool results hand it to any agent the first time it touches a page from the template, so nothing about the template needs to go in this skill. Keep it under a page; `templates/builtin/todo-list.guide.md` is a good model. (Actions, like the Kanban board's, ship only with built-in templates for now.) Upserting without `guide` keeps the current one.
 7. If the user wants one-click agent prompts on these pages, add `agentActions`: `{ id, label, prompt, where?, selection?, context?, run?, thread? }`. Scribe offers them in the page's right-click menu, the Ctrl+P palette while the page is open, and the chat's slash menu (`/<id>`, with any text after it as `{{input}}`). The prompt can use `{{selection}}`, `{{input}}`, `{{page.title}}`, `{{page.key}}`, and `{{#selection}}…{{/selection}}` for text that only shows when there is a selection. For what the user right-clicked (a card, an item), declare `context: ["card"]` and use `{{card}}`: the page marks elements with `data-scribe-context='{"card":"#12 Fix login"}'` (Scribe's right-click menu reads the nearest ones under the cursor), or, when the page draws its own menu, lists `scribe.agent.actions()` and calls `scribe.agent.runAction(id, { context: { card } })`. Such an action shows only in a right-click menu where all its context names are supplied, never in the palette or slash menu. By default an action starts a new thread on the page (`thread`: `mode` board or ask, `provider`, `model`, `effort`, `fast`, `web`, `title`); without `provider` or a non-`default` `model`, Scribe uses the same fixed economical defaults as a Kanban worker (not the user's last chat model). `run: "chat"` sends it in the chat at hand instead. Upserting without `agentActions` keeps the current ones. `templates/builtin/*.json` have examples.
+8. Decide whether its pages open pinned. App-like templates the user keeps and returns to (a board, a tracker, a dashboard) pin their pages, which is the default. For page-like templates the user makes many of (a note, a document), pass `pin: false` so those pages close with Clear like ordinary pages (the built-in Markdown note does). The user can still pin one by hand. Upserting without `pin` keeps the current setting.
 
 Do not pin the template itself. The user opens pages from the sidebar.
 

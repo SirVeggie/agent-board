@@ -263,6 +263,7 @@ function templateFromExport(raw: unknown, index: number): Template {
       guide: typeof raw.guide === "string" ? raw.guide : undefined,
       agentActions: raw.agentActions,
       search: raw.search,
+      pin: typeof raw.pin === "boolean" ? raw.pin : undefined,
     });
   } catch (err) {
     throw new Error(`templates[${index}]: ${(err as Error).message}`);
@@ -284,6 +285,7 @@ function templateFromExport(raw: unknown, index: number): Template {
     ...(normalized.guide ? { guide: normalized.guide } : {}),
     ...(normalized.agentActions?.length ? { agentActions: normalized.agentActions } : {}),
     ...(normalized.search ? { search: normalized.search } : {}),
+    ...(normalized.pin === false ? { pin: false as const } : {}),
     createdAt: finiteNumber(raw.createdAt) ?? now,
     updatedAt: finiteNumber(raw.updatedAt) ?? now,
     ...(source ? { source } : {}),

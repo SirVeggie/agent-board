@@ -64,6 +64,7 @@ type TemplateRow = {
   guide: string | null;
   agent_actions: string | null;
   search: string | null;
+  pin: number | null;
 };
 
 type PageAssetRow = {
@@ -148,7 +149,8 @@ CREATE TABLE IF NOT EXISTS templates (
   builtin_fingerprint TEXT,
   guide TEXT,
   agent_actions TEXT,
-  search TEXT
+  search TEXT,
+  pin INTEGER
 );
 CREATE TABLE IF NOT EXISTS template_bindings (
   tab_id TEXT PRIMARY KEY,
@@ -208,8 +210,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 const UPSERT_TEMPLATE_SQL = `
 INSERT INTO templates (
   id, key, title, description, html, fields, title_template, initial_state,
-  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide, agent_actions, search
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  state_version, created_at, updated_at, builtin_key, builtin_fingerprint, guide, agent_actions, search, pin
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
   title = excluded.title,
@@ -225,7 +227,8 @@ ON CONFLICT(id) DO UPDATE SET
   builtin_fingerprint = excluded.builtin_fingerprint,
   guide = excluded.guide,
   agent_actions = excluded.agent_actions,
-  search = excluded.search
+  search = excluded.search,
+  pin = excluded.pin
 `;
 
 const UPSERT_BINDING_SQL = `
@@ -926,6 +929,7 @@ function templateToParams(template: Template): SQLInputValue[] {
     template.guide ?? null,
     template.agentActions ? JSON.stringify(template.agentActions) : null,
     template.search ? JSON.stringify(template.search) : null,
+    template.pin === false ? 0 : null,
   ];
 }
 
@@ -987,6 +991,7 @@ function rowToTemplate(row: TemplateRow): Template {
     ...(row.guide ? { guide: row.guide } : {}),
     ...(agentActions ? { agentActions } : {}),
     ...(search ? { search } : {}),
+    ...(row.pin === 0 ? { pin: false as const } : {}),
   };
 }
 

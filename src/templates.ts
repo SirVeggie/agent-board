@@ -26,6 +26,8 @@ export type TemplateUpsertInput = {
   /** Omit to keep an existing template's agent actions; an empty array removes them. */
   agentActions?: unknown;
   search?: unknown;
+  /** False for a page-like template: its pages open unpinned. Omit to keep an existing template's setting. */
+  pin?: boolean;
   /** On a built-in's local copy: the built-in's latest changes are merged, so clear builtinUpdate. */
   syncedWithBuiltin?: boolean;
 };
@@ -107,6 +109,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
   guide?: string;
   agentActions?: AgentAction[];
   search?: SearchDeclaration;
+  pin?: boolean;
 } {
   const title = input.title.trim();
   if (!title) {
@@ -158,6 +161,7 @@ export function normalizeTemplateInput(input: TemplateUpsertInput): {
     ...(guide !== undefined ? { guide } : {}),
     ...(agentActions !== undefined ? { agentActions } : {}),
     ...(input.search !== undefined ? { search: parseSearchDeclaration(input.search) } : {}),
+    ...(typeof input.pin === "boolean" ? { pin: input.pin } : {}),
   };
 }
 
@@ -359,7 +363,7 @@ export function renderAgentActionText(source: string, values: Record<string, str
 
 /** Same content means the same template, regardless of id, key, or timestamps. */
 export function templateFingerprint(
-  template: Pick<Template, "title" | "description" | "html" | "fields" | "titleTemplate" | "initialState" | "stateVersion" | "search">
+  template: Pick<Template, "title" | "description" | "html" | "fields" | "titleTemplate" | "initialState" | "stateVersion" | "search" | "pin">
 ): string {
   return stableJson({
     title: template.title,
@@ -370,6 +374,7 @@ export function templateFingerprint(
     initialState: template.initialState ?? null,
     stateVersion: template.stateVersion,
     ...(template.search ? { search: template.search } : {}),
+    ...(template.pin === false ? { pin: false } : {}),
   });
 }
 

@@ -799,6 +799,11 @@ export class BoardStore extends EventEmitter {
         }
       }
       if (input.search !== undefined) existing.search = parsed.search;
+      if (parsed.pin === false) {
+        existing.pin = false;
+      } else if (parsed.pin) {
+        delete existing.pin;
+      }
       if (parsed.agentActions !== undefined) {
         if (parsed.agentActions.length) {
           existing.agentActions = parsed.agentActions;
@@ -834,6 +839,7 @@ export class BoardStore extends EventEmitter {
       ...(parsed.guide ? { guide: parsed.guide } : {}),
       ...(parsed.agentActions?.length ? { agentActions: parsed.agentActions } : {}),
       ...(parsed.search ? { search: parsed.search } : {}),
+      ...(parsed.pin === false ? { pin: false as const } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -891,12 +897,13 @@ export class BoardStore extends EventEmitter {
     const initialState = structuredClone(template.initialState ?? {});
     const actionSet = template.source?.builtin ? BUILTIN_ACTIONS[template.source.builtin] : undefined;
     const state = actionSet?.seed ? actionSet.seed(initialState, parsed) : initialState;
+    const pin = template.pin !== false;
     const tab = opts?.into
-      ? this.fillBlank(this.openBlank(opts.into), { title, html, pin: true, state, actor: opts.actor })
+      ? this.fillBlank(this.openBlank(opts.into), { title, html, pin, state, actor: opts.actor })
       : this.upsert({
           title,
           html,
-          pin: true,
+          pin,
           activate: opts?.activate !== false,
           state,
           actor: opts?.actor,
@@ -3406,6 +3413,11 @@ export class BoardStore extends EventEmitter {
       copy.titleTemplate = builtin.titleTemplate;
       copy.initialState = structuredClone(builtin.initialState);
       copy.search = structuredClone(builtin.search);
+      if (builtin.pin === false) {
+        copy.pin = false;
+      } else {
+        delete copy.pin;
+      }
       copy.source = { builtin: builtin.key, fingerprint: latest };
       copy.updatedAt = Date.now();
       this.markTemplateDirty(copy.id);

@@ -18,5 +18,6 @@
   "initialState": {
     "text": ""
   },
-  "stateVersion": 1
+  "stateVersion": 1,
+  "pin": false
 }
