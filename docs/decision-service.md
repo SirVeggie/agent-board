@@ -1,6 +1,6 @@
 # Decision service (`src/ml/`)
 
-Card #516, the first piece of the intent-detection design (`docs/intent-detection-hooks-design.md`). One daemon function that asks a classifier small typed questions about a piece of state. Nothing calls it yet; hooks, the page API and the features are later cards.
+Card #516, the first piece of the intent-detection design (`docs/intent-detection-hooks-design.md`). One daemon function that asks a classifier small typed questions about a piece of state. Its callers so far: thread hooks (feature `hooks`) and the page-creation hint (feature `page-intent`, `src/agent/pageIntent.ts`).
 
 ## Calling it
 

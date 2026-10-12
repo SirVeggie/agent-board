@@ -36,7 +36,7 @@ function runningThread(fromPage = false): string {
   const turn = { id: `tu_${thread.id}`, threadId: thread.id, seq: 1, status: "running", model: "m", effort: null, mode: thread.mode, startedAt: Date.now() };
   const internals = host as unknown as Internals;
   internals.turns.get(thread.id)?.push(turn);
-  internals.runs.set(thread.id, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null });
+  internals.runs.set(thread.id, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: "", dock: false, called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } });
   if (fromPage) internals.addItem(thread.id, turn.id, { kind: "user", text: "Take card #1", from: "page" } as ItemBody);
   return thread.id;
 }

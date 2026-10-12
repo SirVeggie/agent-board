@@ -351,6 +351,8 @@ export type ItemBody =
       editing?: boolean;
       /** Sent by the code of the thread's page (board.agent), by Scribe itself (going on after a restart), by the agent this helper thread works for, or by a hook's context action; not typed by the user. */
       from?: "page" | "scribe" | "agent" | "hook";
+      /** Typed into the floating chat over a page. Kept so tools/replay-page-intent.ts can measure on those turns alone. */
+      dock?: boolean;
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
       card?: { num: number; title?: string; resume?: boolean; reply?: string };
     }

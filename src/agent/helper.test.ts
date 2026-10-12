@@ -78,7 +78,7 @@ function running(id: string): void {
   const internals = host as unknown as Internals;
   const turn = { id: `tu_${id}`, threadId: id, seq: 1, status: "running", model: "m", effort: null, mode: "ask", startedAt: Date.now() };
   internals.turns.get(id)?.push(turn);
-  internals.runs.set(id, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null });
+  internals.runs.set(id, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: "", dock: false, called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } });
 }
 
 async function approvalFor(id: string): Promise<{ itemId: string }> {

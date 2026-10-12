@@ -84,7 +84,7 @@ function running(threadId: string): void {
   const turn = { id: `tu_${threadId}`, threadId, seq: 1, status: "running", model: "m", effort: null, mode: "code", startedAt: Date.now() };
   const internals = host as unknown as Internals;
   internals.turns.get(threadId)?.push(turn);
-  internals.runs.set(threadId, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null });
+  internals.runs.set(threadId, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: "", dock: false, called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } });
 }
 
 function pendingApprovals(threadId: string) {

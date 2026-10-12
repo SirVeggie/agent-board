@@ -569,7 +569,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const mainEl = document.querySelector('main'), newPageEl = document.querySelector('#newpage'), emptyEl = document.querySelector('#empty');
       const tabs = [{id:'original',title:'Original'}], frames = new Map();
       const state = {activeId:'original',draft:null,restored:true};
-      const childId = null, popoutTitle = null, pageIntent = null;
+      const childId = null, popoutTitle = null, pageIntent = null, pageHint = null, pageHintEl = document.createElement('div');
       let pendingFocus = null, lastInteractedAt = 0;
       const activeTab = () => state.draft?.id === state.activeId ? state.draft : tabs[0];
       const draftActive = () => activeTab()?.draft, isBlank = tab => !!tab?.draft;

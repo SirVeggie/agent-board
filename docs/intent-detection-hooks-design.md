@@ -26,6 +26,17 @@ These override the recommendations below where they differ.
   - The user's rules (`Prefs.hookRules`, Agent settings, Hooks) match by keyword, regular expression, tool name, or a yes/no question for the classifier (the Classifier feature "Hook questions").
   - Not built: `restrict` (the per-turn permission ceiling has its own card), `where.dock`, and the replay script. No detector is built in; features add theirs to `AgentHost.detectors`.
 
+- **Page-creation intent** (#518): `src/agent/pageIntent.ts`, on the host's `detectors`. It replaces #440.
+  - The floating chat sends `dock: true` with a message (kept on the stored user item). Only those turns are watched; board workers and threads with detection off are not.
+  - Such a message reaches the agent with a short note: before a new page it will show in front, call `page_intent { title }` (a Scribe MCP tool that returns at once) in the same step as its first other tool call. The note travels with the message, not in the system prompt, so a thread that moves between the floating chat and the sidebar never restarts its agent.
+  - Signals are `agent_intent { name: "page_create", stage, title?, confidence? }`:
+    - `hint`: the classifier's yes to "Will answering this message require creating a new Scribe page?" on the message, with the thread's page title as context, at `PAGE_HINT_THRESHOLD` (0.75, not yet measured). Its own switch under Settings, Classifier ("Page-creation hint"). An HTML file written inside the workspace is also only a hint.
+    - `confirmed`: the `page_intent` call, or an HTML file written outside the workspace (the #440 gap). No classifier.
+  - `public/agent.js` (`dock.onIntent`) maps `confirmed` onto today's `scribe:page-intent`, and `hint` onto `scribe:page-hint`, which `app.js` draws as a glow at the page's edge (`.page-hint`); the page stays usable. A `page_show` call for a new page is still read by the chat itself, and takes the screen over from the announcement. A screen the user clicked away stays away for the rest of that turn.
+  - The detectors are `observing`: they never hold a tool call, so approvals stay synchronous when the user has no rules.
+  - `npm run replay:page-intent` (`tools/replay-page-intent.ts`) asks the hint question over stored turns and prints precision and recall per threshold. `--dry` only counts.
+  - Not done: stage 2 of the table below (the same question on the agent's first words). The agent's own announcement covers it without a model.
+
 ## Summary
 
 **Recommendation: three layers, built in this order, each as its own card.**

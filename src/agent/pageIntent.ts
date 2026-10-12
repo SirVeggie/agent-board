@@ -22,7 +22,7 @@ export const PAGE_INTENT_FEATURE = "page-intent";
 export const PAGE_INTENT_QUESTION = "Will answering this message require creating a new Scribe page?";
 /**
  * How sure the classifier must be before the hint shows. Not measured on real traffic yet: run
- * tools/replay-page-intent.mjs over your own floating-chat turns and set it from its table.
+ * tools/replay-page-intent.ts over your own floating-chat turns and set it from its table.
  */
 export const PAGE_HINT_THRESHOLD = 0.75;
 
