@@ -873,6 +873,27 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /**
+   * A Scribe chat's MCP hands over a tool's result before the agent gets it (scanTools in mcp.ts):
+   * the thread's hooks may have a note to put in front of it. Anything that goes wrong returns none.
+   */
+  app.post("/api/tool-scan", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const body = isPlainObject(req.body) ? req.body : {};
+    const tool = typeof body.tool === "string" ? body.tool.slice(0, 100) : "";
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!thread || !agentHost || !tool || !text) {
+      res.json({ note: null });
+      return;
+    }
+    agentHost
+      .scanResult(thread, { name: tool, tool: "mcp", title: `Scribe: ${tool}`, text })
+      .catch(() => null)
+      .then((note) => {
+        if (!res.writableEnded) res.json({ note });
+      });
+  });
+
   /** web_request from a Scribe chat's MCP: ask the user for a web call the thread's web setting does not cover. */
   app.post("/api/web-request", (req, res) => {
     const thread = req.get(THREAD_HEADER)?.slice(0, 60);

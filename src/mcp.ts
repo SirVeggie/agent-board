@@ -11,6 +11,7 @@ import { safeStem } from "./boardExport.js";
 import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, contentBaseUrl } from "./config.js";
 import { BROWSER_ACTIONS } from "./browserActions.js";
 import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
+import { SCANNED_TOOLS } from "./agent/injection.js";
 import { log } from "./log.js";
 import { openBoard } from "./openBoard.js";
 import { clampWaitMs, parseEventNames } from "./signal.js";
@@ -63,6 +64,8 @@ type ToolResult = { content: Array<{ type: "text"; text: string } | { type: "ima
  * chat the daemon keeps that memory instead (sent), since the chat's prompt can carry guides too.
  */
 const deliveredGuides = new Map<string, string>();
+/** The parts of a result that are a template's guide: Scribe's own instructions to the agent, which the injection scan leaves out. */
+const guideParts = new WeakSet<object>();
 
 /** quiet leaves out the one-line pointer once the guide was sent (a page_action that went through needs no reminder). */
 async function withGuide(result: ToolResult, which: string, force = false, quiet = false): Promise<ToolResult> {
@@ -81,17 +84,21 @@ async function withGuide(result: ToolResult, which: string, force = false, quiet
   }
   if (!force && (sent ?? deliveredGuides.get(guide.id) === guide.text)) {
     if (quiet) return result;
-    result.content.push({
-      type: "text",
+    const pointer = {
+      type: "text" as const,
       text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; page_state with guide: true shows it again.`,
-    });
+    };
+    guideParts.add(pointer);
+    result.content.push(pointer);
     return result;
   }
   deliveredGuides.set(guide.id, guide.text);
-  result.content.push({
-    type: "text",
+  const part = {
+    type: "text" as const,
     text: `Agent guide for "${guide.title}" pages. Follow it when reading or changing this page.\n\n${guide.text}`,
-  });
+  };
+  guideParts.add(part);
+  result.content.push(part);
   return result;
 }
 
@@ -190,6 +197,40 @@ export function gateTools(server: McpServer, env = process.env, ask: (tool: stri
   };
 }
 
+/** Ask the daemon's hooks about a tool's result. Their note for the agent, or null: also when the daemon cannot be asked (fail open). */
+async function hookScan(tool: string, text: string): Promise<string | null> {
+  try {
+    const { status, data } = await api("POST", "/api/tool-scan", { tool, text }, { timeoutMs: 15_000 });
+    const note = (data as { note?: unknown } | null)?.note;
+    return status === 200 && typeof note === "string" && note ? note : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Prompt-injection scanning (src/agent/injection.ts) for this server's tools that return other
+ * people's content: in a Scribe chat, on every provider, the daemon sees the result before the
+ * agent does, and its note goes in front of it. Call it before the tools are registered.
+ */
+export function scanTools(server: McpServer, env = process.env, scan: (tool: string, text: string) => Promise<string | null> = hookScan): void {
+  if (!env.SCRIBE_THREAD) return;
+  const register = server.tool as (...args: unknown[]) => unknown;
+  (server as unknown as { tool: unknown }).tool = (...args: unknown[]) => {
+    const name = String(args[0]);
+    const handler = args[args.length - 1];
+    if (typeof handler !== "function" || !SCANNED_TOOLS.includes(name)) return register.apply(server, args);
+    const scanned = async (...call: unknown[]) => {
+      const result = (await handler(...call)) as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+      if (!result || result.isError || !Array.isArray(result.content)) return result;
+      const text = result.content.map((part) => (part.type === "text" && typeof part.text === "string" && !guideParts.has(part) ? part.text : "")).join("\n");
+      const note = text.trim() ? await scan(name, text) : null;
+      return note ? { ...result, content: [{ type: "text" as const, text: note }, ...result.content] } : result;
+    };
+    return register.apply(server, [...args.slice(0, -1), scanned]);
+  };
+}
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
@@ -197,6 +238,8 @@ export async function startMcp(): Promise<void> {
   const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
   const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
   const revisions = new SeenRevisions();
+  // Registered first, so it wraps inside the gate: a denied call returns no result to scan.
+  scanTools(server);
   gateTools(server);
   registerCodexFileTools(server);
   // Claims on cards show who holds them; the client's own name is the best label we get.

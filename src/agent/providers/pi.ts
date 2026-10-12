@@ -484,16 +484,16 @@ function mcpContent(content: unknown): Array<TextContent | ImageContent> {
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }], details: undefined });
 
 /** web_search through the user's SearXNG instance (Agent settings), gated like web_fetch. */
-function webSearchTool(baseUrl: string, web: WebAccess, access: Parameters<typeof gatedSearchText>[2]): ToolDefinition {
+function webSearchTool(baseUrl: string, web: WebAccess, access: Parameters<typeof gatedSearchText>[2], scanned: (toolId: string, name: string, result: string) => Promise<string>): ToolDefinition {
   return {
     name: "web_search",
     label: "Web search",
     description: webSearchDescription(web),
     parameters: WEB_SEARCH_SCHEMA as unknown as ToolDefinition["parameters"],
-    execute: async (_id, params, signal) => {
+    execute: async (id, params, signal) => {
       const result = await gatedSearchText(baseUrl, isPlainRecord(params) ? params : {}, access, signal);
       if (result.isError) throw new Error(result.text);
-      return text(result.text);
+      return text(await scanned(id, "web_search", result.text));
     },
   };
 }
@@ -645,13 +645,13 @@ class PiSession implements ProviderSession {
           ? `Fetch a web page or file over HTTP(S) and return its text.${noSearch}`
           : `Fetch a web page or file over HTTP(S) and return its text. Sites the user has not allowed ask the user first, who may refuse.${noSearch}`,
       parameters: { type: "object", properties: { url: { type: "string", description: "Absolute http(s) URL" } }, required: ["url"] } as unknown as ToolDefinition["parameters"],
-      execute: async (_id, params) => {
+      execute: async (id, params) => {
         const result = await gatedFetchText(isPlainRecord(params) ? params.url : undefined, (url) => this.gateFetch(url));
         if (result.isError) throw new Error(result.text);
-        return text(result.text);
+        return text(await this.scanned(id, "web_fetch", result.text));
       },
     });
-    if (searchUrl) tools.push(webSearchTool(searchUrl, this.thread.web, { allowed: (call) => this.webCovered(call), reach: () => this.webReach(), ask: (call) => this.askWeb(call) }));
+    if (searchUrl) tools.push(webSearchTool(searchUrl, this.thread.web, { allowed: (call) => this.webCovered(call), reach: () => this.webReach(), ask: (call) => this.askWeb(call) }, (id, name, result) => this.scanned(id, name, result)));
     tools.push({
       name: "ask_user",
       label: "Question",
@@ -763,6 +763,12 @@ class PiSession implements ProviderSession {
     if (session) session.setActiveToolsByName([...new Set([...session.getActiveToolNames().filter((n) => n !== "exit_plan"), ...CODE_TOOLS])]);
     sink.modeChanged?.("code");
     return text(`The user accepted the plan${decision.note ? ` with a note: ${decision.note}` : ""}. You can edit files and run commands now: implement it.`);
+  }
+
+  /** A web tool's result after Scribe's hooks have looked at it (SessionContext.scanResult): with their note in front when they have one. */
+  private async scanned(toolId: string, name: string, result: string): Promise<string> {
+    const note = await this.ctx.scanResult?.(this.thread.id, { toolId, name, tool: "fetch", text: result }).catch(() => null);
+    return note ? `${note}\n\n${result}` : result;
   }
 
   /** Approvals for Pi's own tools, from the tool_call hook. Scribe's custom tools gate themselves. */

@@ -21,6 +21,15 @@ export const OBSERVE_DEADLINE_MS = 10_000;
 export const HOOKS_FEATURE = "hooks";
 
 const MAX_CHUNK_TEXT = 20_000;
+/**
+ * A windowed detector's share of a long tool result: each window's size, their overlap, how many are
+ * asked about, and how many times wider a window may get before the windows leave gaps. A result in
+ * the transcript (20,000 characters at most) fits whole at the first size.
+ */
+export const WINDOW_CHARS = 4000;
+export const WINDOW_OVERLAP = 500;
+export const MAX_WINDOWS = 6;
+export const WINDOW_GROW = 4;
 const MAX_RULES = 100;
 
 export type Chunk = {
@@ -34,6 +43,12 @@ export type Chunk = {
   tool?: { toolId?: string; name: string; kind: ToolKind; title?: string; paths?: string[]; input?: unknown };
   /** A text block's opening, before the block has closed. Only detectors with `early` see it. */
   early?: boolean;
+  /** A tool result as the host has it, where `text` is only its head and tail. Detectors with `windows` read this. */
+  full?: string;
+  /** A tool result Scribe still holds: the agent has not read it yet. Only detectors with `held` see it. */
+  held?: boolean;
+  /** Set once something this turn read looked like a prompt injection: why, for the approval that follows. */
+  suspect?: string;
   provider: ProviderId;
   mode: ThreadMode;
   /** An unattended board worker's thread. */
@@ -58,7 +73,9 @@ export type Action =
   /** The tool call needs the user's approval, whatever the thread's approval level. */
   | { kind: "ask" }
   /** Deny the tool call, or stop the turn where the call cannot be held. */
-  | { kind: "block"; reason: string };
+  | { kind: "block"; reason: string }
+  /** Mark the rest of the turn as suspect (Chunk.suspect), so detectors with `where.suspect` start to match. Not one of the user's rule actions. */
+  | { kind: "suspect"; reason: string };
 
 export type Hit = { actions: Action[]; reason?: string; confidence?: number };
 
@@ -71,7 +88,11 @@ export type Detector = {
   early?: boolean;
   /** Only ever signals or flags, so no tool call is held for it. */
   observing?: boolean;
-  where?: { worker?: boolean; dock?: boolean; modes?: ThreadMode[]; providers?: ProviderId[] };
+  /** Also runs on a tool result before the agent gets it (see Chunk.held). */
+  held?: boolean;
+  /** Asks its questions about overlapping windows of the whole result (Chunk.full), not its head and tail. The surest window counts. */
+  windows?: boolean;
+  where?: { worker?: boolean; dock?: boolean; modes?: ThreadMode[]; providers?: ProviderId[]; suspect?: boolean };
   /** The Classifier feature switch its questions go under (Settings, Classifier). Default: Hook questions. */
   feature?: string;
   /** Synchronous: keyword, regex, tool name. A Hit or "pass" settles it; null leaves it to `ask`. */
@@ -109,8 +130,10 @@ const SEND_KIND: Record<HookEvent, SendKind> = {
 function applies(detector: Detector, chunk: Chunk): boolean {
   if (!detector.on.includes(chunk.event)) return false;
   if (chunk.early && !detector.early) return false;
+  if (chunk.held && !detector.held) return false;
   const where = detector.where;
   if (!where) return true;
+  if (where.suspect !== undefined && where.suspect !== Boolean(chunk.suspect)) return false;
   if (where.worker !== undefined && where.worker !== chunk.worker) return false;
   if (where.dock !== undefined && where.dock !== Boolean(chunk.dock)) return false;
   if (where.modes && !where.modes.includes(chunk.mode)) return false;
@@ -143,9 +166,12 @@ export function verdict(found: Finding[]): { kind: "block"; finding: Finding } |
 export class HookPipeline {
   constructor(private deps: HookDeps) {}
 
-  /** True when no detector could match this event, so the host can skip building a chunk. `gating`: none that could hold a call. */
-  idle(event: HookEvent, gating = false): boolean {
-    return !this.deps.detectors().some((d) => d.on.includes(event) && !(gating && d.observing));
+  /**
+   * True when no detector could match this event, so the host can skip building a chunk. `gating`:
+   * none that could hold a call. `suspect`: whether the turn is marked (Chunk.suspect).
+   */
+  idle(event: HookEvent, gating = false, suspect = false): boolean {
+    return !this.deps.detectors().some((d) => d.on.includes(event) && !(gating && d.observing) && (d.where?.suspect === undefined || d.where.suspect === suspect));
   }
 
   /** True when some detector wants a text block's opening (Chunk.early). */
@@ -185,14 +211,31 @@ export class HookPipeline {
     if (!this.deps.decide || !open.length || !chunk.text.trim() || this.deps.maySend?.(kind) === false) return [];
     const features = new Map<string, Detector[]>();
     for (const detector of open) {
-      const feature = detector.feature ?? HOOKS_FEATURE;
+      const feature = `${detector.windows ? "w" : "c"}:${detector.feature ?? HOOKS_FEATURE}`;
       features.set(feature, [...(features.get(feature) ?? []), detector]);
     }
-    const found = await Promise.all([...features].map(([feature, detectors]) => this.classifyFeature(chunk, feature, detectors, budgetMs)));
+    const found = await Promise.all(
+      [...features].map(([key, detectors]) => (key.startsWith("w:") ? this.classifyWindows(chunk, key.slice(2), detectors, budgetMs) : this.classifyFeature(chunk, key.slice(2), detectors, budgetMs)))
+    );
     return found.flat();
   }
 
-  private async classifyFeature(chunk: Chunk, feature: string, open: Detector[], budgetMs: number): Promise<Finding[]> {
+  /** Windowed detectors: every window is asked on its own, side by side, and per detector the surest hit counts. */
+  private async classifyWindows(chunk: Chunk, feature: string, open: Detector[], budgetMs: number): Promise<Finding[]> {
+    const perWindow = await Promise.all(windows(chunk.full ?? chunk.text).map((text) => this.classifyFeature({ ...chunk, text }, feature, open, budgetMs, true)));
+    const best = new Map<string, Finding[]>();
+    for (const found of perWindow) {
+      for (const detector of open) {
+        const own = found.filter((f) => f.detector === detector.id);
+        const had = best.get(detector.id);
+        if (own.length && (!had || (own[0].confidence ?? 0) > (had[0].confidence ?? 0))) best.set(detector.id, own);
+      }
+    }
+    return [...best.values()].flat();
+  }
+
+  /** `bare`: the content alone, without the user's message beside it. */
+  private async classifyFeature(chunk: Chunk, feature: string, open: Detector[], budgetMs: number, bare = false): Promise<Finding[]> {
     const decide = this.deps.decide!;
     const kind = SEND_KIND[chunk.event];
     const questions: MlQuestions = {};
@@ -210,7 +253,7 @@ export class HookPipeline {
       asked.push({ detector, prefix, ids: Object.keys(own) });
     });
     if (!asked.length) return [];
-    const withUser = chunk.lastUser && chunk.event !== "prompt" && this.deps.maySend?.("messages") !== false;
+    const withUser = !bare && chunk.lastUser && chunk.event !== "prompt" && this.deps.maySend?.("messages") !== false;
     const state = {
       event: chunk.event,
       mode: chunk.mode,
@@ -281,6 +324,27 @@ export function clip(text: string, max = MAX_CHUNK_TEXT): string {
   if (text.length <= max) return text;
   const half = Math.floor(max / 2);
   return `${text.slice(0, half)}\n…\n${text.slice(-half)}`;
+}
+
+/**
+ * A long text as overlapping windows, so nothing in it is judged cut in half. A text too long for
+ * `max` windows gets wider ones, up to `grow` times the size; past that they are spread evenly from
+ * the start to the end, which leaves gaps between them.
+ */
+export function windows(text: string, size = WINDOW_CHARS, overlap = WINDOW_OVERLAP, max = MAX_WINDOWS, grow = WINDOW_GROW): string[] {
+  if (text.length <= size) return text.trim() ? [text] : [];
+  const fit = Math.ceil((text.length + (max - 1) * overlap) / max);
+  const width = Math.min(Math.max(size, fit), size * grow);
+  const step = width - overlap;
+  const last = text.length - width;
+  const needed = Math.ceil(last / step) + 1;
+  const count = Math.min(needed, max);
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const start = count === needed ? Math.min(i * step, last) : Math.round((i * last) / (count - 1));
+    out.push(text.slice(start, start + width));
+  }
+  return out;
 }
 
 /** Where a text block's opening ends: its first sentence, or about 200 characters. Null while it is too short. */

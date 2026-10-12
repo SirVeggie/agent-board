@@ -74,6 +74,9 @@ export type ToolGateCall = { toolId?: string; name: string; tool: ToolKind; titl
 
 export type ToolGateResult = { allowed: true } | { allowed: false; reason: string };
 
+/** The result of one of Scribe's own tools, for SessionContext.scanResult. */
+export type ToolScanCall = { toolId?: string; name: string; tool: ToolKind; title?: string; text: string };
+
 export type QuestionRequest = { title?: string; questions: QuestionSpec[] };
 
 export type QuestionAnswer = { answers: Record<string, string[]>; notes?: Record<string, string> } | { skipped: true; reason?: string };
@@ -191,6 +194,12 @@ export type SessionContext = {
    * them hold a call (Claude's PreToolUse, Pi's tool_call, Cursor's custom tools).
    */
   toolGate?(threadId: string, call: ToolGateCall, signal?: AbortSignal): Promise<ToolGateResult>;
+  /**
+   * "Look at this result before the agent gets it": for tools Scribe runs itself (web_fetch,
+   * web_search). A note to put in front of the result when a hook has something to tell the agent
+   * about it, else null. Never throws.
+   */
+  scanResult?(threadId: string, call: ToolScanCall): Promise<string | null>;
   /** A tool approval with no turn running (a background agent at work): the thread's own rules, or a refusal. */
   approval?(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision>;
   /**

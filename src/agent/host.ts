@@ -41,6 +41,7 @@ import type {
   RunSink,
   SessionContext,
   ToolGateCall,
+  ToolScanCall,
   ToolGateResult,
   ToolPatch,
   ToolStart,
@@ -91,6 +92,7 @@ import type {
 } from "./types.js";
 import { isProviderId, noPages } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
+import { injectionDetectors } from "./injection.js";
 
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
@@ -104,6 +106,12 @@ const MAX_RECAP = 24_000;
 const PRUNE_FIRST_MS = 5 * 60 * 1000;
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 const DELTA_MS = 50;
+/**
+ * How long a result of one of Scribe's own tools is held for the classifier before the agent gets it
+ * unscanned (fail open). Longer than a tool call's budget: a result is scanned in several windows.
+ */
+const SCAN_HOLD_MS = 2500;
+
 /**
  * Where a provider cannot hold a call (Codex, Cursor), a hook's ask or block waits this long for the
  * call's approval request to turn up, which it can answer, before it falls back to stopping the turn.
@@ -385,6 +393,8 @@ type RunState = {
     told: Set<string>;
     /** The text block whose opening has been through the early hook. */
     earlyItem: string | null;
+    /** Why the turn is suspect (Chunk.suspect), once something it read looked like a prompt injection. */
+    suspect: string | null;
   };
   /** Stops the summary a fork's first turn waits for. */
   abort?: AbortController;
@@ -439,7 +449,7 @@ export class AgentHost {
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
   /** Detectors beside the user's rules (hooks.ts). Features built on hooks add theirs here. */
-  readonly detectors: Detector[] = pageIntentDetectors();
+  readonly detectors: Detector[] = [...pageIntentDetectors(), ...injectionDetectors()];
   private ruleDetectors: Detector[] | null = null;
   /** The decision service hooks ask; tests put a fake in its place. */
   hookBackend: { decide: HookDecide; maySend(kind: SendKind): boolean } = {
@@ -515,6 +525,7 @@ export class AgentHost {
       approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
       webRequest: (threadId, call, opts) => this.requestWeb(threadId, call, opts),
       toolGate: (threadId, call, signal) => this.toolGate(threadId, call, signal),
+      scanResult: (threadId, call) => this.scanResult(threadId, call),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
     this.pageRuns = new PageRuns(
@@ -2796,7 +2807,7 @@ export class AgentHost {
     } else {
       this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
     }
-    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } };
+    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null, suspect: null } };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
@@ -3347,6 +3358,7 @@ export class AgentHost {
       worker: this.unattended(thread.id),
       ...(lastUser ? { lastUser } : {}),
       ...(run?.hooks.dock ? { dock: true } : {}),
+      ...(run?.hooks.suspect ? { suspect: run.hooks.suspect } : {}),
       ...(thread.cwd ? { cwd: thread.cwd } : {}),
       ...part,
     };
@@ -3358,7 +3370,7 @@ export class AgentHost {
    */
   private observe(threadId: string, run: RunState, event: HookEvent, part: () => Pick<Chunk, "text"> & Partial<Chunk>): void {
     const thread = this.threads.get(threadId);
-    if (!thread || thread.hooksOff || this.hooks.idle(event)) return;
+    if (!thread || thread.hooksOff || this.hooks.idle(event, false, Boolean(run.hooks.suspect))) return;
     const chunk = this.hookChunk(thread, run, event, part());
     if (!chunk.text.trim()) return;
     const { found, open } = this.hooks.rules(chunk);
@@ -3410,9 +3422,53 @@ export class AgentHost {
     if (item.kind !== "tool") return;
     this.observe(item.threadId, run, "tool_result", () => ({
       text: item.output ? clipChunk(item.output) : "",
+      ...(item.output ? { full: item.output } : {}),
       itemId: item.id,
-      tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title },
+      tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title, ...(item.paths ? { paths: item.paths } : {}) },
     }));
+  }
+
+  /**
+   * A result of one of Scribe's own tools, before the agent gets it (SessionContext.scanResult, and
+   * POST /api/tool-scan for the MCP's tools). The detectors that read held results get SCAN_HOLD_MS:
+   * what they would tell the agent comes back as a note to put in front of the result. A slower
+   * answer is applied when it arrives, like one on an observed result, and a classifier that is
+   * down leaves the result as it is (fail open).
+   */
+  async scanResult(threadId: string, call: ToolScanCall): Promise<string | null> {
+    const thread = this.threads.get(threadId);
+    const run = this.runs.get(threadId);
+    if (!thread || !run || thread.hooksOff || !call.text.trim()) return null;
+    // The MCP does not know the id the stream shows its call under: the newest running call of that tool is it.
+    const item = call.toolId
+      ? run.tools.get(call.toolId)
+      : [...run.tools.values()].reverse().find((it) => it.kind === "tool" && it.status !== "done" && it.status !== "error" && (it.name.endsWith(call.name) || it.title.includes(call.name)));
+    const chunk = this.hookChunk(thread, run, "tool_result", {
+      text: clipChunk(call.text),
+      full: call.text,
+      held: true,
+      ...(item ? { itemId: item.id } : {}),
+      tool: { ...(call.toolId ? { toolId: call.toolId } : {}), name: call.name, kind: call.tool, ...(call.title ? { title: call.title } : {}) },
+    });
+    const { found, open } = this.hooks.rules(chunk);
+    const asked = open.length ? this.hooks.classify(chunk, open, OBSERVE_DEADLINE_MS) : Promise.resolve([]);
+    let timer: NodeJS.Timeout | undefined;
+    const slow = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), SCAN_HOLD_MS);
+    });
+    const answered = await Promise.race([asked, slow]);
+    clearTimeout(timer);
+    if (!answered) void asked.then((late) => this.applyFindings(chunk, run, late, true));
+    const all = [...found, ...(answered ?? [])];
+    const notes: string[] = [];
+    for (const finding of all) {
+      if (finding.action.kind !== "context" || run.hooks.told.has(finding.detector)) continue;
+      // It goes with the result, so it is not steered into the turn as well.
+      run.hooks.told.add(finding.detector);
+      notes.push(finding.action.text);
+    }
+    this.applyFindings(chunk, run, all.filter((finding) => finding.action.kind !== "context"), false);
+    return notes.length ? notes.join("\n\n") : null;
   }
 
   private flagItem(threadId: string, itemId: string | undefined, finding: Finding): void {
@@ -3451,6 +3507,8 @@ export class AgentHost {
         if (!live || run.hooks.told.has(finding.detector)) continue;
         run.hooks.told.add(finding.detector);
         this.tellAgent(chunk.threadId, action.text);
+      } else if (action.kind === "suspect") {
+        if (live) run.hooks.suspect ??= action.reason;
       } else {
         this.flagItem(chunk.threadId, chunk.itemId, finding);
       }
@@ -3512,7 +3570,7 @@ export class AgentHost {
    */
   private approvalGate(threadId: string, run: RunState, req: ApprovalRequest): Promise<{ kind: "block" | "ask"; reason: string } | null> | null {
     const thread = this.threads.get(threadId);
-    if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true)) return null;
+    if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true, Boolean(run.hooks?.suspect))) return null;
     // Scribe's board tools are held where the daemon runs them (toolGate).
     if (req.boardTool || holdsAll(thread.provider) || (req.toolId && run.hooks.gated.has(req.toolId))) return null;
     return this.heldApproval(thread, run, req);
@@ -3548,8 +3606,8 @@ export class AgentHost {
    */
   async toolGate(threadId: string, call: ToolGateCall, signal?: AbortSignal): Promise<ToolGateResult> {
     const thread = this.threads.get(threadId);
-    if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true)) return { allowed: true };
     const run = this.runs.get(threadId);
+    if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true, Boolean(run?.hooks.suspect))) return { allowed: true };
     if (call.toolId) run?.hooks.gated.add(call.toolId);
     const waiting = call.toolId ? run?.hooks.waiting.get(call.toolId) : undefined;
     if (waiting) {

@@ -1045,7 +1045,15 @@ class CursorSession implements ProviderSession {
           }).catch(() => null);
           if (held && !held.allowed) return { content: [{ type: "text", text: held.reason }], isError: true };
         }
-        return tool.execute(args, context);
+        const result = await tool.execute(args, context);
+        // Scribe's page tools scan their own results where they run (mcp.ts); the web tools run here.
+        if ((name !== "web_fetch" && name !== "web_search") || !this.ctx.scanResult) return result;
+        if (!isPlainRecord(result) || !Array.isArray(result.content) || result.isError === true) return result;
+        const content = result.content as Array<{ type: string; text?: string }>;
+        const toolId = context.toolCallId && this.tools.has(context.toolCallId) ? context.toolCallId : undefined;
+        const text = content.map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : "")).join("\n");
+        const note = await this.ctx.scanResult(this.thread.id, { ...(toolId ? { toolId } : {}), name, tool: "fetch", text }).catch(() => null);
+        return note ? ({ ...result, content: [{ type: "text", text: note }, ...content] } as typeof result) : result;
       },
     };
   }

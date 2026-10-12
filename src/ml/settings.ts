@@ -25,6 +25,12 @@ export const ML_FEATURES: MlFeature[] = [
     hint: "Each message you send in the floating chat is asked whether answering it needs a new page. On a confident yes the page's edge glows until the agent confirms or the turn ends. Off: the creating screen still starts when the agent announces a page.",
     default: true,
   },
+  {
+    id: "injection-scan",
+    label: "Prompt-injection scan",
+    hint: "What the agent reads (pages, files, command output, web pages) is asked whether it tries to give the agent instructions. On a hit the call is flagged, the agent is told it is data, and the turn's later calls that change or send anything need your approval. An extra layer, not a guarantee: the classifier reads the same text and can be fooled, and Cursor's built-in tool calls cannot be held. Needs Tool results on under what may be sent.",
+    default: false,
+  },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
