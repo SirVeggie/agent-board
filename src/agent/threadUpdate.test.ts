@@ -164,10 +164,27 @@ test("Full access is not asked, and continue false ends with the change", async 
   assert.equal(mine(id).length, 1);
 });
 
-test("the user's queued message runs next in the new folder, without Scribe's note", async () => {
+test("a queued message waits behind Scribe's note, so the agent finishes the task it moved for first", async () => {
   const id = thread("full");
   act = async (threadId) => {
     const reply = await host.threadUpdateOp(threadId, { workspace: b });
+    host.send(threadId, { text: "and then this" });
+    return reply;
+  };
+  host.send(id, { text: "go" });
+  await idle(id);
+  const ran = mine(id);
+  assert.equal(ran.length, 3);
+  assert.equal(ran[1].cwd, b);
+  assert.match(ran[1].text, /The workspace is now /);
+  assert.match(ran[2].text, /and then this$/);
+  assert.equal(ran[2].cwd, b);
+});
+
+test("with continue false the queued message runs next, in the new folder", async () => {
+  const id = thread("full");
+  act = async (threadId) => {
+    const reply = await host.threadUpdateOp(threadId, { workspace: b, continue: false });
     host.send(threadId, { text: "and then this" });
     return reply;
   };

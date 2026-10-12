@@ -3169,14 +3169,12 @@ export class AgentHost {
       void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id });
       return;
     }
-    // The agent ended its turn to get the new folder: send it on, unless the user's own message is next.
-    if (moved && run.workspace?.continue && result.status === "done" && !this.queues.get(threadId)?.length) {
-      try {
-        this.send(threadId, { text: workspaceNote(run.workspace.cwd), from: "scribe" });
-        return;
-      } catch (err) {
-        log(`Could not send thread ${threadId} on after its workspace change: ${(err as Error).message}`);
-      }
+    // The agent ended its turn to get the new folder: send it on. Queued messages wait behind the
+    // note, since the move is part of the task they were queued after (a steered one ran above).
+    if (moved && run.workspace?.continue && result.status === "done") {
+      const note: QueuedMessage = { text: workspaceNote(run.workspace.cwd), images: [], files: [], saved: { images: [], files: [] }, context: [], from: "scribe" };
+      void this.runTurn(threadId, note, this.addItem(threadId, null, userBody(note)));
+      return;
     }
     this.drainQueue(threadId);
     if (!this.runs.has(threadId)) {
