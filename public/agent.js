@@ -19,6 +19,7 @@
     presets: "scribe.agent.showPresets",
     hidePage: "scribe.agent.hidePageThreads",
     compact: "scribe.agent.compactThreads",
+    collapsed: "scribe.agent.collapsedGroups",
     fullSide: "scribe.agent.fullSideWidth",
   };
   /** What Enter on an empty composer does with a queued message while a turn runs. */
@@ -196,6 +197,8 @@
     hidePageThreads: localStorage.getItem(LS.hidePage) !== "0",
     /** Extra rows revealed per grouping key via "Show 10 more". */
     groupExtra: new Map(),
+    /** Grouping keys of the thread list groups the user folded shut. */
+    collapsedGroups: new Set(loadCollapsedGroups()),
     lastActiveId: null,
     ready: false,
     /** Forks whose offer to archive the thread they came from was answered or dismissed. */
@@ -390,6 +393,15 @@
     const size = window.scribePreview?.sizeLabel(file.size);
     if (!isImage && size) chip.append(el("span", "ag-chip-size", size));
     return chip;
+  }
+
+  function loadCollapsedGroups() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS.collapsed) || "[]");
+      return Array.isArray(saved) ? saved.filter((key) => typeof key === "string") : [];
+    } catch {
+      return [];
+    }
   }
 
   function prefs() {
@@ -845,7 +857,8 @@
       out.push(dir);
     };
     add(prefer);
-    for (const dir of prefs().recentWorkspaces || []) add(dir);
+    const hidden = hiddenWorkspaceKeys();
+    for (const dir of prefs().recentWorkspaces || []) if (!hidden.has(dirKey(dir))) add(dir);
     return out.slice(0, 3);
   }
 
@@ -854,13 +867,84 @@
     return t.scope?.kind === "workspace" && t.scope.ref ? t.scope.ref : homeDir(t);
   }
 
-  /** Unique disk folders that existing (non-archived) threads are attached to. */
+  /** Workspace folders the user hid (the group's menu in the thread list), by dirKey. */
+  function hiddenWorkspaceKeys() {
+    return new Set((prefs().hiddenWorkspaces || []).map(dirKey));
+  }
+
+  /**
+   * A thread its hidden workspace takes out of the lists. A page's or folder's own threads stay with
+   * that page or folder; only the Workspaces list drops them.
+   */
+  function inHiddenWorkspace(t, hidden = hiddenWorkspaceKeys(), every = false) {
+    if (!hidden.size || !(every || t.scope.kind === "global" || t.scope.kind === "workspace")) return false;
+    const dir = workspaceDir(t);
+    return Boolean(dir) && hidden.has(dirKey(dir));
+  }
+
+  /** Threads of a workspace folder, archived ones and helpers included. */
+  function workspaceThreads(dir) {
+    const key = dirKey(dir);
+    return [...S.threads.values()].filter((t) => {
+      const own = workspaceDir(t);
+      return Boolean(own) && dirKey(own) === key;
+    });
+  }
+
+  async function setWorkspaceHidden(dir, hidden) {
+    try {
+      const data = await api("POST", "/workspaces/hide", { path: dir, hidden });
+      S.config.prefs = data.prefs;
+      renderLists();
+      if (hidden) notice(`Hid ${R.basename(dir) || dir}. It is listed under Archived, and a search still finds its threads.`);
+    } catch (err) {
+      notice(err.message);
+    }
+  }
+
+  async function deleteWorkspace(dir) {
+    const threads = workspaceThreads(dir);
+    const n = threads.length;
+    const running = threads.filter((t) => t.status !== "idle").length;
+    const worktrees = threads.some((t) => openWorktree(t));
+    const parts = [
+      `Delete the workspace “${R.basename(dir) || dir}” from Scribe?`,
+      n ? `${n === 1 ? "Its thread is" : `Its ${n} threads are`} deleted for good, with ${n === 1 ? "its transcript" : "their transcripts"}.` : "It has no threads left.",
+      running ? `${running === 1 ? "1 of them is" : `${running} of them are`} still working and will be stopped.` : "",
+      worktrees ? "Their worktree folders are removed; the work stays on their branches." : "",
+      "Token, cost and usage numbers are kept for statistics. The folder on disk is not touched.",
+    ];
+    if (!(await app().confirm(parts.filter(Boolean).join(" "), "Delete workspace"))) return;
+    try {
+      const data = await api("POST", "/workspaces/delete", { path: dir });
+      S.config.prefs = data.prefs;
+      renderLists();
+    } catch (err) {
+      notice(err.message);
+    }
+  }
+
+  /** Hide or delete a workspace, from the ⋯ button next to it. */
+  function workspaceMenu(anchor, dir) {
+    const hidden = hiddenWorkspaceKeys().has(dirKey(dir));
+    openMenu(anchor, [
+      { header: R.basename(dir) || dir },
+      hidden
+        ? { label: "Show workspace", detail: "Back in the thread list and the workspace menus", run: () => setWorkspaceHidden(dir, false) }
+        : { label: "Hide workspace", detail: "Out of the thread list and the workspace menus. A search still finds its threads.", run: () => setWorkspaceHidden(dir, true) },
+      { separator: true },
+      { label: "Delete workspace…", detail: "Deletes all its threads for good", danger: true, run: () => deleteWorkspace(dir) },
+    ], { width: 280 });
+  }
+
+  /** Unique disk folders that existing (non-archived) threads are attached to. Hidden workspaces are left out. */
   function threadWorkspaces() {
     const byKey = new Map();
+    const hidden = hiddenWorkspaceKeys();
     for (const t of S.threads.values()) {
       if (t.archived) continue;
       const dir = workspaceDir(t);
-      if (!dir) continue;
+      if (!dir || hidden.has(dirKey(dir))) continue;
       const key = dirKey(dir);
       const cur = byKey.get(key);
       if (cur) cur.n++;
@@ -876,8 +960,9 @@
   /** Workspaces offered as presets: last used first, then the other folders threads are attached to. */
   function presetWorkspaces() {
     const byKey = new Map();
+    const hidden = hiddenWorkspaceKeys();
     for (const dir of [...(prefs().recentWorkspaces || []), ...threadWorkspaces().map((w) => w.path)]) {
-      if (dir && !byKey.has(dirKey(dir))) byKey.set(dirKey(dir), dir);
+      if (dir && !hidden.has(dirKey(dir)) && !byKey.has(dirKey(dir))) byKey.set(dirKey(dir), dir);
     }
     return [...byKey.values()].slice(0, 6);
   }
@@ -5383,10 +5468,34 @@
       if (S.filter === "here") threads = threads.filter(hereMatch);
       // Threads with no scope at all group here too, under No workspace.
       if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t) || t.scope.kind === "workspace");
+      const hiddenDirs = hiddenWorkspaceKeys();
       if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
+      // A hidden workspace's threads only come up in a search.
+      else threads = threads.filter((t) => !inHiddenWorkspace(t, hiddenDirs, S.filter === "workspaces"));
       // A helper sits under the thread that started it. A search lists them like any thread.
       if (!q) threads = threads.filter((t) => !nestsUnder(t));
       threads.sort((a, b) => threadRank(b) - threadRank(a));
+      // Archived starts with the hidden workspaces: the folders alone, to show again or delete.
+      const hiddenList = S.filter === "archived" && !q ? prefs().hiddenWorkspaces || [] : [];
+      if (hiddenList.length) {
+        const head = el("div", "ag-list-group");
+        head.dataset.key = "group:hidden-workspaces";
+        head.append(icon("box"), el("span", "ag-list-group-kind", "Hidden workspaces"));
+        out.push(head);
+        for (const dir of hiddenList) {
+          const n = workspaceThreads(dir).length;
+          const row = el("div", "ag-hidden-ws");
+          row.dataset.key = `hidden-ws:${dirKey(dir)}`;
+          row.dataset.tooltip = dir;
+          const acts = el("div", "ag-hidden-ws-acts");
+          acts.append(
+            button("Show", "ag-btn small", () => setWorkspaceHidden(dir, false), "Back in the thread list and the workspace menus"),
+            button(icon("more"), "ag-icon-btn small", (event) => workspaceMenu(event.currentTarget, dir), "Workspace actions")
+          );
+          row.append(el("span", "ag-hidden-ws-name", R.basename(dir) || dir), el("span", "ag-hidden-ws-count", n === 1 ? "1 thread" : `${n} threads`), acts);
+          out.push(row);
+        }
+      }
       const open = S.threads.get(currentId);
       const keepId = !q && open && nestsUnder(open) ? open.helperOf : currentId;
       const helperRows = (parent) => {
@@ -5412,6 +5521,7 @@
         out.push(box);
       };
       if (!threads.length) {
+        if (hiddenList.length) return;
         out.push(
           el(
             "div",
@@ -5453,22 +5563,46 @@
         shown++;
         const first = visible[0] || members[0];
         const gt = groupTitle(first);
-        const head = el("div", "ag-list-group");
+        // A search shows what it found, whatever is folded.
+        const folded = !q && S.collapsedGroups.has(key);
+        const head = el("div", `ag-list-group foldable${folded ? " folded" : ""}`);
         head.dataset.key = `group:${key}`;
+        head.setAttribute("role", "button");
+        head.tabIndex = 0;
+        head.setAttribute("aria-expanded", String(!folded));
+        // The header is kept across renders, so its handlers read the fold as it is now.
+        const fold = () => {
+          if (S.collapsedGroups.has(key)) S.collapsedGroups.delete(key);
+          else S.collapsedGroups.add(key);
+          localStorage.setItem(LS.collapsed, JSON.stringify([...S.collapsedGroups]));
+          renderLists();
+        };
+        head.addEventListener("click", (event) => {
+          if (!event.target.closest("button")) fold();
+        });
+        head.addEventListener("keydown", (event) => {
+          if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+          event.preventDefault();
+          fold();
+        });
         const name = gt.kind === "Global" ? "" : gt.text;
-        head.append(icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
-        if (S.filter === "workspaces") {
-          const dir = workspaceDir(first);
-          if (dir) head.dataset.tooltip = dir;
-        }
+        head.append(icon("chevron", "ag-ico ag-chev"), icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
+        if (folded) head.append(el("span", "ag-list-group-count", String(members.length)));
+        // The folder a workspace group stands for: every group of the Workspaces list, and app scope None elsewhere.
+        const dir = S.filter === "workspaces" ? workspaceDir(first) : first.scope.kind === "workspace" ? first.scope.ref : null;
+        if (dir) head.dataset.tooltip = dir;
+        const acts = el("span", "ag-list-group-acts");
+        if (dir) acts.append(button(icon("more"), "ag-icon-btn small ag-list-group-new", (event) => workspaceMenu(event.currentTarget, dir), "Hide or delete this workspace"));
         if (S.filter !== "archived") {
           const add = button(icon("plus"), "ag-icon-btn small ag-list-group-new", () => {
             const draft = groupDraft(key);
             if (draft) onNewIn(draft.scope, draft.settings);
           }, `New thread here, with the settings of its latest thread`);
-          head.append(add);
+          acts.append(add);
         }
+        if (acts.childNodes.length) head.append(acts);
         out.push(head);
+        if (folded) continue;
         for (const t of visible) {
           out.push(threadRow(t, t.id === currentId, onPick));
           helperRows(t);
@@ -6084,8 +6218,9 @@
       const others = threads.filter((t) => !pageThreads.includes(t));
       const items = [];
       const currentId = this.view.threadId;
+      const hiddenDirs = hiddenWorkspaceKeys();
       const add = (t, detail) => {
-        items.push({ label: t.title, detail, checked: t.id === currentId, run: () => this.pick(t.id) });
+        items.push({ label: t.title, detail, checked: t.id === currentId, searchOnly: t.id !== currentId && inHiddenWorkspace(t, hiddenDirs), run: () => this.pick(t.id) });
         const helpers = helpersOf(t.id).filter((h) => !h.archived);
         // Working ones and the open one always show; of the rest, the latest two. A search finds them all.
         const must = (h) => h.status !== "idle" || h.id === currentId;
@@ -9061,7 +9196,10 @@
     let threads = [...S.threads.values()].filter((t) => !t.archived);
     // A helper is reached through the thread that started it. A search finds it, named as that thread's helper.
     if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
-    else threads = threads.filter((t) => !nestsUnder(t));
+    else {
+      const hidden = hiddenWorkspaceKeys();
+      threads = threads.filter((t) => !nestsUnder(t) && !inHiddenWorkspace(t, hidden));
+    }
     threads.sort((a, b) => threadRank(b) - threadRank(a));
     return threads.slice(0, limit).map((t) => {
       const scope = scopeLabel(t.scope);
