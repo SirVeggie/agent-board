@@ -176,6 +176,16 @@ test("displayed defaults and launched approval agree for a different provider", 
   assert.equal(defaults.model, launch.model);
 });
 
+test("workers allow helpers by default and retain an explicit off choice", () => {
+  const run = harness();
+  for (const mode of ["code", "board"]) {
+    const worker = { mode, cwd: "C:/project" };
+    assert.equal(run(`launch(${JSON.stringify(worker)})`).helpersAllowed, true);
+    assert.equal(run(`launch(${JSON.stringify({ ...worker, helpers: true })})`).helpersAllowed, true);
+    assert.equal(run(`launch(${JSON.stringify({ ...worker, helpers: false })})`).helpersAllowed, undefined);
+  }
+});
+
 test("explicit worker settings still win", () => {
   const run = harness();
   const launch = run("launch({ provider: 'codex', model: 'picked', effort: 'low', approval: 'full', web: 'limited', fast: 'true', cwd: 'C:/project', worktree: true })");

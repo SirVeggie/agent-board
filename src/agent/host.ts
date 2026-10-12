@@ -755,7 +755,7 @@ export class AgentHost {
       searxngUrl: cleanSearxngUrl(saved.searxngUrl),
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
-      helpers: saved.helpers === true,
+      helpers: saved.helpers !== false,
       memory: saved.memory !== false,
       disabledModes: cleanDisabledModes(saved.disabledModes),
       hiddenWorkspaces: Array.isArray(saved.hiddenWorkspaces) ? saved.hiddenWorkspaces.filter((dir) => typeof dir === "string") : [],

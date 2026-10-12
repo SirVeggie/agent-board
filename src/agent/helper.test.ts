@@ -92,8 +92,17 @@ async function approvalFor(id: string): Promise<{ itemId: string }> {
   assert.fail(`thread ${id} did not request helper approval`);
 }
 
-test("helpers are refused until the user turns them on", async () => {
+test("helpers default on when preferences have no saved choice", () => {
+  assert.equal(host.prefs().helpers, true);
+  host.setPrefs({ memory: false });
+  assert.equal(host.prefs().helpers, true);
+});
+
+test("helpers are refused when the user turns them off", async () => {
   host.setPrefs({ helpers: false });
+  assert.equal(host.prefs().helpers, false);
+  host.setPrefs({ memory: true });
+  assert.equal(host.prefs().helpers, false);
   await assert.rejects(host.runHelper(parent(), { task: "x", provider: "pi" }), /turned off/);
   await assert.rejects(host.helperModels(parent()), /turned off/);
 });

@@ -4962,7 +4962,7 @@
       if (w.approval) opts.approval = w.approval;
       if (w.worktree) opts.worktree = true;
     }
-    if (w.helpers) opts.helpers = true;
+    opts.helpers = w.helpers !== false;
     return opts;
   }
 
@@ -6222,7 +6222,7 @@
       var hp = el("label", "check");
       var hpBox = el("input", "switch");
       hpBox.type = "checkbox";
-      hpBox.checked = Boolean(w.helpers);
+      hpBox.checked = w.helpers !== false;
       hpBox.addEventListener("change", function () { set({ helpers: hpBox.checked }); });
       hp.appendChild(hpBox);
       hp.appendChild(document.createTextNode("Start helper agents without asking"));
