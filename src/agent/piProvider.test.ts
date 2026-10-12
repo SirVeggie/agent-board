@@ -3,10 +3,12 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PiProvider, builtinTools, isReadOnlyCommand, sourceModelCost, sourceProviderId, splitPiModel } from "./providers/pi.js";
+import { PiProvider, builtinTools, isReadOnlyCommand, modelRateSnapshot, sourceModelCost, sourceProviderId, splitPiModel } from "./providers/pi.js";
 import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
 import type { Prefs } from "./prefs.js";
 import type { Thread } from "./types.js";
+import { normalizeSource } from "./openaiSources.js";
+import type { RunSink, SessionContext } from "./providers/provider.js";
 
 test("openai threads and prefs move to Pi", () => {
   const thread = { provider: "openai", model: "lmstudio/qwen/qwen3-8b", nativeId: "resp_1" } as unknown as Thread;
@@ -28,6 +30,50 @@ test("openai threads and prefs move to Pi", () => {
     favoriteModels: ["pi:src-or/gpt-5", "claude:opus"],
   });
   assert.deepEqual(migrateOpenaiPrefs({ provider: "claude" }), { provider: "claude" });
+});
+
+test("Native turn freezes rate snapshots, deduplicates messages and retains zero on continuation", async (t) => {
+  const source = normalizeSource({ name: "A", baseUrl: "https://example.test/v1", pricing: { x: { mode: "custom", rates: { input: "1", output: "2" } } } }, undefined, new Set());
+  const provider = new PiProvider(() => [source]);
+  t.after(() => provider.dispose());
+  const model = { provider: "src-a", id: "x", cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } } as any;
+  provider.resolveModel = async () => model;
+  const run = provider.createSession({ id: "test", nativeId: null, model: "src-a/x", mode: "code", scope: { kind: "global", ref: null } } as Thread, {} as SessionContext) as any;
+  let latest: import("./types.js").Usage = {};
+  let prompts = 0;
+  const message = () => ({ role: "assistant", provider: "src-a", model: "x", timestamp: 100, stopReason: "stop", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 999 } } });
+  const fake = {
+    model,
+    messages: [],
+    setModel: async () => {},
+    setThinkingLevel: () => {},
+    clearQueue: () => {},
+    prompt: async () => {
+      prompts++;
+      const first = message();
+      run.onEvent({ type: "message_end", message: first });
+      run.onEvent({ type: "message_end", message: first });
+      if (prompts === 1) {
+        source.pricing!.x = { mode: "custom", rates: { input: "0", output: "0" }, updatedAt: 200 };
+        // A distinct response with the same timestamp must still count.
+        run.onEvent({ type: "message_end", message: message() });
+      }
+    },
+  };
+  run.ensureSession = async () => fake;
+  const sink = { usage: (value: import("./types.js").Usage) => { latest = value; } } as RunSink;
+  const input = { text: "Hi", instructions: "", images: [], documents: [] };
+  assert.equal((await run.run(input, sink)).status, "done");
+  assert.equal(latest.costUsd, 0.00004);
+  assert.equal(latest.inputTokens, 20);
+  assert.equal(latest.costRecords?.length, 2);
+  assert.equal(latest.costRecords?.[1].rate.rates?.input, "1");
+  const saved = structuredClone(latest);
+  assert.equal((await run.run(input, sink)).status, "done");
+  assert.equal(latest.costUsd, 0);
+  assert.equal(latest.estimatedCostUsd, 0);
+  assert.equal(saved.costUsd, 0.00004);
+  assert.equal(latest.costRecords?.length, 1);
 });
 
 test("isReadOnlyCommand lets reads, git queries and tests through", () => {
@@ -96,4 +142,17 @@ test("DeepSeek source registration prices cached and uncached usage from the SDK
   assert.equal(reply.usage.output, 50);
   const expected = (100 * flash.cost.input + 900 * flash.cost.cacheRead + 50 * flash.cost.output) / 1_000_000;
   assert.ok(Math.abs(reply.usage.cost.total - expected) < 1e-12);
+  // Override edits reach an already registered model without changing earlier snapshots.
+  const original = provider.rateSnapshot(model);
+  const pricedSource = source as typeof source & { pricing?: import("./openaiSources.js").OpenAISource["pricing"] };
+  pricedSource.pricing = { "deepseek-flash": { mode: "custom", rates: { input: "0", output: "0" }, updatedAt: 100 } };
+  const free = (await provider.resolveModel("src-ds/deepseek-flash"))!;
+  assert.deepEqual(free.cost, zero);
+  assert.equal(provider.rateSnapshot(free).origin, "custom");
+  assert.equal(provider.rateSnapshot(free).rates?.cacheRead, undefined);
+  assert.equal(original.origin, "catalog");
+  assert.equal(original.rates?.input, String(flash.cost.input));
+  pricedSource.pricing["deepseek-flash"] = { mode: "unknown" };
+  assert.equal(provider.rateSnapshot((await provider.resolveModel("src-ds/deepseek-flash"))!).origin, "unknown");
+  assert.equal(modelRateSnapshot(model, { ...source, baseUrl: "https://secret:password@api.deepseek.com/v1?key=hidden" }).endpoint, "https://api.deepseek.com/v1");
 });

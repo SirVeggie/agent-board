@@ -8,6 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
+import { addCostRecord, estimateCost, type RateSnapshot } from "../pricing.js";
 import { isPlainRecord, noPages, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
 import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
@@ -71,6 +72,9 @@ export function sourceProviderId(sourceId: string): string {
 /** Catalog prices apply only to the official endpoint, never a proxy or local copy. */
 export function sourceModelCost(source: OpenAISource, model: string, catalog: readonly Model[]): Model["cost"] {
   const unknown = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const custom = source.pricing?.[model];
+  if (custom?.mode === "unknown") return unknown;
+  if (custom?.mode === "custom") return { input: Number(custom.rates.input), output: Number(custom.rates.output), cacheRead: Number(custom.rates.cacheRead ?? 0), cacheWrite: Number(custom.rates.cacheWrite ?? 0) };
   let url: URL;
   try {
     url = new URL(source.baseUrl);
@@ -81,6 +85,18 @@ export function sourceModelCost(source: OpenAISource, model: string, catalog: re
   // DeepSeek still accepts these retired Flash names at the current Flash price.
   const id = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].includes(model) ? "deepseek-flash" : model;
   return { ...(catalog.find((m) => m.provider === "deepseek" && m.id === id)?.cost ?? unknown) };
+}
+
+export function modelRateSnapshot(model: Model, source?: OpenAISource): RateSnapshot {
+  // Keep pricing identity without URL credentials or query secrets.
+  const endpoint = source ? new URL(source.baseUrl) : null;
+  const base: RateSnapshot = { origin: "unknown", provider: model.provider, model: model.id, ...(source ? { sourceId: source.id, endpoint: endpoint!.origin + endpoint!.pathname } : {}), unit: "USD/1M tokens", freshness: "unknown" };
+  const custom = source?.pricing?.[model.id];
+  if (custom?.mode === "unknown") return base;
+  if (custom?.mode === "custom") return { ...base, origin: "custom", rates: { ...custom.rates }, updatedAt: custom.updatedAt, freshness: "user-entered" };
+  if (Object.values(model.cost).some((n) => !Number.isFinite(n) || n < 0 || n > 1_000_000) || !Object.values(model.cost).some((n) => n > 0)) return base;
+  const decimal = (n: number) => n.toFixed(9).replace(/\.?0+$/, "") || "0";
+  return { ...base, origin: "catalog", rates: { input: decimal(model.cost.input), output: decimal(model.cost.output), cacheRead: decimal(model.cost.cacheRead), cacheWrite: decimal(model.cost.cacheWrite) } };
 }
 
 /** "<pi provider>/<model id>" → its parts. Model ids may contain slashes themselves (OpenRouter). */
@@ -339,9 +355,19 @@ export class PiProvider implements AgentProvider {
     const models = this.cachedModels().length ? this.cachedModels() : await this.models();
     const parts = id && id !== "default" ? splitPiModel(id) : null;
     const found = parts ? runtime.getModel(parts.provider, parts.model) : undefined;
-    if (found) return found;
+    if (found) return this.currentModel(found, runtime);
     const first = models[0] ? splitPiModel(models[0].id) : null;
-    return first ? (runtime.getModel(first.provider, first.model) ?? null) : null;
+    const fallback = first ? runtime.getModel(first.provider, first.model) : undefined;
+    return fallback ? this.currentModel(fallback, runtime) : null;
+  }
+
+  private currentModel(model: Model, runtime: ModelRuntime): Model {
+    const source = this.sources().find((s) => sourceProviderId(s.id) === model.provider);
+    return { ...model, cost: source ? sourceModelCost(source, model.id, runtime.getModels("deepseek")) : { ...model.cost } };
+  }
+
+  rateSnapshot(model: Model): RateSnapshot {
+    return modelRateSnapshot(model, this.sources().find((s) => sourceProviderId(s.id) === model.provider));
   }
 
   async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
@@ -493,6 +519,8 @@ class PiSession implements ProviderSession {
   private steers = new Map<string, Steer>();
   private carry: string | null = null;
   private usage: Usage = {};
+  private rate: RateSnapshot | null = null;
+  private costMessages = new WeakSet<object>();
   /** Text and reasoning blocks of the message streaming now, so a new block breaks the chat item. */
   private lastBlock: number | null = null;
   /** Plan mode's exit_plan was accepted: the session has the Code tools now. */
@@ -934,6 +962,8 @@ class PiSession implements ProviderSession {
     this.sink = sink;
     this.cancelled = false;
     this.usage = {};
+    this.rate = null;
+    this.costMessages = new WeakSet<object>();
     this.lastBlock = null;
     try {
       if (this.warming) await this.warming;
@@ -953,7 +983,8 @@ class PiSession implements ProviderSession {
         this.reported = this.file;
       }
       const model = await this.provider.resolveModel(this.thread.model);
-      if (model && (session.model?.provider !== model.provider || session.model?.id !== model.id)) await session.setModel(model);
+      if (model) await session.setModel(model);
+      if (session.model) this.rate = this.provider.rateSnapshot(session.model);
       if (session.model) session.setThinkingLevel(this.thinking(session.model));
       if (this.cancelled) return this.endTurn({ status: "cancelled" });
       this.running = true;
@@ -1024,15 +1055,25 @@ class PiSession implements ProviderSession {
       case "message_end": {
         const message = event.message as AssistantMessage;
         if (message.role !== "assistant" || !message.usage) return;
+        if (this.costMessages.has(message)) return;
+        this.costMessages.add(message);
+        const costId = randomUUID();
         const u = message.usage;
         const prev = this.usage;
+        const rate = this.rate && this.rate.provider === message.provider && this.rate.model === message.model
+          ? this.rate : { origin: "unknown" as const, provider: message.provider, model: message.model, unit: "USD/1M tokens" as const, freshness: "unknown" as const };
+        const cost = estimateCost(costId, message.timestamp, rate, { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite });
+        if (["error", "aborted"].includes(message.stopReason) && u.input + u.output + u.cacheRead + u.cacheWrite === 0) {
+          delete cost.estimatedUsd;
+          cost.missing.push("Failed request returned no billable usage");
+        }
         this.usage = {
           inputTokens: (prev.inputTokens ?? 0) + u.input,
           outputTokens: (prev.outputTokens ?? 0) + u.output,
           cacheReadTokens: (prev.cacheReadTokens ?? 0) + u.cacheRead,
           cacheWriteTokens: (prev.cacheWriteTokens ?? 0) + u.cacheWrite,
           ...(u.reasoning !== undefined ? { reasoningTokens: (prev.reasoningTokens ?? 0) + u.reasoning } : {}),
-          ...(u.cost?.total ? { costUsd: (prev.costUsd ?? 0) + u.cost.total } : {}),
+          ...addCostRecord(prev, cost),
         };
         const context = this.session?.getContextUsage();
         sink.usage({ ...this.usage, ...(context?.tokens != null ? { contextTokens: context.tokens } : {}), ...(context ? { contextWindow: context.contextWindow } : {}) });

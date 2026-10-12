@@ -1299,7 +1299,7 @@ class ClaudeSession implements ProviderSession {
           }),
           { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, contextWindow: 0 }
         );
-        sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined, ...(this.contextTokens ? { contextTokens: this.contextTokens } : {}) });
+        sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined, reportedCostUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined, ...(this.contextTokens ? { contextTokens: this.contextTokens } : {}) });
         // A steer this turn took in, in case its lifecycle frame went missing.
         for (const id of Array.isArray(m.user_message_uuids) ? (m.user_message_uuids as string[]) : []) {
           if (this.steers.get(id) === "pending") {

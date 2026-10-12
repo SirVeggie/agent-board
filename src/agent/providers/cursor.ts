@@ -847,7 +847,7 @@ class CursorSession implements ProviderSession {
     try {
       const usage = await Promise.race([agent.getUsage(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000))]);
       const cost = usage?.runs.at(-1)?.cost;
-      if (cost) sink.usage({ costUsd: cost.rawCostCents / 100 });
+      if (cost) sink.usage({ costUsd: cost.rawCostCents / 100, reportedCostUsd: cost.rawCostCents / 100 });
     } catch (err) {
       log(`Cursor getUsage failed: ${(err as Error).message}`);
     }

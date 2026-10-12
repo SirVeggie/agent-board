@@ -1,4 +1,5 @@
 import { isPlainRecord } from "./types.js";
+import { normalizePrices, type ModelPrice } from "./pricing.js";
 
 /**
  * OpenAI-compatible endpoints the user added (OpenAI, OpenRouter, LM Studio, Ollama, vLLM, …).
@@ -16,6 +17,8 @@ export type OpenAISource = {
   models: string[];
   /** Offer reasoning levels (sent as reasoning_effort). */
   reasoning?: boolean;
+  /** Exact model IDs; absence means Automatic. */
+  pricing?: Record<string, ModelPrice>;
 };
 
 /** What the board UI gets: no key, only whether there is one. */
@@ -62,6 +65,10 @@ export function normalizeSource(input: unknown, previous: OpenAISource | undefin
       : previous?.models ?? [];
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : previous?.apiKey ?? "";
   const reasoning = typeof body.reasoning === "boolean" ? body.reasoning : previous?.reasoning ?? false;
+  const endpointChanged = previous && baseUrl !== previous.baseUrl;
+  if (endpointChanged && Object.keys(previous.pricing ?? {}).length && body.pricing === undefined) throw new Error("Endpoint changed: reconfirm or clear model prices");
+  const pricing = body.pricing === undefined ? previous?.pricing : normalizePrices(body.pricing, endpointChanged ? {} : previous?.pricing);
+  if (endpointChanged && Object.keys(pricing ?? {}).length && body.pricingConfirmed !== true) throw new Error("Confirm that model prices apply to the changed endpoint");
   return {
     id: previous?.id ?? slugId(name, taken),
     name,
@@ -69,6 +76,7 @@ export function normalizeSource(input: unknown, previous: OpenAISource | undefin
     ...(apiKey ? { apiKey } : {}),
     models,
     ...(reasoning ? { reasoning: true } : {}),
+    ...(pricing && Object.keys(pricing).length ? { pricing } : {}),
   };
 }
 

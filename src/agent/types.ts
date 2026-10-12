@@ -199,6 +199,10 @@ export type FileChange = {
 };
 
 export type Usage = {
+  costRecords?: import("./pricing.js").CostRecord[];
+  estimatedCostUsd?: number;
+  reportedCostUsd?: number;
+  costPartial?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -213,6 +217,8 @@ export type Usage = {
 
 /** Totals across a thread's turns (reverted turns omitted). Boards read this when a worker chat ends. */
 export type ThreadUsage = {
+  estimatedCostUsd?: number;
+  reportedCostUsd?: number;
   turns: number;
   inputTokens?: number;
   outputTokens?: number;

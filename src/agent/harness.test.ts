@@ -126,3 +126,21 @@ test("skills are found in each provider's folders with their frontmatter", () =>
   assert.equal(skills[1].description, "Runs servers");
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test("Harness distinguishes free estimates, provider costs, legacy amounts and incomplete coverage", () => {
+  const stats = harnessStats([thread("a")], () => [
+    turn("a", "a", { usage: { costUsd: 0, estimatedCostUsd: 0 } }),
+    turn("b", "a", { usage: { costUsd: 2, reportedCostUsd: 2 } }),
+    turn("c", "a", { usage: { costUsd: 1 } }),
+    turn("d", "a", { usage: {} }),
+    turn("e", "a", { usage: { costUsd: 0.5, estimatedCostUsd: 0.5, costPartial: true } }),
+  ], () => []);
+  for (const row of [stats.totals, stats.providers[0], stats.models[0], stats.heavy[0]]) {
+    assert.equal(row.costUsd, 3.5);
+    assert.equal(row.estimatedCostUsd, 0.5);
+    assert.equal(row.reportedCostUsd, 2);
+    assert.equal(row.pricedTurns, 4);
+    assert.equal(row.unpricedTurns, 1);
+    assert.equal(row.costPartial, true);
+  }
+});

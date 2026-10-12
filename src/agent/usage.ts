@@ -19,10 +19,16 @@ export function sumThreadUsage(turns: Turn[]): ThreadUsage | undefined {
   let hasCacheWrite = false;
   let hasReasoning = false;
   let hasCost = false;
+  let estimatedCostUsd: number | undefined;
+  let reportedCostUsd: number | undefined;
+  let costPartial = false;
   for (const turn of turns) {
     if (turn.reverted) continue;
     counted++;
     const u = turn.usage;
+    if (u?.costPartial) costPartial = true;
+    if (u?.estimatedCostUsd !== undefined) estimatedCostUsd = (estimatedCostUsd ?? 0) + u.estimatedCostUsd;
+    if (u?.reportedCostUsd !== undefined) reportedCostUsd = (reportedCostUsd ?? 0) + u.reportedCostUsd;
     if (!u) continue;
     if (typeof u.inputTokens === "number") {
       input += u.inputTokens;
@@ -58,6 +64,9 @@ export function sumThreadUsage(turns: Turn[]): ThreadUsage | undefined {
     ...(hasCacheWrite ? { cacheWriteTokens: cacheWrite } : {}),
     ...(hasReasoning ? { reasoningTokens: reasoning } : {}),
     ...(hasCost ? { costUsd: cost } : {}),
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+    ...(reportedCostUsd !== undefined ? { reportedCostUsd } : {}),
+    ...(costPartial ? { costPartial: true } : {}),
   };
 }
 
@@ -93,7 +102,7 @@ export function sumUsageTree(
       result.turns += part.turns;
       result.inputTokens! += part.promptTokens ?? 0;
       result.promptTokens! += part.promptTokens ?? 0;
-      for (const key of ["outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd"] as const) {
+      for (const key of ["outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "estimatedCostUsd", "reportedCostUsd"] as const) {
         if (part[key] !== undefined) result[key] = (result[key] ?? 0) + part[key]!;
       }
       if (part.costPartial) result.costPartial = true;

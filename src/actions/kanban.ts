@@ -101,7 +101,7 @@ const STEP_LEASE_MS = 15 * 60 * 1000;
 const MAX_WORKER_LOG = 200;
 const DEFAULT_LOG_LIMIT = 80;
 
-const USAGE_KEYS = ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "promptTokens", "threads"] as const;
+const USAGE_KEYS = ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "estimatedCostUsd", "reportedCostUsd", "promptTokens", "threads"] as const;
 
 type UsageTotals = {
   turns?: number;
@@ -111,6 +111,8 @@ type UsageTotals = {
   cacheWriteTokens?: number;
   reasoningTokens?: number;
   costUsd?: number;
+  estimatedCostUsd?: number;
+  reportedCostUsd?: number;
   promptTokens?: number;
   threads?: number;
   costPartial?: boolean;
@@ -124,7 +126,7 @@ function compactUsage(value: unknown, breakdown = true): UsageTotals | undefined
   const out: UsageTotals = {};
   for (const key of USAGE_KEYS) {
     const n = Number(src[key]);
-    if (Number.isFinite(n) && (n > 0 || n === 0 && src[key] !== undefined && ["promptTokens", "costUsd"].includes(key))) out[key] = n;
+    if (Number.isFinite(n) && (n > 0 || n === 0 && src[key] !== undefined && ["promptTokens", "costUsd", "estimatedCostUsd", "reportedCostUsd"].includes(key))) out[key] = n;
   }
   if (src.costPartial === true) out.costPartial = true;
   if (breakdown) for (const key of ["main", "helpers"] as const) {

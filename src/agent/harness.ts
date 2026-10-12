@@ -252,7 +252,7 @@ export function promptTokens(provider: ProviderId, usage: Usage | undefined): nu
   return provider === "claude" || provider === "pi" ? input + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) : input;
 }
 
-export type TokenTotals = { turns: number; prompt: number; cached: number; output: number; reasoning: number; costUsd: number };
+export type TokenTotals = { turns: number; prompt: number; cached: number; output: number; reasoning: number; costUsd: number; estimatedCostUsd?: number; reportedCostUsd?: number; pricedTurns?: number; unpricedTurns?: number; costPartial?: boolean };
 export type ToolRow = { name: string; kind: string; calls: number; errors: number; outputTokens: number; ms: number };
 
 export type HarnessStats = {
@@ -270,19 +270,23 @@ export type HarnessStats = {
   skills: Array<{ name: string; calls: number }>;
   /** First turns that made no tool call: one model call, so their prompt is close to what a session starts with. */
   baselines: Array<{ provider: ProviderId; mode: ThreadMode; samples: number; min: number; median: number }>;
-  heavy: Array<{ id: string; title: string; provider: ProviderId; model: string; turns: number; prompt: number; output: number; toolCalls: number; costUsd: number }>;
+  heavy: Array<TokenTotals & { id: string; title: string; provider: ProviderId; model: string; toolCalls: number }>;
 };
 
 const emptyTotals = (): TokenTotals => ({ turns: 0, prompt: 0, cached: 0, output: 0, reasoning: 0, costUsd: 0 });
 
 function addUsage(into: TokenTotals, provider: ProviderId, usage: Usage | undefined): void {
   into.turns += 1;
+  if (usage?.costUsd === undefined) into.unpricedTurns = (into.unpricedTurns ?? 0) + 1;
+  else into.pricedTurns = (into.pricedTurns ?? 0) + 1;
+  if (usage?.costPartial) into.costPartial = true;
   if (!usage) return;
   into.prompt += promptTokens(provider, usage);
   into.cached += usage.cacheReadTokens ?? 0;
   into.output += usage.outputTokens ?? 0;
   into.reasoning += usage.reasoningTokens ?? 0;
   into.costUsd += usage.costUsd ?? 0;
+  for (const key of ["estimatedCostUsd", "reportedCostUsd"] as const) if (usage[key] !== undefined) into[key] = (into[key] ?? 0) + usage[key];
 }
 
 function dayKey(at: number): string {
@@ -392,7 +396,7 @@ export function harnessStats(
       }
     }
     if (thread.title !== undefined) {
-      heavy.push({ id: thread.id, title: thread.title, provider, model: thread.model, turns: own.turns, prompt: own.prompt, output: own.output, toolCalls: own.toolCalls, costUsd: own.costUsd });
+      heavy.push({ ...own, id: thread.id, title: thread.title, provider, model: thread.model });
     }
   }
 
