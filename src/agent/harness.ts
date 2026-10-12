@@ -7,7 +7,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { dataDir } from "../config.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
+import { mcpCall, toolUses, type ThreadStats, type ToolUse } from "./threadStats.js";
 import type { Item, ProviderId, Thread, ThreadMode, Turn, Usage } from "./types.js";
+
+export { mcpCall };
 
 /**
  * The agent harness view (#456): what Scribe gives each chat at its start (instructions, tools, skills,
@@ -249,17 +252,6 @@ export function promptTokens(provider: ProviderId, usage: Usage | undefined): nu
   return provider === "claude" || provider === "pi" ? input + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) : input;
 }
 
-/** The server and tool of an MCP call. Claude names it mcp__server__tool; the others title it "Server: tool". */
-export function mcpCall(item: { name: string; title: string }): { server: string; tool: string } | null {
-  const named = /^mcp__(.+?)__(.+)$/.exec(item.name);
-  if (named) return { server: named[1].toLowerCase(), tool: named[2] };
-  const titled = /^([\w.-]+):\s+([\w.-]+)/.exec(item.title);
-  if (!titled) return null;
-  const server = titled[1].toLowerCase();
-  // Older Cursor threads titled Scribe's server "Board".
-  return { server: server === "board" ? "scribe" : server, tool: titled[2] };
-}
-
 export type TokenTotals = { turns: number; prompt: number; cached: number; output: number; reasoning: number; costUsd: number };
 export type ToolRow = { name: string; kind: string; calls: number; errors: number; outputTokens: number; ms: number };
 
@@ -298,13 +290,6 @@ function dayKey(at: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** A tool's name for the table: commands some providers name by their text fold into one row. */
-function toolName(item: { name: string; tool: string }): string {
-  if (item.name.startsWith("`")) return "(shell command)";
-  if (/^mcp__/.test(item.name) || item.tool === "mcp") return "(MCP tool)";
-  return item.name || item.tool;
-}
-
 function bump<K, V>(map: Map<K, V>, key: K, make: () => V): V {
   let value = map.get(key);
   if (!value) {
@@ -316,7 +301,17 @@ function bump<K, V>(map: Map<K, V>, key: K, make: () => V): V {
 
 const newTool = (name: string, kind: string): ToolRow => ({ name, kind, calls: 0, errors: 0, outputTokens: 0, ms: 0 });
 
-export function harnessStats(threads: Thread[], turnsOf: (id: string) => Turn[], itemsOf: (id: string) => Item[], since: number | null = null): HarnessStats {
+/**
+ * deleted: what was kept of the threads deleted with their workspace (threadStats.ts). They count in
+ * every total; only the heaviest-threads list leaves them out, as there is nothing left to open.
+ */
+export function harnessStats(
+  threads: Thread[],
+  turnsOf: (id: string) => Turn[],
+  itemsOf: (id: string) => Item[],
+  since: number | null = null,
+  deleted: ThreadStats[] = []
+): HarnessStats {
   const totals = { ...emptyTotals(), toolCalls: 0, toolErrors: 0 };
   const outcomes = { done: 0, error: 0, cancelled: 0 };
   const providers = new Map<ProviderId, HarnessStats["providers"][number]>();
@@ -330,9 +325,21 @@ export function harnessStats(threads: Thread[], turnsOf: (id: string) => Turn[],
   const heavy: HarnessStats["heavy"] = [];
   let counted = 0;
 
-  for (const thread of threads) {
+  type Source = {
+    thread: { id: string; provider: ProviderId; model: string; title?: string };
+    forked: boolean;
+    turns: Array<Pick<Turn, "id" | "seq" | "status" | "model" | "mode" | "startedAt" | "usage" | "reverted">>;
+    tools: () => ToolUse[];
+  };
+  const sources: Source[] = [
+    ...threads.map((thread): Source => ({ thread, forked: Boolean(thread.fork), turns: turnsOf(thread.id), tools: () => toolUses(itemsOf(thread.id)) })),
+    ...deleted.map((kept): Source => ({ thread: { id: kept.id, provider: kept.provider, model: kept.model }, forked: kept.forked, turns: kept.turns, tools: () => kept.tools })),
+  ];
+
+  for (const source of sources) {
+    const { thread } = source;
     const provider = thread.provider;
-    const turns = turnsOf(thread.id).filter((turn) => !turn.reverted && (since === null || turn.startedAt >= since));
+    const turns = source.turns.filter((turn) => !turn.reverted && (since === null || turn.startedAt >= since));
     if (!turns.length) continue;
     counted += 1;
     const row = bump(providers, provider, () => ({ ...emptyTotals(), provider, threads: 0, toolCalls: 0, toolErrors: 0, errors: 0 }));
@@ -341,40 +348,31 @@ export function harnessStats(threads: Thread[], turnsOf: (id: string) => Turn[],
     const kept = new Set(turns.map((turn) => turn.id));
     const toolTurns = new Set<string>();
 
-    for (const item of itemsOf(thread.id)) {
-      if (item.kind !== "tool" || !item.turnId || !kept.has(item.turnId)) continue;
-      toolTurns.add(item.turnId);
-      const failed = item.status === "error";
-      const out = estimateTokens(item.output?.length ?? 0);
-      const ms = item.endedAt ? Math.max(0, item.endedAt - item.startedAt) : 0;
+    for (const use of source.tools()) {
+      if (!kept.has(use.turnId)) continue;
+      toolTurns.add(use.turnId);
       const add = (into: { calls: number; errors: number; outputTokens: number; ms?: number }) => {
-        into.calls += 1;
-        if (failed) into.errors += 1;
-        into.outputTokens += out;
-        if (into.ms !== undefined) into.ms += ms;
+        into.calls += use.calls;
+        into.errors += use.errors;
+        into.outputTokens += use.outputTokens;
+        if (into.ms !== undefined) into.ms += use.ms;
       };
-      totals.toolCalls += 1;
-      row.toolCalls += 1;
-      own.toolCalls += 1;
-      if (failed) {
-        totals.toolErrors += 1;
-        row.toolErrors += 1;
-      }
-      const model = turns.find((turn) => turn.id === item.turnId)?.model ?? thread.model;
-      bump(models, `${provider}\n${model}`, () => ({ ...emptyTotals(), provider, model, toolCalls: 0 })).toolCalls += 1;
-      add(bump(toolKinds, item.tool, () => newTool(item.tool, item.tool)));
-      const name = toolName(item);
-      add(bump(tools, `${provider}\n${name}`, () => ({ ...newTool(name, item.tool), provider })));
-      const call = item.tool === "mcp" || /^mcp__/.test(item.name) ? mcpCall(item) : null;
-      if (call) {
+      totals.toolCalls += use.calls;
+      row.toolCalls += use.calls;
+      own.toolCalls += use.calls;
+      totals.toolErrors += use.errors;
+      row.toolErrors += use.errors;
+      const model = turns.find((turn) => turn.id === use.turnId)?.model ?? thread.model;
+      bump(models, `${provider}\n${model}`, () => ({ ...emptyTotals(), provider, model, toolCalls: 0 })).toolCalls += use.calls;
+      add(bump(toolKinds, use.tool, () => newTool(use.tool, use.tool)));
+      add(bump(tools, `${provider}\n${use.name}`, () => ({ ...newTool(use.name, use.tool), provider })));
+      if (use.mcp) {
+        const call = use.mcp;
         const entry = bump(mcp, `${call.server}\n${call.tool}`, () => ({ ...call, calls: 0, errors: 0, outputTokens: 0, providers: new Set<ProviderId>() }));
         add(entry);
         entry.providers.add(provider);
       }
-      if (item.name === "Skill" && item.input && typeof item.input === "object" && typeof (item.input as { skill?: unknown }).skill === "string") {
-        const skill = (item.input as { skill: string }).skill;
-        skills.set(skill, (skills.get(skill) ?? 0) + 1);
-      }
+      if (use.skill) skills.set(use.skill, (skills.get(use.skill) ?? 0) + use.calls);
     }
 
     for (const turn of turns) {
@@ -389,11 +387,13 @@ export function harnessStats(threads: Thread[], turnsOf: (id: string) => Turn[],
       day.turns += 1;
       day.prompt[provider] = (day.prompt[provider] ?? 0) + prompt;
       day.output[provider] = (day.output[provider] ?? 0) + (turn.usage?.outputTokens ?? 0);
-      if (turn.seq === 1 && turn.status === "done" && prompt > 0 && !toolTurns.has(turn.id) && !thread.fork) {
+      if (turn.seq === 1 && turn.status === "done" && prompt > 0 && !toolTurns.has(turn.id) && !source.forked) {
         bump(baselines, `${provider}\n${turn.mode}`, () => ({ provider, mode: turn.mode, values: [] as number[] })).values.push(prompt);
       }
     }
-    heavy.push({ id: thread.id, title: thread.title, provider, model: thread.model, turns: own.turns, prompt: own.prompt, output: own.output, toolCalls: own.toolCalls, costUsd: own.costUsd });
+    if (thread.title !== undefined) {
+      heavy.push({ id: thread.id, title: thread.title, provider, model: thread.model, turns: own.turns, prompt: own.prompt, output: own.output, toolCalls: own.toolCalls, costUsd: own.costUsd });
+    }
   }
 
   const byCalls = <T extends { calls: number }>(rows: Iterable<T>) => [...rows].sort((a, b) => b.calls - a.calls);

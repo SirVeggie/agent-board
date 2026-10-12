@@ -693,6 +693,27 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  // Hide a workspace from the thread list and the workspace menus, or show it again (#507).
+  router.post(
+    "/workspaces/hide",
+    wrap((req) => {
+      if (typeof req.body?.path !== "string") throw new Error("path is required");
+      return { prefs: host.setWorkspaceHidden(req.body.path, req.body.hidden !== false) };
+    })
+  );
+
+  // Delete a workspace's threads for good; their numbers stay in thread_stats.
+  router.post(
+    "/workspaces/delete",
+    wrap((req) => {
+      if (typeof req.body?.path !== "string") throw new Error("path is required");
+      return host.deleteWorkspace(req.body.path);
+    })
+  );
+
+  /** What is kept of the threads deleted with their workspace: numbers, settings and dates. */
+  router.get("/workspaces/deleted-stats", wrap(() => ({ threads: host.deletedThreadStats() })));
+
   /** Files under a workspace for the composer's @-mention picker. */
   router.get(
     "/fs/files",

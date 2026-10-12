@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { dataDir } from "../config.js";
+import type { ThreadStats } from "./threadStats.js";
 import type { Item, Thread, Turn } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 
@@ -39,6 +40,12 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS idx_items_thread ON items(thread_id, seq);
 CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS thread_stats (
+  id TEXT PRIMARY KEY,
+  deleted_at INTEGER NOT NULL,
+  workspace TEXT,
+  data TEXT NOT NULL
+);
 `;
 
 export const AGENT_SCHEMA_VERSION = 1;
@@ -83,6 +90,21 @@ export class AgentDb {
 
   deleteThread(id: string): void {
     this.db.prepare("DELETE FROM threads WHERE id = ?").run(id);
+  }
+
+  /** What is kept of a thread deleted with its workspace (threadStats.ts): numbers only. */
+  saveThreadStats(stats: ThreadStats): void {
+    this.db
+      .prepare(
+        `INSERT INTO thread_stats (id, deleted_at, workspace, data) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at, workspace = excluded.workspace, data = excluded.data`
+      )
+      .run(stats.id, stats.deletedAt, stats.workspace, JSON.stringify(stats));
+  }
+
+  listThreadStats(): ThreadStats[] {
+    const rows = this.db.prepare("SELECT data FROM thread_stats ORDER BY deleted_at").all() as Array<{ data: string }>;
+    return rows.map((row) => JSON.parse(row.data) as ThreadStats);
   }
 
   listTurns(threadId: string): Turn[] {

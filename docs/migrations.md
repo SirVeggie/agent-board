@@ -1,5 +1,14 @@
 # Migrations
 
+## `thread_stats` table and `hiddenWorkspaces` pref (`agent.sqlite`, additive, schema still 1)
+
+- **What changed:** A workspace can be hidden or deleted from the thread list (#507). Hidden workspace folders are kept in the saved `prefs` setting as `hiddenWorkspaces: string[]`. Deleting a workspace deletes its threads for good, after writing one row per thread to a new `thread_stats` table: `id` (the thread's id), `deleted_at`, `workspace`, and `data` (JSON `ThreadStats`: settings, dates, token and cost totals, per-turn usage, tool call counts, message and character counts; no titles, messages, tool input or output, file names or page ids).
+- **Why no version bump:** Nothing existing changes. `CREATE TABLE IF NOT EXISTS` runs on every open, and prefs without `hiddenWorkspaces` read as an empty list. `AGENT_SCHEMA_VERSION` stays `1`.
+- **Protocol:** additive routes `POST /api/agent/workspaces/hide`, `POST /api/agent/workspaces/delete`, `GET /api/agent/workspaces/deleted-stats`. `GET /api/agent/harness/stats` now counts the deleted threads in its totals (not in its heaviest-threads list). `VERSION` stays `3.0.0`.
+- **Where:** `src/agent/threadStats.ts`, `src/agent/db.ts` (`saveThreadStats`, `listThreadStats`), `src/agent/host.ts` (`setWorkspaceHidden`, `deleteWorkspace`), `src/agent/harness.ts` (`harnessStats` `deleted`), `src/agent/prefs.ts`, `public/agent.js`.
+- **How to verify:** `src/agent/workspaceDelete.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.reply_to` column (additive, schema still 3)
 
 - **What changed:** A page can have a reply target (#320): `replyTo` on the tab, `{ page: <target tab id>, card?: number }`, set by agents with `page_show` / `page_patch` `replyTo` (keys are resolved to ids). The page's `scribe.reply(data, { summary })` sends its answers there after a click; a Kanban target posts them as the user's comment and passes them on to the card's chat (server side, `AgentHost.cardMessage`). Stored as `tabs.reply_to TEXT` (JSON, nullable).

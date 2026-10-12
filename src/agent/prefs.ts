@@ -45,6 +45,11 @@ export type Prefs = {
   memory: boolean;
   recentWorkspaces: string[];
   /**
+   * Workspace folders the user hid: the thread list and the workspace menus leave them out (a search
+   * still finds their threads). Starting a thread in one by its path shows it again.
+   */
+  hiddenWorkspaces: string[];
+  /**
    * Last workspace used for a folder scope ("folder:<id>"), so new threads there start in it.
    * Still recorded for pages; new page threads take the latest AI reply on that page instead.
    */
@@ -75,6 +80,7 @@ export const DEFAULT_PREFS: Prefs = {
   helpers: false,
   memory: true,
   recentWorkspaces: [],
+  hiddenWorkspaces: [],
   scopeWorkspaces: {},
   favoriteModels: [],
   worktrees: {},
@@ -174,6 +180,10 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
   if (patch.cwd && thread.cwd) {
     const cwd = path.normalize(thread.cwd);
     next.recentWorkspaces = [thread.cwd, ...prefs.recentWorkspaces.filter((dir) => path.normalize(dir) !== cwd)].slice(0, 12);
+    const key = workspaceKey(thread.cwd);
+    if (prefs.hiddenWorkspaces.some((dir) => workspaceKey(dir) === key)) {
+      next.hiddenWorkspaces = prefs.hiddenWorkspaces.filter((dir) => workspaceKey(dir) !== key);
+    }
     if (thread.scope.kind === "page" || thread.scope.kind === "folder") {
       next.scopeWorkspaces = { ...prefs.scopeWorkspaces, [`${thread.scope.kind}:${thread.scope.ref}`]: thread.cwd };
     }

@@ -47,6 +47,7 @@ import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRef
 import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
+import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanDisabledModes, DEFAULT_PREFS, modelChoice, prefsPatchFromChoices, seedModelSettings, settingPatch, workspaceKey, type Prefs } from "./prefs.js";
@@ -757,6 +758,7 @@ export class AgentHost {
       helpers: saved.helpers === true,
       memory: saved.memory !== false,
       disabledModes: cleanDisabledModes(saved.disabledModes),
+      hiddenWorkspaces: Array.isArray(saved.hiddenWorkspaces) ? saved.hiddenWorkspaces.filter((dir) => typeof dir === "string") : [],
     };
   }
 
@@ -963,7 +965,7 @@ export class AgentHost {
   /** Token and tool totals over the stored threads; days limits it to turns started in that many days. */
   harnessStats(days: number | null): HarnessStats {
     const since = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
-    return harnessStats([...this.threads.values()], (id) => this.loadTurns(id), (id) => this.loadItems(id), since);
+    return harnessStats([...this.threads.values()], (id) => this.loadTurns(id), (id) => this.loadItems(id), since, this.db.listThreadStats());
   }
 
   /** What a new thread with these settings starts with: Scribe's instructions, its tools, the user's MCP servers, and what the provider adds itself. */
@@ -3430,6 +3432,77 @@ export class AgentHost {
     return [...this.threads.values()].filter((t) => t.id !== threadId && openWorktree(t) && workspaceKey(openWorktree(t)!.path) === key);
   }
 
+  // ---------- hidden and deleted workspaces (#507) ----------
+
+  /**
+   * Hide a workspace folder from the thread list and the workspace menus, or show it again. A hidden
+   * one also leaves the recent workspaces, so new threads stop starting in it.
+   */
+  setWorkspaceHidden(dir: string, hidden: boolean): Prefs {
+    if (!path.isAbsolute(dir)) throw new Error("path must be an absolute path");
+    const key = workspaceKey(dir);
+    const prefs = this.prefs();
+    const rest = prefs.hiddenWorkspaces.filter((d) => workspaceKey(d) !== key);
+    if (!hidden) return this.setPrefs({ hiddenWorkspaces: rest });
+    return this.setPrefs({
+      hiddenWorkspaces: [...rest, dir],
+      recentWorkspaces: prefs.recentWorkspaces.filter((d) => workspaceKey(d) !== key),
+    });
+  }
+
+  /** The threads that belong to a workspace folder, with the helpers they started. */
+  private workspaceThreads(dir: string): Thread[] {
+    const key = workspaceKey(dir);
+    const out = new Map<string, Thread>();
+    for (const thread of this.threads.values()) {
+      const folder = this.threadFolder(thread);
+      if (folder && workspaceKey(folder) === key) out.set(thread.id, thread);
+    }
+    // deleteThread takes a thread's helpers with it, wherever they worked.
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const thread of this.threads.values()) {
+        if (thread.helperOf && out.has(thread.helperOf) && !out.has(thread.id)) {
+          out.set(thread.id, thread);
+          grew = true;
+        }
+      }
+    }
+    return [...out.values()];
+  }
+
+  /**
+   * Delete every thread of a workspace folder for good. Each thread's numbers are kept first
+   * (threadStats.ts), so usage history survives; the folder on disk is not touched.
+   */
+  async deleteWorkspace(dir: string): Promise<{ threads: number; prefs: Prefs }> {
+    if (!path.isAbsolute(dir)) throw new Error("path must be an absolute path");
+    const key = workspaceKey(dir);
+    const threads = this.workspaceThreads(dir);
+    const now = Date.now();
+    for (const thread of threads) {
+      const folder = this.threadFolder(thread);
+      this.db.saveThreadStats(threadStats(thread, this.loadTurns(thread.id), this.loadItems(thread.id), folder ?? dir, now));
+    }
+    for (const thread of threads) {
+      // A helper is gone once the thread that started it is.
+      if (this.threads.has(thread.id)) await this.deleteThread(thread.id);
+    }
+    const prefs = this.prefs();
+    const saved = this.setPrefs({
+      hiddenWorkspaces: prefs.hiddenWorkspaces.filter((d) => workspaceKey(d) !== key),
+      recentWorkspaces: prefs.recentWorkspaces.filter((d) => workspaceKey(d) !== key),
+      scopeWorkspaces: Object.fromEntries(Object.entries(prefs.scopeWorkspaces).filter(([, d]) => workspaceKey(d) !== key)),
+      worktrees: Object.fromEntries(Object.entries(prefs.worktrees).filter(([k]) => k !== key)),
+    });
+    return { threads: threads.length, prefs: saved };
+  }
+
+  /** What is kept of the threads deleted with their workspace. */
+  deletedThreadStats(): ThreadStats[] {
+    return this.db.listThreadStats();
+  }
+
   // ---------- moved workspace folders (#338) ----------
 
   /** The folder in the user's checkout a thread belongs to (not its worktree). */
@@ -3562,6 +3635,7 @@ export class AgentHost {
       recentWorkspaces: [...recent.values()],
       scopeWorkspaces: Object.fromEntries(Object.entries(prefs.scopeWorkspaces).map(([k, dir]) => [k, move(dir) ?? dir])),
       worktrees: Object.fromEntries(Object.entries(prefs.worktrees).map(([k, on]) => [move(k) ? workspaceKey(move(k)!) : k, on])),
+      hiddenWorkspaces: prefs.hiddenWorkspaces.map((dir) => move(dir) ?? dir),
     });
     const memories = this.memories();
     if (memories.some((m) => move(m.workspace))) this.db.setSetting("memories", memories.map((m) => (move(m.workspace) ? { ...m, workspace: move(m.workspace)! } : m)));
