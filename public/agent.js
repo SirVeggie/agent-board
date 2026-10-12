@@ -2107,7 +2107,9 @@
       }
       if (t && S.browsers.has(t.id)) acts.append(button(icon("browser"), "ag-icon-btn", () => openBrowser(t.id), "Agent browser: watch it, click and type into it"));
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
-      acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings", false));
+      const settingsButton = button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings (Ctrl+Shift+,)");
+      settingsButton.setAttribute("aria-description", "Agent settings (Ctrl+Shift+,)");
+      acts.append(settingsButton);
       acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread (Ctrl+Shift+K)"));
       if (!SOLO && window.scribePopout?.supported && (this.variant === "side" || this.variant === "full")) {
         acts.append(button(icon("popout"), "ag-icon-btn", () => popOutChat(), "Open as a window"));
