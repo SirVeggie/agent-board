@@ -768,6 +768,12 @@ class ClaudeSession implements ProviderSession {
             timeout: 7 * 24 * 60 * 60,
             hooks: [async (hookInput, _toolUseId, { signal }) => this.gateWeb(hookInput as { tool_name?: string; tool_input?: unknown }, signal)],
           },
+          {
+            // Scribe's hooks (Agent settings, Hooks): every tool call asks the host first, also under
+            // Full access. An ask waits on the user, so it gets the web gate's long timeout.
+            timeout: 7 * 24 * 60 * 60,
+            hooks: [async (hookInput, _toolUseId, { signal }) => this.gateHooks(hookInput as { tool_name?: string; tool_input?: unknown; tool_use_id?: string }, signal)],
+          },
         ],
       },
       env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" },
@@ -822,6 +828,28 @@ class ClaudeSession implements ProviderSession {
     if (!this.ctx.webRequest) return deny("Web access is off for this thread.");
     const result = await this.ctx.webRequest(thread.id, call, { signal });
     return result.allowed ? allow() : deny(result.message ?? "The user did not allow this web request.");
+  }
+
+  /**
+   * PreToolUse for every tool: Scribe's hooks may deny the call or have the user approve it first.
+   * It never allows one: a call that passes goes on to the permission check as before.
+   */
+  private async gateHooks(inp: { tool_name?: string; tool_input?: unknown; tool_use_id?: string }, signal?: AbortSignal): Promise<HookJSONOutput> {
+    const name = inp.tool_name;
+    if (!this.ctx.toolGate || !name) return { continue: true };
+    try {
+      const described = describeTool(name, inp.tool_input, this.thread.cwd);
+      const result = await this.ctx.toolGate(
+        this.thread.id,
+        { ...(inp.tool_use_id ? { toolId: inp.tool_use_id } : {}), name, tool: toolKind(name), title: described.title, ...(described.detail ? { detail: described.detail } : {}), input: inp.tool_input, ...(described.paths ? { paths: described.paths } : {}) },
+        signal
+      );
+      if (result.allowed) return { continue: true };
+      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: result.reason } };
+    } catch {
+      // A hook that fails must not take the tool away (fail open).
+      return { continue: true };
+    }
   }
 
   private async ensureQuery(): Promise<Query> {

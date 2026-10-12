@@ -645,18 +645,21 @@ class CursorSession implements ProviderSession {
     const t = this.thread;
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
     this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope));
-    const customTools: Record<string, SDKCustomTool> = { ...(await this.userTools()), ...(await this.board.tools()) };
+    // Scribe runs these itself, so its hooks can hold them (the board tools ask from their own process, see mcp.ts).
+    const own: Record<string, SDKCustomTool> = await this.userTools();
     const searchUrl = t.web !== "on" ? (this.ctx.webSearchUrl?.() ?? "") : "";
-    if (t.web !== "on") customTools.web_fetch = gatedFetch((url) => this.gateFetch(url), Boolean(searchUrl));
+    if (t.web !== "on") own.web_fetch = gatedFetch((url) => this.gateFetch(url), Boolean(searchUrl));
     if (searchUrl) {
-      customTools.web_search = gatedSearch(searchUrl, t.web, {
+      own.web_search = gatedSearch(searchUrl, t.web, {
         allowed: (call) => this.webCovered(call),
         reach: () => [...(t.web === "limited" ? this.ctx.webAllowlist() : []), ...(this.thread.webGrants?.domains ?? [])],
         ask: (call) => this.askWeb(call),
       });
     }
     const hostShell = this.hostShell();
-    if (hostShell) customTools[HOST_SHELL] = this.hostShellTool();
+    if (hostShell) own[HOST_SHELL] = this.hostShellTool();
+    const customTools: Record<string, SDKCustomTool> = { ...(await this.board.tools()) };
+    for (const [name, tool] of Object.entries(own)) customTools[name] = this.hooked(name, tool);
     return {
       model: modelSelection(t, models),
       ...toolLists(t, hostShell),
@@ -964,7 +967,7 @@ class CursorSession implements ProviderSession {
     const input = type === "mcp" ? (isPlainRecord(args.args) ? args.args : undefined) : Object.keys(args).length ? args : undefined;
     if (!this.tools.has(callId)) {
       this.tools.set(callId, type);
-      sink.toolStart({ toolId: callId, name: type, tool: toolKind(type), title, detail, input, paths, status: "running" });
+      sink.toolStart({ toolId: callId, name: type, tool: toolKind(type), title, detail, input, paths, status: "running", ...(isBoard ? { held: true } : {}) });
     }
     if (!finished) {
       sink.toolUpdate(callId, { title, ...(detail ? { detail } : {}), ...(input ? { input } : {}), ...(paths ? { paths } : {}) });
@@ -994,7 +997,7 @@ class CursorSession implements ProviderSession {
     }
     if (!this.tools.has(callId)) {
       this.tools.set(callId, "shell");
-      sink.toolStart({ toolId: callId, name: "shell", tool: "execute", title: "Shell", ...(command ? { detail: command } : {}), status: "running" });
+      sink.toolStart({ toolId: callId, name: "shell", tool: "execute", title: "Shell", ...(command ? { detail: command } : {}), status: "running", held: true });
     } else if (command) {
       sink.toolUpdate(callId, { detail: command });
     }
@@ -1019,6 +1022,32 @@ class CursorSession implements ProviderSession {
       }
     }
     return id;
+  }
+
+  /** A custom tool that asks Scribe's hooks first (SessionContext.toolGate): they may deny the call or have the user approve it. */
+  private hooked(name: string, tool: SDKCustomTool): SDKCustomTool {
+    return {
+      ...tool,
+      execute: async (args, context) => {
+        const gate = this.ctx.toolGate;
+        if (gate) {
+          const shell = name === HOST_SHELL;
+          const command = shell && typeof args.command === "string" ? args.command.trim() : "";
+          // The id the stream shows the call under, so a hook's flag and approval sit on that row.
+          const toolId = context.toolCallId && this.tools.has(context.toolCallId) ? context.toolCallId : undefined;
+          const held = await gate(this.thread.id, {
+            ...(toolId ? { toolId } : {}),
+            name,
+            tool: shell ? "execute" : name === "web_fetch" || name === "web_search" ? "fetch" : "mcp",
+            title: shell ? "Run command" : this.bridgedLabels.get(name) ?? name,
+            ...(command ? { detail: command } : {}),
+            input: args,
+          }).catch(() => null);
+          if (held && !held.allowed) return { content: [{ type: "text", text: held.reason }], isError: true };
+        }
+        return tool.execute(args, context);
+      },
+    };
   }
 
   private hostShellTool(): SDKCustomTool {

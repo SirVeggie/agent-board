@@ -9,11 +9,17 @@ export const JEV_BASE_URL = "https://api.typesafe.ai";
 export const JEV_DEFAULT_MODEL = "jev-latest";
 
 /**
- * Features built on the decision service, each with a switch in Settings. Empty until the first one
- * lands (page-creation intent, docs/intent-detection-hooks-design.md); a feature adds itself here
- * and passes its id to decide().
+ * Features built on the decision service, each with a switch in Settings. A feature adds itself here
+ * and passes its id to decide() (docs/intent-detection-hooks-design.md).
  */
-export const ML_FEATURES: MlFeature[] = [];
+export const ML_FEATURES: MlFeature[] = [
+  {
+    id: "hooks",
+    label: "Hook questions",
+    hint: "Hook rules of the kind Question (Agent settings, Hooks) ask the classifier about messages, agent output and tool calls. Off: those rules never match.",
+    default: true,
+  },
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

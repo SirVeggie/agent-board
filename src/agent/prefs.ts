@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope, WebAccess } from "./types.js";
+import type { HookRule } from "./hooks.js";
 import { DEFAULT_WEB_ALLOWLIST } from "./webAccess.js";
 
 export type ModelChoice = { effort: string | null; modelParams: Record<string, string> };
@@ -43,6 +44,8 @@ export type Prefs = {
   helpers: boolean;
   /** Chats get the shared memories in their instructions, and the memory tools to keep them (see memory.ts). */
   memory: boolean;
+  /** The user's own hooks (hooks.ts): a pattern, the event it watches, and what happens on a match. */
+  hookRules: HookRule[];
   recentWorkspaces: string[];
   /**
    * Workspace folders the user hid: the thread list and the workspace menus leave them out (a search
@@ -79,6 +82,7 @@ export const DEFAULT_PREFS: Prefs = {
   cursorHostShell: false,
   helpers: true,
   memory: true,
+  hookRules: [],
   recentWorkspaces: [],
   hiddenWorkspaces: [],
   scopeWorkspaces: {},

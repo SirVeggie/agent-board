@@ -1455,6 +1455,8 @@ export class CodexSession implements ProviderSession {
         ...(input !== undefined ? { input } : {}),
         ...(paths?.length ? { paths } : {}),
         status: "running",
+        // Scribe's own tools ask its hooks from the MCP process (mcp.ts), before they do anything.
+        ...(item.type === "mcp_tool_call" && item.server === "scribe" ? { held: true } : {}),
       });
     } else if (!finished) {
       const output = item.type === "command_execution" ? item.aggregated_output : undefined;

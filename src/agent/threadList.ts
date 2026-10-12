@@ -16,7 +16,7 @@ export function pageOwned(items: Userish[]): boolean {
     }
     // Scribe's own note (going on after a restart) makes a thread neither the page's nor the user's.
     // So do the briefs a helper thread gets from its agent.
-    if (item.from === "scribe" || item.from === "agent") continue;
+    if (item.from === "scribe" || item.from === "agent" || item.from === "hook") continue;
     if (item.text?.trim()) return false;
   }
   return fromPage;

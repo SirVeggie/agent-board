@@ -2891,6 +2891,7 @@
       if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.reply ? `Reply on card #${item.card.num}` : item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
+      else if (item.from === "hook") bubble.prepend(el("div", "ag-from-page", "Sent by a hook"));
       else if (item.from === "agent") bubble.prepend(el("div", "ag-from-page", "Brief from the agent that started this helper"));
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));

@@ -37,6 +37,8 @@ export type ToolStart = {
   paths?: string[];
   parentToolId?: string;
   status?: ToolStatus;
+  /** This call asks the host first (SessionContext.toolGate) on a provider that holds only some calls. */
+  held?: boolean;
 };
 
 export type ToolPatch = {
@@ -66,6 +68,11 @@ export type ApprovalRequest = {
 };
 
 export type ApprovalDecision = { optionId: string; note?: string };
+
+/** A tool call a provider is about to run, for SessionContext.toolGate. */
+export type ToolGateCall = { toolId?: string; name: string; tool: ToolKind; title?: string; detail?: string; input?: unknown; paths?: string[] };
+
+export type ToolGateResult = { allowed: true } | { allowed: false; reason: string };
 
 export type QuestionRequest = { title?: string; questions: QuestionSpec[] };
 
@@ -177,6 +184,13 @@ export type SessionContext = {
    * Returns false when the host cannot take it now; the provider then drops what it buffered.
    */
   followUp?(threadId: string, id: string): boolean;
+  /**
+   * "Ask the host before this tool call": Scribe's hooks (hooks.ts) may deny it, or have the user
+   * approve it first whatever the thread's approval level. It never grants anything: an allowed call
+   * still goes through the provider's own permission check. Providers call it where their SDK lets
+   * them hold a call (Claude's PreToolUse, Pi's tool_call, Cursor's custom tools).
+   */
+  toolGate?(threadId: string, call: ToolGateCall, signal?: AbortSignal): Promise<ToolGateResult>;
   /** A tool approval with no turn running (a background agent at work): the thread's own rules, or a refusal. */
   approval?(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision>;
   /**

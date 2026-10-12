@@ -94,6 +94,8 @@ export type Thread = {
    * draft thread (the list marks it with a pen). Attached files stay in the window that has them.
    */
   draft?: ComposerDraft | null;
+  /** Detection off: Scribe's hooks (Agent settings, Hooks) neither watch nor hold anything in this thread. */
+  hooksOff?: boolean;
 };
 
 export type ComposerDraft = { text: string; context?: ContextChip[] };
@@ -321,12 +323,16 @@ export type TaskInfo = {
   endedAt?: number;
 };
 
+/** A hook's mark on a transcript item (hooks.ts): which detector matched, and what it did about it. */
+export type ItemFlag = { id: string; label: string; action: "flag" | "ask" | "block"; reason?: string };
+
 type ItemBase = {
   id: string;
   threadId: string;
   turnId: string | null;
   seq: number;
   createdAt: number;
+  flags?: ItemFlag[];
 };
 
 export type ItemBody =
@@ -343,8 +349,8 @@ export type ItemBody =
       steer?: "waiting" | "folded";
       /** Temporarily held in the queue while an editing popup is open. */
       editing?: boolean;
-      /** Sent by the code of the thread's page (board.agent), by Scribe itself (going on after a restart), or by the agent this helper thread works for; not typed by the user. */
-      from?: "page" | "scribe" | "agent";
+      /** Sent by the code of the thread's page (board.agent), by Scribe itself (going on after a restart), by the agent this helper thread works for, or by a hook's context action; not typed by the user. */
+      from?: "page" | "scribe" | "agent" | "hook";
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
       card?: { num: number; title?: string; resume?: boolean; reply?: string };
     }
@@ -419,6 +425,8 @@ export type AgentEvent =
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn }
   | { type: "agent_turn_deleted"; threadId: string; id: string }
+  /** A hook's signal action: a detector matched a chunk of the turn (hooks.ts). The agent is unaffected. */
+  | { type: "agent_intent"; threadId: string; turnId: string | null; itemId?: string; name: string; detector: string; event: string; early?: boolean; confidence?: number }
   /** The thread's agent browser opened, navigated, or closed (view null). */
   | { type: "agent_browser"; threadId: string; view: BrowserView | null };
 

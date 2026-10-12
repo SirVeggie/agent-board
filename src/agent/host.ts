@@ -24,6 +24,9 @@ import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
 import { PiProvider } from "./providers/pi.js";
+import { HOOKS_FEATURE, HookPipeline, OBSERVE_DEADLINE_MS, earlyEnd, holdsAll, isGating, normalizeRules, ruleDetectors, toolCallText, verdict, clip as clipChunk, type Chunk, type Detector, type Finding, type HookDecide, type HookEvent, type HookRule } from "./hooks.js";
+import { mlService } from "../ml/service.js";
+import type { SendKind } from "../ml/types.js";
 import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
 import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
 import type {
@@ -37,6 +40,8 @@ import type {
   QuestionRequest,
   RunSink,
   SessionContext,
+  ToolGateCall,
+  ToolGateResult,
   ToolPatch,
   ToolStart,
   TurnResult,
@@ -98,6 +103,12 @@ const MAX_RECAP = 24_000;
 const PRUNE_FIRST_MS = 5 * 60 * 1000;
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 const DELTA_MS = 50;
+/**
+ * Where a provider cannot hold a call (Codex, Cursor), a hook's ask or block waits this long for the
+ * call's approval request to turn up, which it can answer, before it falls back to stopping the turn.
+ */
+const HOOK_GRACE_MS = 400;
+
 /** At most this often, a running thread is sent again because its live step changed. */
 const ACTIVITY_MS = 1000;
 const MAX_TOOL_OUTPUT = 20_000;
@@ -166,7 +177,7 @@ type QueuedMessage = {
   /** Where the images and files were saved, in the same order. */
   saved: { images: FileRef[]; files: FileRef[] };
   context: ContextChip[];
-  from?: "page" | "scribe" | "agent";
+  from?: "page" | "scribe" | "agent" | "hook";
   /** A Kanban card the board sent this about (a comment on it, or Continue). */
   card?: CardRef;
 };
@@ -218,6 +229,8 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
       ? "<context>\nSent by the code of the Scribe page this thread belongs to (scribe.agent), not typed by the user.\n</context>\n\n"
       : msg.from === "scribe"
         ? "<context>\nSent by Scribe itself, not typed by the user.\n</context>\n\n"
+        : msg.from === "hook"
+          ? "<context>\nSent by one of the user's Scribe hooks, which matched something in this turn. Not typed by the user just now.\n</context>\n\n"
         : msg.from === "agent"
           ? "<context>\nA brief from the agent this helper thread works for, not typed by the user. Your final reply goes back to that agent.\n</context>\n\n"
           : "";
@@ -298,6 +311,14 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
   return null;
 }
 
+/** A gating verdict as the approval flow uses it: what to do, and the line that tells the user or agent why. */
+function hookSays(strongest: ReturnType<typeof verdict>): { kind: "block" | "ask"; reason: string } | null {
+  if (!strongest) return null;
+  const { finding } = strongest;
+  if (finding.action.kind === "block") return { kind: "block", reason: finding.action.reason };
+  return { kind: "ask", reason: finding.reason ? `Hook (${finding.label}): ${finding.reason}` : `A hook (${finding.label}) wants your approval for this call.` };
+}
+
 /** PDFs, for providers that read them as documents beside the text that names them. */
 function pdfs(msg: QueuedMessage): ChatFile[] {
   return msg.files.filter((file) => file.mimeType === "application/pdf");
@@ -306,6 +327,15 @@ function pdfs(msg: QueuedMessage): ChatFile[] {
 /** A saved file as the transcript keeps it: without its local path. */
 function fileEntry(ref: FileRef): FileRef {
   return { id: ref.id, name: ref.name, mimeType: ref.mimeType, size: ref.size };
+}
+
+/** Saved hook rules; ones an older or hand-edited file got wrong are dropped, not thrown on. */
+function savedRules(value: unknown): HookRule[] {
+  try {
+    return normalizeRules(value);
+  } catch {
+    return [];
+  }
 }
 
 function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
@@ -332,6 +362,22 @@ type RunState = {
   usage: Usage;
   /** A queued message handed to this turn with steer, until the agent takes it in. */
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
+  hooks: {
+    /** The user's message this turn answers, as context for classifier questions. */
+    lastUser: string;
+    /** Tool calls whose tool_call event has fired. */
+    called: Set<string>;
+    /** Tool calls a gate held (toolGate), so their approval request is not gated a second time. */
+    gated: Set<string>;
+    /** Tool calls the user approved because a hook asked: their own approval request does not ask again. */
+    approved: Set<string>;
+    /** Seen on a provider that could not hold them: an ask or block waiting for the call's approval request. */
+    waiting: Map<string, { found: Finding[]; timer: NodeJS.Timeout }>;
+    /** Detectors that already told the agent something this turn. */
+    told: Set<string>;
+    /** The text block whose opening has been through the early hook. */
+    earlyItem: string | null;
+  };
   /** Stops the summary a fork's first turn waits for. */
   abort?: AbortController;
 };
@@ -346,7 +392,7 @@ export type PageAskResult =
 /** A workspace folder that is gone, and the folder Scribe thinks it became (same file id), if any. */
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent"; card?: CardRef };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent" | "hook"; card?: CardRef };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -384,6 +430,20 @@ export class AgentHost {
   private pageRunTimer: NodeJS.Timeout | null = null;
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
+  /** Detectors beside the user's rules (hooks.ts). Features built on hooks add theirs here. */
+  readonly detectors: Detector[] = [];
+  private ruleDetectors: Detector[] | null = null;
+  /** The decision service hooks ask; tests put a fake in its place. */
+  hookBackend: { decide: HookDecide; maySend(kind: SendKind): boolean } = {
+    decide: (state, questions, options) => mlService().decide(state, questions, options),
+    maySend: (kind) => mlService().maySend(kind),
+  };
+  private hooks = new HookPipeline({
+    detectors: () => this.hookDetectors(),
+    decide: (state, questions, options) => this.hookBackend.decide(state, questions, options),
+    maySend: (kind) => this.hookBackend.maySend(kind),
+    log,
+  });
 
   constructor(private emit: (event: AgentEvent) => void, private readCodexUsage: () => Promise<unknown> = fetchCodexPlanUsage) {
     this.db = new AgentDb();
@@ -446,6 +506,7 @@ export class AgentHost {
       followUp: (threadId, id) => this.followUp(threadId, id),
       approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
       webRequest: (threadId, call, opts) => this.requestWeb(threadId, call, opts),
+      toolGate: (threadId, call, signal) => this.toolGate(threadId, call, signal),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
     this.pageRuns = new PageRuns(
@@ -757,6 +818,7 @@ export class AgentHost {
       cursorHostShell: saved.cursorHostShell === true,
       helpers: saved.helpers !== false,
       memory: saved.memory !== false,
+      hookRules: savedRules(saved.hookRules),
       disabledModes: cleanDisabledModes(saved.disabledModes),
       hiddenWorkspaces: Array.isArray(saved.hiddenWorkspaces) ? saved.hiddenWorkspaces.filter((dir) => typeof dir === "string") : [],
     };
@@ -770,6 +832,10 @@ export class AgentHost {
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
     if (patch.helpers !== undefined) next.helpers = patch.helpers === true;
     if (patch.memory !== undefined) next.memory = patch.memory !== false;
+    if (patch.hookRules !== undefined) {
+      next.hookRules = normalizeRules(patch.hookRules);
+      this.ruleDetectors = null;
+    }
     if (patch.disabledModes !== undefined) next.disabledModes = cleanDisabledModes(patch.disabledModes);
     if (patch.searxngUrl !== undefined) {
       next.searxngUrl = cleanSearxngUrl(patch.searxngUrl);
@@ -1191,6 +1257,10 @@ export class AgentHost {
     if (patch.scope?.kind === "page" && patch.scope.ref) store.promoteDraft(patch.scope.ref, { activate: false });
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
     if (typeof patch.archived === "boolean") next.archived = patch.archived;
+    if (typeof patch.hooksOff === "boolean") {
+      if (patch.hooksOff) next.hooksOff = true;
+      else delete next.hooksOff;
+    }
     if (patch.draft !== undefined) next.draft = patch.draft;
     // An archived thread is done with its agent browser.
     if (next.archived && !thread.archived) void closeThreadBrowser(id);
@@ -1804,6 +1874,7 @@ export class AgentHost {
       this.touch(item);
     }
     this.emitThread(threadId);
+    if (item) this.hookPrompt(threadId, run, msg, item);
     return true;
   }
 
@@ -2716,7 +2787,7 @@ export class AgentHost {
     } else {
       this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
     }
-    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null };
+    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
@@ -2727,6 +2798,8 @@ export class AgentHost {
     this.db.saveThread(thread);
     this.saveTurn(turn);
     this.emitThread(threadId);
+    // A steered message that became this turn went through its prompt hook when it was steered.
+    if (msg && userItem && !opts?.adopt) this.hookPrompt(threadId, run, msg, userItem);
 
     // Checkpoint the page this turn is about, so an agent edit to it can be reverted.
     const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg?.context.find((c) => c.kind === "page")?.id;
@@ -2814,6 +2887,11 @@ export class AgentHost {
     run.steer = null;
 
     this.closeBlocks(run);
+    for (const waiting of run.hooks.waiting.values()) clearTimeout(waiting.timer);
+    run.hooks.waiting.clear();
+    this.observe(threadId, run, "turn_end", () => ({
+      text: clipChunk(this.loadItems(threadId).filter((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId).map((it) => (it as { text: string }).text).join("\n\n")),
+    }));
     for (const item of run.tools.values()) {
       if (item.kind === "tool" && (item.status === "running" || item.status === "pending")) {
         item.status = result.status === "done" ? "done" : "error";
@@ -2925,9 +3003,11 @@ export class AgentHost {
       run.reasoningItem.endedAt = Date.now();
       this.touch(run.reasoningItem);
     }
+    const closed = [run.reasoningItem, run.textItem];
     run.reasoningItem = null;
     if (run.textItem) this.flushDelta(run.textItem.id);
     run.textItem = null;
+    for (const item of closed) if (item) this.hookBlock(run, item);
   }
 
   private expireInteraction(pending: Pending): void {
@@ -3036,30 +3116,35 @@ export class AgentHost {
         run.turn.outputAt = Date.now();
         if (parentToolId) {
           // A subagent's message, whole: one nested item each, shown under the tool call that started it.
-          if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "text", text: delta, parentToolId });
+          if (run.tools.has(parentToolId)) host.hookBlock(run, host.addItem(threadId, turnId, { kind: "text", text: delta, parentToolId }));
           return;
         }
         if (run.reasoningItem) {
-          if (run.reasoningItem.kind === "reasoning") run.reasoningItem.endedAt = Date.now();
-          host.touch(run.reasoningItem);
+          const closed = run.reasoningItem;
+          if (closed.kind === "reasoning") closed.endedAt = Date.now();
+          host.touch(closed);
           run.reasoningItem = null;
+          host.hookBlock(run, closed);
         }
         if (!run.textItem) {
           run.textItem = host.addItem(threadId, turnId, { kind: "text", text: "" });
         }
         host.appendText(run.textItem as Item & { text: string }, delta);
+        host.hookEarly(run, run.textItem as Item & { text: string });
       },
       reasoning(delta, parentToolId) {
         if (!delta) return;
         run.turn.outputAt = Date.now();
         if (parentToolId) {
           const now = Date.now();
-          if (run.tools.has(parentToolId)) host.addItem(threadId, turnId, { kind: "reasoning", text: delta, startedAt: now, endedAt: now, parentToolId });
+          if (run.tools.has(parentToolId)) host.hookBlock(run, host.addItem(threadId, turnId, { kind: "reasoning", text: delta, startedAt: now, endedAt: now, parentToolId }));
           return;
         }
         if (run.textItem) {
-          host.flushDelta(run.textItem.id);
+          const closed = run.textItem;
+          host.flushDelta(closed.id);
           run.textItem = null;
+          host.hookBlock(run, closed);
         }
         if (!run.reasoningItem) {
           run.reasoningItem = host.addItem(threadId, turnId, { kind: "reasoning", text: "", startedAt: Date.now() });
@@ -3090,9 +3175,12 @@ export class AgentHost {
           startedAt: Date.now(),
         });
         run.tools.set(tool.toolId, item);
+        if (tool.held) run.hooks.gated.add(tool.toolId);
         if (tool.paths && (tool.tool === "edit" || tool.tool === "delete")) {
           for (const file of tool.paths) void host.rememberBefore(run, thread(), file);
         }
+        // "pending" is a call still being written (Claude streams the input); its hook waits for the whole call.
+        if (item.kind === "tool" && item.status !== "pending") host.hookToolCall(run, item);
       },
       toolUpdate(toolId: string, patch: ToolPatch) {
         const item = run.tools.get(toolId);
@@ -3112,6 +3200,8 @@ export class AgentHost {
         if (patch.status) item.status = patch.status;
         if (finished) item.endedAt = Date.now();
         host.touch(item);
+        if (patch.status) host.hookToolCall(run, item);
+        if (finished) host.hookToolResult(run, item);
         if (finished && (item.tool === "edit" || item.tool === "delete" || item.tool === "move") && item.paths?.length) {
           void host.computeToolDiff(run, thread(), item, patch.providerDiff);
         } else if (patch.providerDiff?.length && finished) {
@@ -3121,9 +3211,22 @@ export class AgentHost {
       async beforeWrite(_toolId, file) {
         await host.rememberBefore(run, thread(), file, true);
       },
-      approval(req: ApprovalRequest, signal) {
+      async approval(req: ApprovalRequest, signal) {
+        // A hook can only tighten this: deny the call, or have the user decide whatever the approval level.
+        const hook = await host.approvalGate(threadId, run, req);
+        if (hook?.kind === "block") {
+          const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+          if (!reject) throw new Error(hook.reason);
+          return { optionId: reject.id, note: hook.reason };
+        }
+        if (hook?.kind === "ask") req = { ...req, humanOnly: true, detail: [req.detail, hook.reason].filter(Boolean).join("\n\n") };
         const auto = autoApproval(thread(), req);
         if (auto) return auto;
+        if (req.toolId && run.hooks.approved.has(req.toolId)) {
+          // The user approved this very call a moment ago, when the hook asked.
+          const allow = req.options.find((o) => o.kind === "allow_once");
+          if (allow) return { optionId: allow.id };
+        }
         const item = host.addItem(threadId, turnId, {
           kind: "approval",
           requestId: "",
@@ -3204,6 +3307,251 @@ export class AgentHost {
         host.emitThread(threadId);
       },
     };
+  }
+
+  // ---------- hooks (hooks.ts) ----------
+
+  private hookDetectors(): Detector[] {
+    this.ruleDetectors ??= ruleDetectors(this.prefs().hookRules);
+    return this.detectors.length ? [...this.detectors, ...this.ruleDetectors] : this.ruleDetectors;
+  }
+
+  /** The user's hook rules, and whether a classifier is there for the ones that ask it. */
+  hookSettings(): { rules: HookRule[]; classifier: boolean } {
+    const view = mlService().view();
+    return { rules: this.prefs().hookRules, classifier: view.sources.length > 0 && view.features.some((feature) => feature.id === HOOKS_FEATURE && feature.on) };
+  }
+
+  private hookChunk(thread: Thread, turnId: string | null, event: HookEvent, lastUser: string, part: Pick<Chunk, "text"> & Partial<Chunk>): Chunk {
+    return { event, threadId: thread.id, turnId, provider: thread.provider, mode: thread.mode, worker: this.unattended(thread.id), ...(lastUser ? { lastUser } : {}), ...part };
+  }
+
+  /**
+   * An observing hook: rules run now, classifier questions in the background, and nothing here
+   * waits, so the stream is never delayed. `part` is only built when some detector watches the event.
+   */
+  private observe(threadId: string, run: RunState, event: HookEvent, part: () => Pick<Chunk, "text"> & Partial<Chunk>): void {
+    const thread = this.threads.get(threadId);
+    if (!thread || thread.hooksOff || this.hooks.idle(event)) return;
+    const chunk = this.hookChunk(thread, run.turn.id, event, run.hooks.lastUser, part());
+    if (!chunk.text.trim()) return;
+    const { found, open } = this.hooks.rules(chunk);
+    this.applyFindings(chunk, run, found, false);
+    if (open.length) void this.hooks.classify(chunk, open, OBSERVE_DEADLINE_MS).then((late) => this.applyFindings(chunk, run, late, true));
+  }
+
+  private hookPrompt(threadId: string, run: RunState, msg: QueuedMessage, item: Item): void {
+    // A hook's own note to the agent is not a prompt to detect on, or one rule could feed itself.
+    if (msg.from === "hook" || !msg.text) return;
+    // Only what was typed or sent: not the page context or memory blocks Scribe adds around it.
+    this.observe(threadId, run, "prompt", () => ({ text: clipChunk(msg.text), itemId: item.id }));
+  }
+
+  /** A text or thinking block closed. */
+  private hookBlock(run: RunState, item: Item): void {
+    if (item.kind !== "text" && item.kind !== "reasoning") return;
+    this.observe(item.threadId, run, item.kind, () => ({ text: clipChunk(item.text), itemId: item.id }));
+  }
+
+  /** A text block's opening, once: "I'll build you a page for that" comes first. */
+  private hookEarly(run: RunState, item: Item & { text: string }): void {
+    if (run.hooks.earlyItem === item.id || !this.hooks.early()) return;
+    const end = earlyEnd(item.text);
+    if (end === null) return;
+    run.hooks.earlyItem = item.id;
+    this.observe(item.threadId, run, "text", () => ({ text: item.text.slice(0, end), itemId: item.id, early: true }));
+  }
+
+  private hookToolCall(run: RunState, item: Item): void {
+    if (item.kind !== "tool" || run.hooks.called.has(item.toolId)) return;
+    run.hooks.called.add(item.toolId);
+    this.observe(item.threadId, run, "tool_call", () => ({
+      text: toolCallText(item),
+      itemId: item.id,
+      tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title, ...(item.paths ? { paths: item.paths } : {}) },
+    }));
+  }
+
+  private hookToolResult(run: RunState, item: Item): void {
+    if (item.kind !== "tool") return;
+    this.observe(item.threadId, run, "tool_result", () => ({
+      text: item.output ? clipChunk(item.output) : "",
+      itemId: item.id,
+      tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title },
+    }));
+  }
+
+  private flagItem(threadId: string, itemId: string | undefined, finding: Finding): void {
+    const item = itemId ? this.loadItems(threadId).find((it) => it.id === itemId) : undefined;
+    const action = finding.action.kind;
+    if (!item || (action !== "flag" && action !== "ask" && action !== "block")) return;
+    if (item.flags?.some((flag) => flag.id === finding.detector && flag.action === action)) return;
+    const label = (finding.action.kind === "flag" && finding.action.label) || finding.label;
+    const reason = finding.action.kind === "block" ? finding.action.reason : finding.reason;
+    item.flags = [...(item.flags ?? []), { id: finding.detector, label, action, ...(reason ? { reason } : {}) }];
+    this.touch(item);
+  }
+
+  /** What an observing hook's findings do. `late`: a classifier answer that came after the chunk went by. */
+  private applyFindings(chunk: Chunk, run: RunState, found: Finding[], late: boolean): void {
+    if (!found.length || !this.threads.has(chunk.threadId)) return;
+    const live = this.runs.get(chunk.threadId) === run;
+    for (const finding of found) {
+      const action = finding.action;
+      if (action.kind === "signal") {
+        this.emit({
+          type: "agent_intent",
+          threadId: chunk.threadId,
+          turnId: chunk.turnId,
+          ...(chunk.itemId ? { itemId: chunk.itemId } : {}),
+          name: action.name,
+          detector: finding.detector,
+          event: chunk.event,
+          ...(chunk.early ? { early: true } : {}),
+          ...(finding.confidence !== undefined ? { confidence: finding.confidence } : {}),
+        });
+      } else if (action.kind === "context") {
+        // Once per detector and turn: a rule that matches every tool call must not flood the agent.
+        if (!live || run.hooks.told.has(finding.detector)) continue;
+        run.hooks.told.add(finding.detector);
+        this.tellAgent(chunk.threadId, action.text);
+      } else {
+        this.flagItem(chunk.threadId, chunk.itemId, finding);
+      }
+    }
+    const strongest = verdict(found);
+    if (!strongest || !live) return;
+    const toolId = chunk.event === "tool_call" ? chunk.tool?.toolId : undefined;
+    if (chunk.event === "tool_call" && chunk.tool) {
+      const thread = this.threads.get(chunk.threadId)!;
+      // Held elsewhere: by the provider's gate, or for Scribe's own tools where the daemon runs them (toolGate either way).
+      if (holdsAll(thread.provider) || (toolId && run.hooks.gated.has(toolId))) return;
+      // A classifier answer this late found the call already running: its flag is all that is left.
+      if (late) return;
+      if (toolId) {
+        // Codex and Cursor report a call first and ask about it after, when they ask at all.
+        const timer = setTimeout(() => {
+          if (run.hooks.waiting.delete(toolId) && this.runs.get(chunk.threadId) === run) this.unheld(chunk, run, strongest);
+        }, HOOK_GRACE_MS);
+        timer.unref?.();
+        run.hooks.waiting.set(toolId, { found, timer });
+        return;
+      }
+    }
+    this.unheld(chunk, run, strongest);
+  }
+
+  /** An ask or block on something that cannot be held: the strongest action left is stopping the turn. */
+  private unheld(chunk: Chunk, run: RunState, strongest: NonNullable<ReturnType<typeof verdict>>): void {
+    const name = chunk.tool?.title || chunk.tool?.name;
+    const what = chunk.event === "tool_call" ? `the call ${name}` : chunk.event === "tool_result" ? `the result of ${name}` : chunk.event === "prompt" ? "this message" : "the agent's output";
+    if (strongest.kind === "block") {
+      // A finished turn has nothing left to stop.
+      if (chunk.event === "turn_end") return;
+      const reason = strongest.finding.action.kind === "block" ? strongest.finding.action.reason : "";
+      this.closeBlocks(run);
+      const unheld = chunk.event === "tool_call" ? ", which this provider does not let Scribe hold before it runs" : "";
+      this.addItem(chunk.threadId, run.turn.id, { kind: "notice", level: "warn", text: `A hook (${strongest.finding.label}) stopped the turn on ${what}${unheld}. ${reason}`.trim() });
+      void this.cancel(chunk.threadId, { keepQueue: true });
+    } else if (chunk.event === "tool_call") {
+      this.addItem(chunk.threadId, run.turn.id, { kind: "notice", level: "warn", text: `A hook (${strongest.finding.label}) wanted your approval for ${what}, but this provider does not let Scribe hold it: it ran without asking.` });
+    }
+  }
+
+  /** The context action: the hook's note goes into the running turn as a steered message, or right after it. */
+  private tellAgent(threadId: string, text: string): void {
+    if (!this.runs.has(threadId)) return;
+    try {
+      const { queued } = this.send(threadId, { text, from: "hook" });
+      if (queued && this.queues.get(threadId)?.length === 1) this.steerFirst(threadId);
+    } catch (err) {
+      log(`Hook context for ${threadId} was not sent: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * A hook's say on a tool call that came as an approval request (Codex's own, Cursor's host shell,
+   * a bridged MCP server). Null when no hook has one, or a gate already held this call.
+   */
+  private async approvalGate(threadId: string, run: RunState, req: ApprovalRequest): Promise<{ kind: "block" | "ask"; reason: string } | null> {
+    const thread = this.threads.get(threadId);
+    if (!thread || thread.hooksOff || this.hooks.idle("tool_call")) return null;
+    // Scribe's board tools are held where the daemon runs them (toolGate).
+    if (req.boardTool || holdsAll(thread.provider) || (req.toolId && run.hooks.gated.has(req.toolId))) return null;
+    const waiting = req.toolId ? run.hooks.waiting.get(req.toolId) : undefined;
+    const item = req.toolId ? run.tools.get(req.toolId) : undefined;
+    let found: Finding[];
+    if (waiting) {
+      clearTimeout(waiting.timer);
+      run.hooks.waiting.delete(req.toolId!);
+      found = waiting.found;
+    } else {
+      const chunk = this.hookChunk(thread, run.turn.id, "tool_call", run.hooks.lastUser, {
+        text: item?.kind === "tool" ? toolCallText(item) : toolCallText({ name: req.title, detail: req.detail, paths: req.paths }),
+        ...(item ? { itemId: item.id } : {}),
+        tool: { ...(req.toolId ? { toolId: req.toolId } : {}), name: item?.kind === "tool" ? item.name : req.title, kind: req.tool, title: req.title },
+      });
+      found = (await this.hooks.evaluate(chunk)).filter(isGating);
+      for (const finding of found) this.flagItem(threadId, item?.id, finding);
+    }
+    if (req.toolId) run.hooks.gated.add(req.toolId);
+    return hookSays(verdict(found));
+  }
+
+  /**
+   * "Ask the host before this tool call" (SessionContext.toolGate, and POST /hooks/gate for Scribe's
+   * own tools). Holds the call for the gating hooks: rules at once, the classifier within its budget,
+   * and on a timeout or a failing backend the call goes ahead (fail open). A block denies it; an ask
+   * waits for the user, whatever the thread's approval level.
+   */
+  async toolGate(threadId: string, call: ToolGateCall, signal?: AbortSignal): Promise<ToolGateResult> {
+    const thread = this.threads.get(threadId);
+    if (!thread || thread.hooksOff || this.hooks.idle("tool_call")) return { allowed: true };
+    const run = this.runs.get(threadId);
+    if (call.toolId) run?.hooks.gated.add(call.toolId);
+    const waiting = call.toolId ? run?.hooks.waiting.get(call.toolId) : undefined;
+    if (waiting) {
+      clearTimeout(waiting.timer);
+      run!.hooks.waiting.delete(call.toolId!);
+    }
+    const item = call.toolId ? run?.tools.get(call.toolId) : undefined;
+    const chunk = this.hookChunk(thread, run?.turn.id ?? null, "tool_call", run?.hooks.lastUser ?? "", {
+      text: toolCallText(call),
+      ...(item ? { itemId: item.id } : {}),
+      tool: { ...(call.toolId ? { toolId: call.toolId } : {}), name: call.name, kind: call.tool, ...(call.title ? { title: call.title } : {}), ...(call.paths ? { paths: call.paths } : {}) },
+    });
+    const found = (await this.hooks.evaluate(chunk)).filter(isGating);
+    const says = hookSays(verdict(found));
+    if (!says) return { allowed: true };
+    for (const finding of found) this.flagItem(threadId, item?.id, finding);
+    if (says.kind === "block") return { allowed: false, reason: says.reason };
+    if (!run || this.runs.get(threadId) !== run) {
+      return { allowed: false, reason: `${says.reason} With no turn running the user cannot be asked, so it was not run. Leave it out, and mention it in your result.` };
+    }
+    this.closeBlocks(run);
+    const title = (call.title || call.name).slice(0, 300);
+    const detail = [call.detail ?? toolCallText({ name: "", input: call.input }), says.reason].filter(Boolean).join("\n\n");
+    const approval = this.addItem(threadId, run.turn.id, {
+      kind: "approval",
+      requestId: "",
+      ...(call.toolId ? { toolId: call.toolId } : {}),
+      tool: call.tool,
+      title,
+      ...(detail ? { detail } : {}),
+      options: [
+        { id: "allow", label: "Allow once", kind: "allow_once" },
+        { id: "deny", label: "Deny", kind: "reject_once" },
+      ],
+      status: "pending",
+    });
+    try {
+      const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", approval.id, signal);
+      if (decision.optionId !== "allow") return { allowed: false, reason: decision.note ? `The user denied this call: ${decision.note}` : "The user denied this call." };
+      if (call.toolId) run.hooks.approved.add(call.toolId);
+      return { allowed: true };
+    } catch {
+      return { allowed: false, reason: "The approval was cancelled." };
+    }
   }
 
   private resolvePath(thread: Thread | undefined, file: string): string {

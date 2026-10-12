@@ -768,6 +768,23 @@ class PiSession implements ProviderSession {
   /** Approvals for Pi's own tools, from the tool_call hook. Scribe's custom tools gate themselves. */
   private async gate(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
     const name = event.toolName;
+    // Scribe's hooks (Agent settings, Hooks) first, for every tool: they may deny the call or have the user approve it.
+    if (this.ctx.toolGate) {
+      const args: Record<string, unknown> = isPlainRecord(event.input) ? event.input : {};
+      const filePath = str(args.path);
+      const held = await this.ctx
+        .toolGate(this.thread.id, {
+          toolId: event.toolCallId,
+          name,
+          tool: toolKind(name),
+          title: this.toolTitle(name, args),
+          ...(name === "bash" || name === "powershell" ? { detail: str(args.command) } : {}),
+          input: args,
+          ...(filePath ? { paths: [path.resolve(this.cwd(), filePath)] } : {}),
+        })
+        .catch(() => null);
+      if (held && !held.allowed) return { block: true, reason: held.reason };
+    }
     if (READ_TOOLS.includes(name)) return undefined;
     if (name !== "bash" && name !== "powershell" && name !== "edit" && name !== "write") return undefined;
     const sink = this.sink;
