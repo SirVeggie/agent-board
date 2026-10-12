@@ -5446,9 +5446,10 @@
           searching: Boolean(q),
           hidePage: S.hidePageThreads,
         });
-        if (!visible.length) continue;
-        shown += visible.length;
-        const first = visible[0];
+        // Keep older-only groups reachable through their Show more button.
+        if (!visible.length && !hidden) continue;
+        shown++;
+        const first = visible[0] || members[0];
         const gt = groupTitle(first);
         const head = el("div", "ag-list-group");
         head.dataset.key = `group:${key}`;
@@ -5476,7 +5477,7 @@
             container.agFill();
           });
           more.dataset.key = `more:${key}`;
-          more.append(el("span", null, "Show 10 more"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
+          more.append(el("span", null, visible.length ? "Show 10 more" : "Show older threads"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
           out.push(more);
         }
       }
