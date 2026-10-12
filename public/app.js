@@ -852,11 +852,17 @@
     }, 150);
   }
 
-  /** The tab to focus when `id` leaves the strip: its right neighbor, or its left one when it is rightmost. */
+  /** Return to the other split pane, then a previous open tab, then the right or left neighbor. */
   function neighborTabId(id) {
     const back = views.returnTarget(id);
     if (back) {
       return back;
+    }
+    if (state.activeId === id) {
+      const previous = previousOpenTabId(id);
+      if (previous) {
+        return previous;
+      }
     }
     const idx = state.tabs.findIndex((tab) => tab.id === id);
     if (idx === -1) {
@@ -910,12 +916,29 @@
 
   /** Position of the current history entry among the board's own entries; see onHistoryStep. */
   let historyIndex = typeof history.state?.boardIndex === "number" ? history.state.boardIndex : 0;
+  // The browser cannot read earlier entries synchronously. Mirror the entries we visit or write
+  // so closing a tab can choose from the same history without navigating or reopening a page.
+  const tabFocusHistory = new Map([[historyIndex, location.hash.replace(/^#/, "")]]);
+
+  function previousOpenTabId(closingId) {
+    let previous = null;
+    let previousIndex = -Infinity;
+    for (const [index, id] of tabFocusHistory) {
+      if (index < historyIndex && index > previousIndex && id !== closingId &&
+          state.tabs.some((tab) => tab.id === id) && !popout.has(id)) {
+        previous = id;
+        previousIndex = index;
+      }
+    }
+    return previous;
+  }
 
   function syncHash() {
     if (childId) {
       return;
     }
     if (!state.activeId) {
+      tabFocusHistory.set(historyIndex, "");
       if (location.hash) {
         history.replaceState({ boardIndex: historyIndex }, "", location.pathname + location.search);
       }
@@ -923,6 +946,7 @@
     }
     const wanted = "#" + state.activeId;
     if (location.hash === wanted) {
+      tabFocusHistory.set(historyIndex, state.activeId);
       return;
     }
     // Focus moving between open tabs adds a history entry, so the browser's Back and Forward step
@@ -930,11 +954,16 @@
     // the entry is replaced instead.
     const prev = location.hash.replace(/^#/, "");
     if (prev && state.tabs.some((tab) => tab.id === prev)) {
+      tabFocusHistory.set(historyIndex, prev);
+      for (const index of tabFocusHistory.keys()) {
+        if (index > historyIndex) tabFocusHistory.delete(index);
+      }
       historyIndex += 1;
       history.pushState({ boardIndex: historyIndex }, "", wanted);
     } else {
       history.replaceState({ boardIndex: historyIndex }, "", wanted);
     }
+    tabFocusHistory.set(historyIndex, state.activeId);
   }
 
   /**
@@ -951,6 +980,7 @@
     const step = index < historyIndex ? -1 : 1;
     historyIndex = index;
     const id = location.hash.replace(/^#/, "");
+    tabFocusHistory.set(index, id);
     const open = state.tabs.find((tab) => tab.id === id);
     if (open && open.id !== state.activeId) {
       selectTab(open.id, { fromUser: true });
