@@ -939,6 +939,34 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /** thread_update from a Scribe chat's MCP: the chat renames its thread or asks to move its workspace (#577). */
+  app.post("/api/thread-update", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "thread_update only works in Scribe chat threads." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+    // The workspace change waits for the user's answer.
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .threadUpdateOp(thread, { title: str(body.title, 500), workspace: str(body.workspace, 2000), reason: str(body.reason, 1000), continue: body.continue !== false, signal: abort.signal })
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
   /**
    * thread_access, thread_list and thread_read from a Scribe chat's MCP: read other threads in the
    * chat's scopes. Any of them can ask the user first, so the request stays open until answered.

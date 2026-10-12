@@ -129,6 +129,11 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     );
   }
   lines.push(
+    thread.mode === "board" || thread.helperOf
+      ? "This thread: when its subject has changed and the title no longer fits, rename it with thread_update (title)."
+      : "This thread: when its subject has changed and the title no longer fits, rename it with thread_update (title). When the work moves to a folder outside the workspace for more than a file or two, ask to move the workspace there with thread_update (workspace) instead of having each file access approved; the change applies when your turn ends, so end the turn after the call."
+  );
+  lines.push(
     "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. The user is asked to allow it first; thread_access says why."
   );
   if (thread.helperOf) {

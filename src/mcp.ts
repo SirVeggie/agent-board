@@ -117,7 +117,7 @@ const INSTRUCTIONS = [
 ].join(" ");
 
 const NO_PAGES_INSTRUCTIONS =
-  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread tools to read other threads in its workspace, the agent browser, and scoped file tools for Codex where the mode permits them.";
+  "Scribe tools for a Scribe chat thread that has no access to Scribe pages: web_request to ask for web access, thread_update to rename the thread or move its workspace, thread tools to read other threads in its workspace, the agent browser, and scoped file tools for Codex where the mode permits them.";
 
 /** Only Scribe's Codex sessions need substitutes for native read/search tools. */
 export function registerCodexFileTools(server: McpServer, env = process.env): void {
@@ -1592,6 +1592,7 @@ export async function startMcp(): Promise<void> {
     if (!off.has("browser")) registerBrowserTools(server);
     if (pages) registerAsk(server);
     registerWebRequest(server);
+    registerThreadUpdate(server);
     if (!off.has("threads")) registerThreadTools(server);
     if (!off.has("helpers")) registerHelperTools(server);
     registerMemoryTools(server);
@@ -1695,6 +1696,48 @@ function registerWebRequest(server: McpServer): void {
         return jsonResult(data);
       } catch (err) {
         return errorResult((err as Error).message || "web_request failed");
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
+  );
+}
+
+/**
+ * thread_update: the chat renames its own thread when the subject changed, and asks to move its
+ * workspace to the folder the work moved to (#577). The user allows a workspace change; it applies
+ * when the turn ends.
+ */
+function registerThreadUpdate(server: McpServer): void {
+  server.tool(
+    "thread_update",
+    "Change this chat thread's own title or workspace folder. title: rename the thread when its subject has changed and the title no longer says what it is about; a few words, like a headline. A thread the user named keeps its title. workspace: move the thread to another folder when the work has moved there, so file access in it stops needing approval one call at a time; only when the rest of the work is in that folder, not for a single file. The user is asked to allow it (not under Full access). It takes effect when your turn ends, not during it: end your turn right after the call, and Scribe starts your next turn in the new folder with a note to go on (pass continue false when nothing is left to do). A thread in its own worktree, a helper thread and a Pages thread keep their workspace. Returns a message per field you passed.",
+    {
+      title: z.string().optional().describe("The new title: a few words on what the thread is about now."),
+      workspace: z.string().optional().describe("Absolute path of the folder to work in from the next turn on."),
+      reason: z.string().optional().describe("For a workspace change: one line on why, shown to the user."),
+      continue: z.boolean().optional().describe("For a workspace change: whether Scribe sends you on in the new folder once this turn ends. Default true."),
+    },
+    async (input, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined || !input.workspace
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `Waiting for the user to allow the workspace change (${seconds}s)` } })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api("POST", "/api/thread-update", input, { signal: extra.signal });
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "thread_update failed");
       } finally {
         clearInterval(heartbeat);
       }

@@ -3208,7 +3208,7 @@
       bubble.append(content);
       if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.reply ? `Reply on card #${item.card.num}` : item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
-      else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
+      else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe"));
       else if (item.from === "hook") bubble.prepend(el("div", "ag-from-page", "Sent by a hook"));
       const flags = hookFlags(item);
       if (flags) bubble.prepend(flags);

@@ -230,6 +230,11 @@ function helperResumeNote(helpers: Thread[]): string {
 const RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (a question, an approval, a background command) is gone. Check where you left off (files, git status, the pages or card you were working on) and go on from there to finish the task. If you were waiting for the user's answer, ask again.";
 
+/** What a thread reads at the start of the turn after the workspace change it asked for with thread_update. */
+function workspaceNote(cwd: string): string {
+  return `The workspace is now ${cwd}, as you asked with thread_update. Commands run there and relative paths start there. Go on with the task.`;
+}
+
 /** The note for a helper: it works on another agent's brief, so what it still needs goes into its report, not to the user. */
 const HELPER_RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (an approval, a background command) is gone. Check where you left off (files, git status, the pages you were working on) and go on from there to finish the brief you were given. You work for another agent, which gets your final reply as your report: do not ask the user about the task. If you cannot finish without an answer, say what you need in that reply.";
@@ -378,6 +383,8 @@ type RunState = {
   usage: Usage;
   /** A queued message handed to this turn with steer, until the agent takes it in. */
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
+  /** A workspace the agent asked for with thread_update and the user allowed: the thread moves there when the turn ends. */
+  workspace?: { cwd: string; continue: boolean };
   hooks: {
     /** The user's message this turn answers, as context for classifier questions. */
     lastUser: string;
@@ -2271,6 +2278,114 @@ export class AgentHost {
     }
   }
 
+  /**
+   * thread_update from the thread's MCP (#577): the agent renames its thread, or asks to move its
+   * workspace to the folder the work moved to. Each field answers with a line of its own, so a
+   * refused workspace does not hide a changed title.
+   */
+  async threadUpdateOp(
+    threadId: string,
+    opts: { title?: string; workspace?: string; reason?: string; continue?: boolean; signal?: AbortSignal }
+  ): Promise<{ title?: string; workspace?: string }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("thread_update only works in Scribe chat threads.");
+    if (!opts.title && !opts.workspace) throw new Error("Pass title, workspace or both.");
+    const out: { title?: string; workspace?: string } = {};
+    if (opts.title) {
+      const title = opts.title.replace(/\s+/g, " ").trim().slice(0, 120);
+      if (thread.titleLocked) out.title = `Not changed: the user named this thread “${thread.title}”.`;
+      else if (!title) out.title = "Not changed: the title is empty.";
+      else {
+        if (title !== thread.title) {
+          thread.title = title;
+          this.db.saveThread(thread);
+          this.emitThread(threadId);
+        }
+        out.title = `The thread is now titled “${title}”.`;
+      }
+    }
+    if (opts.workspace) out.workspace = await this.requestWorkspace(threadId, opts.workspace, opts);
+    return out;
+  }
+
+  /**
+   * The workspace half of thread_update. A new workspace widens what the approval level lets through,
+   * so the user allows it (Full access aside). It waits for the turn's end: the provider's process,
+   * and the relative paths of the calls it still makes, belong to the old folder until then.
+   */
+  private async requestWorkspace(threadId: string, folder: string, opts: { reason?: string; continue?: boolean; signal?: AbortSignal }): Promise<string> {
+    const thread = this.requireThread(threadId);
+    if (thread.mode === "board") return "Not changed: a Pages thread has no workspace.";
+    if (thread.helperOf) return "Not changed: a helper thread works in the workspace of the agent that started it.";
+    const wt = openWorktree(thread);
+    if (wt) return `Not changed: this thread works in a git worktree of its own (${wt.path}), which stays its workspace until the user merges or leaves it.`;
+    if (!path.isAbsolute(folder)) return "Not changed: workspace must be an absolute folder path.";
+    const cwd = path.resolve(folder);
+    try {
+      if (!fs.statSync(cwd).isDirectory()) return `Not changed: ${cwd} is not a folder.`;
+    } catch {
+      return `Not changed: folder not found: ${cwd}`;
+    }
+    if (thread.cwd && workspaceKey(thread.cwd) === workspaceKey(cwd)) return "That folder already is this thread's workspace.";
+    const run = this.runs.get(threadId);
+    if (!run) return "Not changed: with no turn running the user cannot be asked.";
+    const goOn = opts.continue !== false;
+    if (this.sessionThread(thread).approval !== "full") {
+      const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS.useful : null;
+      const detail = [
+        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. Commands then run there, and this thread's approval level covers that folder instead.`,
+        opts.reason?.trim(),
+        waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const options: ApprovalOption[] = [
+        { id: "allow", label: "Change workspace", kind: "allow_once" },
+        { id: "deny", label: "Deny", kind: "reject_once" },
+      ];
+      this.closeBlocks(run);
+      const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "other", title: `Change workspace to ${cwd}`.slice(0, 300), detail, options, status: "pending" });
+      const abort = new AbortController();
+      const onAbort = () => abort.abort();
+      opts.signal?.addEventListener("abort", onAbort);
+      let timedOut = false;
+      const timer =
+        waitMs === null
+          ? null
+          : setTimeout(() => {
+              timedOut = true;
+              abort.abort();
+            }, waitMs);
+      try {
+        const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", item.id, abort.signal);
+        if (decision.optionId !== "allow") {
+          return decision.note ? `Not changed: the user denied the workspace change: ${decision.note}` : "Not changed: the user denied the workspace change. Carry on in the current workspace.";
+        }
+      } catch {
+        return timedOut ? "Not changed: nobody answered in time. Carry on in the current workspace." : "Not changed: the request was cancelled.";
+      } finally {
+        if (timer) clearTimeout(timer);
+        opts.signal?.removeEventListener("abort", onAbort);
+      }
+    }
+    if (this.runs.get(threadId) !== run) return "Not changed: the turn that asked has ended.";
+    run.workspace = { cwd, continue: goOn };
+    return `Allowed. The workspace changes to ${cwd} when this turn ends; until then commands and relative paths still use ${thread.cwd ?? "the current folder"}. End your turn now${goOn ? ": Scribe then starts your next turn in the new folder" : ""}.`;
+  }
+
+  /** Move the thread to the workspace its ended turn asked for. A workspace-scoped thread's scope follows, as when the user picks a folder. */
+  private applyWorkspace(threadId: string, turnId: string, cwd: string): boolean {
+    try {
+      const thread = this.requireThread(threadId);
+      this.updateThread(threadId, { cwd, ...(thread.scope.kind === "workspace" ? { scope: { kind: "workspace" as const, ref: cwd } } : {}) });
+      this.addItem(threadId, turnId, { kind: "notice", level: "info", text: `Workspace changed to ${cwd}.` });
+      return true;
+    } catch (err) {
+      this.addItem(threadId, turnId, { kind: "notice", level: "error", text: `Could not change the workspace to ${cwd}: ${(err as Error).message}` });
+      return false;
+    }
+  }
+
   /** A thread's items without caching them, so a search over many threads does not keep them all in memory. */
   private peekItems(threadId: string): Item[] {
     return this.items.get(threadId) ?? this.db.listItems(threadId);
@@ -3047,11 +3162,21 @@ export class AgentHost {
       if (!pageOwned(this.loadItems(threadId)) && !latest.helperOf) this.unread.add(threadId);
     }
     this.emitThread(threadId);
+    const moved = run.workspace && latest ? this.applyWorkspace(threadId, turn.id, run.workspace.cwd) : false;
 
     if (carried && latest) {
       const item = carried.itemId ? this.loadItems(threadId).find((it) => it.id === carried.itemId) : undefined;
       void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id });
       return;
+    }
+    // The agent ended its turn to get the new folder: send it on, unless the user's own message is next.
+    if (moved && run.workspace?.continue && result.status === "done" && !this.queues.get(threadId)?.length) {
+      try {
+        this.send(threadId, { text: workspaceNote(run.workspace.cwd), from: "scribe" });
+        return;
+      } catch (err) {
+        log(`Could not send thread ${threadId} on after its workspace change: ${(err as Error).message}`);
+      }
     }
     this.drainQueue(threadId);
     if (!this.runs.has(threadId)) {
