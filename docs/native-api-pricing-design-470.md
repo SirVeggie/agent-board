@@ -2,6 +2,14 @@
 
 Status: first implementation slice selected by the user: fixed overrides and provenance, with reviewed bundled updates/manual overrides. Decision form and investigation: [#470 API pricing design](scribe:native-api-pricing-470). Investigated 2026-10-12. The sections below retain the broader proposal; the implementation notes identify the shipped subset.
 
+## Reviewed tariff evidence and timing (#530)
+
+Implemented the gated second slice: [timing investigation](native-api-pricing-timing-530.md) and [evidence/next-step form](scribe:native-api-pricing-timing-530). Automatic tariff selection remains unresolved; catalog estimates now explicitly carry that uncertainty for eligible official DeepSeek models.
+
+The bundle records reviewed peak/off-peak tables, UTC half-open windows and a versioned 2026 State Council holiday calendar. Its applicability begins on the review date (not an asserted provider publication date), ends before 2027, and never backfills history. Asia/Shanghai holiday dates remain an unconfirmed interpretation. Profile/calendar data is copied into each new message decision, so later edits or source deletion cannot change recorded evidence.
+
+Pi's extension hooks record pre-payload and response-header observations plus message completion. These are not dispatch timestamps: internal transport retries do not rerun the payload hook, and assistant message start occurs after successful response headers for OpenAI completions. The ledger stays at assistant-message granularity. Observed window/boundary, missing applicability/coverage and provider-rule uncertainty are persisted. Reviewed candidate totals are diagnostic only; the selected catalog amount is retained and flagged partial. Fixed overrides and explicit Unknown still take precedence. Shared model prices are never switched by time, and history is never repriced. Follow-up #549 tracks provider conventions and actual per-attempt telemetry before automatic selection.
+
 ## First slice implementation
 
 Source settings now provide exact-model Automatic, Custom fixed and Unknown modes. Custom prices use validated decimal strings in USD per million tokens; cache prices may be blank, while explicit zero is known free usage. Older-client updates preserve pricing; endpoint changes require reconfirmation or clearing. Discovered model-list refreshes retain price entries.
