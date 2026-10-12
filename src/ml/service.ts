@@ -225,6 +225,12 @@ export class MlService {
     return this.store.read().send[kind];
   }
 
+  /** Whether a feature's calls can go out at all: its switch is on, a source is set and these kinds may be sent. */
+  ready(feature: string, sends: SendKind[] = []): boolean {
+    const settings = this.store.read();
+    return featureOn(settings, feature) && settings.sources.some((s) => s.id === settings.defaultSource) && sends.every((kind) => settings.send[kind]);
+  }
+
   /* ---------- usage ---------- */
 
   usage(): MlUsageView {

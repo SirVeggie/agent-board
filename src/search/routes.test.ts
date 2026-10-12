@@ -11,11 +11,17 @@ import { searchRouter } from "./routes.js";
 import { searchIndex } from "./service.js";
 import { searchEmbedder } from "./embedder.js";
 import { SEARCH_MODEL, SEARCH_RUNTIME, searchPackDir, setSearchEnabled } from "./pack.js";
+import { MlService } from "../ml/service.js";
+import { memoryStore } from "../ml/settings.js";
+import { fakeAdapter } from "../ml/adapters/fake.js";
+import { MlError } from "../ml/types.js";
 
 test("semantic HTTP validates queries, returns anchors without scores and filters hidden pages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-semantic-routes-"));
   const previous = process.env.SCRIBE_HOME; process.env.SCRIBE_HOME = root;
-  const app = express(); app.use(express.json()); app.use("/api/search", searchRouter());
+  const app = express(); app.use(express.json()); const adapter = fakeAdapter();
+  const ml = new MlService({ store: memoryStore(), adapter, log: () => {} });
+  app.use("/api/search", searchRouter(() => ml));
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => server.once("listening", resolve));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/search`;
@@ -65,6 +71,32 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
     assert.deepEqual([...new Set((await inRoot.json()).hits.map((h: { id: string }) => h.id))], [board.id]);
     assert.equal((await fetch(`${url}/semantic?q=hello&folder=Nowhere`)).status, 404);
     assert.equal(card.score, undefined); assert.equal(card.hash, undefined); assert.equal(card.vec, undefined);
+    // The classifier's check: nothing is asked until its switch is on and a source is set.
+    const ids = (body: { hits: { id: string }[] }) => body.hits.map(h => h.id);
+    const plain = await (await fetch(`${url}/semantic?q=hello&scope=pages`)).json();
+    assert.ok(plain.hits.length >= 2); assert.equal(plain.rerank, undefined);
+    ml.update({ features: { "search-rerank": true } });
+    assert.equal((await (await fetch(`${url}/semantic?q=hello&scope=pages`)).json()).rerank, undefined);
+    assert.equal(adapter.calls.length, 0);
+    ml.saveSource(undefined, { name: "Fake", baseUrl: "http://127.0.0.1:9" });
+    // The first hit does not fit and is dropped; the second fits best and leads.
+    adapter.answers = { h0: { type: "yesno", yes: 0.1 }, h1: { type: "yesno", yes: 0.9 } };
+    const checked = await (await fetch(`${url}/semantic?q=hello&scope=pages`)).json();
+    assert.deepEqual(ids(checked), ids(plain).slice(1));
+    assert.equal(checked.rerank.applied, true); assert.equal(checked.rerank.dropped, 1); assert.equal(checked.rerank.asked, plain.hits.length);
+    assert.deepEqual(adapter.calls[0].state, { search: "hello" });
+    assert.equal(Object.keys(adapter.calls[0].questions).length, plain.hits.length);
+    assert.match(adapter.calls[0].questions.h0.instructions, /Passage: \S/);
+    // rerank=0 is the vector ranking alone, and a failed call falls back to it.
+    assert.deepEqual(ids(await (await fetch(`${url}/semantic?q=hello&scope=pages&rerank=0`)).json()), ids(plain));
+    adapter.failNext = new MlError("unavailable", "down");
+    const failed = await (await fetch(`${url}/semantic?q=other&scope=pages`)).json();
+    assert.deepEqual(ids(failed), ids(plain)); assert.equal(failed.rerank.applied, false); assert.equal(failed.rerank.reason, "unavailable");
+    // Page text is not sent while Tool results is off.
+    ml.update({ send: { toolResults: false } });
+    const calls = adapter.calls.length;
+    assert.equal((await (await fetch(`${url}/semantic?q=third&scope=pages`)).json()).rerank, undefined); assert.equal(adapter.calls.length, calls);
+    ml.update({ features: { "search-rerank": false }, send: { toolResults: true } });
     // Image rows carry the image's URL and the card it sits on, for a text query and for an image as the query.
     assert.equal(status.images, 1);
     const wanted = [{ id: board.id, key: board.key, title: "Board", folder: null, kind: "image", anchor: shot.id, headingId: null, label: "#12 Deep card", snippet: "shot.png", image: `/blob/${shot.id}`, owner: { kind: "record", anchor: "12", headingId: null } }];

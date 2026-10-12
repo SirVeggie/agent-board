@@ -9,13 +9,29 @@ import { AGENT_CLIENT, CLIENT_HEADER } from "../config.js";
 import { assetUrl } from "../assets.js";
 import { pageAssetUrl } from "../pageAssets.js";
 import type { ImageHit, ScoredHit } from "./indexer.js";
+import { chunkPage } from "./chunker.js";
+import { chunkDigest } from "../aiSearch.js";
+import { mlService, type MlService } from "../ml/service.js";
+import { RERANK_BUDGET_MS, RERANK_FEATURE, RERANK_TOP_K, rerankHits, type RerankInfo } from "./rerank.js";
 
 const MAX_QUERY_IMAGE_BYTES = 20 * 1024 * 1024;
 /** The palette asks for 8; an agent's library_search may ask for more. */
 const MAX_HITS = 30;
 
-export function searchRouter(): Router {
+export function searchRouter(ml: () => MlService = mlService): Router {
   const router = Router();
+  /** What the classifier reads for each hit: page, folder, the section or item, then the passage's own text (the index keeps a snippet only). */
+  const passages = (viewer: "agent" | "user") => {
+    const texts = new Map<string, Map<string, string>>();
+    return (hit: ScoredHit): string => {
+      const tab = store.get(hit.tab_id, viewer);
+      if (!tab) return hit.snippet;
+      const folder = store.folderPath(tab.folderId);
+      let byKey = texts.get(tab.id);
+      if (!byKey) texts.set(tab.id, byKey = new Map(chunkPage(tab, folder, store.searchDeclaration(tab)).map(chunk => [chunk.key, chunk.text])));
+      return chunkDigest({ title: tab.title || tab.key, folder }, { kind: hit.kind, label: hit.label, text: byKey.get(hit.chunk_key) ?? hit.snippet });
+    };
+  };
   const status = () => {
     const pack = detectSearchPack();
     const { pack: manifest, ...view } = pack;
@@ -55,8 +71,16 @@ export function searchRouter(): Router {
         const inFolder = new Set(store.searchLibrary("", { folderId, viewer, limit: Number.MAX_SAFE_INTEGER }).hits.map(hit => hit.tab.id));
         visible = id => inFolder.has(id);
       }
-      const hits = scope === "images" ? await searchIndex.queryImages(q, visible, limit) : await searchIndex.query(q, scope as "pages" | "chunks", visible, limit);
-      res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() });
+      if (scope === "images") {
+        const hits = await searchIndex.queryImages(q, visible, limit);
+        res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() }); return;
+      }
+      // rerank=0 asks for the vector ranking alone (the eval compares the two).
+      const rerank = req.query.rerank !== "0" && ml().ready(RERANK_FEATURE, ["toolResults"]);
+      const found = await searchIndex.query(q, scope as "pages" | "chunks", visible, rerank ? Math.max(limit, RERANK_TOP_K) : limit);
+      let hits = found, info: RerankInfo | undefined;
+      if (rerank && found.length) ({ hits, info } = await rerankHits(q, found, passages(viewer), (...args) => ml().decide(...args), { timeoutMs: RERANK_BUDGET_MS[viewer] }));
+      res.json({ hits: hits.slice(0, limit).flatMap(hit => hitView(hit, viewer)), index: searchIndex.status(), ...(info ? { rerank: info } : {}) });
     } catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   /** An image as the query: the body is its bytes. Returns the indexed images that look most like it. */

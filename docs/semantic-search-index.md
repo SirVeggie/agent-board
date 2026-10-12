@@ -93,3 +93,14 @@ Rank of the owner's image among the 30:
 - On these screenshots the image half adds nothing to a text query: the owner's text alone ranks slightly better than the blend. The pool is 30 app screenshots that look alike, so this says little about photos or diagrams. The weight stays at the design's 0.5 until a library with other kinds of images can be measured.
 - Plain descriptions ("a context menu", "error message dialog") still mostly return unrelated screenshots, with or without the blend. All 30 images score 0.62 to 0.72 against any of them, which is why the blended cut-off is 0.04 and the palette shows four at most.
 - An image as the query works: the cropped copy found its original first for 28 of 30, with a median lead of 0.105 over the next image. Unrelated screenshots still score about 0.8 against each other, so a pasted image that is not in the library returns loosely similar ones.
+
+## Classifier check of the results (#520)
+
+An optional step after retrieval, in `src/search/rerank.ts`. It runs for `scope=pages|chunks` when **Settings → Search → Check results with the classifier** is on (the Classifier feature `search-rerank`, off by default), a classifier source is set and Tool results may be sent. So it covers the palette's rows and `library_search` in semantic mode; image hits are not checked.
+
+- The route retrieves the 20 closest hits (`RERANK_TOP_K`, or `limit` when that is more) and asks one yes/no question per hit in a single `decide` call: the state is `{ search: <query> }`, each question carries the hit's page, folder, section or item and up to 500 characters of its text.
+- Hits are ordered by tenths of "yes" and keep their vector order inside a tenth. A hit under `RERANK_THRESHOLD` (0.3) is dropped. Hits past the first 20 follow in vector order. The result is then cut to `limit`.
+- The call has a time budget (`RERANK_BUDGET_MS`: 800 ms for the palette, 2500 ms for an agent). On a timeout or any failure the response is the vector ranking, as without the step.
+- The response gains `rerank`: `{ applied: true, ms, asked, dropped, cached }`, or `{ applied: false, reason, ms }` with the decision service's error kind. `rerank=0` on the request skips the step.
+
+**Not measured yet.** The threshold and the budgets are first guesses: the machine this was built on had neither a search pack nor a classifier source. `npm run eval:rerank` runs `tools/semantic-search-proto/queries.json` (28 queries, each naming the page or card it should find) against the running Scribe, with and without the step, and prints the rank of the wanted hit before and after, how many other results were shown, and the classifier's times. Keep the switch on only if that comparison is better.

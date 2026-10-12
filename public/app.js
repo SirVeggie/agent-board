@@ -1474,7 +1474,24 @@
     try { await searchSettingsRequest("open-folder", {}); }
     catch (err) { searchPackStatus.textContent = err.message; }
   });
-  window.scribeMlSettings.init({ confirm: confirmDelete });
+  // The classifier's check of search results (#520): the same switch as Classifier, Features, where its source is set up.
+  const rerankSwitch = document.getElementById("search-rerank");
+  const rerankLabel = document.getElementById("search-rerank-label");
+  function renderRerankSetting(view) {
+    const feature = view.features.find((f) => f.id === "search-rerank");
+    const ready = !!feature && view.sources.some((source) => source.id === view.defaultSource);
+    const hint = (ready ? "" : "Add a classifier source first (Classifier). ") + (feature?.hint || "");
+    rerankLabel.dataset.tooltip = hint;
+    rerankLabel.setAttribute("aria-description", hint);
+    rerankSwitch.disabled = !ready;
+    rerankSwitch.setAttribute("aria-checked", String(ready && feature.on));
+  }
+  rerankSwitch.addEventListener("click", async () => {
+    rerankSwitch.disabled = true;
+    try { await window.scribeMlSettings.setFeature("search-rerank", rerankSwitch.getAttribute("aria-checked") !== "true"); }
+    catch (err) { searchPackStatus.textContent = err.message; rerankSwitch.disabled = false; }
+  });
+  window.scribeMlSettings.init({ confirm: confirmDelete, view: renderRerankSetting });
   function openSettings() {
     if (isPaletteOpen()) {
       closePalette();

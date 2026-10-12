@@ -68,6 +68,8 @@
 
   let view = null;
   let confirmRemove = async () => true;
+  /** Told each time the settings are read or changed, for a feature's switch that also sits in another category. */
+  let onView = () => {};
 
   async function request(method, path, body) {
     // Every change is sent as JSON, even an empty one: the daemon refuses anything else.
@@ -155,6 +157,7 @@
     for (const feature of view.features) switchRow(featureSection, `feature-${feature.id}`, feature.label, feature.hint, feature.on, (on) => ({ features: { [feature.id]: on } }));
 
     renderUsage(view.usage);
+    onView(view);
   }
 
   /** Add (source null) or edit a source, in place under the list. The key field only sends a new key; it never shows the old one. */
@@ -218,8 +221,13 @@
   window.scribeMlSettings = {
     sections: [sourcesSection, sendSection, featureSection, usageSection],
     /** `confirm(message, label)` resolves true when the user agrees to remove a source. */
-    init({ confirm }) {
+    init({ confirm, view: listener }) {
       if (confirm) confirmRemove = confirm;
+      if (listener) onView = listener;
+    },
+    /** Switch a feature from outside this category; every copy of its switch follows. */
+    async setFeature(id, on) {
+      render(await request("PUT", "settings", { features: { [id]: on } }));
     },
     /** Called when Settings opens. */
     refresh() {

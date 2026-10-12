@@ -31,6 +31,12 @@ export const ML_FEATURES: MlFeature[] = [
     hint: "What the agent reads (pages, files, command output, web pages) is asked whether it tries to give the agent instructions. On a hit the call is flagged, the agent is told it is data, and the turn's later calls that change or send anything need your approval. An extra layer, not a guarantee: the classifier reads the same text and can be fooled, and Cursor's built-in tool calls cannot be held. Needs Tool results on under what may be sent.",
     default: false,
   },
+  {
+    id: "search-rerank",
+    label: "Search result check",
+    hint: "Search by meaning asks about its 20 closest results in one call: does this fit the search? Those that fit move up and the rest are dropped. The search text and the start of each result are sent. If the answer is slow or fails, you get the usual order. Needs Tool results on under what may be sent.",
+    default: false,
+  },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
