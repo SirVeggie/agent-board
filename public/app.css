@@ -1,7 +1,54 @@
+:root {
+  --dur-turn: 140s;
+  --dur-turn-reverse: 60s;
+  --dur-turn-busy: 50s;
+  --dur-drift-a: 31s;
+  --dur-drift-b: 37s;
+  --dur-drift-c: 43s;
+  --dur-drift-d: 29s;
+  --dur-ambient-breathe: 11s;
+  --dur-ambient-busy: 3.5s;
+  --dur-stagger: 25ms;
+  --dur-instant: 90ms;
+  --dur-fast: 150ms;
+  --dur-enter: 240ms;
+  --dur-leave: 160ms;
+  --dur-slow: 420ms;
+  --dur-flash: 700ms;
+  --dur-spin: 800ms;
+  --dur-fade: 900ms;
+  --dur-pulse: 1.6s;
+  --dur-breathe: 2.4s;
+  --dur-sweep: 4.6s;
+  --blur-none: none;
+  --z-base: 1;
+  --z-raised: 2;
+  --z-controls: 3;
+  --z-address: 4;
+  --z-indicator: 5;
+  --z-pane: 20;
+  --z-peek-card: 21;
+  --z-peek-frame: 22;
+  --z-dock: 30;
+  --z-toast: 31;
+  --z-modal: 40;
+  --z-spaces: 45;
+  --z-space-menu: 46;
+  --z-drag: 50;
+  --z-menu: 60;
+  --z-drag-preview: 70;
+  --z-hovercard: 80;
+  --z-agent-overlay: 900;
+  --z-tooltip: 1000;
+  --z-popover: 1100;
+  --z-startup: 10000;
+  --z-underlay: -1;
+}
+
 .refresh-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: var(--z-startup);
   display: grid;
   place-items: center;
   background:
@@ -9,7 +56,7 @@
     radial-gradient(ellipse at 64% 58%, rgba(var(--fx-2), .09), transparent 44%),
     var(--bg);
   opacity: 1;
-  transition: opacity 220ms ease;
+  transition: opacity var(--dur-enter) ease;
 }
 .refresh-overlay[hidden], .no-refresh-overlay .refresh-overlay { display: none; }
 .refresh-overlay.leaving { opacity: 0; pointer-events: none; }
@@ -32,13 +79,9 @@
   margin-top: 24px;
   border-radius: 2px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  animation: refresh-overlay-breathe 1.4s ease-in-out infinite alternate;
+  animation: refresh-overlay-breathe var(--dur-pulse) ease-in-out infinite alternate;
 }
 @keyframes refresh-overlay-breathe { from { opacity: .25; } to { opacity: .8; } }
-@media (prefers-reduced-motion: reduce) {
-  .refresh-overlay { transition: none; }
-  .refresh-overlay-line { animation: none; opacity: .5; }
-}
 
 :root,
 html[data-theme="neutral"] {
@@ -337,10 +380,10 @@ body {
   flex-shrink: 0;
   height: 48px;
   background: var(--chrome);
-  backdrop-filter: blur(14px);
+
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
   position: relative;
-  z-index: 2;
+  z-index: var(--z-raised);
   min-width: 0;
   overflow: hidden;
 }
@@ -351,7 +394,7 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: -1;
+  z-index: var(--z-underlay);
   pointer-events: none;
 }
 
@@ -361,7 +404,7 @@ body {
   position: relative;
   flex-shrink: 0;
   height: 0;
-  z-index: 3;
+  z-index: var(--z-controls);
   pointer-events: none;
 }
 
@@ -373,7 +416,7 @@ body {
   width: 100%;
   height: 16px;
   opacity: 0;
-  transition: opacity 0.9s ease;
+  transition: opacity var(--dur-fade) ease;
   -webkit-mask: linear-gradient(#000 0 2px, rgba(0, 0, 0, 0.4) 3px, transparent);
   mask: linear-gradient(#000 0 2px, rgba(0, 0, 0, 0.4) 3px, transparent);
 }
@@ -510,7 +553,7 @@ html.spaces-open .chrome-edge {
     rgba(0, 0, 0, calc(1 - var(--tabs-fade-right))) 100%);
   -webkit-mask-image: var(--tabs-mask);
   mask-image: var(--tabs-mask);
-  transition: --tabs-fade-left 150ms ease, --tabs-fade-right 150ms ease;
+  transition: --tabs-fade-left var(--dur-fast) ease, --tabs-fade-right var(--dur-fast) ease;
 }
 
 .tabs.fade-left {
@@ -519,12 +562,6 @@ html.spaces-open .chrome-edge {
 
 .tabs.fade-right {
   --tabs-fade-right: 1;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tabs {
-    transition: none;
-  }
 }
 
 .tabs::-webkit-scrollbar {
@@ -536,7 +573,7 @@ html.spaces-open .chrome-edge {
 
 .new-tab {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-raised);
   flex: 0 0 auto;
   align-self: center;
   width: 28px;
@@ -575,7 +612,7 @@ html.spaces-open .chrome-edge {
   cursor: pointer;
   user-select: none;
   position: relative;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
 .tab:hover {
@@ -606,11 +643,11 @@ html.spaces-open .chrome-edge {
 }
 
 .tabs.reordering .tab {
-  transition: transform 160ms var(--ease);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
 .tab.dragging {
-  z-index: 30;
+  z-index: var(--z-dock);
   color: var(--heading);
   background: var(--panel);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 8px 22px rgba(0, 0, 0, 0.45);
@@ -749,13 +786,13 @@ html.hide-clear #clear {
 .template-block {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: var(--z-address);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
   background: rgba(10, 11, 12, 0.58);
-  backdrop-filter: blur(3px);
+
 }
 
 .template-block[hidden] {
@@ -797,11 +834,7 @@ main.template-locked iframe[data-role="primary"] {
   border-radius: 16px;
   box-shadow: var(--shadow);
   overflow: hidden;
-  transition:
-    width 0.28s var(--ease),
-    margin-left 0.28s var(--ease),
-    margin-right 0.28s var(--ease),
-    opacity 0.2s ease;
+  transition: opacity var(--dur-enter) ease;
 }
 
 .side-pane.closed {
@@ -909,7 +942,7 @@ html[data-library-side="left"] #library-toggle svg {
   bottom: 0;
   width: 8px;
   cursor: col-resize;
-  z-index: 2;
+  z-index: var(--z-raised);
   touch-action: none;
 }
 
@@ -990,7 +1023,7 @@ body.resizing-side .side-pane {
   border-radius: 8px;
   cursor: pointer;
   color: var(--text);
-  transition: background 0.12s ease;
+  transition: background var(--dur-fast) ease;
 }
 
 .side-row:hover {
@@ -1026,7 +1059,7 @@ body.resizing-side .side-pane {
   position: relative;
   padding-top: 2px;
   border-radius: 10px;
-  transition: box-shadow 0.12s ease, background 0.12s ease;
+  transition: box-shadow var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 
 .lib-row {
@@ -1069,7 +1102,7 @@ body.resizing-side .side-pane {
 .lib-page .fileicon {
   opacity: 0.55;
   filter: none;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .lib-page.open {
@@ -1099,7 +1132,7 @@ body.resizing-side .side-pane {
 
 .lib-row .tab-close {
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .lib-row:hover .tab-close,
@@ -1117,7 +1150,7 @@ body.resizing-side .side-pane {
   width: 12px;
   justify-content: center;
   color: var(--muted);
-  transition: transform 0.15s var(--ease);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
 .lib-folder.expanded .lib-chevron {
@@ -1200,7 +1233,7 @@ body.dragging-lib iframe {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 70;
+  z-index: var(--z-drag-preview);
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1214,18 +1247,12 @@ body.dragging-lib iframe {
   pointer-events: none;
   will-change: transform;
   box-shadow: var(--shadow), 0 10px 26px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(var(--accent-rgb), 0.35);
-  animation: lib-ghost-in 120ms var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 .lib-ghost.landing {
-  transition: transform 160ms var(--ease), opacity 160ms ease;
-}
-
-@keyframes lib-ghost-in {
-  from {
-    opacity: 0;
-    scale: 0.92;
-  }
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) ease;
 }
 
 .lib-drop-line {
@@ -1240,7 +1267,7 @@ body.dragging-lib iframe {
   pointer-events: none;
   /* Own compositor layer: repainting in place left stale copies behind mid-transition. */
   will-change: transform, opacity;
-  transition: transform 90ms var(--ease), width 90ms var(--ease), opacity 90ms ease;
+  transition: transform var(--dur-instant) var(--ease), width var(--dur-instant) var(--ease), opacity var(--dur-instant) ease;
 }
 
 .lib-drop-line::before {
@@ -1271,7 +1298,7 @@ body.dragging-lib iframe {
 }
 
 .lib-row.lib-flash {
-  animation: lib-flash 700ms ease-out;
+  animation: lib-flash var(--dur-flash) ease-out;
 }
 
 @keyframes lib-flash {
@@ -1573,6 +1600,7 @@ body.dragging-lib iframe {
   background: rgba(255, 123, 138, 0.16);
 }
 
+@layer reset {
 button {
   appearance: none;
   -webkit-appearance: none;
@@ -1589,7 +1617,7 @@ button {
   align-items: center;
   justify-content: center;
   box-shadow: var(--button-shadow, inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, 0.35));
-  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 
 button[hidden],
@@ -1604,6 +1632,8 @@ button:hover {
 button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
 }
 
 main {
@@ -1658,7 +1688,7 @@ main {
 }
 
 .empty[hidden] { display: none; }
-#startup { gap: 12px; z-index: 3; background: var(--bg); }
+#startup { gap: 12px; z-index: var(--z-controls); background: var(--bg); }
 
 .empty h1 {
   margin: 0 0 8px;
@@ -1714,7 +1744,7 @@ kbd {
 .palette {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: var(--z-dock);
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -1733,7 +1763,7 @@ kbd {
 
 .palette-panel {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-base);
   width: min(560px, 100%);
   background: var(--panel);
   border: 0;
@@ -1874,7 +1904,7 @@ kbd {
 }
 
 .palette-row.busy .tab-title {
-  animation: palette-busy 1.2s ease-in-out infinite alternate;
+  animation: palette-busy var(--dur-pulse) ease-in-out infinite alternate;
 }
 
 @keyframes palette-busy {
@@ -1956,7 +1986,7 @@ kbd {
 .settings {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1981,15 +2011,14 @@ kbd {
 
 .settings-panel {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-base);
   width: min(800px, 100%);
   max-height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 28px 28px 24px;
   background: color-mix(in srgb, var(--panel) 55%, transparent);
-  backdrop-filter: blur(32px) saturate(1.5);
-  -webkit-backdrop-filter: blur(32px) saturate(1.5);
+
   border-radius: 20px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
@@ -2011,7 +2040,7 @@ kbd {
   grid-template-rows: auto minmax(0, 1fr);
   width: min(960px, 100%);
   height: min(700px, 100%);
-  transition: height 220ms ease;
+  transition: none;
   overflow: hidden;
   padding: 0;
 }
@@ -2072,9 +2101,7 @@ button.settings-close svg {
 .settings-content { min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
 .settings-category[hidden] { display: none; }
 .settings-closing { pointer-events: none; }
-@media (prefers-reduced-motion: reduce) {
-  .settings-categorized { transition: none; }
-}
+
 @media (max-width: 560px) {
   .settings-categorized { grid-template-columns: 125px minmax(0, 1fr); border-radius: 14px; }
   .settings-nav { padding: 10px 6px; }
@@ -2263,7 +2290,7 @@ button.settings-close svg {
   border-right: 1.5px solid var(--muted);
   border-bottom: 1.5px solid var(--muted);
   transform: rotate(45deg);
-  transition: transform 0.15s var(--ease);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
 .select-wrap.open .select-button::after {
@@ -2393,7 +2420,7 @@ button.settings-close svg {
 .builtin-body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 0.22s var(--ease);
+  transition: grid-template-rows var(--dur-enter) var(--ease);
 }
 
 .builtin-group.open .builtin-body {
@@ -2413,7 +2440,7 @@ button.settings-close svg {
 }
 
 .side-row.fresh {
-  animation: lib-flash 1.6s var(--ease);
+  animation: lib-flash var(--dur-pulse) var(--ease);
 }
 
 .side-row .template-desc {
@@ -2449,7 +2476,7 @@ button.settings-close svg {
   color: var(--danger);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .template-row:hover button.tab-close,
@@ -2533,7 +2560,7 @@ button.settings-close svg {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 5;
+  z-index: var(--z-indicator);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2548,8 +2575,8 @@ button.settings-close svg {
   opacity: 0;
   transform: scale(0.985);
   transition:
-    opacity 140ms var(--ease),
-    transform 140ms var(--ease);
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
 
 .tabs-wrap.file-drop-over::after,
@@ -2559,27 +2586,25 @@ button.settings-close svg {
   background: rgba(var(--accent-rgb), 0.09);
   opacity: 1;
   transform: none;
-  animation: file-drop-pulse 1.5s var(--ease) infinite;
+  animation: file-drop-pulse var(--dur-pulse) var(--ease) infinite;
 }
 
 .tabs-wrap > * {
   transition:
-    opacity 160ms var(--ease),
-    filter 160ms var(--ease);
+    opacity var(--dur-fast) var(--ease);
 }
 
 /* The rule above would otherwise replace the strip's own edge-fade transition. */
 .tabs-wrap > .tabs {
   transition:
-    opacity 160ms var(--ease),
-    filter 160ms var(--ease),
-    --tabs-fade-left 150ms ease,
-    --tabs-fade-right 150ms ease;
+    opacity var(--dur-fast) var(--ease),
+    --tabs-fade-left var(--dur-fast) ease,
+    --tabs-fade-right var(--dur-fast) ease;
 }
 
 .tabs-wrap.file-drop-over > * {
   opacity: 0.12;
-  filter: blur(1.5px);
+
 }
 
 .tabs-wrap.file-drop-over::after {
@@ -2626,7 +2651,7 @@ button.settings-close svg {
 .tab-menu {
   --menu-shift: -4px;
   position: fixed;
-  z-index: 60;
+  z-index: var(--z-menu);
   display: flex;
   flex-direction: column;
   min-width: 128px;
@@ -2635,7 +2660,8 @@ button.settings-close svg {
   background: var(--panel);
   box-shadow: var(--shadow), 0 12px 32px rgba(0, 0, 0, 0.45);
   transform-origin: top left;
-  animation: tab-menu-in 120ms var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 .tab-menu[data-side="above"] {
@@ -2654,13 +2680,6 @@ button.settings-close svg {
   background: transparent;
   box-shadow: none;
   white-space: nowrap;
-}
-
-@keyframes tab-menu-in {
-  from {
-    opacity: 0;
-    transform: translateY(var(--menu-shift)) scale(0.97);
-  }
 }
 
 .tab-menu button:hover {
@@ -2737,7 +2756,7 @@ button.settings-close svg {
 
 .hover-card {
   position: fixed;
-  z-index: 80;
+  z-index: var(--z-hovercard);
   width: max-content;
   max-width: 300px;
   padding: 10px 12px;
@@ -2748,7 +2767,8 @@ button.settings-close svg {
   font-size: 12px;
   line-height: 1.4;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  animation: hover-card-in 110ms var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 .hover-card.note {
@@ -2757,13 +2777,6 @@ button.settings-close svg {
 
 .hover-card[hidden] {
   display: none;
-}
-
-@keyframes hover-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
 }
 
 .hover-card-title {
@@ -2859,11 +2872,11 @@ button.hover-card-thread:hover {
   transform: scale(0.9);
   opacity: 0.85;
   border-radius: 14px;
-  transition: transform 120ms var(--ease), opacity 120ms ease;
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) ease;
 }
 
 .tab.filing {
-  animation: tab-filing 180ms var(--ease) forwards;
+  animation: tab-filing var(--dur-enter) var(--ease) forwards;
   pointer-events: none;
 }
 
@@ -2894,7 +2907,7 @@ button.hover-card-thread:hover {
   position: fixed;
   left: 50%;
   bottom: 20px;
-  z-index: 50;
+  z-index: var(--z-drag);
   transform: translateX(-50%);
   max-width: min(420px, calc(100% - 32px));
   padding: 8px 14px;
@@ -2940,7 +2953,7 @@ button.pill-toggle::after {
   border-radius: 50%;
   background: var(--heading);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s var(--ease);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
 button.pill-toggle[aria-checked="true"] {
@@ -2956,24 +2969,11 @@ button.pill-toggle[aria-checked="true"]::after {
   transform: translateX(16px);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .side-pane,
-  .tab,
-  button,
-  button.pill-toggle::after {
-    transition: none;
-  }
-
-  .tab-menu {
-    animation: none;
-  }
-}
-
 /* Desktop app (public/desktop.js): native-style window controls and the compact form factor. */
 .desktop-zoom-popup {
   position: fixed;
   right: 12px;
-  z-index: 1100;
+  z-index: var(--z-popover);
   padding: 8px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3229,7 +3229,7 @@ main.has-split .newpage[data-pane],
 /* Over the pane's own body, which only backs a site while it loads. */
 main.has-split #frames iframe[data-pane],
 main.has-split .newpage[data-pane] {
-  z-index: 2;
+  z-index: var(--z-raised);
 }
 
 /* New pages fill the pane behind their floating header. Existing-page covers keep the normal inset. */
@@ -3243,9 +3243,10 @@ main.has-split .newpage:not(.cover)[data-pane] {
   left: var(--peek-x);
   width: calc(100% - 2 * var(--peek-x));
   height: calc(100% - 2 * var(--peek-y) - var(--view-head));
-  z-index: 22;
+  z-index: var(--z-peek-frame);
   border-radius: 0 0 12px 12px;
-  animation: peek-in 0.16s var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 #frames iframe.frame-loading,
@@ -3255,26 +3256,20 @@ main.has-split .newpage:not(.cover)[data-pane] {
 
 /* Let the pane open immediately, but reveal cold iframe content only after load. */
 main.has-split #frames iframe[data-pane] {
-  transition: opacity 0.16s var(--ease);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  main.has-split #frames iframe[data-pane] {
-    transition: none;
-  }
+  transition: opacity var(--dur-fast) var(--ease);
 }
 
 /* "Already here": an outline laid over the frame. A frame's own inset shadow would sit under the page it shows. */
 .view-flash {
   position: absolute;
-  z-index: 30;
+  z-index: var(--z-dock);
   pointer-events: none;
   box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), 0.45), inset 0 0 24px rgba(var(--accent-rgb), 0.08);
   opacity: 0;
 }
 
 .view-flash.on {
-  animation: view-flash 0.7s var(--ease);
+  animation: view-flash var(--dur-flash) var(--ease);
 }
 
 @keyframes view-flash {
@@ -3282,21 +3277,14 @@ main.has-split #frames iframe[data-pane] {
   30% { opacity: 1; }
 }
 
-@keyframes peek-in {
-  from { opacity: 0; transform: translateY(6px) scale(0.99); }
-}
-
-@keyframes scrim-in {
-  from { opacity: 0; }
-}
-
 .peek-scrim {
   position: absolute;
   inset: 0;
-  z-index: 20;
+  z-index: var(--z-pane);
   background: rgba(10, 11, 12, 0.5);
-  backdrop-filter: blur(2px);
-  animation: scrim-in 0.16s var(--ease);
+
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 html[data-theme="cream"] .peek-scrim {
@@ -3309,14 +3297,15 @@ html[data-theme="cream"] .peek-scrim {
   bottom: var(--peek-y);
   left: var(--peek-x);
   right: var(--peek-x);
-  z-index: 21;
+  z-index: var(--z-peek-card);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
   background: var(--panel);
   box-shadow: var(--shadow), 0 18px 48px rgba(0, 0, 0, 0.45);
   overflow: hidden;
-  animation: peek-in 0.16s var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 html[data-theme="cream"] .peek-card {
@@ -3388,7 +3377,7 @@ html[data-theme="cream"] .peek-card {
   top: var(--pane-y);
   left: var(--pane-x);
   width: var(--pane-w);
-  z-index: 3;
+  z-index: var(--z-controls);
   background: var(--chrome-solid);
   cursor: grab;
   user-select: none;
@@ -3398,7 +3387,7 @@ html[data-theme="cream"] .peek-card {
 .pane-drop-overlay {
   position: absolute;
   inset: 0;
-  z-index: 20;
+  z-index: var(--z-pane);
   cursor: grabbing;
   border-radius: inherit;
 }
@@ -3443,7 +3432,7 @@ body.dragging-pane iframe { pointer-events: none; }
 .pane-head .view-title-text {
   font-weight: 500;
   color: var(--muted);
-  transition: color 0.15s ease;
+  transition: color var(--dur-fast) ease;
 }
 
 .pane-head.focused .view-title-text {
@@ -3458,7 +3447,7 @@ body.dragging-pane iframe { pointer-events: none; }
 
 /* The buttons show while the pointer is in the pane (views.js marks it), so a pane at rest is its title alone. */
 .pane-head .view-btn {
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 @media (hover: hover) {
@@ -3469,7 +3458,7 @@ body.dragging-pane iframe { pointer-events: none; }
   /* views.js also reveals the header while the pointer approaches from the page below. */
   .pane-head.blank {
     opacity: 0;
-    transition: opacity 0.4s ease;
+    transition: opacity var(--dur-slow) ease;
   }
 
   .pane-head.blank.pointer-near,
@@ -3480,12 +3469,6 @@ body.dragging-pane iframe { pointer-events: none; }
 
   .pane-head.blank:focus-within .view-btn {
     opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pane-head.blank {
-    transition: none;
   }
 }
 
@@ -3596,7 +3579,7 @@ button.view-btn:hover {
 
 .pane-body {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-base);
 }
 
 .view-loading {
@@ -3630,7 +3613,7 @@ button.view-btn:hover {
   top: 0;
   bottom: 0;
   left: calc(var(--at, 0.5) * 100%);
-  z-index: 5;
+  z-index: var(--z-indicator);
   width: 10px;
   margin-left: -5px;
   cursor: col-resize;
@@ -3668,7 +3651,7 @@ main.split-col .split-divider {
   width: 3px;
   background: rgba(var(--accent-rgb), 0.45);
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 main.split-col .split-divider::before,
@@ -3701,7 +3684,7 @@ main.split-col .split-divider::after {
   position: absolute;
   top: 50%;
   left: 50%;
-  z-index: 1;
+  z-index: var(--z-base);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -3713,7 +3696,7 @@ main.split-col .split-divider::after {
   opacity: 0;
   pointer-events: none;
   cursor: default;
-  transition: opacity 0.15s ease, transform 0.15s var(--ease);
+  transition: opacity var(--dur-fast) ease, transform var(--dur-fast) var(--ease);
 }
 
 main.split-col .split-tools {
@@ -3738,7 +3721,7 @@ body.resizing-split .split-divider .split-tools {
   position: absolute;
   top: 50%;
   left: 50%;
-  z-index: 1;
+  z-index: var(--z-base);
   padding: 3px 9px;
   border-radius: 8px;
   background: var(--chrome-solid);
@@ -3750,7 +3733,7 @@ body.resizing-split .split-divider .split-tools {
   transform: translate(-50%, -50%);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .split-divider.resizing .split-ratio {
@@ -3787,7 +3770,7 @@ body.resizing-split iframe {
 .pv {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-tooltip);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3797,7 +3780,7 @@ body.resizing-split iframe {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(2px);
+
 }
 
 .pv-panel {
@@ -4015,7 +3998,7 @@ button.space-chip[aria-expanded="true"] {
 /* The board steps back while the overview is up: chrome contents fade, the workspace recedes. */
 html.spaces-anim .chrome > *,
 html.spaces-anim .workspace {
-  transition: opacity 0.22s var(--ease), transform 0.26s var(--ease), filter 0.26s var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
 }
 
 html.spaces-open .chrome > :not(.win-controls) {
@@ -4026,23 +4009,21 @@ html.spaces-open .chrome > :not(.win-controls) {
 html.spaces-open .chrome {
   background: transparent;
   box-shadow: none;
-  backdrop-filter: none;
+
 }
 
 html.spaces-open .workspace {
   opacity: 0;
-  transform: scale(0.97);
-  filter: blur(6px);
   pointer-events: none;
 }
 
 .spaces {
   position: fixed;
   inset: 48px 0 0;
-  z-index: 45;
+  z-index: var(--z-spaces);
   overflow: auto;
   opacity: 0;
-  transition: opacity 0.22s var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
 }
 
 .spaces[hidden] {
@@ -4106,13 +4087,13 @@ html.spaces-open .workspace {
   touch-action: none;
   opacity: 0;
   transform: translateY(10px) scale(0.98);
-  transition: transform 0.22s var(--ease), box-shadow 0.15s ease, opacity 0.22s var(--ease);
+  transition: transform var(--dur-enter) var(--ease), box-shadow var(--dur-fast) ease, opacity var(--dur-enter) var(--ease);
 }
 
 .spaces.shown .space-card {
   opacity: 1;
   transform: none;
-  transition-delay: calc(var(--i, 0) * 25ms);
+  transition-delay: calc(var(--i, 0) * var(--dur-stagger));
 }
 
 .spaces.shown .space-card.selected {
@@ -4140,8 +4121,8 @@ html.spaces-open .workspace {
 }
 
 .spaces.shown .space-card.dragging {
-  z-index: 2;
-  transition: box-shadow 0.15s ease;
+  z-index: var(--z-raised);
+  transition: box-shadow var(--dur-fast) ease;
   cursor: grabbing;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), inset 0 0 0 1px color-mix(in srgb, var(--space) 70%, transparent);
 }
@@ -4380,7 +4361,7 @@ button.spaces-restore:hover {
 
 .space-menu {
   position: fixed;
-  z-index: 46;
+  z-index: var(--z-space-menu);
   display: flex;
   flex-direction: column;
   min-width: 170px;
@@ -4431,20 +4412,6 @@ button.space-menu-item.danger {
   color: var(--danger);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  html.spaces-anim .chrome > *,
-  html.spaces-anim .workspace,
-  .spaces,
-  .space-card {
-    transition: none !important;
-  }
-
-  html.spaces-open .workspace {
-    transform: none;
-    filter: none;
-  }
-}
-
 /* ---------- New page (Ctrl+T) ----------
    Matter that has not taken shape yet: a nebula drawn by a WebGL shader (newpage.js,
    .np-canvas). Without WebGL, the fallback below: soft coloured blobs drift on their own paths
@@ -4462,13 +4429,13 @@ button.space-menu-item.danger {
 .newpage.gl .np-canvas {
   opacity: 1;
   /* A fresh canvas may compile before its first style pass: keyframes also fade that case. */
-  animation: np-reveal 320ms ease-out;
+  animation: np-reveal var(--dur-slow) ease-out;
 }
 
 .newpage.gl .newpage-matter {
   opacity: 0;
   visibility: hidden;
-  transition: opacity 320ms ease-out, visibility 0s 320ms;
+  transition: opacity var(--dur-slow) ease-out, visibility 0s var(--dur-slow);
 }
 
 /* Keep the fallback under the incoming shader, then stop its animation work. */
@@ -4486,18 +4453,13 @@ button.space-menu-item.danger {
 .newpage.gl-warm .np-canvas { animation: none; }
 .newpage.gl-warm .newpage-matter { transition: none; }
 
-@media (prefers-reduced-motion: reduce) {
-  .newpage.gl .np-canvas { animation: none; }
-  .newpage.gl .newpage-matter { transition: none; }
-}
-
 .newpage {
   --np-c1: var(--fx-1);
   --np-c2: var(--fx-2);
   --np-c3: var(--fx-3);
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   overflow: hidden;
   background: #08080a;
   display: flex;
@@ -4507,7 +4469,7 @@ button.space-menu-item.danger {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   pointer-events: none;
   /* Use the nebula palette (including provider overrides) for a coloured rim and halo. */
   box-shadow:
@@ -4546,7 +4508,7 @@ main.blank-page #frames iframe:not(.inactive) {
   position: absolute;
   inset: -25%;
   pointer-events: none;
-  animation: np-turn 140s linear infinite;
+  animation: np-turn var(--dur-turn) linear infinite;
 }
 
 .np-blob {
@@ -4559,11 +4521,11 @@ main.blank-page #frames iframe:not(.inactive) {
   will-change: transform;
 }
 
-.np-b1 { left: 22%; top: 18%; animation: np-drift-a 31s ease-in-out infinite alternate; }
-.np-b2 { left: 42%; top: 36%; width: 34%; background: radial-gradient(circle, rgba(var(--np-c2), 0.24), rgba(var(--np-c2), 0.07) 38%, transparent 68%); animation: np-drift-b 37s ease-in-out infinite alternate; }
-.np-b3 { left: 30%; top: 44%; width: 30%; background: radial-gradient(circle, rgba(var(--np-c3), 0.2), rgba(var(--np-c3), 0.06) 38%, transparent 68%); animation: np-drift-c 43s ease-in-out infinite alternate; }
-.np-b4 { left: 48%; top: 20%; width: 26%; animation: np-drift-b 29s ease-in-out infinite alternate-reverse; opacity: 0.8; }
-.np-b5 { left: 38%; top: 30%; width: 22%; background: radial-gradient(circle, rgba(var(--np-c2), 0.16), transparent 65%); animation: np-breathe 11s ease-in-out infinite; }
+.np-b1 { left: 22%; top: 18%; animation: np-drift-a var(--dur-drift-a) ease-in-out infinite alternate; }
+.np-b2 { left: 42%; top: 36%; width: 34%; background: radial-gradient(circle, rgba(var(--np-c2), 0.24), rgba(var(--np-c2), 0.07) 38%, transparent 68%); animation: np-drift-b var(--dur-drift-b) ease-in-out infinite alternate; }
+.np-b3 { left: 30%; top: 44%; width: 30%; background: radial-gradient(circle, rgba(var(--np-c3), 0.2), rgba(var(--np-c3), 0.06) 38%, transparent 68%); animation: np-drift-c var(--dur-drift-c) ease-in-out infinite alternate; }
+.np-b4 { left: 48%; top: 20%; width: 26%; animation: np-drift-b var(--dur-drift-d) ease-in-out infinite alternate-reverse; opacity: 0.8; }
+.np-b5 { left: 38%; top: 30%; width: 22%; background: radial-gradient(circle, rgba(var(--np-c2), 0.16), transparent 65%); animation: np-breathe var(--dur-ambient-breathe) ease-in-out infinite; }
 
 .np-swirl {
   position: absolute;
@@ -4572,7 +4534,7 @@ main.blank-page #frames iframe:not(.inactive) {
   background: conic-gradient(from 0deg, transparent, rgba(var(--np-c1), 0.07) 12%, transparent 26%, rgba(var(--np-c2), 0.05) 48%, transparent 62%, rgba(var(--np-c3), 0.06) 80%, transparent);
   -webkit-mask: radial-gradient(circle, #000 8%, transparent 62%);
   mask: radial-gradient(circle, #000 8%, transparent 62%);
-  animation: np-turn 60s linear infinite reverse;
+  animation: np-turn var(--dur-turn-reverse) linear infinite reverse;
 }
 
 .np-grain {
@@ -4581,15 +4543,15 @@ main.blank-page #frames iframe:not(.inactive) {
   opacity: 0.07;
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  animation: np-shimmer 1.2s steps(4) infinite;
+  animation: np-shimmer var(--dur-pulse) steps(4) infinite;
 }
 
 .newpage.working .newpage-matter {
-  animation-duration: 50s;
+  animation-duration: var(--dur-turn-busy);
 }
 
 .newpage.working .np-b5 {
-  animation-duration: 3.5s;
+  animation-duration: var(--dur-ambient-busy);
 }
 
 @keyframes np-turn {
@@ -4628,16 +4590,9 @@ main.blank-page #frames iframe:not(.inactive) {
   100% { background-position: 0 0; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .newpage-matter,
-  .newpage-matter * {
-    animation: none !important;
-  }
-}
-
 .newpage-body {
   position: relative;
-  z-index: 2;
+  z-index: var(--z-raised);
   margin: auto;
   width: min(760px, 100%);
   max-height: 100%;
@@ -4648,31 +4603,24 @@ main.blank-page #frames iframe:not(.inactive) {
   align-items: center;
   text-align: center;
   opacity: 1;
-  filter: blur(0);
+
   visibility: visible;
-  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s;
+  transition: opacity var(--dur-slow) ease-in-out, visibility 0s;
 }
 
 .newpage.has-thread .newpage-body {
   opacity: 0;
-  filter: blur(12px);
+
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s 420ms;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .newpage .newpage-body,
-  .newpage.has-thread .newpage-body {
-    transition: none;
-  }
+  transition: opacity var(--dur-slow) ease-in-out, visibility 0s var(--dur-slow);
 }
 
 /* While the floating chat writes a page: a word for what the agent is at, and the page's title. */
 .newpage-intent {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: var(--z-raised);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -4682,16 +4630,16 @@ main.blank-page #frames iframe:not(.inactive) {
   text-align: center;
   pointer-events: none;
   opacity: 0;
-  filter: blur(12px);
+
   visibility: hidden;
-  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s 420ms;
+  transition: opacity var(--dur-slow) ease-in-out, visibility 0s var(--dur-slow);
 }
 
 .newpage.intent .newpage-intent {
   opacity: 1;
-  filter: blur(0);
+
   visibility: visible;
-  transition: opacity 420ms ease-in-out, filter 420ms ease-in-out, visibility 0s;
+  transition: opacity var(--dur-slow) ease-in-out, visibility 0s;
 }
 
 .newpage-intent-word {
@@ -4702,7 +4650,7 @@ main.blank-page #frames iframe:not(.inactive) {
   background: linear-gradient(100deg, rgba(255, 255, 255, 0.55) 30%, #fff 50%, rgba(255, 255, 255, 0.55) 70%) 0 0 / 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: np-intent-sheen 2.6s linear infinite;
+  animation: np-intent-sheen var(--dur-breathe) linear infinite;
 }
 
 .newpage-intent-title {
@@ -4728,19 +4676,7 @@ main.blank-page #frames iframe:not(.inactive) {
 }
 
 main.has-split .newpage.cover[data-pane] {
-  z-index: 3;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .newpage-intent,
-  .newpage.intent .newpage-intent {
-    transition: none;
-  }
-
-  .newpage-intent-word {
-    animation: none;
-    background-position: 50% 0;
-  }
+  z-index: var(--z-controls);
 }
 
 .newpage-title {
@@ -4817,10 +4753,9 @@ main.has-split .newpage.cover[data-pane] {
   border-radius: 12px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 72%, transparent);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+
   box-shadow: none;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s var(--ease);
+  transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-fast) var(--ease);
 }
 
 .newpage-card:hover,
@@ -4859,4 +4794,29 @@ main.has-split .newpage.cover[data-pane] {
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* One-shot entry, explicitly requested by the insertion code. */
+[data-fx-enter] { animation: ui-enter var(--dur-enter) var(--ease) backwards; }
+@keyframes ui-enter { from { opacity: 0; transform: translateY(6px); } }
+
+/* One shell-wide effects policy, including pseudo-elements and future components. */
+html.fx-off *, html.fx-off *::before, html.fx-off *::after {
+  animation: none !important;
+  animation-play-state: paused !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* The shell has a zero-backdrop-blur budget: opaque theme surfaces are cheaper. */
+html { backdrop-filter: var(--blur-none); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  .refresh-overlay-line { opacity: .5; }
+  .newpage-intent-word { background-position: 50% 0; }
 }

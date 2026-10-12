@@ -11,14 +11,15 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 40;
+  z-index: var(--z-modal);
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
   background: var(--bg);
   background-image: var(--bg-image);
-  animation: ag-fade-in 0.18s var(--ease);
+  transition: opacity var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; }
 }
 
 html[data-theme="cream"] .agent-harness {
@@ -527,7 +528,7 @@ i.hx-p-pi { background: var(--hx-pi); }
 
 /* Settings dialogs (allowlists) share this panel's layer, and open over it. */
 body.agent-harness-open .settings {
-  z-index: 45;
+  z-index: var(--z-spaces);
 }
 
 .hx-actions {

@@ -608,25 +608,24 @@ window.createViews = function createViews(host) {
     splitAnimations = [];
   }
 
-  /** Resize the existing page in place; moving pooled iframes would reload them. */
+  /** Snap iframe geometry once, then animate only its composited position. */
   function animateSplitLayout(previousBoxes, split) {
-    const options = { duration: 240, easing: getComputedStyle(mainEl).getPropertyValue("--ease").trim() || "ease" };
+    const options = { token: "enter" };
     for (const node of mainEl.querySelectorAll('[data-pane], .split-divider, [data-role="primary"], .newpage')) {
       if (node.hidden || node.classList.contains("inactive")) continue;
       const before = previousBoxes.get(node);
       const after = node.getBoundingClientRect();
       if (before) {
-        const style = getComputedStyle(node);
-        splitAnimations.push(node.animate([
-          { left: `${parseFloat(style.left) + before.left - after.left}px`, top: `${parseFloat(style.top) + before.top - after.top}px`, width: `${before.width}px`, height: `${before.height}px` },
-          { left: style.left, top: style.top, width: style.width, height: style.height },
+        splitAnimations.push(window.scribeMotion.animate(node, [
+          { transform: `translate(${before.left - after.left}px, ${before.top - after.top}px)` },
+          { transform: "none" },
         ], options));
       } else if (split) {
         const offset = split.dir === "col" ? "translateY(16px)" : "translateX(16px)";
         // A cold frame reveals its content after load. An opacity keyframe captured here
         // would otherwise override that reveal, then snap to visible when it finishes.
         const loading = node.matches("iframe.frame-loading, iframe.url-loading");
-        splitAnimations.push(node.animate([
+        splitAnimations.push(window.scribeMotion.animate(node, [
           { ...(loading ? {} : { opacity: 0 }), transform: offset },
           { ...(loading ? {} : { opacity: getComputedStyle(node).opacity }), transform: "none" },
         ], options));
@@ -687,7 +686,7 @@ window.createViews = function createViews(host) {
     const split = active ? activeSplit() : null;
     const layoutKey = split ? JSON.stringify([host.spaceId(), split.dir, stopsFor(split), split.panes.map(frameIdOf)]) : "";
     const hadSplit = mainEl.classList.contains("has-split");
-    const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motion = window.scribeMotion.enabled();
     const openingSplit = split && !hadSplit && motion;
     const closingSplit = !split && hadSplit && motion;
     const previousBoxes = new Map();
@@ -930,15 +929,15 @@ window.createViews = function createViews(host) {
       return false;
     }
     const target = peekTarget();
-    if (!card.hidden && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (!card.hidden && window.scribeMotion.enabled()) {
       const nodes = [scrim, card, host.frame(frameIdOf(target))?.el].filter(Boolean);
       const closing = { key: peekKey(), target, nodes, animations: [] };
       closingPeek = closing;
-      const options = { duration: 160, easing: getComputedStyle(mainEl).getPropertyValue("--ease").trim() || "ease", fill: "forwards" };
+      const options = { token: "leave", fill: "forwards" };
       for (const node of nodes) {
         const style = getComputedStyle(node);
         node.inert = true;
-        closing.animations.push(node.animate([
+        closing.animations.push(window.scribeMotion.animate(node, [
           { opacity: style.opacity, transform: style.transform },
           { opacity: 0, transform: node === scrim ? "none" : "translateY(6px) scale(0.99)" },
         ], options));

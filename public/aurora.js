@@ -71,7 +71,7 @@ gl_FragColor=vec4(col*a,a);}`;
     root.classList.toggle("on", anim);
     root.classList.toggle("tint", setting(IDLE_KEY));
     if (!anim) return;
-    if (still.matches) {
+    if (!window.scribeMotion.enabled()) {
       loop.stop();
       fx.draw({ u_time: time, ...window.scribeGL.palette() });
     } else if (focused()) loop.start();
@@ -90,6 +90,7 @@ gl_FragColor=vec4(col*a,a);}`;
   document.addEventListener("visibilitychange", render);
   window.addEventListener("scribe:aurora", render);
   window.addEventListener("scribe:theme", render);
+  window.addEventListener("scribe:ui-fx", render);
   still.addEventListener?.("change", render);
   render();
 

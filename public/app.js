@@ -12,9 +12,9 @@
   function dismissRefreshOverlay(fade = false) {
     clearTimeout(refreshOverlayTimer);
     if (refreshOverlay.hidden) return;
-    if (fade && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (fade && window.scribeMotion.enabled()) {
       refreshOverlay.classList.add("leaving");
-      refreshOverlayTimer = setTimeout(() => { refreshOverlay.hidden = true; }, 220);
+      window.scribeMotion.reveal(refreshOverlay, false, { translate: "none", fill: "both" }).finished.then(() => { refreshOverlay.hidden = true; }).catch(() => {});
     } else {
       refreshOverlay.hidden = true;
     }
@@ -456,7 +456,7 @@
     document.getElementById("refresh-overlay-label"),
     "Briefly covers the shell while saved tabs and spaces settle after a refresh. Clears when a connection needs attention."
   );
-  document.documentElement.classList.toggle("no-ui-fx", !flagOn(uiFxToggle));
+  document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));
   applyFlag(auroraEdgeToggle, AURORA_EDGE_KEY, true);
   applyFlag(auroraIdleToggle, AURORA_IDLE_KEY, true);
   applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
@@ -1346,7 +1346,7 @@
       document.documentElement.classList.toggle("tight-small", on);
     }
     if (el === uiFxToggle) {
-      document.documentElement.classList.toggle("no-ui-fx", !on);
+      document.documentElement.classList.toggle("fx-off", !on);
       window.dispatchEvent(new Event("scribe:ui-fx"));
     }
     if (el === refreshOverlayToggle && !on) dismissRefreshOverlay();

@@ -214,7 +214,7 @@ gl_FragColor=c;
     }, { element: btn });
     function update() {
       if (disposed || broken) return;
-      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx");
+      const moving = !still.matches && !document.documentElement.classList.contains("fx-off");
       btn.classList.toggle("fx-live", moving);
       if (moving) loop.start();
       else { loop.stop(); draw(); }

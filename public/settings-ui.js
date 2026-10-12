@@ -33,17 +33,16 @@
     root.classList.toggle("settings-closing", !visible);
     root.inert = !visible;
     root.hidden = false;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (!window.scribeMotion.enabled()) {
       root.hidden = !visible;
       return;
     }
     const panel = root.querySelector(".settings-panel");
     const backdrop = root.querySelector(".settings-backdrop");
-    const frames = [{ opacity: 0, transform: "translateY(12px) scale(.98)" }, { opacity: 1, transform: "translateY(0) scale(1)" }];
-    const options = { duration: visible ? 180 : 140, easing: "ease-out", fill: "both" };
+    const options = { fill: "both" };
     const animations = [
-      panel.animate(visible ? frames : [...frames].reverse(), options),
-      backdrop.animate(visible ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], options),
+      window.scribeMotion.reveal(panel, visible, options),
+      window.scribeMotion.reveal(backdrop, visible, { ...options, translate: "none" }),
     ];
     transitions.set(root, animations);
     Promise.all(animations.map(animation => animation.finished)).then(() => {

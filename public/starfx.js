@@ -116,7 +116,7 @@ gl_FragColor=over(pm(sc,fill),c);}`;
         loop.stop();
         return;
       }
-      const moving = !still.matches && !document.documentElement.classList.contains("no-ui-fx");
+      const moving = !still.matches && !document.documentElement.classList.contains("fx-off");
       if (moving) loop.start();
       else {
         loop.stop();

@@ -24,6 +24,7 @@
       if (localStorage.getItem("scribe.refreshOverlay") === "0") {
         document.documentElement.classList.add("no-refresh-overlay");
       }
+      if (localStorage.getItem("scribe.uiEffects") === "0") document.documentElement.classList.add("fx-off");
       // A page in a window of its own (popout.js): no tab strip or sidebars from the first paint.
       if (new URLSearchParams(location.search).has("popout")) {
         document.documentElement.classList.add("popout");
@@ -436,6 +437,7 @@
       <div class="confirm-actions" id="choice-actions"></div>
     </form>
   </dialog>
+  <script src="./motion.js?v=1"></script>
   <script src="./tooltip.js?v=2"></script>
   <script src="./dom-sync.js?v=2"></script>
   <script src="./hovercard.js?v=7"></script>

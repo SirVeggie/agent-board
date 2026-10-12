@@ -97,9 +97,8 @@
   function webEnforced(provider) {
     return provider === "claude" || provider === "cursor" || provider === "codex" || provider === "pi";
   }
-  /** How long the transcript's spring takes to settle at the bottom, and how long a new row fades in (match .ag-enter). */
+  /** How long the transcript's spring takes to settle at the bottom, independent of the CSS entry duration. */
   const STICK_SPRING_MS = 600;
-  const ENTER_MS = 240;
   /** How close to the bottom counts as pinned. Opening the queue dock shrinks the scroll by the dock's height, so this must be the hide/show hysteresis too. */
   const STICK_PX = 80;
   const WEB_UNENFORCED = "Not enforced on this provider: its own web tools stay on.";
@@ -1872,7 +1871,6 @@
       this.queueShown = true;
       this.transcriptThreadId = null;
       this.transcriptHadContent = false;
-      this.entering = new Map();
       this.scroll.addEventListener("scroll", () => {
         this.updateScrollFade();
         if (!(this.stickLock || this.stickAnim)) {
@@ -3825,22 +3823,11 @@
       if (this.helpersBusy) this.renderHelperDock();
     }
 
-    /** New rows fade in; a row rebuilt mid-fade carries on from where it was. */
+    /** Only newly inserted rows request the shared one-shot entry. */
     markEntering(root, known) {
-      const now = performance.now();
-      for (const [id, at] of this.entering) if (now - at >= ENTER_MS) this.entering.delete(id);
       for (const node of root.querySelectorAll("[data-item-id]")) {
-        // A step kept from the last render is already fading in, or done.
-        if (node.classList.contains("ag-enter") || node.parentElement?.closest(".ag-enter")) continue;
-        const id = node.dataset.itemId;
-        let at = this.entering.get(id);
-        if (at == null) {
-          if (known?.has(id)) continue;
-          at = now;
-          this.entering.set(id, at);
-        }
-        node.classList.add("ag-enter");
-        if (now > at) node.style.animationDelay = `${at - now}ms`;
+        if (known?.has(node.dataset.itemId) || node.hasAttribute("data-fx-enter") || node.parentElement?.closest("[data-fx-enter]")) continue;
+        window.scribeMotion.enter(node);
       }
     }
 
@@ -3879,7 +3866,7 @@
       if (!el) return;
       this.stick = true;
       const max = () => Math.max(0, el.scrollHeight - el.clientHeight);
-      const reduce = instant || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+      const reduce = instant || !window.scribeMotion.enabled();
       if (reduce) {
         this.stopStickAnim();
         this.jumpScroll(max());
@@ -6155,9 +6142,7 @@
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
       else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
-    /** The hidden handle shows one line at a time. A new step slides the old line up and out while it blurs, and
-        the new one up and in while it sharpens. CSS transitions rather than keyframes: a step that lands mid-swap
-        retargets each line from where it is, so fast steps keep the text moving and blurred instead of snapping sharp. */
+    /** The hidden handle shows one line at a time using the shared entry and exit helper. */
     setHandleText(text, key) {
       const box = this.handleText;
       const cur = box.querySelector(".dock-handle-line:not(.out)");
@@ -6167,19 +6152,16 @@
       }
       box.dataset.key = key;
       const next = el("span", "dock-handle-line", text);
-      const animate = cur && !this.feedQuiet && !S.dockShown && this.handle.classList.contains("busy");
+      const animate = cur && window.scribeMotion.enabled() && !this.feedQuiet && !S.dockShown && this.handle.classList.contains("busy");
       if (!animate) {
         box.replaceChildren(next);
         return;
       }
-      // Start below and blurred, then let the transition carry it in.
-      next.classList.add("in");
       box.append(next);
-      void next.offsetWidth;
-      next.classList.remove("in");
+      window.scribeMotion.reveal(next, true);
       cur.classList.add("out");
-      // A timer rather than transitionend: transitions stall in a hidden window, and the old line must still go.
-      setTimeout(() => cur.remove(), 560);
+      const leaving = window.scribeMotion.reveal(cur, false, { translate: "translateY(-6px)", fill: "both" });
+      leaving.finished.then(() => { cur.remove(); leaving.cancel(); }).catch(() => {});
       const outs = box.querySelectorAll(".dock-handle-line.out");
       for (let i = 0; i < outs.length - 2; i++) outs[i].remove();
     },
@@ -6250,7 +6232,7 @@
        when none is selected. Live steps cap at 4 while it runs, then fade once it stops. */
     clearFeedLines() {
       clearTimeout(this._settle);
-      for (const node of this.feed.children) clearTimeout(node._fade);
+      for (const node of this.feed.children) node._fade?.cancel();
       this.feed.replaceChildren();
       this.feedLines.clear();
       this.feed.classList.remove("deep");
@@ -6337,15 +6319,16 @@
         line.append(el("span", "dock-dot"), el("span", "dock-line-text"));
         const before = [...this.feed.children];
         this.feed.append(line);
+        if (!this.feedQuiet) window.scribeMotion.enter(line);
         this.feedLines.set(key, line);
-        if (!this.feedQuiet) {
+        if (!this.feedQuiet && window.scribeMotion.enabled()) {
           const lift = line.offsetHeight + 2;
-          for (const node of before) if (node.isConnected) node.animate([{ transform: `translateY(${lift}px)` }, { transform: "none" }], { duration: 360, easing: "cubic-bezier(.2,.8,.2,1)" });
+          for (const node of before) if (node.isConnected) window.scribeMotion.animate(node, [{ transform: `translateY(${lift}px)` }, { transform: "none" }], { token: "slow" });
         }
       }
       line.className = `dock-line ${cls}${hold ? " keep" : ""}`;
       line.querySelector(".dock-line-text").textContent = text;
-      clearTimeout(line._fade);
+      line._fade?.cancel();
       line.classList.remove("fading");
       if (hold) {
         for (const node of [...this.feed.children]) {
@@ -6368,11 +6351,13 @@
         for (const node of [...this.feed.children]) {
           if (node.classList.contains("keep")) continue;
           node.classList.add("fading");
-          clearTimeout(node._fade);
-          node._fade = setTimeout(() => {
+          node._fade?.cancel();
+          const leaving = node._fade = window.scribeMotion.reveal(node, false, { translate: "none", token: "fade", fill: "both" });
+          leaving.finished.then(() => {
             node.remove();
             for (const [k, v] of this.feedLines) if (v === node) this.feedLines.delete(k);
-          }, 900);
+            leaving.cancel();
+          }).catch(() => {});
         }
       }, 1400);
     },

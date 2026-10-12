@@ -35,7 +35,7 @@ window.createSpaces = function createSpaces(host) {
   let menu = null;
   let drag = null;
   let busy = false;
-  let animTimer = 0;
+  let motion = null;
 
   /* ---------- DOM ---------- */
 
@@ -128,12 +128,12 @@ window.createSpaces = function createSpaces(host) {
     }
     host.beforeOpen?.();
     open = true;
-    clearTimeout(animTimer);
+    motion?.cancel();
     document.documentElement.classList.add("spaces-anim", "spaces-open");
     chip.setAttribute("aria-expanded", "true");
     root.hidden = false;
-    // Two frames so the fade starts from the hidden state.
-    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add("shown")));
+    root.classList.add("shown");
+    motion = window.scribeMotion.reveal(root, true, { translate: "none" });
     await run("POST", "/api/spaces/ensure");
     selected = Math.max(0, data.spaces.findIndex((space) => space.id === data.activeId));
     render();
@@ -151,14 +151,18 @@ window.createSpaces = function createSpaces(host) {
     document.documentElement.classList.remove("spaces-open");
     chip.setAttribute("aria-expanded", "false");
     root.classList.remove("shown");
-    clearTimeout(animTimer);
-    animTimer = setTimeout(() => {
-      if (!open) {
+    motion?.cancel();
+    motion = window.scribeMotion.reveal(root, false, { translate: "none", fill: "both" });
+    const closing = motion;
+    closing.finished.then(() => {
+      if (!open && motion === closing) {
         root.hidden = true;
+        closing.cancel();
+        motion = null;
         grid.replaceChildren();
         document.documentElement.classList.remove("spaces-anim");
       }
-    }, 300);
+    }).catch(() => {});
     host.afterClose?.();
   }
 

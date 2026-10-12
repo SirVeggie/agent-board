@@ -130,7 +130,7 @@ gl_FragColor=outc(acc/max(a,1e-3),a*(.4+.4*u_busy));}`;
       loop.stop();
       return;
     }
-    if (still.matches || !focused()) {
+    if (!window.scribeMotion.enabled() || !focused()) {
       // A still frame of where it would have settled.
       loop.stop();
       level = busy ? 1 : 0;
@@ -152,6 +152,7 @@ gl_FragColor=outc(acc/max(a,1e-3),a*(.4+.4*u_busy));}`;
   document.addEventListener("visibilitychange", render);
   window.addEventListener("scribe:chrome-fx", render);
   window.addEventListener("scribe:theme", render);
+  window.addEventListener("scribe:ui-fx", render);
   still.addEventListener?.("change", render);
   render();
 

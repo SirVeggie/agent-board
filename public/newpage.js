@@ -340,7 +340,7 @@ return glow(c,e);}`;
 
     function start(immediate = false) {
       theme();
-      if (still.matches || document.documentElement.classList.contains("no-ui-fx")) {
+      if (still.matches || document.documentElement.classList.contains("fx-off")) {
         loop.stop();
         work = target;
         draw();
@@ -437,14 +437,14 @@ return glow(c,e);}`;
         if (replacement !== pending) return;
         frame.removeEventListener("load", pending.reveal);
         clearTimeout(pending.timer);
-        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        if (!window.scribeMotion.enabled()) {
           render(null);
           return;
         }
-        const timing = { duration: 420, easing: "ease-in-out", fill: "both" };
+        const timing = { token: "slow", fill: "both", translate: "none" };
         pending.animations = [
-          root.animate([{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing),
-          frame.animate([{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing),
+          window.scribeMotion.reveal(root, false, timing),
+          window.scribeMotion.reveal(frame, true, timing),
         ];
         Promise.all(pending.animations.map((animation) => animation.finished)).then(() => {
           if (replacement === pending) render(null);
@@ -495,11 +495,8 @@ return glow(c,e);}`;
 
     function showWord() {
       intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-      intentWord.animate?.(
-        [{ opacity: 0, filter: "blur(8px)", transform: "translateY(8px)" }, { opacity: 1, filter: "blur(0px)", transform: "none" }],
-        { duration: 520, easing: "ease-out" }
-      );
+      if (!window.scribeMotion.enabled()) return;
+      window.scribeMotion.reveal(intentWord, true, { token: "slow" });
       wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
     }
 
@@ -531,7 +528,7 @@ return glow(c,e);}`;
         return;
       }
       if (entering && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        root.animate([{ opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)" }], { duration: 420, easing: "ease-in-out" });
+        window.scribeMotion.reveal(root, true, { token: "slow", translate: "none" });
       }
       const intent = host.intent?.(tab.id) || null;
       const threads = covering ? 1 : host.threads(tab.id);
