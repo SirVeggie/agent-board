@@ -2046,7 +2046,7 @@ kbd {
   grid-template-rows: auto minmax(0, 1fr);
   width: min(960px, 100%);
   height: min(700px, 100%);
-  transition: none;
+  transition: height var(--dur-enter) var(--ease);
   overflow: hidden;
   padding: 0;
 }
