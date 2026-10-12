@@ -498,6 +498,7 @@ test("worker_claim claims a card for the chat the board started, so its agent ne
   assert.equal(c.col, "work");
   assert.equal(c.assignee, "Opus");
   assert.equal(c.thread, "th_a");
+  assert.equal(c.threadAssignee, "Opus");
   assert.equal(c.from, "ready");
   assert.deepEqual(c.status, { kind: "working", text: "Agent starting" });
   assert.deepEqual(c.claim, { holder: "Opus", thread: "th_a", at: 1000, seenAt: 1000, from: "ready" });
@@ -507,6 +508,9 @@ test("worker_claim claims a card for the chat the board started, so its agent ne
   assert.throws(() => run(state, "worker_claim", { card: 1, thread: "th_b", assignee: "Opus" }, page), /held by Opus/);
   // Continue: a finished card goes back to working for the same chat.
   const finished = run(state, "finish", { card: 1, summary: "done" }, agent({ session: undefined, thread: "th_a" })).state;
+  const reassigned = run(finished, "update", { card: 1, assignee: "Sol" }, page).state;
+  assert.equal(card(reassigned, 1).assignee, "Sol");
+  assert.equal(card(reassigned, 1).threadAssignee, "Opus");
   const again = run(finished, "worker_claim", { card: 1, thread: "th_a", assignee: "Opus" }, page).state;
   assert.equal(card(again, 1).col, "work");
   assert.equal((card(again, 1).claim as { from?: string }).from, "ready");

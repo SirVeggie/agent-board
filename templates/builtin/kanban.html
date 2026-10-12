@@ -3360,6 +3360,15 @@
     go.addEventListener("click", function (e) {
       e.stopPropagation();
       go.disabled = skip.disabled = true;
+      c = card(c.id) || c;
+      var assigned = workerIdFor(c.assignee);
+      if (assigned && changedCommentWorker(c, assigned)) {
+        runSolo(c.id, assigned, true).then(function (ok) {
+          if (ok) setComment(c.id, cm.id, { followUp: "continued" });
+          else go.disabled = skip.disabled = false;
+        });
+        return;
+      }
       var sentAt = Date.now();
       scribe.agent.card(c.thread, { card: c.num, title: plainLinks(c.title), resume: true }).then(function (r) {
         if (r && r.ok && r.delivered) {
@@ -5260,17 +5269,40 @@
   function soloRuns(w) {
     return w && w.solo && typeof w.solo === "object" ? w.solo : {};
   }
+  /** Retain the chat's assignee across manual reassignment; older cards use the worker log. */
+  function changedCommentWorker(c, assigned) {
+    if (c.threadAssignee) return workerIdFor(c.threadAssignee) !== assigned;
+    var previous = workerIds().filter(function (id) {
+      var w = worker(id);
+      return w.threadId === c.thread || Boolean(soloRuns(w)[c.thread]);
+    })[0];
+    if (!previous) {
+      var logs = arr(settings().workerLog).filter(function (entry) { return entry.thread === c.thread && entry.workerId; });
+      if (logs.length) previous = logs[logs.length - 1].workerId;
+    }
+    if (!previous) {
+      var comments = arr(c.comments).filter(function (cm) { return workerIdFor(cm.by); });
+      if (comments.length) previous = workerIdFor(comments[comments.length - 1].by);
+    }
+    return Boolean(previous && previous !== assigned);
+  }
   function canRunSolo(c, id) {
     return Boolean(workerIdFor(c.assignee) === id && hasWorkerApi() && isReadyCol(colOf(c)) && workerReady(worker(id)) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]);
   }
-  function runSolo(cardId, id) {
+  function runSolo(cardId, id, continuation) {
     var c = card(cardId);
-    if (!c || !canRunSolo(c, id)) return;
+    var allowed = continuation
+      ? c && workerIdFor(c.assignee) === id && hasWorkerApi() && workerReady(worker(id)) && !c.archived && !(c.claim && !c.claim.stale) && !soloStarting[c.id]
+      : c && canRunSolo(c, id);
+    if (!allowed) {
+      if (continuation) setHint("Could not start the assigned worker: check its setup and whether the card is already held.", true);
+      return Promise.resolve(false);
+    }
     var w = worker(id);
     var name = workerName(w);
     soloStarting[cardId] = true;
     setHint("Starting " + name + " on #" + c.num + "…");
-    loadAgentOptions().then(function () {
+    var started = loadAgentOptions().then(function () {
       return scribe.agent.start(workerPrompt(w, c, null, true), Object.assign(workerOpts(w, c), { run: workerRun(id, c.num, true) }));
     }).then(function (r) {
       delete soloStarting[cardId];
@@ -5278,7 +5310,7 @@
         setHint(launchError(r));
         appendLog(id, "pause", launchError(r) + " (one-card run #" + c.num + ")", { card: c.num });
         render();
-        return;
+        return false;
       }
       threadStatus[r.threadId] = { status: "running", queued: 0, run: { phase: "running" } };
       var now = Date.now();
@@ -5288,8 +5320,15 @@
       appendLog(id, "solo", "One-card run started on #" + c.num + " " + str(c.title).slice(0, 80), { card: c.num, thread: r.threadId });
       setHint(name + " started on #" + c.num + ".");
       render();
+      return true;
+    }).catch(function (err) {
+      delete soloStarting[cardId];
+      setHint("Could not launch the agent: " + str(err && err.message), true);
+      render();
+      return false;
     });
     render();
+    return started;
   }
   /**
    * The board claims the card for the chat it just started (or sent on with Continue) and moves it

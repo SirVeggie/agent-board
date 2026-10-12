@@ -49,6 +49,77 @@ function fn(source: string, name: string): string {
   return match[0];
 }
 
+test("Continue starts the newly assigned worker, but resumes for the same worker or a person", async () => {
+  for (const assignee of ["New", "Old", "Person"]) {
+    const calls: any[] = [];
+    let click: () => void = () => {};
+    const c = { id: "card", num: 525, title: "Follow up", col: "review", thread: "earlier", assignee, threadAssignee: "Old" };
+    const workers: any = { old: { name: "Old" }, next: { name: "New" } };
+    const context = vm.createContext({
+      card: () => c,
+      worker: (id: string) => workers[id],
+      workerIds: () => Object.keys(workers),
+      workerIdFor: (name: string) => Object.keys(workers).find(id => workers[id].name === name),
+      workerName: (w: any) => w.name,
+      workerReady: () => true,
+      hasWorkerApi: () => true,
+      canRunSolo: () => false, // Review/done cards still allow a comment continuation.
+      settings: () => ({}), arr: (v: any) => v || [],
+      str: (v: any) => v == null ? "" : String(v),
+      soloStarting: {}, threadStatus: {},
+      loadAgentOptions: () => Promise.resolve(),
+      workerPrompt: (w: any, card: any, fallback: any, solo: boolean) => `${w.name}: ${card.title}, solo=${solo}`,
+      workerOpts: (w: any) => ({ model: w.name }),
+      workerRun: (id: string) => ({ data: { worker: id } }),
+      scribe: { agent: {
+        start: async (prompt: string, opts: any) => { calls.push(["start", prompt, opts]); return { ok: true, threadId: "fresh" }; },
+        card: async (thread: string) => { calls.push(["resume", thread]); return { ok: true, delivered: "queued" }; },
+      } },
+      claimForAgent: (card: any, thread: string, name: string) => calls.push(["claim", thread, name]),
+      addSolo: (id: string, thread: string) => calls.push(["solo", id, thread]),
+      mergeWhenDone: () => calls.push(["merge"]),
+      setComment: (id: string, cm: string, fields: any) => calls.push(["comment", fields.followUp]),
+      plainLinks: (v: string) => v,
+      render: () => {}, setHint: () => {}, appendLog: () => {},
+      el: (tag: string, cls: string, text: string) => ({
+        dataset: {}, appendChild: () => {},
+        addEventListener: (event: string, cb: any) => { if (text === "Continue") click = () => cb({ stopPropagation() {} }); },
+      }),
+    });
+    vm.runInContext(["soloRuns", "changedCommentWorker", "runSolo", "followUpButtons"].map(name => fn(board, name)).join("\n"), context);
+    vm.runInContext("followUpButtons(card(), { id: 'comment' })", context);
+    click();
+    await new Promise(resolve => setImmediate(resolve));
+    if (assignee === "New") {
+      assert.equal(calls[0][0], "start");
+      assert.match(calls[0][1], /New: Follow up, solo=true/);
+      assert.equal(calls[0][2].model, "New");
+      assert.equal(calls[0][2].run.data.worker, "next");
+      assert.ok(calls.some(call => call.join() === "claim,fresh,New"));
+      assert.ok(calls.some(call => call.join() === "solo,next,fresh"));
+      assert.ok(!calls.some(call => call[0] === "resume"));
+    } else {
+      assert.deepEqual(calls[0], ["resume", "earlier"]);
+      assert.ok(!calls.some(call => call[0] === "start"));
+    }
+    assert.ok(calls.some(call => call.join() === "comment,continued"));
+  }
+});
+
+test("older cards resolve their earlier worker from retained bookkeeping and logs", () => {
+  const context = vm.createContext({
+    workerIds: () => ["old", "next"],
+    worker: (id: string) => id === "old" ? { threadId: "last" } : {},
+    settings: () => ({ workerLog: [{ thread: "finished", workerId: "old" }] }),
+    arr: (v: any) => v || [],
+  });
+  vm.runInContext(fn(board, "soloRuns") + "\n" + fn(board, "changedCommentWorker"), context);
+  for (const thread of ["last", "finished"]) {
+    assert.equal(vm.runInContext(`changedCommentWorker({thread: '${thread}'}, 'next')`, context), true);
+    assert.equal(vm.runInContext(`changedCommentWorker({thread: '${thread}'}, 'old')`, context), false);
+  }
+});
+
 function harness(available = ["cursor", "codex", "claude", "pi"]) {
   const context = vm.createContext({
     agentOptions: {

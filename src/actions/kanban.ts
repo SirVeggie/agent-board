@@ -34,6 +34,7 @@ type Card = {
   priority?: number;
   due?: string;
   assignee?: string;
+  threadAssignee?: string;
   checklist?: Array<{ id: string; text: string; done: boolean }>;
   comments?: Comment[];
   images?: unknown[];
@@ -747,7 +748,7 @@ export const kanbanActions: ActionSet = {
               assignee: claimAssignee(args, ctx),
               status: { kind: "working", text: str(args.text) || "Working on it" },
               claim: claimFor(ctx, ctx.now, from),
-              ...(ctx.caller.thread ? { thread: ctx.caller.thread } : {}),
+              ...(ctx.caller.thread ? { thread: ctx.caller.thread, threadAssignee: claimAssignee(args, ctx) } : {}),
               ...(from ? { from } : {}),
             },
           },
@@ -782,6 +783,7 @@ export const kanbanActions: ActionSet = {
               status: { kind: "working", text: str(args.text) || "Agent starting" },
               claim: { holder: name, thread, at: ctx.now, seenAt: ctx.now, ...(from ? { from } : {}) },
               thread,
+              threadAssignee: name,
               ...(from ? { from } : {}),
             },
           },
@@ -924,6 +926,7 @@ export const kanbanActions: ActionSet = {
           status: { kind: "working", text: "Agent continuing after a reply" },
           claim: { holder: name, thread: deliver.thread, at: ctx.now, seenAt: ctx.now, ...(from ? { from } : {}) },
           thread: deliver.thread,
+          threadAssignee: name,
           ...(from ? { from } : {}),
         },
       });
