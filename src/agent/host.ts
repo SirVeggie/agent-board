@@ -3211,33 +3211,38 @@ export class AgentHost {
       async beforeWrite(_toolId, file) {
         await host.rememberBefore(run, thread(), file, true);
       },
-      async approval(req: ApprovalRequest, signal) {
+      approval(req: ApprovalRequest, signal) {
+        const decide = (req: ApprovalRequest): Promise<ApprovalDecision> => {
+          const auto = autoApproval(thread(), req);
+          if (auto) return auto;
+          if (req.toolId && run.hooks.approved.has(req.toolId)) {
+            // The user approved this very call a moment ago, when the hook asked.
+            const allow = req.options.find((o) => o.kind === "allow_once");
+            if (allow) return Promise.resolve({ optionId: allow.id });
+          }
+          const item = host.addItem(threadId, turnId, {
+            kind: "approval",
+            requestId: "",
+            ...(req.toolId ? { toolId: req.toolId } : {}),
+            tool: req.tool,
+            title: req.title,
+            ...(req.detail ? { detail: req.detail } : {}),
+            options: req.options,
+            status: "pending",
+          });
+          return waitFor<ApprovalDecision>("approval", item.id, signal);
+        };
         // A hook can only tighten this: deny the call, or have the user decide whatever the approval level.
-        const hook = await host.approvalGate(threadId, run, req);
-        if (hook?.kind === "block") {
-          const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
-          if (!reject) throw new Error(hook.reason);
-          return { optionId: reject.id, note: hook.reason };
-        }
-        if (hook?.kind === "ask") req = { ...req, humanOnly: true, detail: [req.detail, hook.reason].filter(Boolean).join("\n\n") };
-        const auto = autoApproval(thread(), req);
-        if (auto) return auto;
-        if (req.toolId && run.hooks.approved.has(req.toolId)) {
-          // The user approved this very call a moment ago, when the hook asked.
-          const allow = req.options.find((o) => o.kind === "allow_once");
-          if (allow) return { optionId: allow.id };
-        }
-        const item = host.addItem(threadId, turnId, {
-          kind: "approval",
-          requestId: "",
-          ...(req.toolId ? { toolId: req.toolId } : {}),
-          tool: req.tool,
-          title: req.title,
-          ...(req.detail ? { detail: req.detail } : {}),
-          options: req.options,
-          status: "pending",
+        const gate = host.approvalGate(threadId, run, req);
+        if (!gate) return decide(req);
+        return gate.then((hook) => {
+          if (hook?.kind === "block") {
+            const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+            if (!reject) throw new Error(hook.reason);
+            return { optionId: reject.id, note: hook.reason };
+          }
+          return decide(hook?.kind === "ask" ? { ...req, humanOnly: true, detail: [req.detail, hook.reason].filter(Boolean).join("\n\n") } : req);
         });
-        return waitFor<ApprovalDecision>("approval", item.id, signal);
       },
       question(req: QuestionRequest, signal) {
         const item = host.addItem(threadId, turnId, { kind: "question", requestId: "", ...(req.title ? { title: req.title } : {}), questions: req.questions, status: "pending" });
@@ -3471,13 +3476,19 @@ export class AgentHost {
 
   /**
    * A hook's say on a tool call that came as an approval request (Codex's own, Cursor's host shell,
-   * a bridged MCP server). Null when no hook has one, or a gate already held this call.
+   * a bridged MCP server). Null, at once, when no hook watches tool calls or a gate already held this
+   * call, so an approval is then answered or shown as before, without a tick in between.
    */
-  private async approvalGate(threadId: string, run: RunState, req: ApprovalRequest): Promise<{ kind: "block" | "ask"; reason: string } | null> {
+  private approvalGate(threadId: string, run: RunState, req: ApprovalRequest): Promise<{ kind: "block" | "ask"; reason: string } | null> | null {
     const thread = this.threads.get(threadId);
     if (!thread || thread.hooksOff || this.hooks.idle("tool_call")) return null;
     // Scribe's board tools are held where the daemon runs them (toolGate).
     if (req.boardTool || holdsAll(thread.provider) || (req.toolId && run.hooks.gated.has(req.toolId))) return null;
+    return this.heldApproval(thread, run, req);
+  }
+
+  private async heldApproval(thread: Thread, run: RunState, req: ApprovalRequest): Promise<{ kind: "block" | "ask"; reason: string } | null> {
+    const threadId = thread.id;
     const waiting = req.toolId ? run.hooks.waiting.get(req.toolId) : undefined;
     const item = req.toolId ? run.tools.get(req.toolId) : undefined;
     let found: Finding[];

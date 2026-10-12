@@ -275,7 +275,7 @@ export type RuleMatch = (typeof RULE_MATCHES)[number];
 export type HookRule = {
   id: string;
   enabled: boolean;
-  /** keyword: the text contains it. regex: a pattern on the text. tool: the tool's name contains it. question: a yes/no question for the classifier. */
+  /** keyword: the text contains it. regex: a pattern on the text. tool: the tool's name or title contains it. question: a yes/no question for the classifier. */
   match: RuleMatch;
   pattern: string;
   event: HookEvent | "any";
@@ -371,7 +371,8 @@ export function ruleDetector(rule: HookRule): Detector {
   return {
     ...base,
     rule: (chunk) => {
-      if (rule.match === "tool") return chunk.tool?.name.toLowerCase().includes(needle) ? hit : "pass";
+      // Codex and Cursor name their calls by kind ("mcp", "command_execution"); the tool itself is in the title.
+      if (rule.match === "tool") return [chunk.tool?.name, chunk.tool?.title].some((name) => name?.toLowerCase().includes(needle)) ? hit : "pass";
       return (regex ? regex.test(chunk.text) : chunk.text.toLowerCase().includes(needle)) ? hit : "pass";
     },
   };

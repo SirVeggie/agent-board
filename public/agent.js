@@ -8961,13 +8961,15 @@
 
       const hooks = el("section", "settings-section");
       this.hookList = el("div", "ag-hook-rules");
+      const hookActions = el("div", "settings-actions");
+      hookActions.append(button("Add rule", "ag-btn", () => editHookRule(null)));
       hooks.append(
         helpHeading(
           "Hooks",
           "A rule watches every chat: your messages, the agent's text and thinking, its tool calls and their results. When it matches it can mark the item, tell the agent something, have you approve the tool call, or block it. A rule only ever tightens what a thread may do. Turn them off for one thread from its menu."
         ),
         this.hookList,
-        el("div", "settings-actions", button("Add rule", "ag-btn", () => editHookRule(null)))
+        hookActions
       );
       const coverage = el("section", "settings-section");
       this.hookCoverage = el("div", "ag-hook-coverage");

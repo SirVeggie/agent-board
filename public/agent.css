@@ -5234,6 +5234,10 @@ html.tight-small .agent-full {
   white-space: nowrap;
 }
 
+.ag-hook .ag-field[hidden] {
+  display: none;
+}
+
 .ag-hook-note {
   margin: 0;
   font-size: 12.5px;
