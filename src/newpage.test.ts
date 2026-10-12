@@ -59,6 +59,7 @@ function screen(webgl = true, restoring = false) {
     return parts.get(key)!;
   };
   const win: any = {
+    scribeMotion: { enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate() },
     matchMedia: () => motion,
     addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     scribeOrb: { colors: (p: string) => palettes[p] },
@@ -79,7 +80,7 @@ function screen(webgl = true, restoring = false) {
   class Observer { observe() {} }
   runInNewContext(source, {
     window: win, document: {
-      getElementById: () => root, documentElement: { hasAttribute: () => restoring, classList: { contains: (name: string) => name === "no-ui-fx" && !uiEffects } },
+      getElementById: () => root, documentElement: { hasAttribute: () => restoring, classList: { contains: (name: string) => name === "fx-off" && !uiEffects } },
       body: { appendChild() {} }, get hidden() { return hidden; },
       addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     },

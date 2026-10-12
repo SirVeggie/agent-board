@@ -33,7 +33,7 @@ test("SDK settings render update, current and failed checks and allow retry", as
     });
     await page.goto("http://sdk.test/");
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    for (const name of ["motion.js", "dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
     await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.sdkTest = agentSettings;") });
     await page.evaluate(async () => {

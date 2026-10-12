@@ -162,6 +162,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
     await page.route("http://hover.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="threads"></div><div id="bar"></div><div id="tail"></div><div id="templates"></div>' }));
     await page.goto("http://hover.test/");
     await page.addScriptTag({ content: source("../public/dom-sync.js") });
+    await page.addScriptTag({ content: source("../public/motion.js") });
     const agent = source("../public/agent.js");
     const app = source("../public/app.js");
     await page.addScriptTag({ content: source("../public/agent-render.js") });

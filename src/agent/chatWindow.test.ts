@@ -10,7 +10,7 @@ const read = (name: string) => fs.readFileSync(new URL(`../../public/${name}`, i
 async function load(page: Page, url: string, boot: string) {
   await page.goto(url);
   await page.addScriptTag({ content: "window.__name = (fn) => fn; window.opened = []; window.open = (url) => { window.opened.push(url); return { closed: false, focus() {}, close() {} }; };" });
-  for (const name of ["popout.js", "dom-sync.js", "agent-render.js"]) {
+  for (const name of ["motion.js", "popout.js", "dom-sync.js", "agent-render.js"]) {
     await page.addScriptTag({ content: read(name) });
   }
   await page.addScriptTag({

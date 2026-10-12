@@ -88,7 +88,7 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     await page.waitForTimeout(150);
     assert.equal(await page.evaluate(() => (window as any).draws), reduced);
     await page.emulateMedia({ reducedMotion: "no-preference" });
-    await page.evaluate(() => { document.documentElement.classList.add("no-ui-fx"); window.dispatchEvent(new Event("scribe:ui-fx")); });
+    await page.evaluate(() => { document.documentElement.classList.add("fx-off"); window.dispatchEvent(new Event("scribe:ui-fx")); });
     await page.waitForTimeout(80);
     const off = await page.evaluate(() => (window as any).draws);
     await page.waitForTimeout(120);
@@ -131,9 +131,9 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
       await selects.nth(3).selectOption(effect);
       const before: number[] = await page.locator(".dock-orb-surface").evaluate(canvas => (canvas as any).lastPixels);
       assert.ok(before.some(v => v > 0), effect + " renders");
-      await page.evaluate(() => { document.documentElement.classList.remove("no-ui-fx"); window.dispatchEvent(new Event("scribe:ui-fx")); });
+      await page.evaluate(() => { document.documentElement.classList.remove("fx-off"); window.dispatchEvent(new Event("scribe:ui-fx")); });
       await page.waitForTimeout(160);
-      await page.evaluate(() => { document.documentElement.classList.add("no-ui-fx"); window.dispatchEvent(new Event("scribe:ui-fx")); });
+      await page.evaluate(() => { document.documentElement.classList.add("fx-off"); window.dispatchEvent(new Event("scribe:ui-fx")); });
       const after: number[] = await page.locator(".dock-orb-surface").evaluate(canvas => (canvas as any).lastPixels);
       if (effect === "glow") assert.deepEqual(after, before);
       else assert.notDeepEqual(after, before, effect + " animates");

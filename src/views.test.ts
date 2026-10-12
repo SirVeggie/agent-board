@@ -20,6 +20,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await page.goto("http://views.test/");
     // tsx's named-function helper must also exist inside serialized evaluate callbacks.
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/motion.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/views.js", import.meta.url), "utf8") });
     const result = await page.evaluate(async () => {
       const w = window as any;
@@ -366,14 +367,12 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       for (const animation of original.getAnimations()) animation.finish();
       return { width, samples, entering, closeSamples, interruptedWidth, reopenedWidth, cancelled };
     });
-    assert.ok(Math.abs(motion.samples[0] - motion.width) < 1);
-    assert.ok(motion.samples[0] > motion.samples[1] && motion.samples[1] > motion.samples[2]);
+    assert.ok(motion.samples.every((width: number) => Math.abs(width - area.width / 2) < 1));
     assert.ok(Math.abs(motion.samples[2] - area.width / 2) < 1);
     assert.equal(motion.entering, true);
-    assert.ok(Math.abs(motion.closeSamples[0] - motion.samples[2]) < 1);
-    assert.ok(motion.closeSamples[0] < motion.closeSamples[1] && motion.closeSamples[1] < motion.closeSamples[2]);
+    assert.ok(motion.closeSamples.every((width: number) => Math.abs(width - motion.width) < 1));
     assert.ok(Math.abs(motion.closeSamples[2] - motion.width) < 1);
-    assert.ok(Math.abs(motion.interruptedWidth - motion.reopenedWidth) < 1);
+    assert.ok(Math.abs(motion.reopenedWidth - area.width / 2) < 1);
     assert.equal(motion.cancelled, true);
     const stackedClose = await page.evaluate(async () => {
       const { views, frames, state } = (window as any).dragTest;
@@ -394,8 +393,8 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       return { beforeTop: before.top, startTop: start.top, beforeHeight: before.height, startHeight: start.height, endHeight: end.height, kept: frames.get(target).el === remaining };
     });
     assert.ok(Math.abs(stackedClose.beforeTop - stackedClose.startTop) < 1);
-    assert.ok(Math.abs(stackedClose.beforeHeight - stackedClose.startHeight) < 1);
-    assert.ok(stackedClose.endHeight > stackedClose.startHeight);
+    assert.ok(stackedClose.startHeight > stackedClose.beforeHeight);
+    assert.ok(Math.abs(stackedClose.endHeight - stackedClose.startHeight) < 1);
     assert.equal(stackedClose.kept, true);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     assert.equal(await page.evaluate(async () => {
@@ -620,12 +619,10 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     assert.ok(activeMotion.draftWidths.length > 0);
     assert.ok(activeMotion.draftWidths.every((width: number) => Math.abs(width - 550) < 1));
     assert.ok(activeMotion.samples.every((sample: number[]) => Math.abs(sample[1] - 550) < 1));
-    assert.ok(Math.abs(activeMotion.samples[0][0] - activeMotion.originalWidth) < 1);
-    assert.ok(activeMotion.samples[0][0] > activeMotion.samples[1][0] && activeMotion.samples[1][0] > activeMotion.samples[2][0]);
+    assert.ok(activeMotion.samples.every((sample: number[]) => Math.abs(sample[0] - 550) < 1));
     assert.ok(Math.abs(activeMotion.samples[2][0] - 550) < 1);
     assert.equal(activeMotion.originalKept, true);
-    assert.ok(Math.abs(activeMotion.closeWidths[0] - 550) < 1);
-    assert.ok(activeMotion.closeWidths[0] < activeMotion.closeWidths[1] && activeMotion.closeWidths[1] < activeMotion.closeWidths[2]);
+    assert.ok(activeMotion.closeWidths.every((width: number) => Math.abs(width - activeMotion.originalWidth) < 1));
     assert.ok(Math.abs(activeMotion.closeWidths[2] - activeMotion.originalWidth) < 1);
   } finally {
     await browser.close();
@@ -648,6 +645,7 @@ test("a split holds more than two panes: stored two-pane splits migrate, drops a
     await page.goto("http://views.test/");
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
     await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") + "\nmain {position:relative} iframe {position:absolute}" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/motion.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/views.js", import.meta.url), "utf8") });
     const result = await page.evaluate(async () => {
       const w = window as any;

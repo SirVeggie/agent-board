@@ -29,7 +29,7 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     await page.goto("http://helpers.test/");
     for (const name of ["app.css", "agent.css"]) await page.addStyleTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    for (const name of ["motion.js", "dom-sync.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     // Exercise the real chat views with fixture data, without booting a daemon or providers.
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
     await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall, liveStep, searchThreads, dock };") });

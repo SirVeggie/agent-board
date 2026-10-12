@@ -65,7 +65,7 @@ test("New page warms one real shader after restoration and shows it immediately 
     await page.goto("http://warmup.test/");
     await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") });
     await page.addScriptTag({ content: "window.__name = value => value; localStorage.setItem('scribe.newPageBackgrounds', 'aurora,caustics');" });
-    for (const name of ["glfx.js", "newpage.js"]) {
+    for (const name of ["motion.js", "glfx.js", "newpage.js"]) {
       await page.addScriptTag({ content: fs.readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8") });
     }
     await page.evaluate(() => {
