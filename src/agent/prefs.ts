@@ -38,6 +38,11 @@ export type Prefs = {
    */
   cursorHostShell: boolean;
   /**
+   * A turn runs with a lower approval level than the thread's when the classifier says the message
+   * needs no more (ceiling.ts). Off until its false-positive rate is known.
+   */
+  lowerPermissions: boolean;
+  /**
    * Agents may hand tasks to a helper agent on another provider or model (agent_run), when told to.
    * On by default; a helper spends that provider's quota.
    */
@@ -80,6 +85,7 @@ export const DEFAULT_PREFS: Prefs = {
   searxngUrl: "",
   claudeHooks: false,
   cursorHostShell: false,
+  lowerPermissions: false,
   helpers: true,
   memory: true,
   hookRules: [],

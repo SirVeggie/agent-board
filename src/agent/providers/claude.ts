@@ -465,7 +465,7 @@ function claudeSpareKey(thread: Thread): string {
   return JSON.stringify([thread.mode, thread.web, thread.cwd, thread.scope.kind, thread.scope.ref]);
 }
 
-function permissionModeFor(thread: Thread): PermissionMode {
+export function permissionModeFor(thread: Pick<Thread, "mode" | "approval">): PermissionMode {
   if (thread.mode === "plan") return "plan";
   if (thread.mode === "board") return "dontAsk";
   switch (thread.approval) {

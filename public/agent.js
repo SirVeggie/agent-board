@@ -3848,12 +3848,14 @@
       if (turn.status === "running") {
         const waiting = items.some((it) => (it.kind === "approval" || it.kind === "question" || it.kind === "plan") && it.status === "pending");
         foot.append(el("span", "ag-spin"), el("span", "ag-foot-label", waiting ? "Waiting for you" : "Working"), elapsed(turn.startedAt));
+        if (turn.ceiling) foot.append(ceilingTag(turn.ceiling));
         foot.append(button(icon("stop"), "ag-btn tiny", () => this.stop(), "Stop", false));
         return foot;
       }
       const parts = el("span", "ag-foot-meta");
       if (turn.status === "error") parts.append(el("span", "ag-st-err", "Failed"));
       else if (turn.status === "cancelled") parts.append(el("span", "ag-muted", "Stopped"));
+      if (turn.ceiling) parts.append(ceilingTag(turn.ceiling));
       if (turn.endedAt) {
         parts.append(el("span", null, R.duration(turn.endedAt - turn.startedAt)));
         parts.append(finishStamp(turn.endedAt));
@@ -7767,6 +7769,17 @@
     return head;
   }
 
+  /** A turn that ran with a lower approval level than its thread's (Turn.ceiling): which, and why, in a tip. */
+  function ceilingTag(ceiling) {
+    const name = (id) => APPROVALS.find((a) => a.id === id)?.label || id;
+    const tag = el("span", "ag-ceiling", ceiling.lifted ? `Started as ${name(ceiling.approval)}` : `Ran as ${name(ceiling.approval)}`);
+    const why = ceiling.approval === "edits" ? "the message did not look like it needs commands" : ceiling.need === "pages" ? "the message looked like it only needs pages" : ceiling.need === "web" ? "the message looked like it only needs the web" : "the message looked like a question";
+    const tip = `This turn's permissions were lowered from ${name(ceiling.from)} to ${name(ceiling.approval)} because ${why}.${ceiling.lifted ? ` You then allowed ${name(ceiling.from)} for the rest of the turn.` : ""} Agent settings, Permissions turns this off.`;
+    tag.setAttribute("aria-description", tip);
+    bindHoverTip(tag, () => noteTip(tip), { delay: 320, start: true });
+    return tag;
+  }
+
   /** A labelled setting row with its control on the right. `hint` explains it in a hover tip on the label. */
   function settingRow(text, control, { id, hint } = {}) {
     const row = el("div", "setting-row");
@@ -8830,6 +8843,31 @@
         })
       );
 
+      const lower = el("section", "settings-section");
+      const lowerOn = switchControl(
+        () => Boolean(prefs().lowerPermissions),
+        () => {
+          const on = !prefs().lowerPermissions;
+          S.config.prefs = { ...prefs(), lowerPermissions: on };
+          api("PUT", "/prefs", { lowerPermissions: on })
+            .then((next) => {
+              S.config.prefs = next;
+            })
+            .catch((err) => {
+              S.config.prefs = { ...prefs(), lowerPermissions: !on };
+              lowerOn.setAttribute("aria-checked", String(!on));
+              notice(err.message);
+            });
+        }
+      );
+      lower.append(
+        el("h3", null, "Permissions"),
+        settingRow("Lower permissions when a message doesn't need them (experimental)", lowerOn, {
+          id: "ag-lower-label",
+          hint: "Each message you type in a Code thread above Ask first is sent to the classifier (Settings, Classifier), which says what it needs. A question then runs as Ask first, and a request for edits as Auto-edit, for that turn only. If the agent wants more you get the usual approval with Allow for this turn, which puts the thread's own level back. If the classifier is slow or unsure, nothing changes. Board workers and helpers are left out. Codex and Cursor reconnect when the level changes between turns, and on Cursor a lowered turn only means its own Auto-review, which denies instead of asking.",
+        })
+      );
+
       const helpers = el("section", "settings-section");
       const helpersOn = switchControl(
         () => Boolean(prefs().helpers),
@@ -9034,7 +9072,7 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, helpers, memory, hooks, coverage, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, lower, helpers, memory, hooks, coverage, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
