@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{title}}</title>
+<title>Markdown note</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -36,7 +36,15 @@
     margin: 0;
     font-size: 28px;
     letter-spacing: -0.03em;
+    padding: 2px 8px;
+    margin-left: -8px;
+    border-radius: 8px;
+    cursor: text;
+    outline: none;
+    word-break: break-word;
   }
+  h1.page-title:hover { background: rgba(255, 255, 255, .05); }
+  h1.page-title:focus { background: rgba(8, 12, 20, .32); box-shadow: var(--depth), 0 0 0 1px var(--accent); }
   .hidden { display: none !important; }
   .md-preview, .md-editor {
     min-height: 240px;
@@ -123,7 +131,7 @@
 <body>
   <div class="wrap">
     <header>
-      <h1 class="page-title">{{title}}</h1>
+      <h1 class="page-title" id="title" tabindex="0" role="textbox" aria-label="Title"></h1>
     </header>
     <div class="md-preview placeholder" id="preview" tabindex="0" role="textbox" aria-multiline="true" aria-label="Note">Click or press Enter to write. Markdown is supported.</div>
     <textarea class="md-editor hidden" id="editor" aria-label="Note" placeholder="Write markdown…" spellcheck="false"></textarea>
@@ -132,6 +140,7 @@
 (function () {
   var preview = document.getElementById("preview");
   var editor = document.getElementById("editor");
+  var titleEl = document.getElementById("title");
 
   if (!window.scribe) {
     preview.className = "need-reload";
@@ -351,6 +360,67 @@
       scribe.setLocal({ draftText: editor.value });
     }
   };
+
+  // ---------- title ----------
+  // The heading is the page's title: click it to rename the page (and its tab).
+  var titleEditing = false;
+
+  function showTitle() {
+    if (!titleEditing) titleEl.textContent = scribe.title || "Untitled";
+  }
+
+  function startTitleEdit() {
+    if (titleEditing) return;
+    titleEditing = true;
+    titleEl.contentEditable = "plaintext-only";
+    if (titleEl.contentEditable !== "plaintext-only") titleEl.contentEditable = "true";
+    titleEl.focus();
+    var range = document.createRange();
+    range.selectNodeContents(titleEl);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function stopTitleEdit(save) {
+    if (!titleEditing) return;
+    titleEditing = false;
+    var next = titleEl.textContent.replace(/\s+/g, " ").trim();
+    titleEl.contentEditable = "false";
+    showTitle();
+    if (!save || !next || next === scribe.title) return;
+    titleEl.textContent = next;
+    scribe.setTitle(next).then(showTitle, showTitle);
+  }
+
+  titleEl.onclick = startTitleEdit;
+  titleEl.onblur = function () { stopTitleEdit(true); };
+  titleEl.onkeydown = function (event) {
+    if (!titleEditing) {
+      if (event.target === titleEl && (event.key === "Enter" || event.key === "F2")) {
+        event.preventDefault();
+        startTitleEdit();
+      }
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      titleEl.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      stopTitleEdit(false);
+      titleEl.blur();
+    }
+  };
+  titleEl.onpaste = function (event) {
+    if (!titleEditing) return;
+    event.preventDefault();
+    var text = (event.clipboardData ? event.clipboardData.getData("text/plain") : "").replace(/\s+/g, " ");
+    document.execCommand("insertText", false, text);
+  };
+  scribe.onTitle(showTitle);
+  showTitle();
 
   if ("draftText" in scribe.state) scribe.set({ draftText: undefined });
 

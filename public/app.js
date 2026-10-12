@@ -1089,6 +1089,15 @@
     void openTemplate(template, {}, { into: tab.id }).then((error) => error && showNotice(error));
   }
 
+  /** A template picked in the sidebar opens a new page; one with fields asks for them first. */
+  function createFromTemplate(template) {
+    if (template.fields?.length) {
+      openTemplateModal(template, "create");
+      return;
+    }
+    void openTemplate(template, {}, {}).then((error) => error && showNotice(error));
+  }
+
   /** POST a template open; resolves to an error message, or null when it went through. */
   async function openTemplate(template, values, extra) {
     const res = await fetch(`/api/templates/${encodeURIComponent(template.id)}/open`, {
@@ -1489,7 +1498,8 @@
     syncSidebarTab();
     const active = activeTab();
     const bound = Boolean(active?.templateId);
-    templateEditBtn.hidden = !bound;
+    // Nothing to edit on a page whose template has no fields.
+    templateEditBtn.hidden = !(bound && state.templates.find((item) => item.id === active.templateId)?.fields?.length);
     const blocked = bound && active.templateCompatible === false;
     const mainEl = document.querySelector("main");
     mainEl.classList.toggle("template-locked", blocked);
@@ -2453,11 +2463,11 @@
     el.dataset.id = template.id;
     el.dataset.kind = "template";
     el.ariaLabel = template.title;
-    el.addEventListener("click", () => live() && openTemplateModal(live(), "create"));
+    el.addEventListener("click", () => live() && createFromTemplate(live()));
     el.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        live() && openTemplateModal(live(), "create");
+        live() && createFromTemplate(live());
       }
     });
 
@@ -2523,7 +2533,7 @@
     event.stopPropagation();
     el.classList.add("menu-on");
     library.openMenu({ x: event.clientX, y: event.clientY }, [
-      { label: "Open…", action: () => openTemplateModal(template, "create") },
+      { label: template.fields?.length ? "Open…" : "Open", action: () => createFromTemplate(template) },
       template.localId
         ? { label: "Show my copy", action: () => flashTemplateRow(template.localId, true) }
         : { label: "Add to my templates", action: () => copyBuiltinTemplate(template) },
@@ -2862,6 +2872,8 @@
     entry.revision = tab.revision;
     if (entry.el.title !== tab.title) {
       entry.el.title = tab.title;
+      // The page isn't reloaded for a rename, so tell it (scribe.onTitle).
+      entry.el.contentWindow?.postMessage({ type: "scribe-title", id: tab.id, title: tab.title }, "*");
     }
   }
 
@@ -4074,6 +4086,30 @@
     reply({ ok: true });
   }
 
+  /** scribe.setTitle in a page: rename that page (the one the message came from) and tell it the title it got. */
+  async function onPageTitle(event) {
+    const data = event.data;
+    const reply = (result) => {
+      event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    };
+    const id = frameIdByWindow(event.source);
+    if (!id) {
+      reply({ ok: false, error: "unknown_page" });
+      return;
+    }
+    try {
+      const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: String(data.title ?? "") }),
+      });
+      const body = await res.json().catch(() => ({}));
+      reply(res.ok ? { ok: true, title: body.tab?.title } : { ok: false, error: body.error || "Could not rename" });
+    } catch {
+      reply({ ok: false, error: "Could not rename" });
+    }
+  }
+
   /** A link clicked inside a page: open it and tell the page how it went. */
   function onPageLink(event) {
     const data = event.data;
@@ -4956,6 +4992,8 @@
       onPagePermissions(event);
     } else if (event.data?.type === "scribe-reply") {
       onPageReply(event);
+    } else if (event.data?.type === "scribe-title") {
+      onPageTitle(event);
     } else if (event.data?.type === "scribe-preview") {
       onPagePreview(event);
     } else if (event.data?.type === "scribe-chat-key") {

@@ -357,6 +357,9 @@ Less common:
 scribe.id                         // this page's tab id (t_…)
 scribe.revision                   // the state revision this page has seen
 scribe.template                   // { id, values, revision, compatible } on a template page, else null
+scribe.title                      // this page's title (its tab and Library name)
+scribe.setTitle("Trip plan")      // rename the page, e.g. from a heading the user edits in place; resolves with the new title
+scribe.onTitle((title) => …)      // the title changed (setTitle here, or a rename in the tab strip or Library)
 scribe.flush()                    // send pending writes now (Scribe already does on hide and unload)
 scribe.ops.get(state, "todos/t_1")   // the state-op engine: get(state, path), diff(before, after, keys), apply(state, ops)
 scribe.reportIncompatible(reason) // template pages: this state is not one the HTML can show; see TEMPLATES.md

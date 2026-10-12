@@ -107,6 +107,7 @@ import {
   normalizeTemplateInput,
   parseTemplateValues,
   renderTemplateTitle,
+  templateSetsTitle,
   substituteTemplate,
   templateFingerprint,
   type TemplateUpsertInput,
@@ -3515,7 +3516,8 @@ export class BoardStore extends EventEmitter {
     compatible: boolean,
     reason?: string
   ): void {
-    const title = renderTemplateTitle(template, values);
+    // A template that doesn't build the title from its fields leaves the page's own title (a rename) alone.
+    const title = templateSetsTitle(template) ? renderTemplateTitle(template, values) : tab.title;
     tab.title = title;
     tab.html = this.renderBoundHtml(template, title, values);
     tab.updatedAt = Date.now();

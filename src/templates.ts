@@ -77,6 +77,11 @@ export function substituteTemplate(source: string, values: TemplateValues, escap
   });
 }
 
+/** False when the title is the page's own (a template with no title field or titleTemplate): a rename then sticks. */
+export function templateSetsTitle(template: Pick<Template, "titleTemplate" | "fields">): boolean {
+  return Boolean(template.titleTemplate?.trim()) || template.fields.some((field) => field.key === "title");
+}
+
 export function renderTemplateTitle(template: Pick<Template, "title" | "titleTemplate" | "fields">, values: TemplateValues): string {
   if (template.titleTemplate?.trim()) {
     const title = substituteTemplate(template.titleTemplate, values, false).trim();

@@ -1,16 +1,8 @@
 {
   "key": "markdown-note",
   "title": "Markdown note",
-  "description": "A titled page with one markdown block. Click to edit raw text, click away to render.",
-  "fields": [
-    {
-      "key": "title",
-      "label": "Title",
-      "type": "text",
-      "required": true,
-      "default": "Notes"
-    }
-  ],
+  "description": "A page with one markdown block. Click to edit raw text, click away to render. Click the title to rename the page.",
+  "fields": [],
   "agentActions": [
     {
       "id": "summarise",
@@ -23,7 +15,6 @@
       }
     }
   ],
-  "titleTemplate": "{{title}}",
   "initialState": {
     "text": ""
   },

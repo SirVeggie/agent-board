@@ -7,6 +7,7 @@ import { createStateOps } from "./stateOps.js";
  *   `scribe.onChange`, `scribe.bind`. Writes apply locally at once, go to the daemon as ops, and
  *   are rebased onto other writers' deltas, so concurrent edits to different items both survive.
  * - `scribe.local` / `scribe.setLocal`: this viewer's own state (filters, open panels, drafts).
+ * - `scribe.title`, `scribe.setTitle(title)`, `scribe.onTitle(fn)`: the page's name in the tab and Library.
  * - `scribe.signal(name, data)` and `data-scribe-signal`: events agents wait on.
  * - `scribe.action(name, args)`: the page template's actions.
  * - `scribe.reply(data, { summary })`: a form's answers to the page its agent wired it to (replyTo).
@@ -473,11 +474,65 @@ export const BOARD_BRIDGE_JS = `
       return;
     }
     var data = event.data;
-    if (!data || data.type !== "scribe-state" || data.id !== tabId) {
+    if (!data || data.id !== tabId) {
+      return;
+    }
+    if (data.type === "scribe-title") {
+      titleChanged(data.title);
+      return;
+    }
+    if (data.type !== "scribe-state") {
       return;
     }
     applyDelta(data);
   });
+
+  /* ---------- the page's title: the tab and Library name ---------- */
+
+  var title = typeof boot.title === "string" ? boot.title : "";
+  var titleListeners = [];
+
+  function titleChanged(next) {
+    if (typeof next !== "string" || next === title) {
+      return;
+    }
+    title = next;
+    for (var i = 0; i < titleListeners.length; i += 1) {
+      try {
+        titleListeners[i](title);
+      } catch (err) {
+        console.error("[scribe] onTitle handler failed", err);
+      }
+    }
+  }
+
+  /** Rename this page, as the user typing a new name would. Resolves with the title it now has. */
+  function setTitle(next) {
+    next = next == null ? "" : String(next).trim();
+    if (!next) {
+      return Promise.reject(new Error("title is required"));
+    }
+    if (capturing || !tabId || next === title) {
+      return Promise.resolve(title);
+    }
+    // The board renames the page: this origin can't reach that route.
+    return askBoard({ type: "scribe-title", title: next }, 10000).then(function (result) {
+      if (!result || !result.ok) {
+        throw new Error((result && result.error) || "could not rename");
+      }
+      titleChanged(typeof result.title === "string" ? result.title : next);
+      return title;
+    });
+  }
+
+  function onTitle(fn) {
+    titleListeners.push(fn);
+    return function () {
+      titleListeners = titleListeners.filter(function (item) {
+        return item !== fn;
+      });
+    };
+  }
 
   var lastActivityPing = 0;
   function pingActivity() {
@@ -1389,6 +1444,11 @@ export const BOARD_BRIDGE_JS = `
   window.scribe = {
     id: tabId,
     template: template,
+    get title() {
+      return title;
+    },
+    setTitle: setTitle,
+    onTitle: onTitle,
     saveAsset: saveAsset,
     deleteAsset: deleteAsset,
     listAssets: listAssets,

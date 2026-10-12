@@ -890,6 +890,27 @@ test("folder instructions persist, export, and use markdown-note text", () => {
   again.closeDb();
 });
 
+test("a template without a title field leaves the page's title alone", () => {
+  const store = loaded();
+  // A page made while the template still asked for a title.
+  const { template } = store.upsertTemplate({
+    title: "Note",
+    html: "<h1>{{title}}</h1>",
+    fields: [{ key: "title", label: "Title", type: "text" }],
+    titleTemplate: "{{title}}",
+  });
+  const { tab } = store.openFromTemplate(template.id, { title: "Guide" });
+  assert.equal(tab.title, "Guide");
+  // The template drops the field: the page keeps the title it had, and a rename survives a re-render.
+  store.upsertTemplate({ id: template.id, title: "Note", html: "<h1></h1>", fields: [] });
+  assert.equal(store.get(tab.id)?.title, "Guide");
+  store.renamePage(tab.id, "Mine");
+  store.upsertTemplate({ id: template.id, title: "Note", html: "<h1>x</h1>", fields: [] });
+  assert.equal(store.get(tab.id)?.title, "Mine");
+  assert.equal(store.openFromTemplate(template.id, {}).tab.title, "Note");
+  store.closeDb();
+});
+
 test("agent page writes record created-by and last-changed-by", () => {
   const store = loaded();
   const actor = { thread: "th_abc", title: "Fix provenance", at: 1_700_000_000_000 };

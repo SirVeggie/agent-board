@@ -1976,6 +1976,7 @@ function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: Boar
   const capturing = captureLocal !== undefined;
   const boot = jsonForScript({
     id: tab.id,
+    title: tab.title,
     state: tab.state,
     stateRevision: tab.stateRevision,
     viewer: capturing ? null : viewer,
