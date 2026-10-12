@@ -157,6 +157,8 @@ test("shell updates retain composer pills, thread controls and template rows wit
   const browser = await launchChromium({ headless: true, args: [], purpose: "Shell hover stability test" });
   try {
     const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.stack || error.message));
     await page.route("http://hover.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="threads"></div><div id="bar"></div><div id="tail"></div><div id="templates"></div>' }));
     await page.goto("http://hover.test/");
     await page.addScriptTag({ content: source("../public/dom-sync.js") });
@@ -187,7 +189,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const state = { templates: [{ id: 'one', title: 'Template', fields: [{ key: 'old' }] }], builtinTemplates: [] };
       const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} };
       const findTemplateMeta = id => state.templates.find(t => t.id === id);
-      const openTemplateModal = template => window.opened = template;
+      const createFromTemplate = template => window.opened = template;
       ${app.slice(app.indexOf('  function templateRow('), app.indexOf('  function builtinMenu('))}
       window.check = () => {
         renderLists(); view.renderComposerBar();
@@ -206,11 +208,13 @@ test("shell updates retain composer pills, thread controls and template rows wit
       return [controls.every(n => n.isConnected), document.activeElement === search];
     }), [true, true]);
     await page.locator('#templates > div').click();
+    assert.deepEqual(errors, []);
     assert.equal(await page.evaluate(() => (window as any).opened.fields[0].key), 'new');
     await page.locator('#bar .ag-wt-icon').click();
     assert.equal(await page.evaluate(() => { (window as any).check(); return document.querySelector('#bar .ag-wt-icon')!.classList.contains('on'); }), true);
     await page.locator('#bar .ag-wt-icon').click();
     assert.equal(await page.evaluate(() => { (window as any).check(); return document.querySelector('#bar .ag-wt-icon')!.classList.contains('on'); }), false);
+    assert.deepEqual(errors, []);
   } finally {
     await browser.close();
   }
