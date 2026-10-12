@@ -3242,6 +3242,16 @@ button.ag-row.on .ag-row-pen {
   display: none;
 }
 
+/* The chat in a window of its own (popout.js): under the desktop app's title bar, or the whole browser popup. */
+html.popout .agent-full {
+  top: 0;
+  animation: none;
+}
+
+html.popout.desktop .agent-full {
+  top: 38px;
+}
+
 /* The full window covers the page, so no tab shows as selected; clicking one goes back to it. */
 html body.agent-full-open .tabs .tab.active {
   background: transparent;

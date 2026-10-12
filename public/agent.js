@@ -170,6 +170,8 @@
 
   /** A page in a window of its own (popout.js) has no sidebar: every chat there is the floating one. */
   const SOLO = Boolean(window.scribePopout?.childId);
+  /** A child window that is the agent chat on its own (#505): the full window layout, always open, and no floating chat. */
+  const CHAT = SOLO && Boolean(window.scribePopout.chatChild);
 
   const S = {
     config: { providers: [], prefs: null, models: { claude: [], cursor: [], codex: [], pi: [] } },
@@ -180,7 +182,7 @@
     current: localStorage.getItem(LS.current) || null,
     sideOpen: !SOLO && localStorage.getItem(LS.side) === "1",
     fullOpen: false,
-    dockShown: localStorage.getItem(LS.dock) === "1",
+    dockShown: !CHAT && localStorage.getItem(LS.dock) === "1",
     dockExpanded: false,
     /** Thread the dock uses per page id, when the user picked one. Survives refresh. */
     dockPicks: loadDockPicks(),
@@ -2107,9 +2109,14 @@
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
       acts.append(button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings", false));
       acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread (Ctrl+Shift+K)"));
+      if (!SOLO && window.scribePopout?.supported && (this.variant === "side" || this.variant === "full")) {
+        acts.append(button(icon("popout"), "ag-icon-btn", () => popOutChat(), "Open in its own window"));
+      }
       if (this.variant === "side") {
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L)"));
         acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)", false));
+      } else if (this.variant === "full" && CHAT) {
+        acts.append(button(icon("collapse"), "ag-icon-btn", () => returnChatToMain(), "Back to the main window", false));
       } else if (this.variant === "full") {
         acts.append(button(icon("collapse"), "ag-icon-btn", () => leaveFull(), "Back to Scribe (Esc)", false));
       } else if (this.variant === "helper") {
@@ -5895,6 +5902,7 @@
       requestAnimationFrame(() => this.view.autosize());
     },
     setShown(shown) {
+      if (CHAT) return;
       S.dockShown = shown;
       localStorage.setItem(LS.dock, shown ? "1" : "0");
       if (shown) this.syncThread();
@@ -8920,6 +8928,16 @@
    * Without it (background starts and sends) nothing the user has open is closed.
    */
   function showPageThread(id, where, { reveal = false } = {}) {
+    if (CHAT) {
+      if (reveal) {
+        closeMenu();
+        setCurrent(id);
+        full.view.setThread(id);
+        full.renderList();
+        full.view.focus();
+      }
+      return;
+    }
     if (SOLO && where === "sidebar") where = "dock";
     if (reveal) {
       closeMenu();
@@ -8950,8 +8968,87 @@
   }
 
   window.scribePopout?.onRequest((request) => {
-    if (!SOLO && request?.type === "open-thread" && typeof request.id === "string") {
+    if (SOLO) return;
+    if (request?.type === "open-thread" && typeof request.id === "string") {
       openThread(request.id);
+    } else if (request?.type === "chat-return" && request.chat) {
+      takeChatBack(request.chat);
+    }
+  });
+
+  /** The chat as another window can show it: attached files stay in this window's composer. */
+  function chatForWindow(view) {
+    const content = view.composerContent();
+    const shown = Boolean(view.threadId || view.draft);
+    return {
+      threadId: shown ? view.threadId : S.current && S.threads.has(S.current) ? S.current : null,
+      draft: view.threadId || !view.draft ? null : { scope: { ...view.draft.scope }, settings: { ...view.draft.settings } },
+      composer: content && (content.text.trim() || content.mentions.length) ? { text: content.text, mentions: content.mentions } : null,
+    };
+  }
+
+  /** What another window handed over, as giveChat takes it. A thread this window does not know opens a new one. */
+  function chatFromWindow(chat) {
+    const threadId = typeof chat?.threadId === "string" && S.threads.has(chat.threadId) && !S.threads.get(chat.threadId).archived ? chat.threadId : null;
+    return { threadId, draft: threadId ? null : chat?.draft || null, composer: chat?.composer || null };
+  }
+
+  /**
+   * Move the sidebar or full window chat to a window of its own. The chat closes here; its thread
+   * stays in the sidebar for when that is opened again.
+   */
+  function popOutChat() {
+    closeMenu();
+    const view = S.fullOpen ? full.view : sidebar.view;
+    if (!window.scribePopout.openChat(chatForWindow(view))) {
+      notice("The browser blocked the new window. Allow pop-ups for Scribe to open the chat in its own window.");
+      return;
+    }
+    // What was written went along; attached files cannot, and wait here.
+    view.input.value = "";
+    view.mentions = [];
+    view.autosize();
+    view.renderContext();
+    if (S.fullOpen) {
+      const snap = full.view.takeChat();
+      fullFrom = null;
+      full.close();
+      sidebar.view.giveChat(snap);
+    }
+    if (S.sideOpen) sidebar.setOpen(false);
+  }
+
+  /** The chat window: give the chat back to the main window and close. */
+  function returnChatToMain() {
+    window.scribePopout.request({ type: "chat-return", chat: chatForWindow(full.view) });
+    window.scribePopout.focusMain();
+    window.scribePopout.closeSelf();
+  }
+
+  /** The main window: the chat window's chat comes back to the full window when that is open, else the sidebar. */
+  function takeChatBack(chat) {
+    const snap = chatFromWindow(chat);
+    closeMenu();
+    if (snap.threadId) setCurrent(snap.threadId);
+    if (S.fullOpen) {
+      full.view.giveChat(snap);
+      full.renderList();
+      full.view.focus();
+      return;
+    }
+    sidebar.view.closeHelper();
+    sidebar.view.giveChat(snap);
+    if (sidebar.listOpen) sidebar.toggleList();
+    sidebar.setOpen(true);
+  }
+
+  window.scribePopout?.onTell((message) => {
+    if (CHAT && message?.type === "chat" && message.chat) {
+      const snap = chatFromWindow(message.chat);
+      if (snap.threadId) setCurrent(snap.threadId);
+      full.view.giveChat(snap);
+      full.renderList();
+      full.view.focus();
     }
   });
 
@@ -9435,6 +9532,8 @@
    * Pass "side" to land in the sidebar even if it was closed (Ctrl+L). Leaving fullscreen itself does not open it.
    */
   function leaveFull(to) {
+    // The chat window is nothing but the full window.
+    if (CHAT) return;
     const dest = to ?? fullFrom;
     const snap = full.view.takeChat();
     fullFrom = null;
@@ -9639,6 +9738,7 @@
       return true;
     }
     if (S.fullOpen) {
+      if (CHAT) return false;
       leaveFull();
       return true;
     }
@@ -9866,6 +9966,7 @@
       sidebar.renderList();
     };
     loadStartupData().then(() => {
+      if (CHAT) full.open(chatFromWindow(window.scribePopout.chatHandoff() || { threadId: S.current }));
       if (S.sideOpen) sidebar.ensureThread();
       dock.syncThread();
       renderAll();

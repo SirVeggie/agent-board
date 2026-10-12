@@ -106,6 +106,8 @@
   const popout = window.scribePopout;
   /** Set when this window shows one page on its own (popout.js): no strip, no sidebars, never another page. */
   const childId = popout.childId;
+  /** A child window that shows the agent chat and no page (agent.js fills it). */
+  const chatChild = popout.chatChild;
 
   const SANDBOX =
     "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
@@ -2303,6 +2305,10 @@
     if (!snapshotSeen) {
       return;
     }
+    if (chatChild) {
+      state.activeId = null;
+      return;
+    }
     if (childId) {
       state.activeId = state.tabs.some((tab) => tab.id === childId) ? childId : null;
       if (!state.activeId) {
@@ -2928,9 +2934,9 @@
   function renderFrames() {
     const tab = activeTab();
     emptyEl.hidden = !state.restored || Boolean(tab);
-    document.title = tab ? (childId ? tab.title : tab.title + " · Scribe") : "Scribe";
+    document.title = tab ? (childId ? tab.title : tab.title + " · Scribe") : chatChild ? "Agent chat" : "Scribe";
     if (popoutTitle) {
-      popoutTitle.textContent = tab?.title || "";
+      popoutTitle.textContent = chatChild ? "Agent chat" : tab?.title || "";
     }
     views.layout();
     // The New page screen stands in for a blank page's frame, in whichever pane the page is.

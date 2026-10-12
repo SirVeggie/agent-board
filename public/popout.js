@@ -9,12 +9,17 @@
  */
 window.scribePopout = (() => {
   const childId = new URLSearchParams(location.search).get("popout") || null;
+  /** The child window that is the agent chat on its own, not a page (#505). Page ids never look like this. */
+  const CHAT_ID = "agent-chat";
+  /** What the chat window opens with: main writes it before opening the window, which reads it as it loads. */
+  const CHAT_HANDOFF_KEY = "scribe.agent.chatWindow";
   const invoke = window.__TAURI__?.core?.invoke || null;
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("scribe-popout") : null;
   /** Main window: page id → the browser popup's window, or null (desktop app, or a popup found again by its "open"). */
   const children = new Map();
   const changeListeners = new Set();
   const requestListeners = new Set();
+  const tellListeners = new Set();
   let emitQueued = false;
   let closing = false;
 
@@ -91,6 +96,37 @@ window.scribePopout = (() => {
     forget(id);
   }
 
+  /**
+   * Show the agent chat in its own window, with `chat` ({ threadId, draft, composer }) in it. An open
+   * chat window takes it over and comes forward. False when the browser blocked the popup.
+   */
+  function openChat(chat) {
+    if (children.has(CHAT_ID)) {
+      post({ type: "tell", id: CHAT_ID, message: { type: "chat", chat } });
+      focus(CHAT_ID);
+      return true;
+    }
+    try {
+      localStorage.setItem(CHAT_HANDOFF_KEY, JSON.stringify(chat));
+    } catch {
+      /* the window then opens the current thread */
+    }
+    return open({ id: CHAT_ID, title: "Agent chat" });
+  }
+
+  /** The chat window: what it was opened with. The thread stays for a reload; the unsent text is used once. */
+  function chatHandoff() {
+    try {
+      const chat = JSON.parse(localStorage.getItem(CHAT_HANDOFF_KEY) || "null");
+      if (chat?.composer) {
+        localStorage.setItem(CHAT_HANDOFF_KEY, JSON.stringify({ ...chat, composer: null }));
+      }
+      return chat && typeof chat === "object" ? chat : null;
+    } catch {
+      return null;
+    }
+  }
+
   function closeSelf() {
     if (closing) {
       return;
@@ -115,6 +151,10 @@ window.scribePopout = (() => {
         closeSelf();
       } else if (msg.type === "focus") {
         window.focus();
+      } else if (msg.type === "tell") {
+        for (const listener of tellListeners) {
+          listener(msg.message);
+        }
       }
     });
     addEventListener("pagehide", () => post({ type: "closed", id: childId }));
@@ -155,12 +195,19 @@ window.scribePopout = (() => {
 
   return {
     childId,
+    /** Whether this window is the agent chat on its own. */
+    chatChild: childId === CHAT_ID,
     /** Whether pages can go to their own windows from here. */
     supported: Boolean(channel) && !childId,
     desktop: Boolean(invoke),
     has: (id) => children.has(id),
-    ids: () => [...children.keys()],
+    /** The pages in windows of their own (the chat window is not a page). */
+    ids: () => [...children.keys()].filter((id) => id !== CHAT_ID),
     open,
+    openChat,
+    chatHandoff,
+    /** Main → child: what `tell` sent to this window. */
+    onTell: (listener) => tellListeners.add(listener),
     focus,
     close,
     closeSelf,
