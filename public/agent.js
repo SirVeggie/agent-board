@@ -4649,7 +4649,7 @@
           (event) => this.webMenu(event.currentTarget),
           detail
         );
-        web.append(icon("fetch"));
+        web.append(icon(wm.id === "limited" ? "fetchLimited" : "fetch"));
         // The floating chat is narrow: the icon alone, with the mode in its tooltip and style.
         if (this.variant !== "dock") web.append(el("span", null, wm.label));
         else web.classList.add("ag-web-icon");
