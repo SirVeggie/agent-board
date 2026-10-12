@@ -4,6 +4,96 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
+test("Kanban columns load batches independently and retain them through live updates", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Kanban lazy loading test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    page.setDefaultTimeout(5000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    await page.setContent(`<script>
+      window.scribe = {
+        state: {
+          columns: [{ id: 'todo', title: 'Todo' }, { id: 'other', title: 'Other' }],
+          labels: [], nextNum: 77, settings: {},
+          cards: Array.from({ length: 76 }, (_, i) => ({ id: 'c' + (i + 1), num: i + 1,
+            col: i < 55 ? 'todo' : 'other', title: 'Task ' + (i + 1), labels: [], priority: 0 }))
+        }, local: {},
+        set(patch) { Object.assign(this.state, patch); },
+        setLocal(patch) { Object.assign(this.local, patch); },
+        onChange(fn) { this.changed = fn; }
+      };
+    </script>${html}`);
+    const todo = page.locator('.cards[data-col="todo"]');
+    const other = page.locator('.cards[data-col="other"]');
+    const waitCount = async (col: string, count: number) => {
+      await page.waitForFunction(({ col, count }) => document.querySelectorAll(`.cards[data-col="${col}"] .card`).length === count, { col, count });
+    };
+    assert.equal(await todo.locator('.card').count(), 20);
+    assert.equal(await other.locator('.card').count(), 20);
+    assert.equal(await page.locator('.column[data-col="todo"] .col-count').innerText(), '55');
+    assert.equal(await todo.locator('[data-id="c21"]').count(), 0);
+    const first = await todo.locator('.card').first().elementHandle();
+    await todo.evaluate(node => { node.scrollTop = node.scrollHeight - node.clientHeight - 200; });
+    await waitCount('todo', 40);
+    assert.equal(await first!.evaluate(node => node.isConnected), true);
+    assert.equal(await other.locator('.card').count(), 20);
+    await todo.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await waitCount('todo', 55);
+    const scroll = await todo.evaluate(node => node.scrollTop);
+    await page.evaluate(() => {
+      const scribe = (window as any).scribe;
+      scribe.state.cards[54].title = 'Updated last task';
+      scribe.changed();
+    });
+    await todo.getByText('Updated last task', { exact: true }).waitFor();
+    assert.equal(await todo.locator('.card').count(), 55);
+    assert.equal(await todo.evaluate(node => node.scrollTop), scroll);
+    await page.locator('#search').fill('Updated last task');
+    await waitCount('todo', 1);
+    assert.equal(await todo.locator('.card').getAttribute('data-id'), 'c55');
+    await page.locator('#search').fill('');
+    await waitCount('todo', 20);
+    assert.equal(await todo.evaluate(node => node.scrollTop), 0);
+    await other.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await waitCount('other', 21);
+    assert.equal(await page.evaluate(() => (window as any).scribe.state.cards.length), 76);
+    // Holding a dragged card at the lower edge must load the remaining cards too.
+    const cardBox = (await todo.locator('.card').first().boundingBox())!;
+    const listBox = (await todo.boundingBox())!;
+    await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(cardBox.x + cardBox.width / 2, listBox.y + listBox.height + 10, { steps: 10 });
+    await waitCount('todo', 55);
+    await page.waitForFunction(() => {
+      const list = document.querySelector('.cards[data-col="todo"]')!;
+      return list.scrollHeight - list.scrollTop - list.clientHeight < 2;
+    });
+    await page.mouse.up();
+    await page.waitForFunction(() => {
+      const cards = (window as any).scribe.state.cards.filter((c: any) => c.col === 'todo');
+      return cards[cards.length - 1].id === 'c1';
+    });
+    await page.locator('.column[data-col="todo"] .add-card').click();
+    await page.locator('.composer-input').fill('New task at end');
+    await page.locator('.composer-input').press('Enter');
+    await todo.getByText('New task at end', { exact: true }).waitFor();
+    assert.equal(await todo.locator('.card').count(), 56);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Board header shows main provider quotas, detailed tips, and live recovery", async (t) => {
   let browser;
   try {

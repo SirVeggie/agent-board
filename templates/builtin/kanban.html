@@ -1310,6 +1310,9 @@
   // Comments opened from their folded preview, for the card that is open (reset when it closes).
   var expandedFor = null, expandedComments = {};
   var coverEls = {};
+  var CARD_BATCH = 20;
+  var columnLimits = new Map();
+  var columnView = null;
   /** Thread id -> its running turn's last steps ([{ key, kind, text }], from scribe.agent.steps). */
   var threadSteps = {};
   /** Card id -> its live step line; kept across renders so a new step can slide the old one out. */
@@ -2023,6 +2026,13 @@
   }
 
   function renderBoard() {
+    var viewKey = JSON.stringify(view());
+    var viewChanged = columnView !== viewKey;
+    if (viewChanged) {
+      columnView = viewKey;
+      columnLimits.clear();
+    }
+    columnLimits.forEach(function (_, id) { if (!column(id)) columnLimits.delete(id); });
     var labelMap = renderCache.labels;
     labels().forEach(function (l) { labelMap[l.id] = l; });
     var scrollLeft = boardEl.scrollLeft;
@@ -2096,9 +2106,28 @@
       var ul = colEl.querySelector(".cards") || el("ul", "cards");
       var cardNodes = [];
       ul.dataset.col = col.id;
-      visible.forEach(function (c) {
+      var loaded = Math.min(visible.length, columnLimits.get(col.id) || CARD_BATCH);
+      columnLimits.set(col.id, Math.max(CARD_BATCH, loaded));
+      visible.slice(0, loaded).forEach(function (c) {
         cardNodes.push(renderCard(c, col, labelMap));
       });
+      // Append in place: scrolling and dragging must keep their existing nodes and positions.
+      ul._loadMore = function () {
+        if (!ul.isConnected || loaded >= visible.length || !ul.clientHeight ||
+            ul.scrollHeight - ul.scrollTop - ul.clientHeight > 240) return false;
+        var end = Math.min(visible.length, loaded + CARD_BATCH);
+        var fragment = document.createDocumentFragment();
+        visible.slice(loaded, end).forEach(function (c) { fragment.appendChild(renderCard(c, col, labelMap)); });
+        ul.appendChild(fragment);
+        loaded = end;
+        columnLimits.set(col.id, loaded);
+        return true;
+      };
+      ul._nextUnloaded = function () { return visible[loaded] ? visible[loaded].id : null; };
+      if (!ul._lazyScroll) {
+        ul._lazyScroll = true;
+        ul.addEventListener("scroll", function () { ul._loadMore(); }, { passive: true });
+      }
       window.scribeSyncChildren(ul, cardNodes);
       ul.querySelectorAll(".card").forEach(function (node) {
         var cover = node.querySelector(".cover");
@@ -2148,7 +2177,7 @@
     window.scribeSyncChildren(boardEl, boardNodes);
     boardEl.scrollLeft = scrollLeft;
     boardEl.querySelectorAll(".cards").forEach(function (list) {
-      if (listScroll[list.dataset.col]) list.scrollTop = listScroll[list.dataset.col];
+      list.scrollTop = !viewChanged && listScroll[list.dataset.col] || 0;
     });
     if (focusComposerNext) {
       focusComposerNext = false;
@@ -2352,6 +2381,8 @@
     } else {
       focusComposerNext = true;
     }
+    // Adding a card jumps to the end of its column, so reveal the path to it first.
+    columnLimits.set(colId, cardsIn(colId).length + 1);
     scribe.set({ cards: allCards().concat([c]), nextNum: num + 1 });
     render();
     afterMove(c.id, null, colId);
@@ -2723,7 +2754,7 @@
         if (!list) return;
         var lr = list.getBoundingClientRect();
         var sy = edgeSpeed(y, lr.top, lr.bottom);
-        if (sy) { list.scrollTop += sy; idle = false; }
+        if (sy) { list.scrollTop += sy; list._loadMore(); idle = false; }
         placeCardSlot(slot, list, gy + rect.height / 2);
       },
       end: function (cancelled) {
@@ -2732,7 +2763,7 @@
         ghost.remove();
         slot.remove();
         drag = null;
-        if (!cancelled && list && list.dataset.col) dropCard(id, list.dataset.col, nextEl ? nextEl.dataset.id : null);
+        if (!cancelled && list && list.dataset.col) dropCard(id, list.dataset.col, nextEl ? nextEl.dataset.id : list._nextUnloaded());
         else render();
       }
     });
