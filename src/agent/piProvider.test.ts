@@ -50,6 +50,7 @@ test("Native turn freezes rate snapshots, deduplicates messages and retains zero
     clearQueue: () => {},
     prompt: async () => {
       prompts++;
+      run.observePayload(model);
       const first = message();
       run.onEvent({ type: "message_end", message: first });
       run.onEvent({ type: "message_end", message: first });
@@ -67,6 +68,10 @@ test("Native turn freezes rate snapshots, deduplicates messages and retains zero
   assert.equal(latest.costUsd, 0.00004);
   assert.equal(latest.inputTokens, 20);
   assert.equal(latest.costRecords?.length, 2);
+  assert.equal(latest.costRecords?.[0].timing?.basis, "assistant-message");
+  assert.equal(latest.costRecords?.[0].timing?.attempts, "unavailable");
+  assert.ok(latest.costRecords?.[0].timing?.payloadObservedAt);
+  assert.equal(latest.costRecords?.[1].timing?.payloadObservedAt, undefined);
   assert.equal(latest.costRecords?.[1].rate.rates?.input, "1");
   const saved = structuredClone(latest);
   assert.equal((await run.run(input, sink)).status, "done");
@@ -155,4 +160,30 @@ test("DeepSeek source registration prices cached and uncached usage from the SDK
   pricedSource.pricing["deepseek-flash"] = { mode: "unknown" };
   assert.equal(provider.rateSnapshot((await provider.resolveModel("src-ds/deepseek-flash"))!).origin, "unknown");
   assert.equal(modelRateSnapshot(model, { ...source, baseUrl: "https://secret:password@api.deepseek.com/v1?key=hidden" }).endpoint, "https://api.deepseek.com/v1");
+});
+
+test("Pi payload/response hooks bracket a logical call but do not expose transport retries", async (t) => {
+  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-pi-timing-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const runtime = await ModelRuntime.create({ authPath: path.join(dir, "auth.json"), modelsPath: null, modelsStorePath: path.join(dir, "catalog.json"), refreshOnCreate: false });
+  const provider = new PiProvider(() => [{ id: "timing", name: "Timing", baseUrl: "https://api.deepseek.com/v1", apiKey: "test-key", models: ["deepseek-flash"] }]);
+  provider.runtime = async () => runtime;
+  t.after(() => provider.dispose());
+  runtime.getAvailable = async () => runtime.getModels("src-timing").slice();
+  const model = (await provider.resolveModel("src-timing/deepseek-flash"))!;
+  const events: string[] = [];
+  t.mock.method(globalThis, "fetch", async () => {
+    events.push("fetch");
+    if (events.filter((v) => v === "fetch").length === 1) return new Response('{"error":{"message":"retry"}}', { status: 500, headers: { "Content-Type": "application/json", "retry-after-ms": "1" } });
+    const chunk = { choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 1 } };
+    return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+  });
+  const reply = await runtime.completeSimple(model, { messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] }, {
+    maxRetries: 1,
+    onPayload: () => { events.push("payload"); },
+    onResponse: () => { events.push("response"); },
+  });
+  assert.equal(reply.stopReason, "stop", reply.errorMessage);
+  assert.deepEqual(events, ["payload", "fetch", "fetch", "response"]);
 });

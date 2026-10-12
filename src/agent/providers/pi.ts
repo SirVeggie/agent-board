@@ -10,6 +10,7 @@ import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
 import { addCostRecord, estimateCost, type RateSnapshot } from "../pricing.js";
+import { deepSeekProfile, recordTariff } from "../tariffs.js";
 import { isPlainRecord, noPages, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
 import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
@@ -95,9 +96,11 @@ export function modelRateSnapshot(model: Model, source?: OpenAISource): RateSnap
   const custom = source?.pricing?.[model.id];
   if (custom?.mode === "unknown") return base;
   if (custom?.mode === "custom") return { ...base, origin: "custom", rates: { ...custom.rates }, updatedAt: custom.updatedAt, freshness: "user-entered" };
-  if (Object.values(model.cost).some((n) => !Number.isFinite(n) || n < 0 || n > 1_000_000) || !Object.values(model.cost).some((n) => n > 0)) return base;
+  const tariffProfile = deepSeekProfile(model.provider, model.id, source ? base.endpoint : model.baseUrl);
+  const automatic = { ...base, ...(tariffProfile ? { tariffProfile } : {}) };
+  if (Object.values(model.cost).some((n) => !Number.isFinite(n) || n < 0 || n > 1_000_000) || !Object.values(model.cost).some((n) => n > 0)) return automatic;
   const decimal = (n: number) => n.toFixed(9).replace(/\.?0+$/, "") || "0";
-  return { ...base, origin: "catalog", rates: { input: decimal(model.cost.input), output: decimal(model.cost.output), cacheRead: decimal(model.cost.cacheRead), cacheWrite: decimal(model.cost.cacheWrite) } };
+  return { ...automatic, origin: "catalog", rates: { input: decimal(model.cost.input), output: decimal(model.cost.output), cacheRead: decimal(model.cost.cacheRead), cacheWrite: decimal(model.cost.cacheWrite) } };
 }
 
 /** "<pi provider>/<model id>" → its parts. Model ids may contain slashes themselves (OpenRouter). */
@@ -524,6 +527,7 @@ class PiSession implements ProviderSession {
   private carry: string | null = null;
   private usage: Usage = {};
   private rate: RateSnapshot | null = null;
+  private observedRequest: { payloadObservedAt: number; responseObservedAt?: number } | null = null;
   private costMessages = new WeakSet<object>();
   /** Text and reasoning blocks of the message streaming now, so a new block breaks the chat item. */
   private lastBlock: number | null = null;
@@ -877,7 +881,15 @@ class PiSession implements ProviderSession {
       noExtensions: true,
       noThemes: true,
       ...(this.instructions ? { appendSystemPrompt: [this.instructions] } : {}),
-      extensionFactories: [{ name: "scribe", hidden: true, factory: (api: ExtensionAPI) => void api.on("tool_call", (event) => this.gate(event)) }],
+      extensionFactories: [{ name: "scribe", hidden: true, factory: (api: ExtensionAPI) => {
+        api.on("tool_call", (event) => this.gate(event));
+        // These bracket a logical provider call, not each SDK transport retry.
+        // Never retain the payload, headers, credentials or response body.
+        api.on("before_provider_request", (_event, ctx) => this.observePayload(ctx.model));
+        api.on("after_provider_response", () => {
+          if (this.observedRequest) this.observedRequest.responseObservedAt = Date.now();
+        });
+      } }],
     });
     await resourceLoader.reload();
     let sessionManager = null;
@@ -990,6 +1002,7 @@ class PiSession implements ProviderSession {
     this.cancelled = false;
     this.usage = {};
     this.rate = null;
+    this.observedRequest = null;
     this.costMessages = new WeakSet<object>();
     this.lastBlock = null;
     try {
@@ -1051,6 +1064,11 @@ class PiSession implements ProviderSession {
     return result;
   }
 
+  private observePayload(model: Model | undefined): void {
+    this.observedRequest = this.sink && model && this.rate?.provider === model.provider && this.rate.model === model.id
+      ? { payloadObservedAt: Date.now() } : null;
+  }
+
   private onEvent(event: AgentSessionEvent): void {
     const sink = this.sink;
     if (!sink) return;
@@ -1089,9 +1107,13 @@ class PiSession implements ProviderSession {
         const prev = this.usage;
         const rate = this.rate && this.rate.provider === message.provider && this.rate.model === message.model
           ? this.rate : { origin: "unknown" as const, provider: message.provider, model: message.model, unit: "USD/1M tokens" as const, freshness: "unknown" as const };
-        const cost = estimateCost(costId, message.timestamp, rate, { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite });
+        const cost = recordTariff(estimateCost(costId, message.timestamp, rate, { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite }), {
+          basis: "assistant-message", attempts: "unavailable", endedAt: Date.now(), ...(this.observedRequest ?? {}),
+        });
+        this.observedRequest = null;
         if (["error", "aborted"].includes(message.stopReason) && u.input + u.output + u.cacheRead + u.cacheWrite === 0) {
           delete cost.estimatedUsd;
+          delete cost.tariffCandidatesUsd;
           cost.missing.push("Failed request returned no billable usage");
         }
         this.usage = {

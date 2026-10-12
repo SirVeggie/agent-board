@@ -13,6 +13,16 @@ export type RateSnapshot = {
   updatedAt?: number;
   /** Catalog verification dates are not supplied by Pi. */
   freshness: "user-entered" | "unknown";
+  /** Bundled evidence is frozen with source settings at turn start. */
+  tariffProfile?: import("./tariffs.js").DeepSeekProfile;
+};
+export type MessageTiming = {
+  basis: "assistant-message";
+  payloadObservedAt?: number;
+  responseObservedAt?: number;
+  endedAt: number;
+  /** Pi's payload/response hooks do not expose internal transport retry attempts. */
+  attempts: "unavailable";
 };
 export type CostRecord = {
   id: string;
@@ -22,6 +32,10 @@ export type CostRecord = {
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
   estimatedUsd?: number;
   missing: string[];
+  timing?: MessageTiming;
+  tariff?: import("./tariffs.js").TariffDecision;
+  /** Diagnostic candidate totals, not a selected tariff or invoice bound. */
+  tariffCandidatesUsd?: { lower: number; upper: number };
 };
 
 function rate(value: unknown, name: string): string {
