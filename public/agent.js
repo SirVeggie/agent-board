@@ -6896,14 +6896,17 @@
     // A thread with messages keeps its provider, so only that provider's favourites apply.
     const locked = Boolean(t && t.stats.turns > 0);
     const usable = (f) => providerAvailable(f.provider) && modelInfo(f.provider, f.id) && (!locked || f.provider === s.provider);
-    const list = favoriteModels()
-      .map((key) => ({ provider: key.slice(0, key.indexOf(":")), id: key.slice(key.indexOf(":") + 1) }))
-      .filter(usable);
+    const candidates = new Set(favoriteModels());
     const current = modelKey(s.provider, s.model);
     const chatKey = view.threadId || `draft:${view.variant}`;
-    if (!list.some((f) => modelKey(f.provider, f.id) === current)) cycleExtras.set(chatKey, { provider: s.provider, id: s.model });
+    if (!candidates.has(current)) cycleExtras.set(chatKey, { provider: s.provider, id: s.model });
     const extra = cycleExtras.get(chatKey);
-    if (extra && usable(extra) && !list.some((f) => modelKey(f.provider, f.id) === modelKey(extra.provider, extra.id))) list.unshift(extra);
+    if (extra && usable(extra)) candidates.add(modelKey(extra.provider, extra.id));
+    // Use the picker's provider, model and Native source order, regardless of when stars were added.
+    const list = PROVIDERS.flatMap((provider) => {
+      const models = modelsOf(provider).filter((m) => candidates.has(modelKey(provider, m.id)) && usable({ provider, id: m.id }));
+      return modelMenuItems(provider, models, (m) => ({ provider, id: m.id })).filter((item) => !item.header);
+    });
     if (list.length < 2) {
       notice(favoriteModels().length ? "Star another model to cycle between them" : "Star models in the model picker to cycle them with Ctrl+'");
       return;
