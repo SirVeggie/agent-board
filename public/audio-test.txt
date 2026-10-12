@@ -1,0 +1,3 @@
+audio-test.wav: "Scribe audio test."
+Generated locally with the default Windows SAPI voice, October 2026, for the Audio settings test.
+No third-party recording is included.

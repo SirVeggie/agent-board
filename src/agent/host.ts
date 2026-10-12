@@ -899,7 +899,7 @@ export class AgentHost {
   // ---------- Native harness model sources ----------
 
   /** OpenAI-compatible endpoints for the native harness (Pi). Kept under the setting the old openai provider used. */
-  private modelSources(): OpenAISource[] {
+  modelSources(): OpenAISource[] {
     return this.db.getSetting<OpenAISource[]>("openai.sources", []);
   }
 
