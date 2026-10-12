@@ -4071,7 +4071,7 @@ button.space-chip[aria-expanded="true"] {
 /* The board steps back while the overview is up: chrome contents fade, the workspace recedes. */
 html.spaces-anim .chrome > *,
 html.spaces-anim .workspace {
-  transition: opacity var(--dur-enter) var(--ease);
+  transition: opacity 0.22s var(--ease), transform 0.26s var(--ease), filter 0.26s var(--ease);
 }
 
 html.spaces-open .chrome > :not(.win-controls) {
@@ -4087,6 +4087,8 @@ html.spaces-open .chrome {
 
 html.spaces-open .workspace {
   opacity: 0;
+  transform: scale(0.97);
+  filter: blur(6px);
   pointer-events: none;
 }
 
@@ -4096,7 +4098,7 @@ html.spaces-open .workspace {
   z-index: var(--z-spaces);
   overflow: auto;
   opacity: 0;
-  transition: opacity var(--dur-enter) var(--ease);
+  transition: opacity 0.22s var(--ease);
 }
 
 .spaces[hidden] {
@@ -4160,13 +4162,13 @@ html.spaces-open .workspace {
   touch-action: none;
   opacity: 0;
   transform: translateY(10px) scale(0.98);
-  transition: transform var(--dur-enter) var(--ease), box-shadow var(--dur-fast) ease, opacity var(--dur-enter) var(--ease);
+  transition: transform 0.22s var(--ease), box-shadow 0.15s ease, opacity 0.22s var(--ease);
 }
 
 .spaces.shown .space-card {
   opacity: 1;
   transform: none;
-  transition-delay: calc(var(--i, 0) * var(--dur-stagger));
+  transition-delay: calc(var(--i, 0) * 25ms);
 }
 
 .spaces.shown .space-card.selected {
@@ -4893,6 +4895,11 @@ main.has-split .newpage.cover[data-pane] {
 @keyframes ui-enter { from { opacity: 0; transform: translateY(6px); } }
 
 /* One shell-wide effects policy, including pseudo-elements and future components. */
+html.fx-off.spaces-open .workspace {
+  transform: none;
+  filter: none;
+}
+
 html.fx-off *, html.fx-off *::before, html.fx-off *::after {
   animation: none !important;
   animation-play-state: paused !important;
@@ -4901,6 +4908,7 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html.spaces-open .workspace { transform: none; filter: none; }
   *, *::before, *::after {
     animation: none !important;
     transition: none !important;
