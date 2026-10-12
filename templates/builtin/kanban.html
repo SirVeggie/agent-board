@@ -382,6 +382,7 @@
   button.card-creator { padding: 0; border: 0; background: none; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
   .badges { display: flex; flex-wrap: wrap; gap: 5px 9px; margin-top: 6px; color: var(--muted); font-size: 11.5px; align-items: center; }
   .badge { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+  .badge.usage { display: block; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
   .badge.soon { color: var(--warn); }
   .badge.late { color: var(--danger); }
   .badge.full { color: var(--ok); }
@@ -2297,7 +2298,7 @@
     if (c.images.length > 1) badges.appendChild(el("span", "badge", "🖼 " + c.images.length));
     var usageText = formatUsage(c.usage);
     if (usageText) {
-      var tok = el("span", "badge" + (usageHeavy(c.usage) ? " heavy" : ""), usageText);
+      var tok = el("span", "badge usage" + (usageHeavy(c.usage) ? " heavy" : ""), usageText);
       tok.dataset.tooltip = usageTip(c.usage);
       badges.appendChild(tok);
     }
