@@ -4546,6 +4546,8 @@
 
     hidePicker() {
       this.slash.hidden = true;
+      this.slash.classList.remove("loading");
+      this.slash.removeAttribute("aria-busy");
       this.mentionLoading = false;
       this.mentionGen += 1;
       clearTimeout(this.mentionTimer);
@@ -4860,6 +4862,10 @@
           return;
         }
         if ((event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) || event.key === "Tab") {
+          if (this.mentionLoading) {
+            event.preventDefault();
+            return;
+          }
           if (items.length) {
             event.preventDefault();
             (items[at >= 0 ? at : 0]).click();
@@ -4980,6 +4986,10 @@
     showMentions(mention) {
       const gen = ++this.mentionGen;
       this.mentionLoading = true;
+      if (!this.slash.hidden && this.slash.hasAttribute("aria-busy")) {
+        this.slash.classList.add("loading");
+        this.slash.setAttribute("aria-busy", "true");
+      }
       clearTimeout(this.mentionTimer);
       this.mentionTimer = setTimeout(() => {
         void this.loadMentions(mention, gen);
@@ -4993,7 +5003,10 @@
       const s = this.settings();
       const folders = this.localFolderMentions(q, taken);
       const wantFiles = (s.mode === "code" || s.mode === "plan") && s.cwd;
-      this.renderMentionPicker({ pages: [], folders, files: [], mention, loading: true });
+      // Keep the previous results (and scroll position) until the latest search completes.
+      if (this.slash.hidden || !this.slash.hasAttribute("aria-busy")) {
+        this.renderMentionPicker({ pages: [], folders, files: [], mention, loading: true });
+      }
       try {
         const [pages, folderHits, files] = await Promise.all([
           this.searchPageMentions(q, taken),
@@ -5061,6 +5074,8 @@
     }
 
     renderMentionPicker({ pages, folders, files, mention, loading }) {
+      this.slash.classList.toggle("loading", loading);
+      this.slash.setAttribute("aria-busy", String(loading));
       this.slash.replaceChildren();
       const sections = [
         { title: "Pages", items: pages },
@@ -5091,6 +5106,7 @@
     }
 
     pickMention(item, mention) {
+      if (this.mentionLoading) return;
       const chip =
         item.kind === "page"
           ? { kind: "page", id: item.id, key: item.key, title: item.title }
