@@ -2261,7 +2261,6 @@
     titleText.innerHTML = linkText(c.title);
     titleEl.appendChild(titleText);
     li.appendChild(titleEl);
-    li.appendChild(creatorElement(c));
     var suggested = suggestionRow(c, labelMap);
     if (suggested) li.appendChild(suggested);
 
@@ -2353,10 +2352,13 @@
 
   function creatorElement(c) {
     var name = str(c.createdBy).trim();
-    var text = "Created by " + (name === "user" ? "you" : name || "unknown");
     var thread = str(c.createdThread).trim();
     var canOpen = thread && scribe.agent && typeof scribe.agent.show === "function";
-    var node = el(canOpen ? "button" : "div", "card-creator", text);
+    var node = el(canOpen ? "button" : "div", "card-creator", "Created by ");
+    var nameEl = el("span", "", name === "user" ? "you" : name || "unknown");
+    var wid = name !== "user" && workerIdFor(name);
+    if (wid) nameEl.style.color = workerColor(wid);
+    node.appendChild(nameEl);
     if (canOpen) {
       node.type = "button";
       node.dataset.tooltip = "Open the chat that created this card";

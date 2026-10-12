@@ -24,7 +24,7 @@ test("Kanban columns load batches independently and retain them through live upd
       window.scribe = {
         state: {
           columns: [{ id: 'todo', title: 'Todo' }, { id: 'other', title: 'Other' }],
-          labels: [], nextNum: 77, settings: {},
+          labels: [], nextNum: 77, settings: { workers: { sol: { name: 'Sol', color: '#a78bfa' } } },
           cards: Array.from({ length: 76 }, (_, i) => ({ id: 'c' + (i + 1), num: i + 1,
             col: i < 55 ? 'todo' : 'other', title: 'Task ' + (i + 1), labels: [], priority: 0,
             ...(i === 0 ? { createdBy: 'Sol', createdThread: 'th_creator', thread: 'th_assignee' } : {}),
@@ -43,12 +43,18 @@ test("Kanban columns load batches independently and retain them through live upd
     };
     assert.equal(await todo.locator('.card').count(), 20);
     assert.equal(await other.locator('.card').count(), 20);
-    await todo.locator('[data-id="c1"] .card-creator').click();
-    assert.deepEqual(await page.evaluate(() => (window as any).openedCreator), { id: 'th_creator', options: { where: 'sidebar' } });
-    assert.equal(await todo.locator('[data-id="c2"] .card-creator').innerText(), 'Created by you');
-    assert.equal(await todo.locator('[data-id="c3"] .card-creator').innerText(), 'Created by unknown');
+    assert.equal(await page.locator('.card .card-creator').count(), 0);
     await todo.locator('[data-id="c1"] .card-title').click();
     assert.equal(await page.locator('#mTimes .card-creator').innerText(), 'Created by Sol');
+    assert.equal(await page.locator('#mTimes .card-creator span').evaluate(node => getComputedStyle(node).color), 'rgb(167, 139, 250)');
+    await page.locator('#mTimes .card-creator').click();
+    assert.deepEqual(await page.evaluate(() => (window as any).openedCreator), { id: 'th_creator', options: { where: 'sidebar' } });
+    await page.keyboard.press('Escape');
+    await todo.locator('[data-id="c2"] .card-title').click();
+    assert.equal(await page.locator('#mTimes .card-creator').innerText(), 'Created by you');
+    await page.keyboard.press('Escape');
+    await todo.locator('[data-id="c3"] .card-title').click();
+    assert.equal(await page.locator('#mTimes .card-creator').innerText(), 'Created by unknown');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.column[data-col="todo"] .col-count').innerText(), '55');
     assert.equal(await todo.locator('[data-id="c21"]').count(), 0);
