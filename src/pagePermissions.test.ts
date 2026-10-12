@@ -17,6 +17,8 @@ test("permissions without a grant are at their defaults", () => {
   assert.deepEqual(
     views.map((v) => [v.id, v.value]),
     [
+      ["audio.microphone", "ask"],
+      ["audio.transcribe", "ask"],
       ["agent.chat", "allow"],
       ["agent.unattended", "ask"],
       ["agent.workspace", "ask"],

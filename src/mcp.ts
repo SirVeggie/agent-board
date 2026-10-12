@@ -739,7 +739,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "scribe_docs",
-    "The scribe skill for this Scribe version: rules for building and changing pages, and the page API pages use (window.scribe: state and ops, signals, actions, assets, links, scribe.preview, scribe.agent, permissions). Use it when the scribe skill is not loaded, or to check an API the skill you have does not mention. No topic: overview and table of contents. topic: a heading or part of one (e.g. \"Interactive pages\", \"Waiting\", \"Previewing files\"), \"templates\" for Scribe templates, or \"all\".",
+    "The scribe skill for this Scribe version: rules for building and changing pages, and the page API pages use (window.scribe: state and ops, signals, actions, assets, links, scribe.preview, scribe.agent, scribe.audio, permissions). Use it when the scribe skill is not loaded, or to check an API the skill you have does not mention. No topic: overview and table of contents. topic: a heading or part of one (e.g. \"Interactive pages\", \"Waiting\", \"Previewing files\"), \"templates\" for Scribe templates, or \"all\".",
     {
       topic: z.string().optional().describe("Heading (or part of one) to read, \"templates\", or \"all\". Omit for the contents."),
     },

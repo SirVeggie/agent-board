@@ -3,6 +3,72 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { test } from "node:test";
 import { launchChromium } from "../chromium.js";
+import { BOARD_BRIDGE_JS } from "../bridge.js";
+
+function pageAudioHarness() {
+  const posted: any[] = [], frames = new Map([["page", { revision: 1, el: { isConnected: true } }]]);
+  let activated = false, visible = true, calls = 0, cancelled = 0, resolveEnd: (blob: Blob) => void;
+  const button = { hidden: true, addEventListener() {} };
+  const audio = {
+    available: () => ({ mic: true, stt: true }), refresh: async () => {}, cancel() { cancelled++; },
+    capture: async () => { calls++; return { ended: new Promise<Blob>(r => { resolveEnd = r; }),
+      cancel() { cancelled++; resolveEnd(new Blob(["clip"], { type: "audio/webm" })); },
+      stop() { resolveEnd(new Blob(["clip"], { type: "audio/webm" })); } }; },
+    transcribe: async () => ({ ok: true, text: "Words" })
+  };
+  const source = { postMessage: (message: any) => posted.push(message) };
+  const context = vm.createContext({ window: { scribeAudio: audio, scribePermissions: { ensure: async () => ({ ok: true }) } },
+    document: { hidden: false, createElement: () => button, querySelector: () => ({ append() {} }), addEventListener() {} },
+    tabsEl: { querySelectorAll: () => [] }, views: { shownIds: () => new Set(visible ? ["page"] : []) },
+    frames, frameIdByWindow: (win: any) => win === source ? "page" : null, findAnyTab: () => ({ id: "page" }),
+    frameActivated: () => activated, crypto: { randomUUID: () => "session" }, Blob, ArrayBuffer, AbortController,
+    setInterval() {}, setTimeout, clearTimeout, Date });
+  const app = fs.readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
+  vm.runInContext(app.slice(app.indexOf("  const pageAudioSessions ="), app.indexOf("\n  /**", app.indexOf("  async function onPageAudio"))), context);
+  return { context, posted, button, get calls() { return calls; }, get cancelled() { return cancelled; },
+    activate() { activated = true; }, hide() { visible = false; vm.runInContext("checkPageAudioVisibility()", context); },
+    request: async (op: string, extra = {}) => { await context.onPageAudio({ source, origin: "http://127.0.0.2", data: { op, id: "page", reqId: "request", ...extra } }); return posted.at(-1)?.result; } };
+}
+
+test("listen combines ask permissions in one prompt and stops at a denied permission", async () => {
+  let value = "ask", prompts = 0;
+  const remembered: string[] = [];
+  const context = vm.createContext({
+    list: async () => ["audio.microphone", "audio.transcribe"].map(id => ({ id, label: id, detail: id })),
+    request: async () => ({ result: value }),
+    prompt: async (_tab: unknown, def: any) => { prompts++; assert.match(def.label, /audio.microphone and audio.transcribe/); return "allow"; },
+    remember: async (_tab: unknown, def: any) => remembered.push(def.id)
+  });
+  const source = fs.readFileSync(new URL("../../public/permissions.js", import.meta.url), "utf8");
+  vm.runInContext(source.slice(source.indexOf("  async function ensure("), source.indexOf("  /** The page's permissions")), context);
+  const needs = [{ perm: "audio.microphone" }, { perm: "audio.transcribe" }];
+  assert.equal((await context.ensure({ id: "page" }, needs)).ok, true);
+  assert.equal(prompts, 1); assert.deepEqual(remembered, needs.map(n => n.perm));
+  value = "deny";
+  assert.equal((await context.ensure({ id: "page" }, needs)).error, "denied"); assert.equal(prompts, 1);
+  value = "allow";
+  assert.equal((await context.ensure({ id: "page" }, needs)).ok, true); assert.equal(prompts, 1);
+});
+
+test("shell refuses microphone without frame activation and cancels when a page is hidden", async () => {
+  const h = pageAudioHarness();
+  assert.equal((await h.request("record")).error, "no_gesture"); assert.equal(h.calls, 0);
+  h.activate(); assert.equal((await h.request("record")).ok, true); assert.equal(h.calls, 1);
+  assert.equal(h.button.hidden, false);
+  h.hide(); assert.ok(h.cancelled > 0); assert.equal(h.button.hidden, true);
+  assert.equal((await h.request("stop", { sessionId: "session" })).error, "cancelled");
+});
+
+test("shell returns a finished clip and checks permissions before opening the mic", async () => {
+  const h = pageAudioHarness(); h.activate();
+  h.context.window.scribePermissions.ensure = async () => ({ ok: false, error: "denied", permission: "audio.microphone" });
+  assert.equal((await h.request("listen")).error, "denied"); assert.equal(h.calls, 0);
+  h.context.window.scribePermissions.ensure = async () => ({ ok: true });
+  await h.request("record");
+  const result = await h.request("stop", { sessionId: "session" });
+  assert.equal(result.ok, true); assert.equal(result.mimeType, "audio/webm");
+  assert.equal(new TextDecoder().decode(result.buffer), "clip");
+});
 
 test("caret insertion replaces selection and spaces words without separating punctuation", () => {
   const context = vm.createContext({ window: { addEventListener() {} } });
@@ -102,5 +168,55 @@ test("Chromium capture stops tracks, enforces one session and cap; composer hand
     await page.evaluate(() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException("blocked", "NotAllowedError"); }; });
     await page.locator("button").click(); await page.waitForFunction(() => (window as any).notices.length === 1);
     assert.match(await page.evaluate(() => (window as any).notices[0]), /Microphone blocked.*site permissions/);
+  } finally { await browser.close(); }
+});
+test("page listen and record round trip through a cross-origin iframe with no microphone delegation", async () => {
+  const browser = await launchChromium({ headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"], purpose: "Page audio test" });
+  try {
+    const page = await browser.newPage(); page.setDefaultTimeout(7000);
+    const errors: string[] = []; page.on("pageerror", e => errors.push(e.message));
+    const app = fs.readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
+    const handlers = app.slice(app.indexOf("  const pageAudioSessions ="), app.indexOf("\n  /**", app.indexOf("  async function onPageAudio")));
+    const fixture = fs.readFileSync(new URL("./page-test.html", import.meta.url), "utf8");
+    await page.route("http://127.0.0.2:47999/**", route => route.fulfill({ contentType: "text/html", body:
+      `<script>window.__SCRIBE_BOOT__ = {id:'page',capture:true};</script><script>${BOARD_BRIDGE_JS}</script>${fixture}` }));
+    await page.route("http://127.0.0.1:47999/**", route => {
+      const url = route.request().url();
+      if (url.includes("/api/audio/settings")) return route.fulfill({ json: { available: true } });
+      if (url.includes("/api/audio/transcriptions")) {
+        assert.equal(route.request().headers()["x-scribe-tab"], "page");
+        return route.fulfill({ json: { ok: true, text: "spoken words" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: `<header class="chrome"></header><div id="tabs"><div class="tab" data-id="page"></div></div><iframe src="http://127.0.0.2:47999/page" sandbox="allow-scripts allow-same-origin"></iframe>` });
+    });
+    await page.goto("http://127.0.0.1:47999/");
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/audio.js", import.meta.url), "utf8") });
+    await page.addScriptTag({ content: `(() => {
+      const iframe = document.querySelector('iframe'), tabsEl = document.getElementById('tabs');
+      const frames = new Map([['page',{revision:1,el:iframe}]]);
+      const views = {shownIds:() => new Set(['page'])};
+      const frameIdByWindow = win => win === iframe.contentWindow ? 'page' : null;
+      const findAnyTab = () => ({id:'page'});
+      const frameActivated = id => navigator.userActivation.isActive && document.activeElement === iframe;
+      window.scribePermissions = {ensure:async () => ({ok:true})};
+      ${handlers}
+      window.addEventListener('message', event => { if(event.origin === 'http://127.0.0.2:47999' && event.data.type === 'scribe-audio') onPageAudio(event); });
+    })();` });
+    const frame = page.frameLocator("iframe");
+    await frame.locator("#record").click();
+    await frame.locator("#output").filter({ hasText: "Recording" }).waitFor();
+    assert.equal(await page.locator(".tab-recording").count(), 1);
+    await page.waitForTimeout(200); // Give the fake microphone time to produce an audio packet.
+    await frame.locator("#stop").click();
+    await frame.locator("#output").filter({ hasText: "mimeType" }).waitFor();
+    const result = JSON.parse(await frame.locator("#output").innerText());
+    assert.ok(result.bytes > 0); assert.ok(result.durationMs >= 0);
+    await frame.locator("#listen").click();
+    await frame.locator("#output").filter({ hasText: "Recording" }).waitFor();
+    await page.locator(".page-audio-stop").click();
+    await frame.locator("#stop").click();
+    await frame.locator("#output").filter({ hasText: "spoken words" }).waitFor();
+    assert.equal(await page.locator("iframe").getAttribute("allow"), null);
+    assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

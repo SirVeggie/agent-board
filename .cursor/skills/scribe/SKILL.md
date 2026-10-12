@@ -542,6 +542,40 @@ and have the submit button call `scribe.reply` with the answers and a one-line s
 - Each click sends again and adds a new comment. Name fields so they read well as labels (`approach`, `notes`), and leave unanswered ones empty: empty values are skipped.
 - `page_patch` with `replyTo` (and no edits) wires an existing page; `replyTo: null` clears it.
 
+### Microphone and speech-to-text: scribe.audio
+
+Scribe owns the microphone; pages receive text or a finished clip, never a live stream.
+`scribe.audio.listen` and `scribe.audio.record` require a click every time and a visible page.
+Listen asks once for `audio.microphone` and `audio.transcribe`; record asks only for the microphone.
+Both default to ask. Microphone grants reset when an agent rewrites the page's code.
+
+```js
+const session = await scribe.audio.listen({ language: "en", prompt: "Names used here", maxMs: 30000 });
+if (session.ok) {
+  session.onlevel = value => { meter.value = value; }; // 0..1, about 15 updates/second
+  session.onstate = state => { status.textContent = state; };
+  // From a Stop button:
+  const result = await session.stop(); // { ok, text, error?, permission? }
+  // Or discard: await session.cancel();
+}
+const rec = await scribe.audio.record({ maxMs: 30000 });
+if (rec.ok) {
+  const clip = await rec.stop(); // { ok, blob, mimeType, durationMs }
+  if (clip.ok) await scribe.audio.transcribe(clip.blob, { language: "en" });
+}
+const caps = await scribe.audio.available(); // { mic, stt, reason? }
+```
+
+`scribe.audio.transcribe` needs `audio.transcribe`; granted uploads do not need a click.
+With a hosted speech source, audio leaves this PC. Pages can send audio Blobs up to 25 MB;
+each page is limited to 6 transcriptions/minute and 60/hour. Choose the source in Settings → Audio.
+All calls resolve, including failures: `{ ok: false, error, permission? }`, such as `denied`,
+`no_gesture`, `no_source`, `no_mic`, `busy`, `cancelled`, `rate_limited` or `too_large`.
+A failed start returns that object instead of a session. Captures cap at five minutes, with a
+shell recording marker and Stop recording button. Hiding, closing or reloading the page cancels
+its session; the shell Stop button and time cap finish the clip. Call `stop()` to collect the
+result even when capture ended automatically. Handle failure before reading the transcript or clip.
+
 ### Asking the classifier: scribe.ml
 
 A page can put small typed questions about its own text to the classifier the user set up (Settings → Classifier): which labels fit a card, how urgent a note is, whether an entry belongs in a list. It answers in well under a second and costs far less than an agent chat, so use it for sorting and suggesting, not for writing text.

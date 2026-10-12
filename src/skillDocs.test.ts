@@ -49,6 +49,7 @@ test("the scribe skill documents every member of window.scribe", () => {
     ["scribe.agent.", "var agent = {"],
     ["scribe.permissions.", "var permissions = {"],
     ["scribe.ml.", "var ml = {"],
+    ["scribe.audio.", "var audio = {"],
   ];
   for (const [prefix, start] of apis) {
     const keys = objectKeys(start);

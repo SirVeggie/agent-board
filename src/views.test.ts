@@ -524,7 +524,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const mainEl = document.querySelector('main'), framesEl = document.querySelector('#frames'), frames = new Map();
       const tabs = ['primary','cold'].map(id => ({id,title:id,revision:1}));
       const SANDBOX = 'allow-scripts', EMBED_ALLOW = '', viewUrl = tab => 'http://views.test/' + tab.id;
-      const evictOverflow = () => {}, touchFrame = () => {};
+      const evictOverflow = () => {}, touchFrame = () => {}, cancelPageAudio = () => {};
       ${ensureFrameSource}
       ${loadFrameSource}
       const views = window.createViews({mainEl,contentOrigin:()=>location.origin,
@@ -573,7 +573,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       let pendingFocus = null, lastInteractedAt = 0;
       const activeTab = () => state.draft?.id === state.activeId ? state.draft : tabs[0];
       const draftActive = () => activeTab()?.draft, isBlank = tab => !!tab?.draft;
-      const syncHash = () => {}, reportViewer = () => {}, showNotice = () => {};
+      const syncHash = () => {}, reportViewer = () => {}, showNotice = () => {}, checkPageAudioVisibility = () => {};
       const draftWidths = [];
       const newPageView = {
         focus(){}, replace(){newPageEl.hidden=true;},

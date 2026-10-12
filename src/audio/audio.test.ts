@@ -7,6 +7,8 @@ import express from "express";
 import type { OpenAISource } from "../agent/openaiSources.js";
 import { shellOrigins } from "../config.js";
 import { audioRouter } from "./routes.js";
+import { PageAudio } from "./page.js";
+import type { PermissionGrant } from "../pagePermissions.js";
 import { AudioService, MAX_AUDIO_BYTES } from "./service.js";
 import { fileStore, memoryStore } from "./settings.js";
 import { openAiEngine } from "./engine.js";
@@ -104,5 +106,33 @@ test("routes reject page origins, form uploads, oversize bytes, and ungranted ta
     assert.equal(saved.status, 200); assert.equal((await (await fetch(base + "/settings")).json()).input.sendAfterDictation, true);
     const tested = await request("/test", "{}", { "Content-Type": "application/json" });
     assert.equal((await tested.json()).ok, true); assert.equal(calls[1].audio.type, "audio/wav");
+  } finally { server.close(); }
+});
+test("page transcription requires an allow grant and limits calls per page", async () => {
+  let now = 0;
+  const grants = new Map<string, PermissionGrant>();
+  const gate = new PageAudio(() => grants, () => now);
+  for (const value of ["ask", "deny"] as const) {
+    grants.set("audio.transcribe", { value, updatedAt: 1 });
+    assert.deepEqual(gate.check("page"), { ok: false, error: "denied", permission: "audio.transcribe" });
+  }
+  grants.set("audio.transcribe", { value: "allow", updatedAt: 1 });
+  for (let i = 0; i < 6; i++) assert.equal(gate.check("page").ok, true);
+  assert.equal(gate.check("page").error, "rate_limited");
+  assert.equal(gate.check("other").ok, true);
+  now = 60000;
+  assert.equal(gate.check("page").ok, true);
+  const { service, calls } = setup();
+  const app = express(); app.use("/api/audio", audioRouter(service, gate));
+  const server = app.listen(0, "127.0.0.1"); await new Promise<void>(r => server.once("listening", r));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as any).port}/api/audio/transcriptions`;
+    const upload = () => fetch(base, { method: "POST", body: "sound", headers: { "Content-Type": "audio/webm", "x-scribe-tab": "page" } });
+    grants.set("audio.transcribe", { value: "deny", updatedAt: 2 });
+    assert.equal((await (await upload()).json()).error, "denied");
+    assert.equal(calls.length, 0);
+    grants.set("audio.transcribe", { value: "allow", updatedAt: 3 });
+    assert.equal((await (await upload()).json()).ok, true);
+    assert.equal(calls.length, 1);
   } finally { server.close(); }
 });
