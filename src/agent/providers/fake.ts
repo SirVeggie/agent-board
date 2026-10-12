@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ActionCaller, ThreadRunInfo } from "../../actions/types.js";
 import { git } from "../git.js";
 import type { ModelOption, ProviderId, ProviderStatus, SlashCommand, Thread } from "../types.js";
-import type { AgentProvider, ProviderSession, RunSink, TurnInput, TurnResult } from "./provider.js";
+import type { AgentProvider, ProviderSession, RunSink, SessionContext, TurnInput, TurnResult } from "./provider.js";
 
 /**
  * Fake agents for testing board workers end to end (SCRIBE_FAKE_AGENTS=1). Every provider's
@@ -20,6 +20,9 @@ import type { AgentProvider, ProviderSession, RunSink, TurnInput, TurnResult } f
  * stream=N steps, default 12) streams thinking, tool calls and text first, to try the transcript's motion.
  * [fake:helper] (or helper=N, side by side) hands a task to a fake helper agent with agent_run and
  * waits for it, with Helper agents on in Agent settings; helperdelay=ms is how long each one works.
+ * [fake-run: npm test] runs that command as a Bash tool call that asks the host first, the way
+ * Claude and Pi do (SessionContext.toolGate), so hooks that ask or block can be tried; the fake
+ * runs nothing, and the call's output says whether it was let through.
  */
 
 export const FAKE_AGENTS = process.env.SCRIBE_FAKE_AGENTS === "1";
@@ -38,6 +41,8 @@ export type FakePlan = {
   stream: number;
   /** Helper agents to start side by side and wait for; 0 for none. */
   helpers: number;
+  /** Commands to run as held Bash calls ([fake-run: ...]), in order. */
+  commands: string[];
   /** The board page and card, when the message is a board worker's prompt. */
   board: { page: string; card: number } | null;
 };
@@ -70,6 +75,7 @@ export function fakePlan(text: string, defaultDelayMs = DEFAULT_DELAY_MS): FakeP
     limitSec,
     stream,
     helpers,
+    commands: [...text.matchAll(/\[fake-run:([^\]]*)\]/gi)].map((match) => match[1].trim()).filter(Boolean),
     board: page && card ? { page, card: Number(card) } : null,
   };
 }
@@ -107,8 +113,8 @@ export class FakeProvider implements AgentProvider {
     return `Fake summary of ${prompt.length} characters.`;
   }
 
-  createSession(thread: Thread): ProviderSession {
-    return new FakeSession(thread, this.deps);
+  createSession(thread: Thread, ctx?: SessionContext): ProviderSession {
+    return new FakeSession(thread, this.deps, ctx);
   }
 
   prewarm(): void {}
@@ -119,12 +125,14 @@ export class FakeProvider implements AgentProvider {
 class FakeSession implements ProviderSession {
   private abort: AbortController | null = null;
   private turns = 0;
+  private calls = 0;
   /** The plan a usage limit cut short, for the turn that resumes it. */
   private cut: FakePlan | null = null;
 
   constructor(
     private thread: Thread,
-    private deps: FakeDeps
+    private deps: FakeDeps,
+    private ctx?: SessionContext
   ) {}
 
   async warm(): Promise<void> {}
@@ -140,6 +148,7 @@ class FakeSession implements ProviderSession {
     try {
       sink.text(`Fake agent, turn ${this.turns}.`);
       if (plan.board) this.act(sink, "claim", { card: plan.board.card, text: "Fake agent working" }, plan.board.page);
+      for (const command of plan.commands) await this.command(sink, command, abort.signal);
       if (plan.stream) await this.stream(sink, plan.stream, abort.signal);
       if (plan.helpers) await this.helpers(sink, plan.helpers, /helperdelay=(\d+)/i.exec(input.text)?.[1] ?? "8000", abort.signal);
       if (plan.hang) await wait(abort.signal);
@@ -173,6 +182,17 @@ class FakeSession implements ProviderSession {
     } catch (err) {
       sink.toolUpdate(toolId, { status: "error", output: (err as Error).message });
     }
+  }
+
+  /** A Bash call that asks the host before it "runs", like a provider that can hold its calls. */
+  private async command(sink: RunSink, command: string, signal: AbortSignal): Promise<void> {
+    const toolId = `fake-run-${++this.calls}-${Date.now().toString(36)}`;
+    sink.breakBlock();
+    sink.toolStart({ toolId, name: "Bash", tool: "execute", title: command, detail: command, input: { command }, status: "running", held: true });
+    const held = await this.ctx?.toolGate?.(this.thread.id, { toolId, name: "Bash", tool: "execute", title: command, detail: command, input: { command } }, signal);
+    if (signal.aborted) throw new Error("cancelled");
+    if (held && !held.allowed) sink.toolUpdate(toolId, { status: "error", output: held.reason });
+    else sink.toolUpdate(toolId, { status: "done", output: `ran: ${command}` });
   }
 
   /** agent_run calls side by side, each shown as the tool call a real agent's would be. */

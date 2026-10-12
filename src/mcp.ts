@@ -159,6 +159,37 @@ export function registerCodexFileTools(server: McpServer, env = process.env): vo
   }
 }
 
+/** Ask the daemon's hooks about one of this server's tool calls. A reason when the call is denied; null lets it run, also when the daemon cannot be asked (fail open). */
+async function hookGate(tool: string, input: unknown): Promise<string | null> {
+  try {
+    const { status, data } = await api("POST", "/api/tool-gate", { tool, input });
+    const reply = data as { allowed?: boolean; reason?: string } | null;
+    return status === 200 && reply?.allowed === false ? reply.reason || "A Scribe hook denied this call." : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scribe's hooks (Agent settings, Hooks) on a provider that cannot hold a tool call for them (Codex,
+ * Cursor): this server's own tools ask the daemon before they do anything. Claude and Pi hold every
+ * call themselves, so their threads skip it. Call it before the tools are registered.
+ */
+export function gateTools(server: McpServer, env = process.env, ask: (tool: string, input: unknown) => Promise<string | null> = hookGate): void {
+  if (!env.SCRIBE_THREAD || (env.SCRIBE_PROVIDER !== "codex" && env.SCRIBE_PROVIDER !== "cursor")) return;
+  const register = server.tool as (...args: unknown[]) => unknown;
+  (server as unknown as { tool: unknown }).tool = (...args: unknown[]) => {
+    const handler = args[args.length - 1];
+    if (typeof handler !== "function") return register.apply(server, args);
+    const gated = async (...call: unknown[]) => {
+      // A tool without parameters gets only the request's extra.
+      const denied = await ask(String(args[0]), call.length > 1 ? call[0] : undefined);
+      return denied ? errorResult(denied) : handler(...call);
+    };
+    return register.apply(server, [...args.slice(0, -1), gated]);
+  };
+}
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
@@ -166,6 +197,7 @@ export async function startMcp(): Promise<void> {
   const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
   const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
   const revisions = new SeenRevisions();
+  gateTools(server);
   registerCodexFileTools(server);
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {

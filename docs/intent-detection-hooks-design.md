@@ -14,6 +14,18 @@ These override the recommendations below where they differ.
 - **Classifier slow or down:** fail open.
 - **After page intent:** injection scanning, search rerank, kanban label suggestions through the page API.
 
+## Built so far
+
+- **Decision service** (#516): `src/ml/`, settings category Classifier.
+- **Thread hooks** (#517): `src/agent/hooks.ts` and the host around `makeSink`, `runTurn` and `steerFirst`. What differs from the proposal below:
+  - Gating shipped with the first version: `ask` and `block`, with a 500 ms budget for the classifier and fail open.
+  - One provider capability, `SessionContext.toolGate`, called from Claude's `PreToolUse` callback, Pi's `tool_call` extension and Cursor's custom tools (user MCP servers, web, host shell). Scribe's own MCP tools ask from their own process on Codex and Cursor (`gateTools` in `src/mcp.ts`, `POST /api/tool-gate`). Approval requests that reach the host (Codex's own, Cursor's host shell) are held in `RunSink.approval`.
+  - Where a call is only seen (Codex's sandboxed commands, Cursor's built-in tools), `block` stops the turn and `ask` marks the call and says so in the transcript. The host waits 400 ms for the call's approval request first, since Codex reports a call before it asks about it.
+  - The gate never allows a call: one that passes still goes through the provider's permission check. A call the user approved for a hook is not asked about a second time.
+  - `context` is a message from the hook (`from: "hook"`), steered into the turn or queued behind it, at most once per detector and turn.
+  - The user's rules (`Prefs.hookRules`, Agent settings, Hooks) match by keyword, regular expression, tool name, or a yes/no question for the classifier (the Classifier feature "Hook questions").
+  - Not built: `restrict` (the per-turn permission ceiling has its own card), `where.dock`, and the replay script. No detector is built in; features add theirs to `AgentHost.detectors`.
+
 ## Summary
 
 **Recommendation: three layers, built in this order, each as its own card.**

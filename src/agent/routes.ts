@@ -13,6 +13,7 @@ import { isPlainRecord, isProviderId } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, setServerEnabled, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey } from "./prefs.js";
+import { hookCoverage } from "./hooks.js";
 import { copySkill, createSkill, readHarnessFile, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
@@ -232,6 +233,17 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap(async (req) => {
       const provider = parseProvider(req.query.provider);
       return { provider, models: await host.models(provider, req.query.refresh === "1") };
+    })
+  );
+
+  // The user's hook rules (hooks.ts), and what each provider lets a hook hold.
+  const hooksView = () => ({ ...host.hookSettings(), coverage: hookCoverage() });
+  router.get("/hooks", wrap(hooksView));
+  router.put(
+    "/hooks",
+    wrap((req) => {
+      host.setPrefs({ hookRules: isPlainRecord(req.body) ? (req.body.rules as never) : [] });
+      return hooksView();
     })
   );
 
@@ -810,6 +822,7 @@ function threadPatch(body: Record<string, unknown>): Partial<Thread> {
   if (body.scope !== undefined) patch.scope = parseScope(body.scope);
   if (typeof body.pinned === "boolean") patch.pinned = body.pinned;
   if (typeof body.archived === "boolean") patch.archived = body.archived;
+  if (typeof body.hooksOff === "boolean") patch.hooksOff = body.hooksOff;
   if (body.draft === null) patch.draft = null;
   else if (isPlainRecord(body.draft) && typeof body.draft.text === "string") {
     const context = Array.isArray(body.draft.context) ? (body.draft.context.filter(isPlainRecord) as ContextChip[]) : [];

@@ -628,6 +628,12 @@
         pageStepsChanged(msg.threadId);
         return;
       }
+      case "agent_intent": {
+        // A hook's signal (hooks.ts): for whatever part of the shell acts on that kind of intent.
+        const { type: _type, ...intent } = msg;
+        window.dispatchEvent(new CustomEvent("scribe:agent-intent", { detail: intent }));
+        return;
+      }
       case "agent_browser": {
         if (msg.view) S.browsers.set(msg.threadId, msg.view);
         else S.browsers.delete(msg.threadId);
@@ -1452,6 +1458,130 @@
       // Esc from the modal stack resolves as cancel.
       modalStack[modalStack.length - 1] = () => finish(null);
     });
+  }
+
+  /* ---------- Hook rules (Agent settings → Hooks) ---------- */
+
+  const HOOK_MATCH = { keyword: "contains", regex: "regex", tool: "tool name", question: "question" };
+  const HOOK_EVENT = { any: "anything", prompt: "your message", text: "agent text", reasoning: "agent thinking", tool_call: "tool call", tool_result: "tool result", turn_end: "end of turn" };
+  const HOOK_ACTION = {
+    flag: { label: "Flag", text: "Label", hint: "Shown on the item. Leave empty to show the pattern.", placeholder: "e.g. Force push" },
+    context: { label: "Tell the agent", text: "Message to the agent", hint: "Sent into the running turn, once per turn.", placeholder: "e.g. Never push to main; open a pull request instead." },
+    ask: { label: "Ask me first", text: "Why", hint: "Shown with the approval.", placeholder: "Optional" },
+    block: { label: "Block", text: "Reason", hint: "The agent is told this when the call is denied.", placeholder: "Optional" },
+    signal: { label: "Signal", text: "Signal name", hint: "Sent to Scribe's own UI as an agent_intent event. For building on hooks; the chat shows nothing.", placeholder: "e.g. deploy" },
+  };
+
+  function hookRules() {
+    return prefs().hookRules || [];
+  }
+
+  async function saveHookRules(rules) {
+    const view = await api("PUT", "/hooks", { rules });
+    S.config.prefs = { ...prefs(), hookRules: view.rules };
+    return view;
+  }
+
+  /** Add (rule null) or edit one of the user's hook rules. `rules` is the list it is in. */
+  function editHookRule(rule, rules = hookRules()) {
+    const { panel, close } = modal("ag-source ag-hook");
+    const field = (label, control, hint) => {
+      const wrap = el("label", "ag-field");
+      const caption = el("span", "ag-field-label", label);
+      control.setAttribute("aria-label", label);
+      if (hint) { caption.dataset.tooltip = hint; caption.setAttribute("aria-description", hint); }
+      wrap.append(caption, control);
+      return { wrap, caption };
+    };
+    const select = (options, value) => {
+      const node = el("select", "ag-input");
+      for (const [id, label] of options) {
+        const opt = el("option", null, label);
+        opt.value = id;
+        node.append(opt);
+      }
+      node.value = value;
+      return node;
+    };
+    const match = select(
+      [["keyword", "Contains the text"], ["regex", "Matches the regular expression"], ["tool", "Tool name contains"], ["question", "Question for the classifier"]],
+      rule?.match || "keyword"
+    );
+    const pattern = el("input", "ag-input");
+    pattern.value = rule?.pattern || "";
+    pattern.spellcheck = false;
+    const event = select(Object.entries(HOOK_EVENT).map(([id, label]) => [id, label[0].toUpperCase() + label.slice(1)]), rule?.event || "any");
+    const action = select(["flag", "context", "ask", "block", "signal"].map((id) => [id, HOOK_ACTION[id].label]), rule?.action || "flag");
+    const text = el("input", "ag-input");
+    text.value = rule?.text || "";
+    const threshold = el("input", "ag-input");
+    threshold.type = "number";
+    threshold.min = "50";
+    threshold.max = "100";
+    threshold.step = "5";
+    threshold.value = String(Math.round((rule?.threshold ?? 0.7) * 100));
+    const textField = field("Label", text);
+    const thresholdField = field("Match when at least this sure (%)", threshold, "How sure the classifier must be that the answer is yes. Higher matches less often.");
+    const patternField = field("Pattern", pattern);
+    const note = el("p", "ag-muted ag-hook-note");
+    const sync = () => {
+      const question = match.value === "question";
+      patternField.caption.textContent = question ? "Question" : match.value === "tool" ? "Tool name" : "Pattern";
+      pattern.placeholder = question ? "A yes/no question, e.g. Does this delete files outside the workspace?" : match.value === "regex" ? "e.g. rm\\s+-rf|git push .*--force" : match.value === "tool" ? "e.g. Bash, page_show" : "e.g. --force";
+      thresholdField.wrap.hidden = !question;
+      // A tool name is only there on a tool call or its result.
+      for (const opt of event.options) opt.hidden = match.value === "tool" && opt.value !== "tool_call" && opt.value !== "tool_result";
+      if (match.value === "tool" && event.selectedOptions[0]?.hidden) event.value = "tool_call";
+      const what = HOOK_ACTION[action.value];
+      textField.caption.textContent = what.text;
+      textField.caption.dataset.tooltip = what.hint;
+      textField.caption.setAttribute("aria-description", what.hint);
+      text.setAttribute("aria-label", what.text);
+      text.placeholder = what.placeholder;
+      const gating = action.value === "ask" || action.value === "block";
+      const onCall = event.value === "tool_call" || event.value === "any";
+      note.textContent = !gating
+        ? ""
+        : onCall
+          ? "Holds the call on Claude and Native. On Codex and Cursor only some calls can be held (see below the rules)."
+          : action.value === "block"
+            ? "Nothing can be held here, so a match stops the turn."
+            : "Nothing can be held here, so a match only marks the item.";
+      note.hidden = !note.textContent;
+    };
+    for (const control of [match, event, action]) control.addEventListener("change", sync);
+    sync();
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const done = async (next) => {
+      try {
+        await saveHookRules(next);
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        return;
+      }
+      close();
+      void agentSettings.renderHooks();
+    };
+    const save = () => {
+      const edited = {
+        ...(rule ? { id: rule.id } : {}),
+        enabled: rule ? rule.enabled : true,
+        match: match.value,
+        pattern: pattern.value,
+        event: event.value,
+        action: action.value,
+        text: text.value,
+        ...(match.value === "question" ? { threshold: Number(threshold.value) / 100 } : {}),
+      };
+      return done(rule ? rules.map((r) => (r === rule ? edited : r)) : [...rules, edited]);
+    };
+    const actions = el("div", "ag-modal-actions");
+    if (rule) actions.append(button("Remove", "ag-btn ghost danger", () => done(rules.filter((r) => r !== rule))));
+    actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn ghost", close), button(rule ? "Save" : "Add", "ag-btn primary", save));
+    panel.append(el("h3", null, rule ? "Edit hook rule" : "New hook rule"), field("When", event).wrap, field("Match", match).wrap, patternField.wrap, thresholdField.wrap, field("Then", action).wrap, textField.wrap, note, error, actions);
+    pattern.focus();
   }
 
   /* ---------- Native harness model sources ---------- */
@@ -2526,6 +2656,10 @@
         ...(t.stats.turns ? [{ label: "Fork thread", detail: "Continue in a new thread", run: () => forkThread(t, (id) => this.openThread(id)) }] : []),
         { label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) },
         ...(openWorktree(t) ? [{ label: "Worktree…", detail: openWorktree(t).branch, icon: "git", run: () => this.worktreeMenu(anchor) }] : []),
+        // Only worth a row once there are hooks to turn off; a thread that has them off can always turn them back on.
+        ...(hookRules().some((rule) => rule.enabled) || t.hooksOff
+          ? [{ label: t.hooksOff ? "Turn detection on" : "Turn detection off", detail: t.hooksOff ? "Hooks ignore this thread" : "Hooks watch this thread", icon: "shield", run: () => api("PATCH", `/threads/${t.id}`, { hooksOff: !t.hooksOff }).catch((e) => notice(e.message)) }]
+          : []),
         ...(t.grants?.length ? [{ label: "Permissions…", detail: `${t.grants.length} granted`, icon: "shield", run: () => this.permissionsMenu(anchor) }] : []),
         ...(t.nativeId ? [{ label: "Copy session id", detail: t.nativeId, run: () => navigator.clipboard?.writeText(t.nativeId) }] : []),
         { separator: true },
@@ -2892,6 +3026,8 @@
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
       else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe after a restart"));
       else if (item.from === "hook") bubble.prepend(el("div", "ag-from-page", "Sent by a hook"));
+      const flags = hookFlags(item);
+      if (flags) bubble.prepend(flags);
       else if (item.from === "agent") bubble.prepend(el("div", "ag-from-page", "Brief from the agent that started this helper"));
       // Your turn is marked with an arrow instead of a bubble.
       row.append(icon("you", "ag-ico ag-you"));
@@ -2973,6 +3109,8 @@
         case "text": {
           const node = el("div", "ag-md");
           node.dataset.itemId = it.id;
+          // The text is re-rendered as it streams, so its flags sit on the node (CSS shows them above it).
+          if (it.flags?.length) node.dataset.flags = it.flags.map((flag) => flag.label).join(" · ");
           R.renderMarkdown(node, it.text, mdCtx);
           return node;
         }
@@ -3076,7 +3214,7 @@
         this.toggle(key, node);
       });
       const secs = it.endedAt && it.endedAt - it.startedAt >= 1000 ? R.duration(it.endedAt - it.startedAt) : "";
-      head.append(icon("think"), el("span", "ag-reason-label", running ? "Thinking" : `Thought${secs ? ` for ${secs}` : ""}`), el("span", "ag-reason-preview", lastLine(it.text)), icon("chevron", "ag-ico ag-chev"));
+      head.append(icon("think"), el("span", "ag-reason-label", running ? "Thinking" : `Thought${secs ? ` for ${secs}` : ""}`), el("span", "ag-reason-preview", lastLine(it.text)), ...[hookFlags(it)].filter(Boolean), icon("chevron", "ag-ico ag-chev"));
       const body = el("div", "ag-reason-body ag-md");
       R.renderMarkdown(body, it.text, mdCtx);
       node.append(head, body);
@@ -3150,6 +3288,8 @@
         label.append(el("span", "ag-tool-title", it.title));
       }
       head.append(label);
+      const flags = hookFlags(it);
+      if (flags) head.append(flags);
       if (task) head.append(el("span", `ag-task-badge ts-${task.status}`, taskStatusLabel(task)));
       if (it.exitCode !== undefined && it.tool === "execute") head.append(el("span", `ag-exit${it.exitCode === 0 ? " ok" : " bad"}`, it.exitCode === 0 ? "exit 0" : `exit ${it.exitCode}`));
       if (it.endedAt && it.startedAt && it.endedAt - it.startedAt > 1500) head.append(el("span", "ag-muted ag-dur", R.duration(it.endedAt - it.startedAt)));
@@ -7556,6 +7696,22 @@
     return el("div", "ag-usage-tip ag-note-tip", text);
   }
 
+  const FLAG_WORD = { flag: "Flagged", ask: "Asked first", block: "Blocked" };
+
+  /** A hook's marks on a transcript item (item.flags), as small tags. Null when it has none. */
+  function hookFlags(it) {
+    if (!it.flags?.length) return null;
+    const wrap = el("span", "ag-flags");
+    for (const flag of it.flags) {
+      const tag = el("span", `ag-tag ag-flag a-${flag.action}`, flag.label);
+      const tip = `${FLAG_WORD[flag.action] || "Flagged"} by a hook${flag.reason ? `: ${flag.reason}` : "."}`;
+      tag.dataset.tooltip = tip;
+      tag.setAttribute("aria-description", tip);
+      wrap.append(tag);
+    }
+    return wrap;
+  }
+
   /**
    * A section heading with a ? that shows its explanation at once, for help that isn't one setting's.
    * Help for one setting goes on its label instead (settingRow's `hint`), so neither takes room in the dialog.
@@ -8803,6 +8959,26 @@
         )
       );
 
+      const hooks = el("section", "settings-section");
+      this.hookList = el("div", "ag-hook-rules");
+      hooks.append(
+        helpHeading(
+          "Hooks",
+          "A rule watches every chat: your messages, the agent's text and thinking, its tool calls and their results. When it matches it can mark the item, tell the agent something, have you approve the tool call, or block it. A rule only ever tightens what a thread may do. Turn them off for one thread from its menu."
+        ),
+        this.hookList,
+        el("div", "settings-actions", button("Add rule", "ag-btn", () => editHookRule(null)))
+      );
+      const coverage = el("section", "settings-section");
+      this.hookCoverage = el("div", "ag-hook-coverage");
+      coverage.append(
+        helpHeading(
+          "What a hook can hold",
+          "Ask and Block act before a tool call runs only where the provider lets Scribe hold the call. A call that is only seen is already running: Block then stops the turn, and Ask can only mark the call."
+        ),
+        this.hookCoverage
+      );
+
       const keys = el("section", "settings-section");
       const modeTrack = el("div", "button-track text-track");
       modeTrack.setAttribute("role", "group");
@@ -8821,12 +8997,13 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, helpers, memory, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, helpers, memory, hooks, coverage, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Memory", sections: [memory] },
         { label: "Helper agents", sections: [helpers] },
+        { label: "Hooks", sections: [hooks, coverage] },
         { label: "Keys", sections: [keys] },
       ], {
         close: () => this.close(),
@@ -8838,6 +9015,51 @@
         } },
       });
 
+    },
+    /** The Hooks category: the user's rules, and what each provider lets a rule hold. */
+    async renderHooks() {
+      let view;
+      try {
+        view = await api("GET", "/hooks");
+      } catch (err) {
+        this.hookList.replaceChildren(el("div", "ag-muted", err.message));
+        return;
+      }
+      S.config.prefs = { ...prefs(), hookRules: view.rules };
+      this.hookList.replaceChildren();
+      if (!view.rules.length) this.hookList.append(el("div", "ag-muted", "None yet."));
+      for (const rule of view.rules) {
+        const row = el("div", "setting-row ag-hook-rule");
+        const label = el("span", "ag-hook-text");
+        const needsClassifier = rule.match === "question" && !view.classifier;
+        label.append(
+          el("strong", null, rule.pattern),
+          el("span", "ag-muted", ` · ${HOOK_MATCH[rule.match]} · ${HOOK_EVENT[rule.event]} · ${HOOK_ACTION[rule.action].label}${needsClassifier ? " · needs a classifier (General settings)" : ""}`)
+        );
+        const on = switchControl(
+          () => rule.enabled,
+          () => {
+            rule.enabled = !rule.enabled;
+            void saveHookRules(view.rules).catch((err) => {
+              notice(err.message);
+              void this.renderHooks();
+            });
+          }
+        );
+        on.setAttribute("aria-label", `Rule ${rule.pattern}`);
+        row.append(label, on, button("Edit", "ag-btn small", () => editHookRule(rule, view.rules)));
+        this.hookList.append(row);
+      }
+      const table = el("table", "ag-hook-table");
+      const head = el("tr");
+      head.append(el("th", null, "Provider"), el("th", null, "Held before it runs"), el("th", null, "Only seen"));
+      table.append(head);
+      for (const row of view.coverage) {
+        const tr = el("tr");
+        tr.append(el("th", null, row.label), el("td", null, row.held), el("td", row.observed ? null : "ag-muted", row.observed || "Nothing"));
+        table.append(tr);
+      }
+      this.hookCoverage.replaceChildren(table);
     },
     renderCycleModes() {
       for (const [id, control] of this.modeButtons || []) {
@@ -8982,6 +9204,7 @@
       this.renderStatus();
       this.renderCycleModes();
       void this.renderSources();
+      void this.renderHooks();
       this.renderSummarizer();
       this.categories.open();
       this.renderUsage();

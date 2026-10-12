@@ -5225,6 +5225,69 @@ html.tight-small .agent-full {
   font-size: 12.5px;
 }
 
+/* Hook rules (Agent settings → Hooks). */
+.ag-hook-rule .ag-hook-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-hook-note {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.ag-hook-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.ag-hook-table th,
+.ag-hook-table td {
+  padding: 6px 10px 6px 0;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid var(--ag-card-border);
+}
+
+.ag-hook-table tr:first-child th {
+  border-top: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* A hook's mark on a transcript item. */
+.ag-flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ag-flag,
+.ag-md[data-flags]::before {
+  color: var(--ag-warn, #e0b060);
+  background: rgba(224, 176, 96, 0.14);
+}
+
+.ag-flag.a-block {
+  color: var(--danger);
+  background: rgba(224, 96, 96, 0.14);
+}
+
+.ag-md[data-flags]::before {
+  content: attr(data-flags);
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
 /* MCP servers (Agent settings → MCP servers). */
 .ag-mcp .ag-modal-panel {
   width: min(640px, calc(100vw - 40px));

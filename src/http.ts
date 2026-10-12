@@ -844,6 +844,35 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /**
+   * A Scribe chat's MCP asks before it runs one of its own tools (gateTools in mcp.ts): the thread's
+   * hooks may deny the call or have the user approve it first. Anything that goes wrong lets it run.
+   */
+  app.post("/api/tool-gate", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const body = isPlainObject(req.body) ? req.body : {};
+    const tool = typeof body.tool === "string" ? body.tool.slice(0, 100) : "";
+    if (!thread || !agentHost || !tool) {
+      res.json({ allowed: true });
+      return;
+    }
+    // An ask waits on the user, as long as it takes.
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .toolGate(thread, { name: tool, tool: "mcp", title: `Scribe: ${tool}`, input: body.input }, abort.signal)
+      .catch(() => ({ allowed: true }))
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
   /** web_request from a Scribe chat's MCP: ask the user for a web call the thread's web setting does not cover. */
   app.post("/api/web-request", (req, res) => {
     const thread = req.get(THREAD_HEADER)?.slice(0, 60);

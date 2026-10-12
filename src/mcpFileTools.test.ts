@@ -23,3 +23,40 @@ test("only Codex thread MCP servers register scoped read/list/grep tools", async
     }
   }
 });
+
+test("Scribe's own tools ask the hooks first on Codex and Cursor, and only there", async () => {
+  const { gateTools } = await import("./mcp.js");
+  const { z } = await import("zod");
+  for (const provider of ["codex", "cursor", "claude", "pi"]) {
+    const asked: Array<[string, unknown]> = [];
+    let ran = 0;
+    const server = new McpServer({ name: "scribe", version: "1" }, { capabilities: { tools: {} } });
+    gateTools(server, { SCRIBE_PROVIDER: provider, SCRIBE_THREAD: "thread-one" }, async (tool, input) => {
+      asked.push([tool, input]);
+      return tool === "page_delete" ? "Blocked by a hook." : null;
+    });
+    for (const name of ["page_show", "page_delete"]) {
+      server.tool(name, "A page tool", { key: z.string() }, async () => {
+        ran++;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      });
+    }
+    server.tool("page_list", "No parameters", async () => ({ content: [{ type: "text" as const, text: "list" }] }));
+    const client = new Client({ name: "test", version: "1" });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const held = provider === "codex" || provider === "cursor";
+      const shown = await client.callTool({ name: "page_show", arguments: { key: "a" } });
+      const deleted = await client.callTool({ name: "page_delete", arguments: { key: "a" } });
+      const listed = await client.callTool({ name: "page_list", arguments: {} });
+      assert.equal(shown.isError ?? false, false);
+      assert.deepEqual(listed.content, [{ type: "text", text: "list" }]);
+      assert.equal(deleted.isError ?? false, held);
+      if (held) assert.deepEqual(deleted.content, [{ type: "text", text: "Blocked by a hook." }]);
+      assert.equal(ran, held ? 1 : 2);
+      assert.deepEqual(asked, held ? [["page_show", { key: "a" }], ["page_delete", { key: "a" }], ["page_list", undefined]] : []);
+    } finally { await client.close(); await server.close(); }
+  }
+});
