@@ -3168,7 +3168,9 @@ main {
   --view-head: 36px;
   --peek-y: 40px;
   --peek-x: max(48px, calc((100% - 1100px) / 2));
-  --split: 0.5;
+  --split-1: 0.5;
+  --split-2: 1;
+  --split-3: 1;
 }
 
 @media (max-width: 760px), (max-height: 480px) {
@@ -3178,29 +3180,38 @@ main {
   }
 }
 
-/* A split's two panes, "a" first and "b" second: side by side, or stacked with .split-col. Each pane's
- * box is set here once; its header, frame, New page screen and body all read it. */
+/* A split's panes, "a" first to "d" last: side by side, or stacked with .split-col. views.js sets where each
+ * border is (--split-1 to --split-3, as shares of the page area; 1 past the last pane). Each pane's box is
+ * set here once; its header, frame, New page screen and body all read it. */
 main.has-split [data-pane] {
-  --pane-x: 0%;
+  --pane-from: 0;
+  --pane-to: var(--split-1);
+  --pane-x: calc(var(--pane-from) * 100%);
   --pane-y: 0%;
-  --pane-w: calc(var(--split) * 100%);
+  --pane-w: calc((var(--pane-to) - var(--pane-from)) * 100%);
   --pane-h: 100%;
 }
 
 main.has-split [data-pane="b"] {
-  --pane-x: calc(var(--split) * 100%);
-  --pane-w: calc((1 - var(--split)) * 100%);
+  --pane-from: var(--split-1);
+  --pane-to: var(--split-2);
+}
+
+main.has-split [data-pane="c"] {
+  --pane-from: var(--split-2);
+  --pane-to: var(--split-3);
+}
+
+main.has-split [data-pane="d"] {
+  --pane-from: var(--split-3);
+  --pane-to: 1;
 }
 
 main.has-split.split-col [data-pane] {
-  --pane-w: 100%;
-  --pane-h: calc(var(--split) * 100%);
-}
-
-main.has-split.split-col [data-pane="b"] {
   --pane-x: 0%;
-  --pane-y: calc(var(--split) * 100%);
-  --pane-h: calc((1 - var(--split)) * 100%);
+  --pane-y: calc(var(--pane-from) * 100%);
+  --pane-w: 100%;
+  --pane-h: calc((var(--pane-to) - var(--pane-from)) * 100%);
 }
 
 /* An iframe is a replaced element: with width or height auto it falls back to 300x150 instead of filling its insets. */
@@ -3371,7 +3382,7 @@ html[data-theme="cream"] .peek-card {
 }
 
 /* A pane's header is part of the chrome, like the tab strip: the focused pane's title is bold and
- * in the accent colour, the other pane's is muted. */
+ * in the accent colour, the other panes' are muted. */
 .pane-head {
   position: absolute;
   top: var(--pane-y);
@@ -3510,7 +3521,7 @@ html.popout #newpage {
   display: none !important;
 }
 
-/* The other pane's tab, or one whose page is in its own window: still on screen, so it is marked,
+/* Another pane's tab, or one whose page is in its own window: still on screen, so it is marked,
  * but quieter than the active one. */
 .tab.beside {
   color: var(--text);
@@ -3606,13 +3617,13 @@ button.view-btn:hover {
   gap: 8px;
 }
 
-/* The split's border: a hairline at rest; hovering it (after a beat) or dragging it fades in a wider accent line.
+/* A border between two panes (--at is its place, set by views.js): a hairline at rest; hovering it (after a beat) or dragging it fades in a wider accent line.
  * Both lines keep whole-pixel geometry and only the accent's opacity animates, so nothing shifts. */
 .split-divider {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--split) * 100%);
+  left: calc(var(--at, 0.5) * 100%);
   z-index: 5;
   width: 10px;
   margin-left: -5px;
@@ -3622,7 +3633,7 @@ button.view-btn:hover {
 }
 
 main.split-col .split-divider {
-  top: calc(var(--split) * 100%);
+  top: calc(var(--at, 0.5) * 100%);
   bottom: auto;
   left: 0;
   right: 0;
@@ -3674,7 +3685,7 @@ main.split-col .split-divider::after {
 
 .split-divider.hot::after,
 .split-divider:focus-visible::after,
-body.resizing-split .split-divider::after {
+.split-divider.resizing::after {
   opacity: 1;
 }
 
@@ -3716,7 +3727,7 @@ body.resizing-split .split-divider .split-tools {
   pointer-events: none;
 }
 
-/* While the divider is dragged, the split's sizes stand where the pill was. */
+/* While a divider is dragged, the sizes of the panes it parts stand where the pill was. */
 .split-ratio {
   position: absolute;
   top: 50%;
@@ -3736,7 +3747,7 @@ body.resizing-split .split-divider .split-tools {
   transition: opacity 0.15s ease;
 }
 
-body.resizing-split .split-ratio {
+.split-divider.resizing .split-ratio {
   opacity: 1;
 }
 

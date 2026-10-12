@@ -986,7 +986,7 @@
     if (childId) {
       return false;
     }
-    // The one draft is already on screen, in front or in the other pane of a split.
+    // The one draft is already on screen, in front or in another pane of a split.
     if (state.draft && views.isShown(state.draft.id)) {
       if (!draftActive()) {
         activatePage(state.draft.id);
@@ -1015,7 +1015,7 @@
   }
 
   /**
-   * Leaving a draft throws it away, unless it stays on screen as the other pane of a split. The
+   * Leaving a draft throws it away, unless it stays on screen as another pane of a split. The
    * request waits a moment: a chat that keeps its unsent text as a thread when you leave makes the
    * draft a page, and that has to reach the daemon first.
    */
@@ -2890,8 +2890,7 @@
     }
     views.layout();
     // The New page screen stands in for a blank page's frame, in whichever pane the page is.
-    const beside = views.otherPage();
-    const blank = isBlank(tab) ? tab : isBlank(beside) ? beside : null;
+    const blank = isBlank(tab) ? tab : views.besidePages().find(isBlank) || null;
     const cover = !blank && tab && pageIntent?.origin === tab.id ? tab : null;
     const pane = blank ? views.paneOf(blank.id) : cover ? views.paneOf(cover.id) : "";
     mainEl.classList.toggle("blank-page", Boolean(blank));
@@ -3129,7 +3128,7 @@
     return true;
   }
 
-  /** Put a page in front: a tab, or the New page when it sits in the other pane of a split. */
+  /** Put a page in front: a tab, or the New page when it sits in another pane of a split. */
   function activatePage(id) {
     if (state.draft?.id !== id) {
       selectTab(id, { fromUser: true });

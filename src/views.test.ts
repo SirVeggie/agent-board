@@ -187,7 +187,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       afterReload: ["da", "a"], deletedTarget: "d", deletedSplitNotRestored: "d",
       deletedSpaceRemoved: "{}",
       edgeDrop: { edge: "top" }, overlayVisible: true, dragStack: ["cb", true],
-      expandedSplitTarget: { edge: "top" }, compactReplaceTarget: { pane: "a" },
+      expandedSplitTarget: { edge: "top", at: 0 }, compactReplaceTarget: { pane: "a" },
       dragReplace: ["db", "b"], dragRight: ["bd", false], noDropOutside: null,
       cancelKeepsLayout: "bd", dragToStrip: ["b", true, true], dragTabToSplit: ["cb", "b"],
       dragOnlyTab: ["c,new", true], overlayCleaned: [true, false],
@@ -252,7 +252,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await moveDrag('.tab[data-id="b"]', area.x + area.width - 5, area.y + area.height / 2);
     await page.mouse.up();
     assert.equal(await page.locator('main').evaluate(el => el.classList.contains('has-split')), true);
-    // Hover shows swap/stack; body.resizing-split (added while the divider is dragged) hides them.
+    // Hover shows swap/stack; a divider being dragged hides them and shows its sizes.
     assert.deepEqual(await page.evaluate(() => {
       const divider = document.querySelector('.split-divider')!;
       const tools = document.querySelector('.split-tools') as HTMLElement;
@@ -262,8 +262,10 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       divider.classList.add("hot");
       const hovered = sample();
       document.body.classList.add("resizing-split");
+      divider.classList.add("resizing");
       const dragging = sample();
       document.body.classList.remove("resizing-split");
+      divider.classList.remove("resizing");
       divider.classList.remove("hot");
       tools.style.transition = ratio.style.transition = "";
       return { hovered, dragging };
@@ -561,6 +563,128 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     assert.ok(activeMotion.samples[0][0] > activeMotion.samples[1][0] && activeMotion.samples[1][0] > activeMotion.samples[2][0]);
     assert.ok(Math.abs(activeMotion.samples[2][0] - 550) < 1);
     assert.equal(activeMotion.originalKept, true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a split holds more than two panes: stored two-pane splits migrate, drops add panes, links replace the next one", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Page views panes test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.route("http://views.test/**", route => route.fulfill({ contentType: "text/html", body: '<main style="width:1100px;height:700px"></main>' }));
+    await page.goto("http://views.test/");
+    await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
+    await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") + "\nmain {position:relative} iframe {position:absolute}" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/views.js", import.meta.url), "utf8") });
+    const result = await page.evaluate(async () => {
+      const w = window as any;
+      const mainEl = document.querySelector("main")!;
+      const pages = new Map(["a", "b", "c", "d", "e"].map(id => [id, { id, title: id }]));
+      const frames = new Map<string, { el: HTMLIFrameElement }>();
+      let active: string | null = "a";
+      let views: any;
+      const select = (id: string) => { views.onSelect(id); active = id; views.layout(); };
+      const host = {
+        mainEl, contentOrigin: () => location.origin,
+        tabs: () => [...pages.values()], closed: () => [],
+        findAnyTab: (id: string) => pages.get(id) || null,
+        activeId: () => active, activeTab: () => pages.get(active!) || null,
+        isBlank: () => false, draftId: () => null, activate: select,
+        spaceId: () => "s", spaceIds: () => ["s"],
+        frame: (id: string) => frames.get(id), frameIds: () => [...frames.keys()],
+        ensureFrame: (meta: any) => {
+          if (!frames.has(meta.id)) {
+            const el = document.createElement("iframe");
+            mainEl.append(el);
+            frames.set(meta.id, { el });
+          }
+          return frames.get(meta.id);
+        },
+        discardFrame: (id: string) => { frames.get(id)?.el.remove(); frames.delete(id); },
+        selectTab: select, openPage: select, showNotice: () => {}, linkMode: () => "tab",
+        markSeen: () => {}, render: () => views.layout(),
+      };
+      const stored = () => JSON.parse(localStorage.getItem("scribe.spaceSplits") || "{}").s;
+      const panes = () => ["a", "b", "c", "d"].map(pane => [...frames].find(([, f]) => f.el.dataset.pane === pane && !f.el.classList.contains("inactive"))?.[0] || "").join("");
+      const focused = () => (mainEl.querySelector(".pane-head.focused") as HTMLElement)?.dataset.pane;
+      const dividers = () => [...mainEl.querySelectorAll(".split-divider")].filter(el => !(el as HTMLElement).hidden) as HTMLElement[];
+      const widths = () => [...mainEl.querySelectorAll(".pane-head")].filter(el => !(el as HTMLElement).hidden).map(el => Math.round(el.getBoundingClientRect().width));
+      const box = mainEl.getBoundingClientRect();
+      const drag = async (source: any, x: number, y: number) => {
+        views.beginPageDrag(source);
+        const drop = views.updatePageDrag(box.left + box.width * x, box.top + box.height * y);
+        views.endPageDrag();
+        await views.dropPage(source, drop);
+        return drop;
+      };
+      const observations: Record<string, unknown> = {};
+      // A split stored before panes were a list: the other pane, the focused one's side, the tab it showed.
+      localStorage.setItem("scribe.spaceSplits", JSON.stringify({ s: { page: "b", ratio: 0.4, dir: "row", side: 1, seen: "a" } }));
+      views = w.createViews(host); views.prune(); views.layout();
+      observations.migrated = [panes(), focused(), widths()];
+      // A tab dropped towards an edge along the split becomes a pane beside the one under the pointer.
+      observations.addDrop = await drag({ id: "c" }, 0.97, 0.3);
+      observations.added = [panes(), focused(), dividers().length, widths(), stored()];
+      // A split link shows in the pane after the focused one, or before it from the last pane.
+      await views.open("d", "split");
+      observations.linkNext = [panes(), focused()];
+      select("d");
+      await views.open("c", "split");
+      observations.linkFromLast = [panes(), focused()];
+      // 1100px has no room for a fourth pane: the tab takes the place of the pane under it.
+      observations.fullDrop = await drag({ id: "a" }, 0.03, 0.3);
+      observations.full = [panes(), focused()];
+      // A pane dragged by its header moves with its size; a drop that changes nothing is no drop.
+      observations.noMove = await drag({ pane: "a" }, 0.03, 0.3);
+      observations.moveDrop = await drag({ pane: "a" }, 0.97, 0.3);
+      observations.moved = [panes(), focused(), widths()];
+      // Each divider swaps its own two panes, and sizes only them.
+      (dividers()[0].querySelector('[aria-label="Swap panes"]') as HTMLButtonElement).click();
+      observations.swapped = [panes(), focused()];
+      dividers()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true }));
+      observations.resized = widths();
+      dividers()[1].dispatchEvent(new MouseEvent("dblclick"));
+      observations.evened = widths();
+      // Towards an edge across the split turns all of it.
+      observations.turnDrop = await drag({ pane: "c" }, 0.5, 0.02);
+      observations.turned = [panes(), mainEl.classList.contains("split-col")];
+      (dividers()[0].querySelector('[aria-label="Show side by side"]') as HTMLButtonElement).click();
+      // Closing the focused pane hands focus to the next pane; the split stays while two are left.
+      const before = [panes(), focused(), active];
+      (mainEl.querySelector(`.pane-head[data-pane="${focused()}"] [aria-label="Close pane"]`) as HTMLButtonElement).click();
+      observations.closedFocused = [before, panes(), focused(), active];
+      await views.open("e", "split");
+      await drag({ id: "b" }, 0.03, 0.3);
+      observations.three = panes();
+      // A closed or deleted tab takes only its own pane.
+      const gone = panes()[0];
+      views.onClosed(gone); pages.delete(gone); views.layout();
+      observations.tabClosed = [panes().length, mainEl.classList.contains("has-split")];
+      views = w.createViews(host); views.prune(); views.layout();
+      observations.reloaded = [panes().length, stored().panes.length, stored().sizes.reduce((sum: number, size: number) => sum + size, 0).toFixed(3)];
+      return observations;
+    });
+    assert.deepEqual(result, {
+      migrated: ["ba", "b", [440, 660]],
+      addDrop: { edge: "right", at: 1 },
+      added: ["bac", "b", 2, [293, 440, 367], { panes: [{ page: "b" }, { page: "a" }, { page: "c" }], sizes: result.added[4].sizes, dir: "row", focus: 1 }],
+      linkNext: ["bad", "b"], linkFromLast: ["bcd", "c"],
+      fullDrop: { pane: "a" }, full: ["acd", "c"],
+      noMove: null, moveDrop: { edge: "right", at: 2 }, moved: ["cda", "b", [440, 367, 293]],
+      swapped: ["dca", "a"], resized: [367, 330, 403], evened: [367, 367, 367],
+      turnDrop: { edge: "top" }, turned: ["adc", true],
+      closedFocused: [["adc", "b", "d"], "ac", "b", "c"],
+      three: "bec", tabClosed: [2, true], reloaded: [2, 2, "1.000"],
+    });
   } finally {
     await browser.close();
   }
