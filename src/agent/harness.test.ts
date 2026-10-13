@@ -7,6 +7,55 @@ import { discoverSkills, harnessStats, instructionSections, mcpCall, promptToken
 import type { Item, Thread, Turn } from "./types.js";
 import { launchChromium } from "../chromium.js";
 
+test("harness lists older workspaces and refreshes them without losing the selection", async (t) => {
+  let browser;
+  try { browser = await launchChromium({ headless: true, args: [], purpose: "Harness workspace picker test" }); }
+  catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    const recent = Array.from({ length: 12 }, (_, i) => `C:/recent/${i}`);
+    const threads = [
+      { cwd: "C:/trunk", scope: { kind: "global" } },
+      { cwd: "c:\\TRUNK\\", scope: { kind: "global" } },
+      { cwd: "C:/worktrees/task", worktree: { home: "C:/checkout" } },
+      { scope: { kind: "workspace", ref: "C:/scope" } },
+    ];
+    const skillRequests: Array<string | null> = [];
+    await page.route("http://workspace.test/**", async (route) => {
+      const url = new URL(route.request().url());
+      let data: any = {};
+      if (url.pathname.endsWith("/config")) data = { prefs: { recentWorkspaces: recent, scopeWorkspaces: { "page:one": "C:/default" } } };
+      else if (url.pathname.endsWith("/threads")) data = { threads };
+      else if (url.pathname.endsWith("/context")) data = { thread: route.request().postDataJSON() };
+      else if (url.pathname.endsWith("/skills")) {
+        skillRequests.push(url.searchParams.get("cwd"));
+        data = { skills: [], folders: [] };
+      } else if (url.pathname.endsWith("/stats")) data = { totals: {}, toolKinds: [], tools: [], skills: [] };
+      else if (url.pathname.endsWith("/memories")) data = { memories: [] };
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto("http://workspace.test/");
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("skills"));
+    const picker = page.getByRole("combobox", { name: "Workspace", exact: true });
+    await picker.locator('option[value="C:/trunk"]').waitFor({ state: "attached" });
+    assert.deepEqual(await picker.locator("option").evaluateAll(options => options.map(option => (option as HTMLOptionElement).value)),
+      ["", ...recent, "C:/default", "C:/trunk", "C:/checkout", "C:/scope"]);
+    await picker.selectOption("C:/trunk");
+    await page.waitForFunction(() => !document.querySelector(".agent-harness.loading"));
+    assert.equal(skillRequests.at(-1), "C:/trunk");
+    threads.push({ cwd: "C:/added", scope: { kind: "global" } });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await picker.locator('option[value="C:/added"]').waitFor({ state: "attached" });
+    assert.equal(await picker.inputValue(), "C:/trunk");
+    assert.equal(skillRequests.at(-1), "C:/trunk");
+  } finally { await browser.close(); }
+});
+
 test("harness keeps content while filters load and ignores superseded responses", async (t) => {
   let browser;
   try { browser = await launchChromium({ headless: true, args: [], purpose: "Harness filter test" }); }

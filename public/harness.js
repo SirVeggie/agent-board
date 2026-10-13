@@ -41,6 +41,7 @@
     memEdit: null,
     memDraft: { text: "", workspace: "" },
     config: null,
+    threads: [],
     measure: null,
     probes: new Map(),
     error: "",
@@ -400,13 +401,29 @@
     );
     const select = el("select", "hx-select");
     select.setAttribute("aria-label", "Workspace");
-    const folders = [...new Set([S.pick.cwd, ...(S.config?.prefs?.recentWorkspaces || [])].filter(Boolean))];
+    const folders = workspaceDirs();
     select.append(new Option("No workspace", ""));
     for (const folder of folders) select.append(new Option(folder, folder));
     select.value = S.pick.cwd || "";
     select.addEventListener("change", () => repick({ cwd: select.value || null }));
     row.append(select);
     return row;
+  }
+
+  /** Recent folders are capped; saved threads and scope defaults keep older workspaces available. */
+  function workspaceDirs() {
+    const dirs = [
+      S.pick.cwd,
+      ...(S.config?.prefs?.recentWorkspaces || []),
+      ...Object.values(S.config?.prefs?.scopeWorkspaces || {}),
+      ...S.threads.map((thread) =>
+        (thread.worktree && !thread.worktree.closed ? thread.worktree.home : null) ||
+        thread.cwd || (thread.scope?.kind === "workspace" ? thread.scope.ref : null)
+      ),
+    ];
+    const unique = new Map();
+    for (const dir of dirs) if (dir && !unique.has(dirKey(dir))) unique.set(dirKey(dir), dir);
+    return [...unique.values()];
   }
 
   function baselineFor(pick) {
@@ -1228,7 +1245,9 @@
       loadStats(),
       loadMemories(),
       load(async () => {
-        S.config = await api("GET", "/config");
+        const [config, result] = await Promise.all([api("GET", "/config"), api("GET", "/threads")]);
+        S.config = config;
+        S.threads = result.threads || [];
         if (S.pick.cwd === undefined) S.pick.cwd = null;
       }).then(loadContext),
     ]);
