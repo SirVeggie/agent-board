@@ -62,6 +62,7 @@ import { cleanCustomModes, modeKeepsServer, modeOff, threadCustom } from "./cust
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
+import { likePatterns, matchMessages, searchWords, type ThreadMessageHit } from "./threadSearch.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
 import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, saveMemory, type Memory } from "./memory.js";
@@ -2449,6 +2450,13 @@ export class AgentHost {
   /** A thread's turns, from the cache when loaded, else straight from the database. */
   private peekTurns(threadId: string): Turn[] {
     return this.turns.get(threadId) ?? this.db.listTurns(threadId);
+  }
+
+  /** The thread menu's search: the threads whose messages mention words of q, with which words and a snippet. */
+  searchThreadMessages(q: unknown): ThreadMessageHit[] {
+    // A single letter is in nearly every message.
+    const words = searchWords(q).filter((word) => word.length > 1);
+    return matchMessages(this.db.searchMessages(words.flatMap(likePatterns)), words);
   }
 
   /** Threads reader may read, asking for access first when it has none yet. */

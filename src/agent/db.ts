@@ -130,6 +130,27 @@ export class AgentDb {
     return rows.map((row) => JSON.parse(row.data) as Item);
   }
 
+  /**
+   * The user's messages and the agent's own replies (not a subagent's) whose stored JSON matches any of the
+   * LIKE patterns, oldest first within a thread. The patterns narrow the scan; the caller checks the text.
+   */
+  *searchMessages(patterns: string[]): IterableIterator<{ threadId: string; text: string }> {
+    if (!patterns.length) return;
+    const rows = this.db
+      .prepare(
+        `SELECT thread_id AS threadId, json_extract(data, '$.text') AS text FROM items
+         WHERE (${patterns.map(() => "data LIKE ? ESCAPE '!'").join(" OR ")})
+           AND json_extract(data, '$.kind') IN ('user', 'text')
+           AND json_extract(data, '$.dropped') IS NOT 1
+           AND json_extract(data, '$.parentToolId') IS NULL
+         ORDER BY thread_id, seq`
+      )
+      .iterate(...patterns) as IterableIterator<{ threadId: string; text: unknown }>;
+    for (const row of rows) {
+      if (typeof row.text === "string") yield { threadId: row.threadId, text: row.text };
+    }
+  }
+
   saveItems(items: Item[]): void {
     if (!items.length) {
       return;

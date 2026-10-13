@@ -4524,13 +4524,15 @@
     renderPalette();
   }
 
-  function runThreadPaletteSearch(query) {
+  async function runThreadPaletteSearch(query) {
     const req = ++paletteReq;
-    const hits = window.scribeChat?.searchThreads?.(query) || [];
-    if (req !== paletteReq || !isPaletteOpen()) {
+    applyPaletteHits(window.scribeChat?.searchThreads?.(query) || []);
+    // Titles match at once; threads found by what was said in them follow from the daemon.
+    const fresh = await window.scribeChat?.searchThreadMessages?.(query);
+    if (!fresh || req !== paletteReq || !isPaletteOpen()) {
       return;
     }
-    applyPaletteHits(hits);
+    applyPaletteHits(window.scribeChat.searchThreads(query));
   }
 
   async function runPaletteSearch() {
@@ -4547,7 +4549,7 @@
       return;
     }
     if (parsed.id === "threads") {
-      runThreadPaletteSearch(parsed.query);
+      void runThreadPaletteSearch(parsed.query);
       return;
     }
     if (parsed.id === "ai") {

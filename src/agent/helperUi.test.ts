@@ -24,6 +24,9 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
         approvals.push(route.request().url().split("/").at(-1)!);
         return route.fulfill({ contentType: "application/json", body: "{}" });
       }
+      if (route.request().url().includes("/api/agent/thread-search")) {
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify({ hits: [{ id: "parent", words: ["llama"], snippet: "about llama.cpp" }] }) });
+      }
       return route.fulfill({ contentType: "text/html", body: '<main style="display:flex;width:460px;height:780px"></main>' });
     });
     await page.goto("http://helpers.test/");
@@ -32,7 +35,7 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     // Exercise the real chat views with fixture data, without booting a daemon or providers.
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall, liveStep, searchThreads, dock };") });
+    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall, liveStep, searchThreads, searchMessages, dock };") });
     await page.evaluate(() => {
       const { S, view } = (window as any).helperTest;
       const base = { provider: "claude", model: "sonnet", effort: null, mode: "code", approval: "ask", web: "off", cwd: null, scope: { kind: "global", ref: null }, stats: { turns: 1, files: 0, added: 0, removed: 0 }, createdAt: 1, activityAt: 1, archived: false, unread: false, queued: 0 };
@@ -84,12 +87,23 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       anchor.remove();
       const hit = (r: any) => [r.id, r.title, r.locationLabel, r.snippet];
-      return { step: liveStep(S.details.get("parent").items[0]).text, menu, all: searchThreads("").map(hit), found: searchThreads("audit").map(hit) };
+      return { step: liveStep(S.details.get("parent").items[0]).text, menu, all: searchThreads("").map(hit), found: searchThreads("audit").map(hit), words: searchThreads("task main").map(hit), none: searchThreads("main audit").length };
     });
     assert.equal(picked.step, "Helper · Audit the files · sonnet");
     assert.deepEqual(picked.menu, [["New thread", false], ["Main task", false], ["Audit the files", true]]);
     assert.deepEqual(picked.all, [["parent", "Main task", "Thread", ""]]);
     assert.deepEqual(picked.found, [["helper", "Audit the files", "Helper", "Main task"]]);
+    // A search matches its words one by one, in any order.
+    assert.deepEqual(picked.words, [["parent", "Main task", "Thread", ""]]);
+    assert.equal(picked.none, 0);
+    // Words the title lacks may come from what was said in the thread, which the daemon searches.
+    const said = await page.evaluate(async () => {
+      const { searchThreads, searchMessages } = (window as any).helperTest;
+      const before = searchThreads("llama main").length;
+      const fresh = await searchMessages("llama main");
+      return { before, fresh, hits: searchThreads("llama main").map((r: any) => [r.id, r.snippet]) };
+    });
+    assert.deepEqual(said, { before: 0, fresh: true, hits: [["parent", "about llama.cpp"]] });
     assert.equal(await page.getByRole("button", { name: "Open thread", exact: true }).count(), 0);
     await page.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
     assert.equal(await page.locator(".ag-view-helper .ag-title").textContent(), "Helper: Audit the files");

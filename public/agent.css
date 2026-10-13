@@ -3122,6 +3122,16 @@ html.fx-off .ag-slash { transition: none; }
   white-space: nowrap;
 }
 
+/* The message text a search found the thread by. */
+.ag-row-found {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+
 .ag-row-meta .ag-counts {
   font-size: 10.5px;
 }

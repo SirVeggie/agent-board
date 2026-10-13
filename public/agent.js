@@ -1057,10 +1057,61 @@
     return `${t.title} ${scopeLabel(t.scope).text} ${workspaceDir(t) || ""}`.toLowerCase();
   }
 
+  /** Keep in sync with src/agent/threadSearch.ts */
+  function searchWords(q) {
+    return [...new Set(String(q || "").toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 10);
+  }
+
+  /** What the daemon found in threads' messages, by query. The list itself only knows titles. */
+  const messageSearch = { cache: new Map(), last: new Map(), timer: 0, cancel: null };
+
+  function messageHits(q) {
+    return messageSearch.cache.get(searchWords(q).join(" "))?.hits || messageSearch.last;
+  }
+
+  /** Ask the daemon which threads' messages mention the words. Resolves true when there are new hits to show. */
+  function searchMessages(q) {
+    const key = searchWords(q).join(" ");
+    clearTimeout(messageSearch.timer);
+    messageSearch.cancel?.();
+    messageSearch.cancel = null;
+    const had = messageSearch.cache.get(key);
+    if (key.length < 2 || (had && Date.now() - had.at < 30_000)) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      messageSearch.cancel = () => resolve(false);
+      messageSearch.timer = setTimeout(async () => {
+        messageSearch.cancel = null;
+        try {
+          const data = await api("GET", `/thread-search?q=${encodeURIComponent(key)}`);
+          const hits = new Map((data.hits || []).map((hit) => [hit.id, hit]));
+          messageSearch.cache.delete(key);
+          messageSearch.cache.set(key, { at: Date.now(), hits });
+          if (messageSearch.cache.size > 8) messageSearch.cache.delete(messageSearch.cache.keys().next().value);
+          messageSearch.last = hits;
+          resolve(true);
+        } catch {
+          resolve(false);
+        }
+      }, 180);
+    });
+  }
+
+  /** Every word is in the title, scope or workspace, or in what was said in the thread; in any order. */
   function threadMatchesQuery(t, q) {
-    const needle = String(q || "").trim().toLowerCase();
-    if (!needle) return true;
-    return threadSearchHaystack(t).includes(needle);
+    const words = searchWords(q);
+    if (!words.length) return true;
+    const hay = threadSearchHaystack(t);
+    const said = messageHits(q).get(t.id)?.words || [];
+    return words.every((word) => hay.includes(word) || said.includes(word));
+  }
+
+  /** The message text that made a search find a thread; "" when its title has every word. */
+  function threadMatchSnippet(t, q) {
+    const words = searchWords(q);
+    const title = t.title.toLowerCase();
+    if (!words.length || words.every((word) => title.includes(word))) return "";
+    const hit = messageHits(q).get(t.id);
+    return hit && words.some((word) => hit.words.includes(word)) ? hit.snippet : "";
   }
 
   /** Keep in sync with src/agent/threadList.ts */
@@ -5819,6 +5870,7 @@
       S.search = search.value;
       container.dataset.activeId = "";
       container.agFill();
+      void searchMessages(S.search).then((fresh) => fresh && renderLists());
     };
     // Up and Down move a highlight through the rows; Enter opens the highlighted thread. The highlight
     // shows from the first arrow press until the search box next gets the focus.
@@ -6115,6 +6167,8 @@
     const title = el("span", "ag-row-title", name);
     if (compactThreads()) main.append(title);
     else main.append(title, threadRowMeta(t));
+    const found = threadMatchSnippet(t, S.search);
+    if (found) main.append(el("span", "ag-row-found", found));
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     row.dataset.tooltip = name;
@@ -9935,7 +9989,9 @@
       const hidden = hiddenWorkspaceKeys();
       threads = threads.filter((t) => !nestsUnder(t) && !inHiddenWorkspace(t, hidden));
     }
-    threads.sort((a, b) => threadRank(b) - threadRank(a));
+    // Threads found by their title come before those found by what was said in them.
+    const found = new Map(threads.map((t) => [t.id, threadMatchSnippet(t, q)]));
+    threads.sort((a, b) => Boolean(found.get(a.id)) - Boolean(found.get(b.id)) || threadRank(b) - threadRank(a));
     return threads.slice(0, limit).map((t) => {
       const scope = scopeLabel(t.scope);
       const running = t.status === "running" || (t.status === "idle" && t.background);
@@ -9944,7 +10000,7 @@
         kind: "thread",
         id: t.id,
         title: parent ? helperName(t) : t.title,
-        snippet: parent ? parent.title : scope.text && scope.text !== "Global" ? scope.text : "",
+        snippet: found.get(t.id) || (parent ? parent.title : scope.text && scope.text !== "Global" ? scope.text : ""),
         locationLabel: parent ? "Helper" : "Thread",
         location: "thread",
         qualityLabel: running ? "Running" : "",
@@ -10826,7 +10882,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 
