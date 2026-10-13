@@ -9261,6 +9261,27 @@
       const usage = el("section", "settings-section");
       this.usage = el("div", "ag-usage-list");
       usage.append(el("h3", null, "Plan usage"), this.usage);
+      for (const [provider, label] of [["claude", "Claude (Haiku)"], ["codex", "Codex (Luna)"]]) {
+        const control = switchControl(
+          () => Boolean(prefs().usageWindowStarts?.[provider]),
+          () => {
+            const before = { claude: false, codex: false, ...prefs().usageWindowStarts };
+            const next = { ...before, [provider]: !before[provider] };
+            S.config.prefs = { ...prefs(), usageWindowStarts: next };
+            api("PUT", "/prefs", { usageWindowStarts: next })
+              .then((saved) => { S.config.prefs = saved; })
+              .catch((err) => {
+                S.config.prefs = { ...prefs(), usageWindowStarts: before };
+                control.setAttribute("aria-checked", String(before[provider]));
+                notice(err.message);
+              });
+          }
+        );
+        usage.append(settingRow(`Start the next 5-hour window · ${label}`, control, {
+          id: `ag-window-start-${provider}`,
+          hint: "While Scribe is running, send a short hello ten minutes after the provider's reported five-hour reset. Uses a little subscription usage, with no chat or workspace context. Skips ongoing work, exhausted weekly usage and unavailable subscription access; failed sends are not retried for that window.",
+        }));
+      }
 
       const chat = el("section", "settings-section");
       chat.append(
@@ -9551,6 +9572,11 @@
     renderUsage() {
       if (!this.usage || !this.isOpen()) return;
       this.usage.replaceChildren(...["claude", "codex", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
+      for (const provider of ["claude", "codex"]) {
+        const activity = S.config.limits?.[provider]?.windowStart;
+        if (!activity?.result) continue;
+        this.usage.append(el("div", "ag-muted", `${provider === "claude" ? "Claude" : "Codex"} window start: ${activity.result}`));
+      }
     },
     forkSummarizerButton(provider) {
       const b = el("button", "ag-pill ag-summarizer");

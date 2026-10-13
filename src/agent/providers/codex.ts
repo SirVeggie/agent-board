@@ -659,6 +659,50 @@ export class CodexProvider implements AgentProvider {
     return this.modelCache?.models.length ? this.modelCache.models : FALLBACK_MODELS;
   }
 
+  /** Isolated from the user's config, MCP servers, skills and project instructions. */
+  async startUsageWindow(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    syncCodexAuth();
+    const models = await this.models();
+    const model = models.find((m) => /luna/i.test(m.id));
+    if (!model) throw new Error("Codex Luna is unavailable");
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-window-codex-"));
+    const home = path.join(cwd, "home");
+    fs.mkdirSync(home);
+    const authFile = path.join(scribeCodexHome(), "auth.json");
+    const isolatedAuth = path.join(home, "auth.json");
+    try {
+      fs.copyFileSync(authFile, isolatedAuth);
+      const env = cliEnv();
+      env.CODEX_HOME = home;
+      for (const key of ["CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"]) delete env[key];
+      const report = await withAppServer(env, async (call) => {
+        await call("initialize", { clientInfo: { name: "scribe", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+        return readCodexPlanUsage(call);
+      });
+      const { planLimitsFromCodexRateLimits } = await import("../planLimits.js");
+      const limits = planLimitsFromCodexRateLimits(report, Date.now());
+      if (limits?.ordinaryUsageAllowed !== true) throw new Error("Codex included usage unavailable");
+      signal.throwIfAborted();
+      const { Codex } = await sdk();
+      const client = new Codex({ env, config: {
+        forced_login_method: "chatgpt", model_provider: "openai", project_doc_max_bytes: 0,
+        developer_instructions: "Reply only with hi.",
+        features: { shell_tool: false, multi_agent: false, hooks: false, memories: false, goals: false, plugins: false },
+        tools: { view_image: false },
+        apps: { _default: { enabled: false } },
+      } });
+      const handle = client.startThread({ model: model.id, skipGitRepoCheck: true,
+        sandboxMode: "read-only", approvalPolicy: "never", webSearchEnabled: false,
+        modelReasoningEffort: "low", workingDirectory: cwd });
+      await handle.run("Hello. Reply only with hi.", { signal });
+    } finally {
+      // Preserve any provider-managed token refresh before removing the isolated home.
+      try { syncAuthFiles(authFile, isolatedAuth); } catch { /* retain original login */ }
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+
   async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
     syncCodexAuth();
     const { Codex } = await sdk();

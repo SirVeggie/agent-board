@@ -150,6 +150,8 @@ export type RunStatus = "idle" | "running" | "waiting";
 
 /** How much of a subscription's usage windows is used, as the provider last reported it. */
 export type PlanLimits = {
+  /** Background window-start activity; never a provider quota or proof of a reset. */
+  windowStart?: { reset?: number; attempted?: number; result?: string };
   /** When the provider reported it. */
   at: number;
   /** "allowed", "allowed_warning" or "rejected" (Claude). */

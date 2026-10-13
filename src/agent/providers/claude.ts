@@ -3,6 +3,8 @@ import { claudeToolsOff, customKey, scribeToolsOff } from "../customModes.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { isPlainRecord, noPages } from "../types.js";
@@ -357,6 +359,53 @@ export class ClaudeProvider implements AgentProvider {
       } catch {
         abortController.abort();
       }
+    }
+  }
+
+  /** A single context-free subscription request; check the active query before releasing its input. */
+  async startUsageWindow(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    const sdk = await loadSdk();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-window-claude-"));
+    const input = new InputQueue();
+    const abortController = new AbortController();
+    const abort = () => abortController.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    let q;
+    try {
+      q = sdk.query({ prompt: input, options: {
+        cwd, model: "haiku", systemPrompt: "Reply only with hi.", settingSources: [], tools: [],
+        mcpServers: {}, persistSession: false, maxTurns: 1, abortController,
+        thinking: { type: "disabled" },
+      } });
+      const account = await q.accountInfo();
+      if (account.apiProvider !== "firstParty" || (account.apiKeySource && account.apiKeySource !== "none") ||
+          !/^(pro|max|team|enterprise)/i.test(account.subscriptionType ?? "")) {
+        throw new Error("Claude subscription source unavailable");
+      }
+      const usage = await queryPlanUsage(q);
+      const { planLimitsFromUsageReport } = await import("../planLimits.js");
+      const { windowStartBlocked } = await import("../usageWindowStarts.js");
+      const limits = planLimitsFromUsageReport(usage, Date.now());
+      if (!limits || windowStartBlocked("claude", limits, Date.now()) || limits.windows.some((w) =>
+        w.id === "five_hour" && w.utilization >= 1 && (!w.resetsAt || w.resetsAt > Date.now()))) {
+        throw new Error("Claude included usage unavailable");
+      }
+      signal.throwIfAborted();
+      input.push({ type: "user", message: { role: "user", content: "Hello. Reply only with hi." },
+        parent_tool_use_id: null, session_id: "" });
+      for await (const msg of q) {
+        if (msg.type !== "result") continue;
+        if (msg.subtype === "success" && !msg.is_error) return;
+        throw new Error("Claude window request failed");
+      }
+      throw new Error("Claude sent no result");
+    } finally {
+      signal.removeEventListener("abort", abort);
+      input.close();
+      try { q?.close(); } catch { abort(); }
+      fs.rmSync(cwd, { recursive: true, force: true });
     }
   }
 

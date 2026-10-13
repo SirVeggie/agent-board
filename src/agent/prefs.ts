@@ -3,11 +3,13 @@ import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope, WebAc
 import type { HookRule } from "./hooks.js";
 import type { CustomMode } from "./customModes.js";
 import { DEFAULT_WEB_ALLOWLIST } from "./webAccess.js";
+import type { WindowStarts } from "./usageWindowStarts.js";
 
 export type ModelChoice = { effort: string | null; modelParams: Record<string, string> };
 
 /** Last-used chat settings. New threads and drafts start from these. */
 export type Prefs = {
+  usageWindowStarts: WindowStarts;
   provider: ProviderId;
   models: Partial<Record<ProviderId, string>>;
   efforts: Partial<Record<ProviderId, string | null>>;
@@ -78,6 +80,7 @@ export type Prefs = {
 };
 
 export const DEFAULT_PREFS: Prefs = {
+  usageWindowStarts: { claude: false, codex: false },
   provider: "cursor",
   models: { cursor: "composer-2.5", claude: "default", codex: "default" },
   efforts: {},

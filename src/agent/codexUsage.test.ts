@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { AgentEvent, PlanLimits, Turn } from "./types.js";
+import type { UsageWindowStarts } from "./usageWindowStarts.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-codex-quota-"));
 process.env.SCRIBE_HOME = dir;
@@ -13,11 +14,50 @@ before(() => store.load());
 after(() => { store.closeDb(); fs.rmSync(dir, { recursive: true, force: true }); });
 
 type Internals = {
+  usageWindowStarts: UsageWindowStarts;
+  providers: { codex: { startUsageWindow(signal: AbortSignal): Promise<void> } };
   refreshCodexUsage(): Promise<void>;
-  recordLimits(provider: "codex", info: unknown): void;
+  recordLimits(provider: "codex" | "claude", info: unknown): void;
   codexUsageFetchAt: number;
   codexUsageTimer: NodeJS.Timeout | null;
 };
+
+test("sparse Claude notifications cannot schedule the locally projected next window", () => {
+  const host = new AgentHost(() => {}, async () => quota(true));
+  const internal = host as unknown as Internals;
+  try {
+    const reset = Date.now() - 1000;
+    internal.recordLimits("claude", { rateLimitType: "five_hour", utilization: 0.2, resetsAt: reset });
+    const before = internal.usageWindowStarts.view("claude")!.reset;
+    const projected = host.limits().claude!;
+    assert.ok(projected.windows[0].resetsAt! > reset);
+    (host as unknown as { planLimits: { claude: PlanLimits } }).planLimits.claude = projected;
+    internal.recordLimits("claude", { status: "allowed" });
+    assert.equal(internal.usageWindowStarts.view("claude")!.reset, before);
+  } finally { host.dispose(); }
+});
+
+test("host defaults window starts off and dispatches an enabled overdue reset once", async () => {
+  const reset = Math.floor((Date.now() - 11 * 60_000) / 1000);
+  const host = new AgentHost(() => {}, async () => ({ ordinaryUsageAllowed: true, rateLimits: {
+    limitId: "codex", primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: reset },
+  } }));
+  const internal = host as unknown as Internals;
+  let calls = 0;
+  internal.providers.codex.startUsageWindow = async () => { calls++; };
+  try {
+    host.db.setSetting("prefs", {});
+    assert.deepEqual(host.prefs().usageWindowStarts, { claude: false, codex: false });
+    await internal.usageWindowStarts.tick();
+    assert.equal(calls, 0);
+    host.db.setSetting("prefs", { usageWindowStarts: { codex: true } });
+    await internal.usageWindowStarts.tick();
+    await internal.usageWindowStarts.tick();
+    assert.equal(calls, 1);
+    assert.equal(host.limits().codex?.windowStart?.result, "Sent");
+    assert.equal(host.db.getSetting<{ codex: { attempted: number } }>("usageWindowStarts", {} as never).codex.attempted, reset * 1000);
+  } finally { host.db.setSetting("prefs", {}); host.dispose(); }
+});
 const quota = (allowed: boolean | null) => ({ ordinaryUsageAllowed: allowed, rateLimits: {
   limitId: "codex", primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) - 1 },
 } });

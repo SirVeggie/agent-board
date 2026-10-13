@@ -20,6 +20,7 @@ import { contextBlock, cursorScribeServers, freshContext, guidesBlock, pageKeysI
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
+import { UsageWindowStarts, cleanWindowStarts, type WindowStartState } from "./usageWindowStarts.js";
 import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
@@ -540,6 +541,37 @@ export class AgentHost {
       scanResult: (threadId, call) => this.scanResult(threadId, call),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
+    this.usageWindowStarts = new UsageWindowStarts({
+      now: () => Date.now(),
+      enabled: () => this.prefs().usageWindowStarts,
+      running: (provider) => [...this.runs.keys(), ...this.resuming].some((id) => this.threads.get(id)?.provider === provider),
+      read: async (provider) => {
+        if (this.closed || this.fakes) return null;
+        if (provider === "codex") {
+          const parsed = planLimitsFromCodexRateLimits(await this.readCodexUsage(), Date.now());
+          if (this.closed) return null;
+          if (parsed) this.commitLimits(provider, parsed, false);
+          return parsed;
+        }
+        const parsed = planLimitsFromUsageReport(await (this.providers.claude as ClaudeProvider).fetchPlanUsage(), Date.now());
+        if (this.closed) return null;
+        if (parsed) this.commitLimits(provider, applyExpiredWindows(parsed), false);
+        return parsed;
+      },
+      start: async (provider, signal) => {
+        if (provider === "claude") await (this.providers.claude as ClaudeProvider).startUsageWindow(signal);
+        else await (this.providers.codex as CodexProvider).startUsageWindow(signal);
+      },
+      save: (state) => {
+        if (this.closed) return;
+        this.db.setSetting("usageWindowStarts", state);
+        this.emit({ type: "agent_limits", limits: this.liveLimits() });
+      },
+    }, this.db.getSetting<WindowStartState>("usageWindowStarts", {}));
+    if (!this.fakes) {
+      this.usageWindowTimer = setInterval(() => void this.usageWindowStarts.tick(), 30_000);
+      this.usageWindowTimer.unref?.();
+    }
     this.pageRuns = new PageRuns(
       {
         now: () => Date.now(),
@@ -651,6 +683,8 @@ export class AgentHost {
   }
 
   private planLimits: Partial<Record<ProviderId, PlanLimits>> = {};
+  private usageWindowStarts: UsageWindowStarts;
+  private usageWindowTimer: NodeJS.Timeout | null = null;
   private usageTimer: NodeJS.Timeout | null = null;
   private usageFetch: Promise<void> | null = null;
   private lastUsageFetchAt = 0;
@@ -671,6 +705,10 @@ export class AgentHost {
       const live = livePlanLimits(limits);
       if (live !== limits) out = { ...out, [provider]: live };
     }
+    for (const provider of ["claude", "codex"] as const) {
+      const entry = this.usageWindowStarts?.view(provider);
+      if (out[provider] && entry) out = { ...out, [provider]: { ...out[provider]!, windowStart: entry } };
+    }
     return out;
   }
 
@@ -689,6 +727,13 @@ export class AgentHost {
     const next = provider === "codex" ? planLimitsFromCodexRateLimits(info, Date.now(), this.planLimits.codex, true)
       : planLimitsFromRateLimitInfo(info, Date.now(), this.planLimits[provider]);
     if (!next) return;
+    if (provider === "claude" || provider === "codex") {
+      // Sparse notifications may inherit locally projected Claude windows.
+      // Scheduling accepts only timestamps actually present in this report.
+      const reported = provider === "claude" ? planLimitsFromRateLimitInfo(info, Date.now()) :
+        planLimitsFromCodexRateLimits(info, Date.now());
+      if (reported) this.usageWindowStarts.observe(provider, reported);
+    }
     this.commitLimits(provider, next, true);
     if (provider === "codex") void this.refreshCodexUsage();
   }
@@ -707,6 +752,7 @@ export class AgentHost {
         if (this.closed) return;
         const parsed = planLimitsFromCodexRateLimits(report, Date.now());
         if (!parsed) throw new Error("Invalid Codex quota response");
+        this.usageWindowStarts.observe("codex", parsed);
         this.commitLimits("codex", parsed, false);
       } catch (error) {
         if (this.closed) return;
@@ -788,6 +834,7 @@ export class AgentHost {
       const report = await (this.providers.claude as ClaudeProvider).fetchPlanUsage();
       if (this.closed) return;
       const parsed = planLimitsFromUsageReport(report, Date.now());
+      if (parsed) this.usageWindowStarts.observe("claude", parsed);
       if (parsed) this.commitLimits("claude", applyExpiredWindows(parsed), false);
     } catch {
       /* overlay already applied; the next turn still reports */
@@ -815,6 +862,8 @@ export class AgentHost {
 
   dispose(): void {
     this.closed = true;
+    this.usageWindowStarts.dispose();
+    if (this.usageWindowTimer) clearInterval(this.usageWindowTimer);
     store.off("tab_closed", this.onPageClosed);
     store.off("tab_upserted", this.onPageUpserted);
     if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
@@ -837,6 +886,7 @@ export class AgentHost {
     return {
       ...DEFAULT_PREFS,
       ...saved,
+      usageWindowStarts: cleanWindowStarts(saved.usageWindowStarts),
       models: { ...DEFAULT_PREFS.models, ...saved.models },
       modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams },
       modelSettings: seedModelSettings(saved),
@@ -861,6 +911,7 @@ export class AgentHost {
 
   setPrefs(patch: Partial<Prefs>): Prefs {
     const next = { ...this.prefs(), ...patch };
+    next.usageWindowStarts = cleanWindowStarts(patch.usageWindowStarts ?? next.usageWindowStarts);
     if (patch.forkSummarizers !== undefined) next.forkSummarizers = { ...this.prefs().forkSummarizers, ...cleanForkSummarizers(patch.forkSummarizers) };
     next.web = parseWebAccess(patch.web) ?? this.prefs().web;
     // null puts back the starting list.
@@ -882,6 +933,7 @@ export class AgentHost {
     }
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     this.db.setSetting("prefs", next);
+    if (patch.usageWindowStarts !== undefined) this.usageWindowStarts.settingsChanged();
     if (patch.customModes !== undefined) this.refreshCustomModes(next);
     return next;
   }

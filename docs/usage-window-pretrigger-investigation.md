@@ -1,7 +1,40 @@
 # Five-hour window pre-triggering (#552)
 
-Investigated 2026-10-12. No model requests or account changes were made.
-This is an investigation and a proposed experiment, not an implemented scheduler.
+Investigated 2026-10-12; implemented 2026-10-13 after the user's confirmation.
+No live model requests or account changes were made during development.
+
+## Implementation and user confirmation
+
+The user confirmed on #552 that the five-hour period starts on first usage after
+reset, and chose the scheduler for both providers, ten minutes after reset. Their
+account's actual reported limits take precedence over the general pricing page
+quoted below; the earlier Pro statement was too broad for this account.
+
+Agent settings > Plan usage now has separate Claude (Haiku) and Codex (Luna)
+switches, off by default. The daemon checks every 30 seconds, sends at most once
+per provider-reported reset after ten minutes, persists that attempt before
+sending, and refreshes quota afterwards. Last result appears with plan usage.
+It never schedules from Claude's locally projected countdown. A later server
+reset permits another cycle; wake/restart makes one current decision, with no
+replay of missed periods. Missing quota is polled again without sending.
+
+The scheduler skips active provider work and unavailable or exhausted included
+usage. Claude checks account metadata and usage on the active query before
+releasing its input; API-key and cloud sources are rejected. It uses Haiku with
+tools, settings sources and thinking disabled, a minimal system instruction and
+an isolated temporary cwd. Codex selects an available Luna model, copies only
+the managed auth file into an isolated temporary home, verifies ChatGPT included
+usage, removes API-key/base-URL environment overrides, and disables shell,
+web, apps, multi-agent, hooks, memories and goals. A read-only temporary cwd has
+no workspace instructions. Provider-built-in instructions/overhead may remain.
+Any managed token refresh is synchronized back before the temporary home is
+removed. No fallback model or funding source is used.
+
+Disabling a switch or stopping Scribe aborts an in-flight send. Requests have a
+60-second cancellation deadline; failures are not retried for the same reset.
+The result says "Sent", rather than claiming a new server window was proven.
+Runtime provider behavior still needs observation on the user's accounts; the
+automated tests use offline doubles, including the actual request methods.
 
 ## What is established
 
@@ -67,11 +100,8 @@ this first experiment.
 - Expose last attempt/result and a disable switch. Measure window movement rather
   than labeling successful text generation as a successful window start.
 
-## Decision still needed
+## Decision history
 
-The card's premise cannot be confirmed from the available documentation or local
-quota code. The linked background form asks which provider to verify first and
-whether to implement a bounded experiment, the proposed opt-in scheduler, or only
-correct the countdown. It includes a freeform field. #552 remains in Needs input
-until that choice is made. The projected Claude reset is filed separately in
-design so it does not depend on adding background model traffic.
+The original investigation could not establish the premise from documentation
+alone. The user subsequently confirmed it and chose the scheduler for both
+providers. #554 tracks the projected Claude countdown separately.
