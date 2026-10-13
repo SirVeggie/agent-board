@@ -486,7 +486,7 @@ return glow(c,e);}`;
     }
 
     function updateBackdrop(provider = host.provider?.()) {
-      const colors = appearanceStorage.getItem(PROVIDER_KEY) !== "0" && provider ? window.scribeOrb?.colors(provider) : null;
+      const colors = appearanceStorage.getItem(PROVIDER_KEY) === "1" && provider ? window.scribeOrb?.colors(provider) : null;
       root.classList.toggle("provider-colors", Boolean(colors));
       if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
       else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));

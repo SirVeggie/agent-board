@@ -70,7 +70,7 @@ gl_FragColor=vec4(col*a,a);}`;
     // Keep drawing through the fade-out rather than freezing mid-fade.
     if (!anim && root.classList.contains("on")) fadeUntil = performance.now() + FADE_MS;
     root.classList.toggle("on", anim);
-    root.classList.toggle("tint", setting(IDLE_KEY));
+    root.classList.toggle("tint", appearanceStorage.getItem(IDLE_KEY) === "1");
     if (!anim) return;
     if (!window.scribeMotion.enabled()) {
       loop.stop();

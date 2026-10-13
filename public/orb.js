@@ -18,11 +18,17 @@
     ink: ["#111827", "#334155"],
   };
   const KEY = "scribe.dock-appearance.v1";
-  const defaults = (provider) => ({
-    style: "mesh", symbol: "traced", bleed: "dye",
-    iconColors: [...ICON_PALETTES.white], iconSize: .85,
-    colors: [...PALETTES[({ claude: "ember", cursor: "moonstone", codex: "sky", pi: "ocean" })[provider] || "ocean"]],
-  });
+  // Desktop choices migrated to the daemon, adopted as built-in defaults (#561).
+  const PROVIDER_DEFAULTS = {
+    claude: { style: "mesh", symbol: "none", bleed: "glow", iconColors: ["#ff9100", "#ffb300"], iconSize: .7, colors: PALETTES.ember },
+    cursor: { style: "none", symbol: "crt", bleed: "waveDots", iconColors: ICON_PALETTES.white, iconSize: 1, colors: PALETTES.moonstone },
+    codex: { style: "none", symbol: "crt", bleed: "dye", iconColors: ICON_PALETTES.white, iconSize: .85, colors: ["#0d2a5c", "#3b82f6", "#62abfe", "#ffffff"] },
+    pi: { style: "galaxy", symbol: "glow", bleed: "galaxy", iconColors: ICON_PALETTES.white, iconSize: .85, colors: PALETTES.ocean },
+  };
+  const defaults = (provider) => {
+    const base = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.pi;
+    return { ...base, iconColors: [...base.iconColors], colors: [...base.colors] };
+  };
   function clean(value, provider) {
     const base = defaults(provider);
     if (!value || typeof value !== "object") return base;

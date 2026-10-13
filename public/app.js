@@ -470,7 +470,7 @@
   );
   document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));
   applyFlag(auroraEdgeToggle, AURORA_EDGE_KEY, true);
-  applyFlag(auroraIdleToggle, AURORA_IDLE_KEY, true);
+  applyFlag(auroraIdleToggle, AURORA_IDLE_KEY, false);
   applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
   applyPaneSideAttr("librarySide", paneSide(LIBRARY_SIDE_KEY));
   renderThemeList();
@@ -478,13 +478,13 @@
   renderPaneSides();
   renderChromeFx();
   renderNewPageBgs();
-  applyFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY, true);
+  applyFlag(newPageProviderToggle, NEWPAGE_PROVIDER_KEY, false);
   applyFlag(pageIntentToggle, PAGE_INTENT_KEY, true);
   renderPalettePrefixSettings();
   window.addEventListener("scribe:appearance", () => {
     applyTheme(loadTheme(), false);
     for (const [control, key] of [[tightSmallToggle, TIGHT_SMALL_KEY], [uiFxToggle, UI_FX_KEY], [auroraEdgeToggle, AURORA_EDGE_KEY], [auroraIdleToggle, AURORA_IDLE_KEY], [newPageProviderToggle, NEWPAGE_PROVIDER_KEY]]) {
-      applyFlag(control, key, true);
+      applyFlag(control, key, key !== AURORA_IDLE_KEY && key !== NEWPAGE_PROVIDER_KEY);
     }
     document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
     document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));

@@ -283,6 +283,9 @@ test("provider palettes update live, preserve the shader and use theme colors wh
   const s = screen();
   s.reduce(true);
   s.page.render({ id: "draft" });
+  assert.equal(s.classes.has("provider-colors"), false, "fresh profiles use background colours");
+  assert.equal(s.css["--np-c1"], undefined);
+  s.tint(true);
   assert.equal(s.uniforms.u_tint, 1);
   assert.equal(s.css["--np-c1"], "168,50,26");
   const count = s.shaders.length;
@@ -338,6 +341,8 @@ test("Bokeh drift speeds up gently without jumping on working changes, and freez
 test("CSS fallback follows providers and the setting without WebGL", () => {
   const s = screen(false);
   s.page.render({ id: "draft" });
+  assert.equal(s.classes.has("provider-colors"), false);
+  s.tint(true);
   assert.equal(s.classes.has("provider-colors"), true);
   s.provider("codex");
   assert.equal(s.css["--np-c2"], "147,197,253");
