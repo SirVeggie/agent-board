@@ -3266,8 +3266,8 @@ html.fx-off .ag-slash { transition: none; }
   padding: 14px;
   background: var(--bg);
   background-image: var(--bg-image);
-  transition: opacity var(--dur-enter) var(--ease);
-  @starting-style { opacity: 0; }
+  transition: opacity 180ms var(--ease), transform 180ms var(--ease);
+  @starting-style { opacity: 0; transform: translateY(6px); }
 }
 
 .agent-full[hidden] {
@@ -4598,21 +4598,21 @@ html.tight-small .agent-full {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 16px;
-
+  filter: blur(0px);
   transition:
-    transform var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1),
-
-    opacity var(--dur-slow) cubic-bezier(0, 0, 0.35, 1);
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 520ms cubic-bezier(0, 0, 0.35, 1);
 }
 
 .dock-handle-line.in {
   transform: translateY(12px);
-
+  filter: blur(4px);
 }
 
 .dock-handle-line.out {
   transform: translateY(-12px);
-
+  filter: blur(4px);
   opacity: 0;
 }
 
@@ -4666,8 +4666,8 @@ html.tight-small .agent-full {
   gap: 10px;
   color: var(--text);
   max-height: calc(100vh - 60px);
-  transition: opacity var(--dur-enter) var(--ease);
-  @starting-style { opacity: 0; }
+  transition: opacity var(--dur-enter) var(--ease), transform var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; transform: translateY(6px); }
 }
 
 .ag-modal-title {
@@ -5463,12 +5463,12 @@ html.tight-small .agent-full {
   padding: 6px;
   max-height: min(520px, calc(100vh - 120px));
   overflow-y: auto;
-  transition: opacity var(--dur-enter) var(--ease);
-  @starting-style { opacity: 0; }
+  transition: opacity var(--dur-enter) var(--ease), transform var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; transform: translateY(4px); }
 }
 
 .ag-fly.from-button {
-
+  @starting-style { transform: translateY(-4px); }
 }
 
 .ag-fly-head {
@@ -5630,8 +5630,8 @@ html.tight-small .agent-full {
   box-shadow: var(--ag-raised);
   font-size: 12.5px;
   pointer-events: auto;
-  transition: opacity var(--dur-enter) var(--ease);
-  @starting-style { opacity: 0; }
+  transition: opacity var(--dur-enter) var(--ease), transform var(--dur-enter) var(--ease);
+  @starting-style { opacity: 0; transform: translateX(12px); }
 }
 
 .ag-toast > .ag-dot {

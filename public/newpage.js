@@ -442,10 +442,10 @@ return glow(c,e);}`;
           render(null);
           return;
         }
-        const timing = { token: "slow", fill: "both", translate: "none" };
+        const timing = { token: "slow", fill: "both", easing: "ease-in-out" };
         pending.animations = [
-          window.scribeMotion.reveal(root, false, timing),
-          window.scribeMotion.reveal(frame, true, timing),
+          window.scribeMotion.animate(root, [{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing),
+          window.scribeMotion.animate(frame, [{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing),
         ];
         Promise.all(pending.animations.map((animation) => animation.finished)).then(() => {
           if (replacement === pending) render(null);
@@ -497,7 +497,9 @@ return glow(c,e);}`;
     function showWord() {
       intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
       if (!window.scribeMotion.enabled()) return;
-      window.scribeMotion.reveal(intentWord, true, { token: "slow" });
+      window.scribeMotion.animate(intentWord,
+        [{ opacity: 0, filter: "blur(8px)", transform: "translateY(8px)" }, { opacity: 1, filter: "blur(0px)", transform: "none" }],
+        { duration: 520, easing: "ease-out" });
       wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
     }
 
@@ -528,8 +530,8 @@ return glow(c,e);}`;
         setIntent(null);
         return;
       }
-      if (entering && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        window.scribeMotion.reveal(root, true, { token: "slow", translate: "none" });
+      if (entering && window.scribeMotion.enabled()) {
+        window.scribeMotion.animate(root, [{ opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)" }], { token: "slow", easing: "ease-in-out" });
       }
       const intent = host.intent?.(tab.id) || null;
       const threads = covering ? 1 : host.threads(tab.id);

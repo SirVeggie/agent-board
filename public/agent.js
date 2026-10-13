@@ -6604,7 +6604,7 @@
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
       else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
-    /** The hidden handle shows one line at a time using the shared entry and exit helper. */
+    /** CSS transitions retarget text mid-swap, retaining the slide and blur of rapid updates. */
     setHandleText(text, key) {
       const box = this.handleText;
       const cur = box.querySelector(".dock-handle-line:not(.out)");
@@ -6619,11 +6619,13 @@
         box.replaceChildren(next);
         return;
       }
+      next.classList.add("in");
       box.append(next);
-      window.scribeMotion.reveal(next, true);
+      void next.offsetWidth;
+      next.classList.remove("in");
       cur.classList.add("out");
-      const leaving = window.scribeMotion.reveal(cur, false, { translate: "translateY(-6px)", fill: "both" });
-      leaving.finished.then(() => { cur.remove(); leaving.cancel(); }).catch(() => {});
+      // Cleanup must also run when the window is hidden and transitions stall.
+      setTimeout(() => cur.remove(), 560);
       const outs = box.querySelectorAll(".dock-handle-line.out");
       for (let i = 0; i < outs.length - 2; i++) outs[i].remove();
     },

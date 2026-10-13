@@ -3318,8 +3318,11 @@ main.has-split .newpage:not(.cover)[data-pane] {
   height: calc(100% - 2 * var(--peek-y) - var(--view-head));
   z-index: var(--z-peek-frame);
   border-radius: 0 0 12px 12px;
-  transition: opacity var(--dur-enter) var(--ease);
-  @starting-style { opacity: 0; }
+  animation: peek-in var(--dur-enter) var(--ease);
+}
+
+@keyframes peek-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
 }
 
 #frames iframe.frame-loading,
@@ -3377,8 +3380,7 @@ html[data-theme="cream"] .peek-scrim {
   background: var(--panel);
   box-shadow: var(--shadow), 0 18px 48px rgba(0, 0, 0, 0.45);
   overflow: hidden;
-  transition: opacity var(--dur-enter) var(--ease);
-  @starting-style { opacity: 0; }
+  animation: peek-in var(--dur-enter) var(--ease);
 }
 
 html[data-theme="cream"] .peek-card {
@@ -4697,17 +4699,17 @@ main.blank-page #frames iframe:not(.inactive) {
   align-items: center;
   text-align: center;
   opacity: 1;
-
+  filter: blur(0);
   visibility: visible;
-  transition: opacity var(--dur-slow) ease-in-out, visibility 0s;
+  transition: opacity var(--dur-slow) ease-in-out, filter var(--dur-slow) ease-in-out, visibility 0s;
 }
 
 .newpage.has-thread .newpage-body {
   opacity: 0;
-
+  filter: blur(12px);
   visibility: hidden;
   pointer-events: none;
-  transition: opacity var(--dur-slow) ease-in-out, visibility 0s var(--dur-slow);
+  transition: opacity var(--dur-slow) ease-in-out, filter var(--dur-slow) ease-in-out, visibility 0s var(--dur-slow);
 }
 
 /* While the floating chat writes a page: a word for what the agent is at, and the page's title. */
@@ -4724,16 +4726,16 @@ main.blank-page #frames iframe:not(.inactive) {
   text-align: center;
   pointer-events: none;
   opacity: 0;
-
+  filter: blur(12px);
   visibility: hidden;
-  transition: opacity var(--dur-slow) ease-in-out, visibility 0s var(--dur-slow);
+  transition: opacity var(--dur-slow) ease-in-out, filter var(--dur-slow) ease-in-out, visibility 0s var(--dur-slow);
 }
 
 .newpage.intent .newpage-intent {
   opacity: 1;
-
+  filter: blur(0);
   visibility: visible;
-  transition: opacity var(--dur-slow) ease-in-out, visibility 0s;
+  transition: opacity var(--dur-slow) ease-in-out, filter var(--dur-slow) ease-in-out, visibility 0s;
 }
 
 .newpage-intent-word {

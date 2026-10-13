@@ -59,7 +59,7 @@ function screen(webgl = true, restoring = false) {
     return parts.get(key)!;
   };
   const win: any = {
-    scribeMotion: { enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate() },
+    scribeMotion: { enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate(), animate: (node: any) => node.animate() },
     matchMedia: () => motion,
     addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
     scribeOrb: { colors: (p: string) => palettes[p] },

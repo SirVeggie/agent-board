@@ -40,8 +40,9 @@
     const panel = root.querySelector(".settings-panel");
     const backdrop = root.querySelector(".settings-backdrop");
     const options = { fill: "both" };
+    const frames = [{ opacity: 0, transform: "translateY(12px) scale(.98)" }, { opacity: 1, transform: "translateY(0) scale(1)" }];
     const animations = [
-      window.scribeMotion.reveal(panel, visible, options),
+      window.scribeMotion.animate(panel, visible ? frames : [...frames].reverse(), { ...options, token: visible ? "enter" : "leave" }),
       window.scribeMotion.reveal(backdrop, visible, { ...options, translate: "none" }),
     ];
     transitions.set(root, animations);

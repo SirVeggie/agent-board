@@ -18,7 +18,7 @@ Inventory of the motion changes in `0bf898a` and `990a1fb`, compared with `0bf89
 | Peek card entry | 6px slide and scale from .99 over 160ms | Opacity-only entry over 240ms; exit still uses slide/scale with the shared helper |
 | Peek scrim | 160ms entry fade | 240ms entry fade |
 | Library drag ghost | 120ms fade and scale from .92 | 240ms opacity-only entry; landing 160ms becomes 150ms |
-| Agent menus and modals | Fade plus 6px upward entrance (160–180ms) | Opacity-only entry over 240ms |
+| Full-window agent chat and modals | Fade plus 6px upward entrance (160–180ms) | Opacity-only entry over 240ms; agent menus had no such entry animation |
 | Agent flyouts | 4px slide up/down plus 160ms fade | Opacity-only entry over 240ms |
 | Agent toasts | 12px horizontal slide plus 220ms fade | Opacity-only entry over 240ms |
 | Transcript rows | Per-item 240ms entry tracked across rebuilds, custom easing | Explicit one-shot shared entry with shell easing and attribute cleanup |
@@ -45,3 +45,9 @@ Inventory of the motion changes in `0bf898a` and `990a1fb`, compared with `0bf89
 ## Related paint changes
 
 Backdrop blur was removed from chrome, settings, template lock, new-page template cards, peek/file-preview scrims, floating chat output/handle, and agent modal backdrop. These are appearance changes rather than separate transitions.
+
+## Selected restorations after review
+
+Restored the handle's original retargetable 520ms slide/blur, settings slide/scale, peek slide/scale, full-window chat slide, modal/flyout/toast slides, and new-page entry/handoff/panel/word blur. Settings, peek, toast, flyout and modal timings retain the post-#435 values. Full-window chat retains the original 180ms timing; intent words retain the original 520ms timing. The review's "Agent menus" illustration was mislabeled: it represents full-window chat, not menus.
+
+Transcript easing and rebuild behavior remain unchanged; rebuild continuity was left undecided. All explicit Keep choices, including backdrop blur removal and shared effects-off policy, remain in place.
