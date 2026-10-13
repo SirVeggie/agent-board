@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { McpBridge } from "./mcpBridge.js";
 import { resolveServer } from "./mcpConfig.js";
+import { McpPermissions } from "./mcpPermissions.js";
 
 const sdkServer = fileURLToPath(new URL("../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js", import.meta.url));
 const sdkStdio = fileURLToPath(new URL("../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js", import.meta.url));
@@ -35,11 +36,13 @@ test("bridged tools call the server, and ask first unless allowed", async () => 
   const bridge = new McpBridge(
     [server],
     os.tmpdir(),
-    () => ({ approval }),
+    () => ({ approval, id: "test-thread" }),
     () => async (req) => {
       asked.push(req.title);
       return { optionId: answer };
-    }
+    },
+    undefined,
+    new McpPermissions(path.join(path.dirname(file), "permissions.json"))
   );
   try {
     const tools = await bridge.tools();
@@ -57,6 +60,11 @@ test("bridged tools call the server, and ask first unless allowed", async () => 
     approval = "full";
     await tools[0].call({}, {});
     assert.equal(asked.length, 2);
+    approval = "ask";
+    answer = "mcp";
+    await tools[0].call({}, {});
+    await tools[0].call({}, {});
+    assert.equal(asked.length, 3);
   } finally {
     bridge.close();
   }

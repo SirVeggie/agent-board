@@ -8,6 +8,7 @@ import { bridgedToolName, type ResolvedMcpServer } from "./mcpConfig.js";
 import type { ApprovalDecision, ApprovalRequest } from "./providers/provider.js";
 import type { Thread } from "./types.js";
 import { isPlainRecord } from "./types.js";
+import { McpPermissions, mcpApprovalOptions } from "./mcpPermissions.js";
 
 /**
  * The user's MCP servers (mcpConfig.ts) for providers that take tools from the host rather than MCP
@@ -65,10 +66,11 @@ export class McpBridge {
     readonly servers: ResolvedMcpServer[],
     /** Folder stdio servers start in when they name none. */
     readonly cwd: string,
-    private thread: () => Pick<Thread, "approval">,
+    private thread: () => Pick<Thread, "approval"> & Partial<Pick<Thread, "id">>,
     private ask: () => BridgeAsk | undefined,
     /** A server that could not start; the session goes on without it. */
-    private onError?: (server: string, message: string) => void
+    private onError?: (server: string, message: string) => void,
+    private permissions = new McpPermissions()
   ) {}
 
   tools(): Promise<BridgedTool[]> {
@@ -120,7 +122,7 @@ export class McpBridge {
     opts: { toolCallId?: string; signal?: AbortSignal }
   ): Promise<{ content: unknown[]; isError: boolean }> {
     const fail = (text: string) => ({ content: [{ type: "text", text }], isError: true });
-    if (bridgeAsks(this.thread(), server)) {
+    if (bridgeAsks(this.thread(), server) && !this.permissions.allows(server, tool, this.thread().id)) {
       const ask = this.ask();
       if (!ask) return fail("No active turn: nobody is there to approve this tool call.");
       try {
@@ -130,14 +132,11 @@ export class McpBridge {
             tool: "other",
             title: `${server.name}: ${tool}`,
             detail: summarizeArgs(args),
-            options: [
-              { id: "allow", label: "Allow", kind: "allow_once" },
-              { id: "reject", label: "Deny", kind: "reject_once" },
-            ],
+            options: mcpApprovalOptions,
           },
           opts.signal
         );
-        if (decision.optionId !== "allow") return fail(`The user denied this tool call${decision.note ? `: ${decision.note}` : "."}`);
+        if (!this.permissions.grant(server, tool, this.thread().id, decision.optionId)) return fail(`The user denied this tool call${decision.note ? `: ${decision.note}` : "."}`);
       } catch (err) {
         return fail((err as Error).message || "Not allowed.");
       }

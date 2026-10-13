@@ -299,6 +299,7 @@ export type ToolStatus = "pending" | "running" | "done" | "error";
 export type ApprovalOption = {
   id: string;
   label: string;
+  description?: string;
   kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
 };
 

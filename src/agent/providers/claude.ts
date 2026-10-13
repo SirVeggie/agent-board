@@ -10,6 +10,7 @@ import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolK
 import { isPlainRecord, noPages } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
 import { claudeServerConfig, serversKey, type ResolvedMcpServer } from "../mcpConfig.js";
+import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 
 /**
@@ -1280,7 +1281,11 @@ class ClaudeSession implements ProviderSession {
       return { behavior: "deny", message: "This thread is in Pages mode: only board tools and web search are available." };
     }
     const described = describeTool(name, input, this.thread.cwd);
-    const options = [
+    const mcpServer = this.userServers().find((server) => name.startsWith(`mcp__${server.name}__`));
+    const mcpTool = mcpServer ? name.slice(`mcp__${mcpServer.name}__`.length) : undefined;
+    const permissions = new McpPermissions();
+    if (mcpServer && mcpTool && permissions.allows(mcpServer, mcpTool, this.thread.id)) return { behavior: "allow", updatedInput: input };
+    const options = mcpServer ? mcpApprovalOptions : [
       { id: "allow", label: "Allow", kind: "allow_once" as const },
       ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: "Always allow", kind: "allow_always" as const }] : []),
       { id: "deny", label: "Deny", kind: "reject_once" as const },
@@ -1302,7 +1307,7 @@ class ClaudeSession implements ProviderSession {
         },
         opts.signal
       );
-      if (decision.optionId === "deny") {
+      if (mcpServer && mcpTool ? !permissions.grant(mcpServer, mcpTool, this.thread.id, decision.optionId) : decision.optionId === "deny") {
         return { behavior: "deny", message: decision.note ? `The user denied this: ${decision.note}` : "The user denied this tool call." };
       }
       return {

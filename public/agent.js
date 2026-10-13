@@ -3928,6 +3928,10 @@
             for (const x of actions.querySelectorAll("button")) x.disabled = false;
           }
         });
+        if (opt.description) {
+          b.dataset.tooltip = opt.description;
+          b.setAttribute("aria-description", opt.description);
+        }
         actions.append(b);
       }
       node.append(note, actions);
