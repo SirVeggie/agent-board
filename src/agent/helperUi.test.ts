@@ -19,9 +19,11 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const approvals: string[] = [];
+    const approvalDecisions: unknown[] = [];
     await page.route("http://helpers.test/**", async (route) => {
       if (route.request().url().includes("/api/agent/approvals/")) {
         approvals.push(route.request().url().split("/").at(-1)!);
+        approvalDecisions.push(route.request().postDataJSON());
         return route.fulfill({ contentType: "application/json", body: "{}" });
       }
       if (route.request().url().includes("/api/agent/thread-search")) {
@@ -119,11 +121,14 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     await page.getByRole("button", { name: "Close helper and return to parent chat" }).click();
     await page.evaluate(() => {
       const { S, onEvent } = (window as any).helperTest;
-      onEvent({ type: "agent_thread", thread: { ...S.threads.get("helper"), status: "waiting", asking: { kind: "approval", itemId: "helper-approval", title: "Run tests", detail: "npm test", options: [{ id: "allow", label: "Allow", kind: "allow_once" }, { id: "deny", label: "Deny", kind: "reject_once" }] } } });
+      onEvent({ type: "agent_thread", thread: { ...S.threads.get("helper"), provider: "codex", approval: "auto", status: "waiting", asking: { kind: "approval", itemId: "helper-approval", title: "Codex Auto-review denied this action", detail: "scribe/page_action\nThis needs explicit authorization.", options: [{ id: "approveRetry", label: "Approve one retry", kind: "allow_once" }, { id: "keepDenied", label: "Keep denied", kind: "reject_once" }] } } });
     });
     assert.match(await page.locator(".ag-helper-approval-name").textContent() || "", /Audit the files/);
-    await page.locator(".ag-helper-approval").getByRole("button", { name: "Allow", exact: true }).click();
+    assert.match(await page.locator(".ag-helper-approval").textContent() || "", /scribe\/page_action/);
+    assert.equal(await page.locator(".ag-helper-approval").getByRole("button", { name: "Keep denied", exact: true }).count(), 1);
+    await page.locator(".ag-helper-approval").getByRole("button", { name: "Approve one retry", exact: true }).click();
     assert.deepEqual(approvals, ["helper-approval"]);
+    assert.deepEqual(approvalDecisions, [{ optionId: "approveRetry" }]);
     const active = await page.evaluate(() => (window as any).helperTest.flyoutSnapshot("button").rows.map((r: any) => [r.thread.id, r.thread.status]));
     assert.deepEqual(active, [["parent", "waiting"]]);
     if (process.env.SCRIBE_HELPER_SCREENSHOT) await page.screenshot({ path: process.env.SCRIBE_HELPER_SCREENSHOT });

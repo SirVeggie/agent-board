@@ -60,6 +60,32 @@ test("human-only overrides retain Pages tool refusals and ordinary Full/Edits gr
   }
 });
 
+test("a helper's native MCP denial exposes a human retry without granting the parent", async () => {
+  const parent = running("auto");
+  const helper = running("auto");
+  helper.thread.helperOf = parent.id;
+  const retryRequest: ApprovalRequest = { ...request, tool: "mcp",
+    title: "Codex Auto-review denied this action", detail: "scribe/page_action",
+    options: [{ id: "approveRetry", label: "Approve one retry", kind: "allow_once" },
+      { id: "keepDenied", label: "Keep denied", kind: "reject_once" }] };
+  for (const optionId of ["approveRetry", "keepDenied"]) {
+    const pending = helper.sink.approval(retryRequest);
+    const view = host.listThreads().find((t) => t.id === helper.id)!;
+    assert.equal(view.status, "waiting");
+    assert.equal(view.helperOf, parent.id);
+    assert.equal(view.asking?.kind, "approval");
+    assert.deepEqual(view.asking?.options, retryRequest.options);
+    assert.equal(view.asking?.detail, "scribe/page_action");
+    assert.ok(view.asking?.itemId);
+    assert.equal(host.listThreads().find((t) => t.id === parent.id)?.asking, undefined);
+    host.resolveApproval(view.asking!.itemId, optionId);
+    assert.equal((await pending).optionId, optionId);
+    assert.equal(host.listThreads().find((t) => t.id === helper.id)?.asking, undefined);
+    assert.equal(helper.thread.approval, "auto");
+    assert.equal(parent.thread.approval, "auto");
+  }
+});
+
 async function asksUser(paths: string[] | undefined, tool: ApprovalRequest["tool"] = "edit", cwd: string | null = workspace) {
   const { id, sink } = running("edits", "code", cwd);
   const pending = sink.approval({ ...request, humanOnly: false, paths, tool });
