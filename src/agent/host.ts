@@ -14,7 +14,7 @@ import { isBlankPage, type PageEvent } from "../types.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
-import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { contextBlock, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
@@ -1377,6 +1377,14 @@ export class AgentHost {
       if (cwd !== thread.cwd && this.runs.has(id)) throw new Error("Stop the running turn before changing the workspace.");
       if (cwd !== thread.cwd && openWorktree(thread)) throw new Error("This thread works in its own worktree. Merge or leave it before changing the workspace.");
       next.cwd = cwd;
+      if (cwd !== thread.cwd && thread.worktree?.closed) {
+        delete next.worktree;
+        next.useWorktree = false;
+        next.nativeId = null;
+        this.sessions.get(id)?.dispose();
+        this.sessions.delete(id);
+        forgetGuides(id);
+      }
     }
     if (typeof patch.useWorktree === "boolean" && patch.useWorktree !== Boolean(thread.useWorktree)) {
       if (openWorktree(thread)) throw new Error("This thread already has a worktree. Merge or leave it from the branch menu.");
@@ -4155,7 +4163,7 @@ export class AgentHost {
    * base as it is then (in the same folder when it can, where the session resumes). A left one goes
    * back to the main checkout with a new session.
    */
-  async finishWorktree(threadId: string, how: "merge" | "leave"): Promise<{ ok: true; message: string }> {
+  async finishWorktree(threadId: string, how: "merge" | "leave" | "discard"): Promise<{ ok: true; message: string }> {
     if (this.runs.has(threadId)) throw new Error("Stop the running turn first.");
     const thread = this.requireThread(threadId);
     const wt = openWorktree(thread);
@@ -4174,9 +4182,11 @@ export class AgentHost {
         const synced = await syncDependencies(wt.repo).catch((err) => `Checking node_modules after the merge failed: ${(err as Error).message}`);
         if (synced) message += ` ${synced}`;
       }
-    } else {
+    } else if (how === "leave") {
       const committed = await commitAll(wt, `WIP: ${thread.title}`);
       message = `Left the work on branch ${wt.branch}${committed ? "; its uncommitted changes were committed there as WIP" : ""}.`;
+    } else {
+      message = `Discarded the work on branch ${wt.branch}.`;
     }
     // The provider process runs in the worktree folder; Windows will not remove a folder in use.
     for (const id of [threadId, ...sharers.map((t) => t.id)]) {
@@ -4184,7 +4194,10 @@ export class AgentHost {
       this.sessions.delete(id);
       forgetGuides(id);
     }
-    await removeWorktree(wt);
+    if (how === "discard") {
+      const deleted = await discardWorktree(wt);
+      if (!deleted) message += ` The branch could not be deleted and remains in the repository.`;
+    } else await removeWorktree(wt);
     if (how === "merge") await dropBranchIfEmpty(wt);
     // Agent sessions are tied to their folder. Forks that shared the worktree can't all reopen its
     // folder, so only the thread itself keeps its session; the others start over in the main checkout.

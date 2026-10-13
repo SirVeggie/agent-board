@@ -2770,6 +2770,22 @@
         if (dir) await this.rememberDraftPrefs();
         return;
       }
+      const wt = openWorktree(t);
+      if (wt) {
+        if (t.status === "running") {
+          notice("Stop the running turn before changing the workspace.");
+          return;
+        }
+        const warning = `Change workspace to ${dir || "none"}? This discards uncommitted changes, deletes branch ${wt.branch}, and removes its worktree folder. Other threads sharing this worktree return to the main checkout.`;
+        if (!(await app().confirm(warning, "Discard and change workspace"))) return;
+        try {
+          const res = await api("POST", `/threads/${encodeURIComponent(t.id)}/worktree`, { action: "discard" });
+          notice(res.message);
+        } catch (err) {
+          notice(err.message);
+          return;
+        }
+      }
       await this.updateSettings({ scope, cwd: dir });
     }
 

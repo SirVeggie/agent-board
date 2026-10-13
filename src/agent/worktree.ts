@@ -275,6 +275,14 @@ export function unlinkOrphanedWorktrees(open: string[]): string[] {
   return cut;
 }
 
+/** Discard a worktree, cutting shared links before removing its files and branch. */
+export async function discardWorktree(wt: ThreadWorktree): Promise<boolean> {
+  await removeWorktree(wt);
+  if (!(await branchExists(wt.repo, wt.branch))) return true;
+  const res = await git(["branch", "-D", wt.branch], wt.repo, { timeoutMs: 10_000 });
+  return res.code === 0;
+}
+
 /** Delete the worktree's branch when it holds nothing the base does not. */
 export async function dropBranchIfEmpty(wt: ThreadWorktree): Promise<boolean> {
   if (!(await branchExists(wt.repo, wt.branch)) || (await countAheadOf(wt)) > 0) return false;

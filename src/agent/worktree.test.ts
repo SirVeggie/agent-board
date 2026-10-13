@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { revertTrees, snapshotTree } from "./git.js";
-import { commitAll, createWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus } from "./worktree.js";
 
 let root = "";
 let repo = "";
@@ -71,6 +71,21 @@ test("a worktree branches from HEAD, links node_modules, and keeps the link out 
   assert.ok(!fs.existsSync(wt.path));
   assert.ok(fs.existsSync(path.join(repo, "node_modules", "dep", "index.js")), "removing the worktree leaves the linked folder alone");
   assert.ok(await dropBranchIfEmpty(wt));
+});
+
+test("discard removes committed and uncommitted work without touching the main checkout or linked dependencies", async () => {
+  const base = sh(repo, "rev-parse", "HEAD");
+  const { worktree: wt } = await createWorktree(repo, repo, "Discard me");
+  fs.writeFileSync(path.join(wt.path, "committed.txt"), "discard\n");
+  await commitAll(wt, "work to discard");
+  fs.writeFileSync(path.join(wt.path, "untracked.txt"), "discard too\n");
+  fs.writeFileSync(path.join(wt.path, "src", "a.txt"), "dirty\n");
+  assert.equal(await discardWorktree(wt), true);
+  assert.equal(fs.existsSync(wt.path), false);
+  assert.equal(sh(repo, "branch", "--list", wt.branch), "");
+  assert.equal(sh(repo, "rev-parse", "HEAD"), base);
+  assert.equal(fs.existsSync(path.join(repo, "committed.txt")), false);
+  assert.equal(fs.readFileSync(path.join(repo, "node_modules", "dep", "index.js"), "utf8"), "x");
 });
 
 test("a merged worktree reopens in the same folder from the latest base", async () => {

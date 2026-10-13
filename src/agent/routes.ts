@@ -594,7 +594,7 @@ export function agentRouter(host: AgentHost): express.Router {
     "/threads/:id/worktree",
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
-      if (body.action !== "merge" && body.action !== "leave") throw new Error("action must be merge or leave");
+      if (body.action !== "merge" && body.action !== "leave" && body.action !== "discard") throw new Error("action must be merge, leave or discard");
       return host.finishWorktree(req.params.id, body.action);
     })
   );
