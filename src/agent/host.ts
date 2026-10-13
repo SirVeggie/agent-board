@@ -2462,8 +2462,7 @@ export class AgentHost {
 
   /** The thread menu's search: the threads whose messages mention words of q, with which words and a snippet. */
   searchThreadMessages(q: unknown): ThreadMessageHit[] {
-    // A single letter is in nearly every message.
-    const words = searchWords(q).filter((word) => word.length > 1);
+    const words = searchWords(q);
     return matchMessages(this.db.searchMessages(words.flatMap(likePatterns)), words);
   }
 

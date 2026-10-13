@@ -54,3 +54,24 @@ test("thread search reads the user's messages and the agent's replies, word by w
   assert.deepEqual(search("älä ÄÄKKÖSIÄ").map((hit) => hit.words.length), [2]);
   assert.deepEqual(search(""), []);
 });
+
+test("short terms, technical names, and stopwords keep useful message matches", () => {
+  db.saveThread({ id: "short", title: "Model setup", activityAt: 1 } as unknown as Thread);
+  db.saveItems([item("short", { kind: "user", text: "llama.cpp H2O x" })]);
+  assert.deepEqual(searchWords("please show my llama.cpp page"), ["llama.cpp"]);
+  assert.deepEqual(searchWords("a"), ["a"]);
+  assert.deepEqual(search("x").map((hit) => hit.id), ["short"]);
+  assert.deepEqual(search("please show llama.cpp H2O x").map((hit) => [hit.id, hit.words]), [
+    ["a", ["llama.cpp", "h2o"]], ["short", ["llama.cpp", "h2o", "x"]],
+  ]);
+});
+
+test("later messages can complete a match and improve its snippet", () => {
+  const rows = [
+    { threadId: "t", text: "llama" },
+    { threadId: "t", text: "h2o" },
+    { threadId: "t", text: "llama and h2o together" },
+    { threadId: "t", text: "llama h2o later" },
+  ];
+  assert.deepEqual(matchMessages(rows, ["llama", "h2o"]), [{ id: "t", words: ["llama", "h2o"], snippet: "llama and h2o together" }]);
+});

@@ -37,7 +37,7 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     // Exercise the real chat views with fixture data, without booting a daemon or providers.
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall, liveStep, searchThreads, searchMessages, dock };") });
+    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.helperTest = { S, view: sidebar.view, views, onEvent, flyoutSnapshot, helperCall, liveStep, searchThreads, searchMessages, renderThreadList, dock };") });
     await page.evaluate(() => {
       const { S, view } = (window as any).helperTest;
       const base = { provider: "claude", model: "sonnet", effort: null, mode: "code", approval: "ask", web: "off", cwd: null, scope: { kind: "global", ref: null }, stats: { turns: 1, files: 0, added: 0, removed: 0 }, createdAt: 1, activityAt: 1, archived: false, unread: false, queued: 0 };
@@ -106,6 +106,30 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       return { before, fresh, hits: searchThreads("llama main").map((r: any) => [r.id, r.snippet]) };
     });
     assert.deepEqual(said, { before: 0, fresh: true, hits: [["parent", "about llama.cpp"]] });
+    // Search relevance must hold across workspace boundaries, not just within each group.
+    const rankedList = await page.evaluate(() => {
+      const { S, renderThreadList } = (window as any).helperTest;
+      const previous = { search: S.search, filter: S.filter };
+      const base = S.threads.get("parent");
+      S.threads.set("exact-search", { ...base, id: "exact-search", title: "llama main" });
+      S.threads.set("workspace-search", { ...base, id: "workspace-search", title: "llama main notes", scope: { kind: "workspace", ref: "C:/models" } });
+      S.search = "llama main";
+      S.filter = "all";
+      const container = document.createElement("div");
+      document.body.append(container);
+      const opts = { onPick() {}, onNew() {}, onNewIn() {}, currentId: null };
+      renderThreadList(container, opts);
+      const ids = [...container.querySelectorAll(".ag-row")].map((node: any) => node.dataset.id);
+      S.search = "";
+      renderThreadList(container, opts);
+      const grouped = container.querySelectorAll(".ag-list-group").length > 0;
+      container.remove();
+      S.threads.delete("exact-search");
+      S.threads.delete("workspace-search");
+      Object.assign(S, previous);
+      return { ids, grouped };
+    });
+    assert.deepEqual(rankedList, { ids: ["exact-search", "workspace-search", "parent"], grouped: true });
     assert.equal(await page.getByRole("button", { name: "Open thread", exact: true }).count(), 0);
     await page.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
     assert.equal(await page.locator(".ag-view-helper .ag-title").textContent(), "Helper: Audit the files");

@@ -13,8 +13,13 @@ export type ThreadMessageHit = {
 /** A query's words, lowercase: a thread matches when each is in its title or its messages, in any order. */
 export function searchWords(q: unknown): string[] {
   const words = typeof q === "string" ? q.toLowerCase().split(/\s+/).filter(Boolean) : [];
-  return [...new Set(words)].slice(0, 10);
+  const useful = words.filter((word) => !QUERY_STOPWORDS.has(word));
+  // A query made entirely of stopwords can still name something specific (e.g. C's "a").
+  return [...new Set(useful.length ? useful : words)].slice(0, 10);
 }
+
+/** Same stopwords as library search; keep public/agent.js in sync. */
+const QUERY_STOPWORDS = new Set(["a", "an", "the", "my", "me", "your", "our", "page", "pages", "tab", "tabs", "board", "html", "list", "lists", "updated", "update", "please", "show"]);
 
 /** SQL LIKE patterns that find a word in an item's stored JSON. LIKE folds case for ASCII only, so other letters get their case variants. */
 export function likePatterns(word: string): string[] {
@@ -34,10 +39,12 @@ export function messageSnippet(text: string, word: string, width = 160): string 
 export function matchMessages(rows: Iterable<MessageRow>, words: string[]): ThreadMessageHit[] {
   const found = new Map<string, { words: Set<string>; best: number; snippet: string }>();
   for (const row of rows) {
+    let hit = found.get(row.threadId);
+    // All words and the best possible snippet are already known for this thread.
+    if (hit?.best === words.length) continue;
     const text = row.text.toLowerCase();
     const here = words.filter((word) => text.includes(word));
     if (!here.length) continue;
-    let hit = found.get(row.threadId);
     if (!hit) found.set(row.threadId, (hit = { words: new Set(), best: 0, snippet: "" }));
     for (const word of here) hit.words.add(word);
     if (here.length > hit.best) {

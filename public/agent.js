@@ -1058,16 +1058,15 @@
   }
 
   /** Keep in sync with src/agent/threadSearch.ts */
+  const QUERY_STOPWORDS = new Set(["a", "an", "the", "my", "me", "your", "our", "page", "pages", "tab", "tabs", "board", "html", "list", "lists", "updated", "update", "please", "show"]);
   function searchWords(q) {
-    return [...new Set(String(q || "").toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 10);
+    const words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+    const useful = words.filter((word) => !QUERY_STOPWORDS.has(word));
+    return [...new Set(useful.length ? useful : words)].slice(0, 10);
   }
 
   /** What the daemon found in threads' messages, by query. The list itself only knows titles. */
   const messageSearch = { cache: new Map(), last: new Map(), timer: 0, cancel: null };
-
-  function messageHits(q) {
-    return messageSearch.cache.get(searchWords(q).join(" "))?.hits || messageSearch.last;
-  }
 
   /** Ask the daemon which threads' messages mention the words. Resolves true when there are new hits to show. */
   function searchMessages(q) {
@@ -1076,7 +1075,7 @@
     messageSearch.cancel?.();
     messageSearch.cancel = null;
     const had = messageSearch.cache.get(key);
-    if (key.length < 2 || (had && Date.now() - had.at < 30_000)) return Promise.resolve(false);
+    if (!key || (had && Date.now() - had.at < 30_000)) return Promise.resolve(false);
     return new Promise((resolve) => {
       messageSearch.cancel = () => resolve(false);
       messageSearch.timer = setTimeout(async () => {
@@ -1096,22 +1095,50 @@
     });
   }
 
-  /** Every word is in the title, scope or workspace, or in what was said in the thread; in any order. */
-  function threadMatchesQuery(t, q) {
-    const words = searchWords(q);
-    if (!words.length) return true;
-    const hay = threadSearchHaystack(t);
-    const said = messageHits(q).get(t.id)?.words || [];
-    return words.every((word) => hay.includes(word) || said.includes(word));
+  let preparedThreadQuery = null;
+  function threadQuery(q) {
+    if (preparedThreadQuery?.q !== q) {
+      const words = searchWords(q);
+      preparedThreadQuery = { q, words, phrase: words.join(" "), sequence: words.join("") };
+    }
+    return { ...preparedThreadQuery, hits: messageSearch.cache.get(preparedThreadQuery.phrase)?.hits || messageSearch.last };
   }
 
-  /** The message text that made a search find a thread; "" when its title has every word. */
-  function threadMatchSnippet(t, q) {
-    const words = searchWords(q);
+  function titleSequence(title, sequence) {
+    if (!sequence || sequence.length > title.length) return false;
+    let at = 0;
+    for (const ch of title) {
+      if (ch === sequence[at] && ++at === sequence.length) return true;
+    }
+    return false;
+  }
+
+  /** Title matches outrank scope/message matches; pinning and recency only break ties. */
+  function threadMatch(t, query) {
+    const { words, phrase, sequence, hits } = query;
+    if (!words.length) return { score: 0, snippet: "" };
     const title = t.title.toLowerCase();
-    if (!words.length || words.every((word) => title.includes(word))) return "";
-    const hit = messageHits(q).get(t.id);
-    return hit && words.some((word) => hit.words.includes(word)) ? hit.snippet : "";
+    const inTitle = words.filter((word) => title.includes(word)).length;
+    if (inTitle === words.length) return { score: title === phrase ? 100 : 80, snippet: "" };
+    if (titleSequence(title, sequence)) return { score: 55, snippet: "" };
+    const hay = threadSearchHaystack(t);
+    const hit = hits.get(t.id);
+    if (!words.every((word) => hay.includes(word) || hit?.words.includes(word))) return null;
+    const inMetadata = words.every((word) => hay.includes(word));
+    return { score: (inMetadata ? 25 : 10) + 20 * inTitle / words.length, snippet: !inMetadata && hit ? hit.snippet : "" };
+  }
+
+  /** Prepare once and score each thread once, outside the sort comparator. */
+  function rankedThreads(threads, q) {
+    const query = threadQuery(q);
+    return threads.map((thread) => ({ thread, match: threadMatch(thread, query) }))
+      .filter((row) => row.match)
+      .sort((a, b) => b.match.score - a.match.score || threadRank(b.thread) - threadRank(a.thread));
+  }
+
+  /** The message text that made a search find a thread; "" when its title or metadata matches. */
+  function threadMatchSnippet(t, q) {
+    return threadMatch(t, threadQuery(q))?.snippet || "";
   }
 
   /** Keep in sync with src/agent/threadList.ts */
@@ -5986,12 +6013,12 @@
       // Threads with no scope at all group here too, under No workspace.
       if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t) || t.scope.kind === "workspace");
       const hiddenDirs = hiddenWorkspaceKeys();
-      if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
+      if (q) threads = rankedThreads(threads, q).map((row) => row.thread);
       // A hidden workspace's threads only come up in a search.
       else threads = threads.filter((t) => !inHiddenWorkspace(t, hiddenDirs, S.filter === "workspaces"));
       // A helper sits under the thread that started it. A search lists them like any thread.
       if (!q) threads = threads.filter((t) => !nestsUnder(t));
-      threads.sort((a, b) => threadRank(b) - threadRank(a));
+      if (!q) threads.sort((a, b) => threadRank(b) - threadRank(a));
       // Archived starts with the hidden workspaces: the folders alone, to show again or delete.
       const hiddenList = S.filter === "archived" && !q ? prefs().hiddenWorkspaces || [] : [];
       if (hiddenList.length) {
@@ -6050,6 +6077,11 @@
                 : "No threads"
           )
         );
+        return;
+      }
+      // Grouping would put weaker hits from one workspace above stronger hits from another.
+      if (q) {
+        for (const t of threads) out.push(threadRow(t, t.id === currentId, onPick));
         return;
       }
       const order = [];
@@ -10004,15 +10036,11 @@
     const q = String(query || "").trim();
     let threads = [...S.threads.values()].filter((t) => !t.archived);
     // A helper is reached through the thread that started it. A search finds it, named as that thread's helper.
-    if (q) threads = threads.filter((t) => threadMatchesQuery(t, q));
-    else {
+    if (!q) {
       const hidden = hiddenWorkspaceKeys();
       threads = threads.filter((t) => !nestsUnder(t) && !inHiddenWorkspace(t, hidden));
     }
-    // Threads found by their title come before those found by what was said in them.
-    const found = new Map(threads.map((t) => [t.id, threadMatchSnippet(t, q)]));
-    threads.sort((a, b) => Boolean(found.get(a.id)) - Boolean(found.get(b.id)) || threadRank(b) - threadRank(a));
-    return threads.slice(0, limit).map((t) => {
+    return rankedThreads(threads, q).slice(0, limit).map(({ thread: t, match }) => {
       const scope = scopeLabel(t.scope);
       const running = t.status === "running" || (t.status === "idle" && t.background);
       const parent = nestsUnder(t) ? S.threads.get(t.helperOf) : null;
@@ -10020,7 +10048,7 @@
         kind: "thread",
         id: t.id,
         title: parent ? helperName(t) : t.title,
-        snippet: found.get(t.id) || (parent ? parent.title : scope.text && scope.text !== "Global" ? scope.text : ""),
+        snippet: match.snippet || (parent ? parent.title : scope.text && scope.text !== "Global" ? scope.text : ""),
         locationLabel: parent ? "Helper" : "Thread",
         location: "thread",
         qualityLabel: running ? "Running" : "",
