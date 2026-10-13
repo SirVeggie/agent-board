@@ -46,7 +46,7 @@ impl Default for Layout {
             compact_on_top: true,
             close_to_tray: false,
             reduced_motion: false,
-            dock_child_windows: false,
+            dock_child_windows: true,
         }
     }
 }
@@ -60,7 +60,7 @@ mod tests {
         let mut layout: Layout = serde_json::from_str(r#"{"compactOnTop":false}"#).unwrap();
         assert!(!layout.reduced_motion);
         assert!(!layout.compact_on_top);
-        assert!(!layout.dock_child_windows);
+        assert!(layout.dock_child_windows);
         layout.reduced_motion = true;
         layout.dock_child_windows = true;
         let saved = serde_json::to_string(&layout).unwrap();

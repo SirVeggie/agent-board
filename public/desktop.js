@@ -44,7 +44,7 @@
     closeToTray: false,
     launchAtStartup: false,
     reducedMotion: false,
-    dockChildWindows: false,
+    dockChildWindows: true,
     hidden: false,
   };
 
