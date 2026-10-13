@@ -2,10 +2,52 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import { readScopedFile, READ_FILE_MAX_BYTES, READ_FILE_MAX_LINE_CHARS } from "./readFile.js";
 import { threadFilesDir } from "./attachments.js";
 import type { ThreadWorktree } from "./types.js";
+
+test("external skills are readable under auto review without exposing adjacent files or nested link targets", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-read-skills-"));
+  const home = path.join(root, "home");
+  const data = path.join(root, "data");
+  const cwd = path.join(root, "workspace");
+  const previousHome = process.env.SCRIBE_HOME;
+  process.env.SCRIBE_HOME = data;
+  const homeMock = mock.method(os, "homedir", () => home);
+  const shared = path.join(home, ".agents", "skills");
+  const provider = path.join(data, "agent", "codex", "skills");
+  const escape = path.join(shared, "help", "escape");
+  try {
+    await fs.mkdir(cwd);
+    for (const folder of [shared, provider]) {
+      await fs.mkdir(path.join(folder, "help", "docs"), { recursive: true });
+      await fs.writeFile(path.join(folder, "help", "SKILL.md"), "Use this skill.");
+      await fs.writeFile(path.join(folder, "help", "docs", "guide.md"), "Supporting instructions.");
+      for (const mode of ["code", "ask", "plan"] as const) {
+        const scope = { cwd, provider: "codex", mode, approval: "auto" } as const;
+        assert.match((await readScopedFile(scope, { path: path.join(folder, "help", "SKILL.md") })).content, /Use this skill/);
+        assert.match((await readScopedFile(scope, { path: path.join(folder, "help", "docs", "guide.md") })).content, /Supporting instructions/);
+      }
+    }
+    const scope = { cwd, provider: "codex", mode: "code", approval: "auto" } as const;
+    const privateFile = path.join(data, "agent", "codex", "auth.json");
+    await fs.writeFile(privateFile, "private");
+    await assert.rejects(readScopedFile(scope, { path: privateFile }), /outside/);
+    await assert.rejects(readScopedFile({ ...scope, provider: "claude" }, { path: path.join(provider, "help", "SKILL.md") }), /outside/);
+    await fs.symlink(path.dirname(privateFile), escape, "junction");
+    await assert.rejects(readScopedFile(scope, { path: path.join(escape, "auth.json") }), /link target/);
+    await assert.rejects(readScopedFile({ ...scope, mode: "board" }, { path: path.join(shared, "help", "SKILL.md") }), /mode/);
+  } finally {
+    homeMock.mock.restore();
+    if (previousHome === undefined) delete process.env.SCRIBE_HOME;
+    else process.env.SCRIBE_HOME = previousHome;
+    await fs.unlink(escape).catch(() => {});
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith("scribe-read-skills-"));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("scoped reads paginate, enforce modes and scope, and bound bytes and output", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-read-test-"));
