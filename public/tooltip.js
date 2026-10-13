@@ -30,6 +30,7 @@
   document.body.append(tip);
   let anchor = null;
   let timer = 0;
+  let pointerPressed = false;
   const descriptions = new WeakMap();
 
   function hide() {
@@ -102,11 +103,23 @@
   document.addEventListener("pointerout", event => {
     if (anchor && !anchor.contains(event.relatedTarget)) hide();
   });
-  document.addEventListener("focusin", event => enter(target(event.target), 0));
+  document.addEventListener("focusin", event => {
+    if (!pointerPressed) enter(target(event.target), 0);
+  });
   document.addEventListener("focusout", hide);
-  document.addEventListener("pointerdown", hide, true);
+  document.addEventListener("pointerdown", () => {
+    // Pointer focus follows this event and must not reopen the dismissed tip.
+    pointerPressed = true;
+    hide();
+  }, true);
+  window.addEventListener("pointerup", event => { pointerPressed = !!event.buttons; }, true);
+  window.addEventListener("pointercancel", () => { pointerPressed = false; }, true);
+  document.addEventListener("contextmenu", hide, true);
   document.addEventListener("keydown", hide, true);
-  window.addEventListener("blur", hide);
+  window.addEventListener("blur", () => {
+    pointerPressed = false;
+    hide();
+  });
   // Only a scroll that moves the anchor: a chat streaming elsewhere scrolls on every frame.
   window.addEventListener("scroll", event => {
     if (anchor && event.target.contains?.(anchor)) hide();

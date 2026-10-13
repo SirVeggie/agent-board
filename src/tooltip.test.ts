@@ -44,6 +44,20 @@ test("shared tooltips handle dynamic pages, keyboard focus and modal dialogs", a
     await page.evaluate(() => { document.querySelector("#modal")!.remove(); });
     await tip.waitFor({ state: "hidden" });
     await page.evaluate(() => { document.querySelector("dialog")!.close(); });
+    // A mouse press can focus the button after pointerdown has hidden its tip.
+    // Keep it hidden while right-clicking and after releasing the button.
+    await page.locator("#rich").focus();
+    await page.locator("#plain").hover();
+    await page.mouse.down({ button: "right" });
+    await page.waitForTimeout(750);
+    assert.equal(await tip.isVisible(), false);
+    await page.mouse.up({ button: "right" });
+    assert.equal(await tip.isVisible(), false);
+    await page.locator("#rich").focus();
+    await page.locator("#plain").focus();
+    await tip.waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+    await page.mouse.move(390, 290);
     await page.locator("#plain").hover();
     await tip.waitFor({ state: "visible" });
     const bounds = await tip.boundingBox();
