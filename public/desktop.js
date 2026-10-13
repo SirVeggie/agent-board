@@ -6,7 +6,7 @@
   }
   const invoke = tauri.core.invoke;
   // Keep in step with layout::DesktopState. Bump when this UI needs a new native API.
-  const REQUIRED_API_REVISION = 1;
+  const REQUIRED_API_REVISION = 2;
   let stateReceived = false;
   const root = document.documentElement;
   const chrome = document.querySelector(".chrome");
@@ -44,6 +44,7 @@
     closeToTray: false,
     launchAtStartup: false,
     reducedMotion: false,
+    dockChildWindows: false,
     hidden: false,
   };
 
@@ -67,6 +68,16 @@
   ];
 
   let hidden = loadHidden();
+
+  // Intercept only the same bare drag regions Tauri uses. Controls and double-click maximize
+  // keep their usual behavior; native tracking keeps working after the pointer leaves this view.
+  window.addEventListener("mousedown", (event) => {
+    if (!child || window.scribePopout.chatChild || !desktop.dockChildWindows || !desktop.childDockingSupported ||
+        event.button !== 0 || event.detail >= 2 || !event.target.hasAttribute?.("data-tauri-drag-region")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    invoke("window_action", { action: "drag-child" }).catch(console.error);
+  }, true);
 
   function loadHidden() {
     try {
@@ -264,7 +275,13 @@
   motionError.setAttribute("role", "status");
   motionError.textContent = "Update the desktop app to use Reduce motion.";
   motionError.hidden = true;
-  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, motionError, hint);
+  const dockingRow = settingRow("desktop-dock-children", "Drag child windows into the main window", desktop.dockChildWindows,
+    (on) => saveSetting("dockChildWindows", on));
+  const dockingHint = "Drop on a panel to split or replace it. Hold Shift to move the window without docking.";
+  const dockingLabel = dockingRow.row.querySelector("span");
+  dockingLabel.dataset.tooltip = dockingHint;
+  dockingLabel.setAttribute("aria-description", dockingHint);
+  section.append(buttonTrack.row, onTopRow.row, openRow.row, trayRow.row, startupRow.row, motionRow.row, motionError, dockingRow.row, hint);
   const buildRow = document.createElement("div");
   buildRow.className = "setting-row";
   const buildStatus = document.createElement("span");
@@ -278,7 +295,7 @@
 
   function needsUpdate() {
     return stateReceived && (!Number.isInteger(desktop.apiRevision) || desktop.apiRevision < REQUIRED_API_REVISION ||
-      ["compactOnTop", "openFromAgents", "closeToTray", "launchAtStartup", "reducedMotion"].some((name) => typeof desktop[name] !== "boolean"));
+      ["compactOnTop", "openFromAgents", "closeToTray", "launchAtStartup", "reducedMotion", "dockChildWindows", "childDockingSupported"].some((name) => typeof desktop[name] !== "boolean"));
   }
 
   function showBuildDetails() {
@@ -397,6 +414,11 @@
     trayRow.toggle.setAttribute("aria-checked", String(desktop.closeToTray));
     startupRow.toggle.setAttribute("aria-checked", String(desktop.launchAtStartup));
     motionRow.toggle.setAttribute("aria-checked", String(desktop.reducedMotion));
+    dockingRow.toggle.setAttribute("aria-checked", String(Boolean(desktop.dockChildWindows)));
+    dockingRow.toggle.disabled = !stateReceived || !desktop.childDockingSupported || typeof desktop.dockChildWindows !== "boolean";
+    const dockingHelp = stateReceived && desktop.childDockingSupported === false ? "Available in the Windows desktop app." : dockingHint;
+    dockingLabel.dataset.tooltip = dockingHelp;
+    dockingLabel.setAttribute("aria-description", dockingHelp);
     // The daemon serves current UI assets even to an older desktop executable.
     // Older shells neither report this preference nor accept its setting command.
     const supportsMotion = stateReceived && typeof desktop.reducedMotion === "boolean";

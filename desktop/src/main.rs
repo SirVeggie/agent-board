@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod board;
+mod docking;
 #[cfg(windows)]
 mod embeds;
 #[cfg(windows)]
@@ -52,6 +53,10 @@ async fn window_action(window: WebviewWindow, action: String) -> Result<(), Stri
             }
         }
         "close" => window.close(),
+        "drag-child" => {
+            docking::watch(&window);
+            window.start_dragging()
+        }
         "toggle-compact" => {
             layout::toggle_compact(&window);
             Ok(())
@@ -85,6 +90,7 @@ async fn set_desktop_setting(
         }
         "launchAtStartup" => startup::set_enabled(value)?,
         "reducedMotion" => layout::set_reduced_motion(&window, value),
+        "dockChildWindows" => layout::set_dock_child_windows(&window, value),
         _ => return Err(format!("Unknown desktop setting: {name}")),
     }
     Ok(layout::desktop_state(&window))

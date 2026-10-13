@@ -33,6 +33,7 @@ struct Layout {
     compact_on_top: bool,
     close_to_tray: bool,
     reduced_motion: bool,
+    dock_child_windows: bool,
 }
 
 impl Default for Layout {
@@ -45,6 +46,7 @@ impl Default for Layout {
             compact_on_top: true,
             close_to_tray: false,
             reduced_motion: false,
+            dock_child_windows: false,
         }
     }
 }
@@ -54,15 +56,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn old_layouts_follow_system_motion_and_new_choice_survives_reload() {
+    fn old_layouts_default_new_preferences_and_choices_survive_reload() {
         let mut layout: Layout = serde_json::from_str(r#"{"compactOnTop":false}"#).unwrap();
         assert!(!layout.reduced_motion);
         assert!(!layout.compact_on_top);
+        assert!(!layout.dock_child_windows);
         layout.reduced_motion = true;
+        layout.dock_child_windows = true;
         let saved = serde_json::to_string(&layout).unwrap();
         let restored: Layout = serde_json::from_str(&saved).unwrap();
         assert!(restored.reduced_motion);
         assert!(!restored.compact_on_top);
+        assert!(restored.dock_child_windows);
     }
 }
 
@@ -87,6 +92,8 @@ pub struct DesktopState {
     open_from_agents: bool,
     close_to_tray: bool,
     reduced_motion: bool,
+    dock_child_windows: bool,
+    child_docking_supported: bool,
     launch_at_startup: bool,
     /// Hidden in the tray. The page tells the daemon, so agents open the window again.
     hidden: bool,
@@ -116,6 +123,10 @@ impl LayoutState {
 
     pub fn reduced_motion(&self) -> bool {
         self.layout.lock().unwrap().reduced_motion
+    }
+
+    pub fn dock_child_windows(&self) -> bool {
+        self.layout.lock().unwrap().dock_child_windows
     }
 }
 
@@ -231,11 +242,22 @@ pub fn set_reduced_motion(window: &WebviewWindow, on: bool) {
     }
 }
 
+pub fn set_dock_child_windows(window: &WebviewWindow, on: bool) {
+    let state = state(window);
+    let mut layout = state.layout.lock().unwrap();
+    layout.dock_child_windows = on;
+    save(&state, &layout);
+    drop(layout);
+    for (_, window) in window.webview_windows() {
+        push_state(&window);
+    }
+}
+
 pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
     let state = state(window);
     let layout = state.layout.lock().unwrap();
     DesktopState {
-        api_revision: 1,
+        api_revision: 2,
         version: env!("CARGO_PKG_VERSION"),
         built_at: env!("SCRIBE_DESKTOP_BUILT_AT"),
         executable: std::env::current_exe().ok().map(|path| path.to_string_lossy().into_owned()),
@@ -245,6 +267,8 @@ pub fn desktop_state<R: Runtime>(window: &WebviewWindow<R>) -> DesktopState {
         open_from_agents: board::read_registration().is_none_or(|registration| registration.open_from_agents),
         close_to_tray: layout.close_to_tray,
         reduced_motion: layout.reduced_motion,
+        dock_child_windows: layout.dock_child_windows,
+        child_docking_supported: cfg!(windows),
         launch_at_startup: startup::is_enabled(),
         hidden: !window.is_visible().unwrap_or(true),
     }

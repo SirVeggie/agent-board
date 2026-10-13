@@ -140,6 +140,34 @@ window.scribePopout = (() => {
     }
   }
 
+  /** Main window: drive the same panel targets as a tab drag from native client coordinates. */
+  function bindDocking({ views, findAnyTab, isDragging }) {
+    if (childId || !invoke) return;
+    let dockingChild = null;
+    addEventListener("scribe:child-drag", async (event) => {
+      const { id, x, y, enabled, done } = event.detail || {};
+      const valid = enabled && id !== CHAT_ID && children.has(id) && findAnyTab(id) && !isDragging() &&
+        Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+      if (!valid) {
+        if (dockingChild) views.endPageDrag();
+        dockingChild = null;
+        return;
+      }
+      if (dockingChild !== id) {
+        views.beginPageDrag({ id });
+        dockingChild = id;
+      }
+      const drop = views.updatePageDrag(x * innerWidth, y * innerHeight);
+      if (!done) return;
+      views.endPageDrag();
+      dockingChild = null;
+      if (!drop) return;
+      close(id);
+      await views.dropPage({ id }, drop);
+      invoke("child_window", { action: "focus-main", id: "" }).catch(() => undefined);
+    });
+  }
+
   if (childId) {
     channel?.addEventListener("message", (event) => {
       const msg = event.data;
@@ -211,6 +239,7 @@ window.scribePopout = (() => {
     focus,
     close,
     closeSelf,
+    bindDocking,
     onChange: (listener) => changeListeners.add(listener),
     /** Child → main: something this window cannot do itself (show another page). */
     request: (request) => post({ type: "request", request }),

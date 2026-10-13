@@ -5566,6 +5566,8 @@
 
   window.addEventListener("scribe:threads-ready", () => library.render());
 
+  popout.bindDocking({ views, findAnyTab, isDragging: () => Boolean(drag) });
+
   popout.onChange(() => {
     // A page that left for its own window gives up its pane, and its frame here.
     for (const id of popout.ids()) {
