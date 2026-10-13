@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { threadFilesDir } from "./attachments.js";
 import type { Thread } from "./types.js";
+import { skillFolders } from "./harness.js";
 
 export const READ_FILE_MAX_BYTES = 64 * 1024 * 1024;
 export const READ_FILE_MAX_CHARS = 32_000;
 /** Longer lines (minified code, logs) are cut, as Claude Code's read does, instead of refusing the page. */
 export const READ_FILE_MAX_LINE_CHARS = 2_000;
-export type ReadScope = Pick<Thread, "cwd" | "mode" | "approval"> & Partial<Pick<Thread, "id" | "worktree">>;
+export type ReadScope = Pick<Thread, "cwd" | "mode" | "approval"> & Partial<Pick<Thread, "id" | "worktree" | "provider">>;
 
 function inside(root: string, file: string): boolean {
   const rel = path.relative(root, file);
@@ -30,6 +31,11 @@ async function readRoots(thread: ReadScope): Promise<Array<{ lexical: string; re
   };
   if (thread.cwd) await add(thread.cwd);
   if (thread.id) await add(threadFilesDir(thread.id));
+  // Skills are loaded from files on demand, including user/provider folders outside the workspace.
+  // Grant the skills subtree only; credentials and settings next to it remain outside the scope.
+  for (const folder of skillFolders(thread.cwd)) {
+    if (!thread.provider || folder.providers.includes(thread.provider)) await add(folder.dir);
+  }
   const wt = thread.worktree;
   if (wt && !wt.closed) {
     for (const rel of wt.links) {

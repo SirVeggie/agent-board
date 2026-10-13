@@ -170,6 +170,7 @@ export function skillFrontmatter(text: string): { name?: string; description?: s
 /** Where each provider's threads find skills. Codex and Native run with Scribe's own home folders. */
 export function skillFolders(workspace: string | null, home = os.homedir(), data = dataDir()): Array<{ dir: string; scope: "user" | "workspace"; providers: ProviderId[] }> {
   const folders: Array<{ dir: string; scope: "user" | "workspace"; providers: ProviderId[] }> = [
+    { dir: path.join(home, ".agents", "skills"), scope: "user", providers: ["cursor", "codex", "pi"] },
     { dir: path.join(home, ".claude", "skills"), scope: "user", providers: ["claude"] },
     { dir: path.join(home, ".cursor", "skills"), scope: "user", providers: ["cursor"] },
     { dir: path.join(data, "agent", "codex", "skills"), scope: "user", providers: ["codex"] },

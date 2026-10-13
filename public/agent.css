@@ -1154,7 +1154,12 @@ html[data-theme="cream"] .ag-md {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: ag-pulse var(--dur-pulse) ease-in-out infinite;
+  animation: ag-reason-shine var(--dur-pulse) linear infinite;
+}
+
+@keyframes ag-reason-shine {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 
 .ag-reason-preview,
