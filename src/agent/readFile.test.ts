@@ -81,7 +81,13 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     await fs.symlink(root, path.join(cwd, "escape"), "junction");
     await assert.rejects(readScopedFile(scope, { path: "escape/outside.txt" }), /link target/);
     await fs.writeFile(path.join(cwd, "binary"), Buffer.from([0, 1, 2]));
-    await assert.rejects(readScopedFile(scope, { path: "binary" }), /Binary/);
+    await assert.rejects(readScopedFile(scope, { path: "binary" }), /NUL byte at byte offset 0/);
+    await fs.writeFile(path.join(cwd, "utf16le"), Buffer.from([0xff, 0xfe, 0x61, 0]));
+    await assert.rejects(readScopedFile(scope, { path: "utf16le" }), /UTF-16LE byte-order mark.*convert.*UTF-8/);
+    await fs.writeFile(path.join(cwd, "utf16be"), Buffer.from([0xfe, 0xff, 0, 0x61]));
+    await assert.rejects(readScopedFile(scope, { path: "utf16be" }), /UTF-16BE byte-order mark.*convert.*UTF-8/);
+    await fs.writeFile(path.join(cwd, "late-nul"), Buffer.concat([Buffer.alloc(64 * 1024 + 7, 97), Buffer.from([0])]));
+    await assert.rejects(readScopedFile(scope, { path: "late-nul", limit: 1 }), /NUL byte at byte offset 65543/);
     await fs.writeFile(path.join(cwd, "invalid"), Buffer.from([255]));
     await assert.rejects(readScopedFile(scope, { path: "invalid" }), /UTF-8/);
     const listing = await readScopedFile(scope, { path: "." });

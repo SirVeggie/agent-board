@@ -135,9 +135,15 @@ export async function readScopedFile(thread: ReadScope | null, input: { path?: u
     while (used <= READ_FILE_MAX_BYTES) {
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (!bytesRead) break;
+      if (used === 0 && bytesRead >= 2) {
+        const encoding = chunk[0] === 0xff && chunk[1] === 0xfe ? "UTF-16LE"
+          : chunk[0] === 0xfe && chunk[1] === 0xff ? "UTF-16BE" : null;
+        if (encoding) throw new Error(`File has a ${encoding} byte-order mark; read_file accepts UTF-8 text. Save or convert the file as UTF-8 before reading it.`);
+      }
       used += bytesRead;
       const bytes = chunk.subarray(0, bytesRead);
-      if (bytes.includes(0)) throw new Error("Binary files are not supported; read_file accepts UTF-8 text.");
+      const nul = bytes.indexOf(0);
+      if (nul !== -1) throw new Error(`NUL byte at byte offset ${used - bytesRead + nul} (zero-based); the file may be binary or use another encoding. read_file accepts UTF-8 text without NUL bytes.`);
       feed(decode(bytes));
     }
     if (used > READ_FILE_MAX_BYTES) throw new Error("File grew past the 64 MiB read limit during the read; retry.");
