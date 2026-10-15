@@ -145,7 +145,8 @@
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
   const SCOPE_CHIP_TITLE = "Page, folder, or workspace this thread belongs to (Ctrl+. next workspace · Ctrl+Shift+. next Scribe access)";
-  const SCOPE_SLASH = [
+  const LOCAL_SLASH = [
+    { name: "clear", description: "New thread with the current page's default chat settings" },
     { name: "here", description: "This thread belongs to the current page" },
     { name: "folder", description: "This thread belongs to the current page's folder" },
     { name: "workspace", description: "Set the workspace folder" },
@@ -2755,7 +2756,11 @@
       await this.updateSettings({ scope });
     }
 
-    async applyScopeSlash(name) {
+    async applyLocalSlash(name) {
+      if (name === "clear") {
+        newThread(this, true);
+        return;
+      }
       const tab = activeTab();
       if (name === "here") {
         if (!tab) {
@@ -5056,13 +5061,13 @@
       if (gen !== this.mentionGen) return;
       if (!/^\/([\w:.-]*)$/.exec(this.input.value)) return;
       const q = typed.toLowerCase();
-      const local = SCOPE_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
+      const local = LOCAL_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
       // The open page's template actions (#152): /<id>, with any text after it as {{input}}.
       const page = pageActions(activeTab(), "slash")
-        .filter((a) => !SCOPE_SLASH.some((c) => c.name === a.id) && (a.id.includes(q) || a.label.toLowerCase().includes(q)))
+        .filter((a) => !LOCAL_SLASH.some((c) => c.name === a.id) && (a.id.includes(q) || a.label.toLowerCase().includes(q)))
         .map((a) => ({ name: a.id, description: a.description ? `${a.label}: ${a.description}` : a.label }));
       const remote = (list || []).filter(
-        (c) => c.name.toLowerCase().includes(q) && !SCOPE_SLASH.some((s) => s.name === c.name.toLowerCase()) && !page.some((a) => a.name === c.name.toLowerCase())
+        (c) => c.name.toLowerCase().includes(q) && !LOCAL_SLASH.some((s) => s.name === c.name.toLowerCase()) && !page.some((a) => a.name === c.name.toLowerCase())
       );
       const hits = [...local, ...page, ...remote].slice(0, 40);
       this.slash.replaceChildren();
@@ -5076,7 +5081,7 @@
             this.input.value = "";
             this.hidePicker();
             this.autosize();
-            void this.applyScopeSlash(c.name);
+            void this.applyLocalSlash(c.name);
             this.focus();
             return;
           }
@@ -5351,12 +5356,12 @@
     async send() {
       if (this.withdrawing) return;
       const text = this.input.value.trim();
-      const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
-      if (scopeCmd && !this.attachments.length) {
+      const localCmd = /^\/(clear|here|folder|workspace|global)$/i.exec(text);
+      if (localCmd && (localCmd[1].toLowerCase() === "clear" || !this.attachments.length)) {
         this.input.value = "";
         this.hidePicker();
         this.autosize();
-        await this.applyScopeSlash(scopeCmd[1].toLowerCase());
+        await this.applyLocalSlash(localCmd[1].toLowerCase());
         return;
       }
       const actionCmd = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
@@ -10594,12 +10599,12 @@
     };
   }
 
-  function newThread(fromView) {
+  function newThread(fromView, resetSettings = false) {
     const where = fromView ? (fromView.variant === "full" ? "full" : fromView.variant === "dock" ? "dock" : "side") : shortcutChat();
     const view = fromView || (where === "dock" ? dock.view : where === "full" ? full.view : sidebar.view);
-    const cur = view.settings();
-    const scope = { kind: cur.scope.kind, ref: cur.scope.ref };
-    const settings = inheritSettings(view);
+    const cur = resetSettings ? null : view.settings();
+    const scope = resetSettings ? defaultScope() : { kind: cur.scope.kind, ref: cur.scope.ref };
+    const settings = resetSettings ? {} : inheritSettings(view);
     if (where === "dock") {
       if (scope.kind === "page") clearDockPick(scope.ref);
       view.startDraft(scope, settings);
