@@ -4,6 +4,7 @@
 
 mod board;
 mod docking;
+mod downloads;
 #[cfg(windows)]
 mod embeds;
 #[cfg(windows)]
@@ -154,6 +155,7 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>) ->
         .title(title)
         .zoom_hotkeys_enabled(true)
         .disable_drag_drop_handler()
+        .on_download(downloads::handle)
         .inner_size(CHILD_SIZE.0, CHILD_SIZE.1)
         .min_inner_size(320.0, 240.0)
         .decorations(true)
@@ -287,6 +289,7 @@ fn main() {
                 .zoom_hotkeys_enabled(true)
                 // Let the board's HTML drop handlers receive files on Windows.
                 .disable_drag_drop_handler()
+                .on_download(downloads::handle)
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(320.0, 240.0)
                 .decorations(true)
