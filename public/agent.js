@@ -2288,7 +2288,6 @@
       this.mentionGen = 0;
       this.mentionTimer = 0;
       this.mentionLoading = false;
-      this.contextOn = variant === "dock";
 
       this.root = el("div", `ag-view ag-view-${variant}`);
       this.header = el("div", "ag-thead");
@@ -4568,17 +4567,6 @@
       const row = this.ctxRow;
       if (!row) return;
       row.replaceChildren();
-      const tab = activeTab();
-      const already = this.pageInThread(tab);
-      const mentionedHere = Boolean(tab && this.mentions.some((c) => c.kind === "page" && c.id === tab.id));
-      if (tab && !already && !mentionedHere) {
-        const chip = button("", `ag-chip small toggle${this.contextOn ? " on" : ""}`, () => {
-          this.contextOn = !this.contextOn;
-          this.renderContext();
-        }, this.contextOn ? "The current page is attached to your message" : "Attach the current page");
-        chip.append(icon("page"), el("span", null, this.contextOn ? tab.title : `+ ${tab.title}`));
-        row.append(chip);
-      }
       this.mentions.forEach((chip, index) => {
         const node = el("span", "ag-chip small");
         node.dataset.tooltip = chipTitle(chip);
@@ -4630,7 +4618,8 @@
       return keys;
     }
 
-    composerContext() {
+    /** The chips sent with text: the picked mentions, plus the current page for a bare @this. */
+    composerContext(text = "") {
       const chips = [];
       const seen = new Set();
       const push = (chip) => {
@@ -4646,7 +4635,7 @@
         push(chip);
       }
       const tab = activeTab();
-      if (this.contextOn && tab && !this.pageInThread(tab)) {
+      if (tab && /(^|\s)@this(?=[\s.,;:!?]|$)/i.test(text) && !this.pageInThread(tab)) {
         push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
       }
       return chips;
@@ -4654,8 +4643,6 @@
 
     restoreContextChips(context) {
       this.mentions = Array.isArray(context) ? context.map((c) => ({ ...c })) : [];
-      const tab = activeTab();
-      if (tab && this.mentions.some((c) => c.kind === "page" && c.id === tab.id)) this.contextOn = true;
     }
 
     hidePicker() {
@@ -5187,13 +5174,32 @@
       }
     }
 
+    /** The current page (also @this) and its folder, when the query still fits them. */
+    hereMentions(query, taken) {
+      const tab = activeTab();
+      if (!tab) return [];
+      const q = query.toLowerCase();
+      const items = [];
+      if (!taken.has(`page:${tab.id}`) && (!q || "this".startsWith(q) || String(tab.title || "").toLowerCase().includes(q))) {
+        items.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title, folder: "@this" });
+      }
+      const path = tab.folderId ? folderPath(tab.folderId) : "";
+      if (path && !taken.has(`folder:${tab.folderId}`) && (!q || path.toLowerCase().includes(q))) {
+        items.push({ kind: "folder", id: tab.folderId, path });
+      }
+      return items;
+    }
+
     renderMentionPicker({ pages, folders, files, mention, loading }) {
       this.slash.classList.toggle("loading", loading);
       this.slash.setAttribute("aria-busy", String(loading));
       this.slash.replaceChildren();
+      const here = this.hereMentions(mention.query, this.knownMentionKeys());
+      const hereKeys = new Set(here.map(chipKey));
       const sections = [
-        { title: "Pages", items: pages },
-        { title: "Folders", items: folders },
+        { title: "Here", items: here },
+        { title: "Pages", items: pages.filter((p) => !hereKeys.has(chipKey(p))) },
+        { title: "Folders", items: folders.filter((f) => !hereKeys.has(chipKey(f))) },
         { title: "Files", items: files },
       ];
       let first = true;
@@ -5392,7 +5398,7 @@
         setTimeout(() => this.send(), 100);
         return;
       }
-      const context = this.composerContext();
+      const context = this.composerContext(text);
       const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
       const images = sending.filter((f) => f.mimeType.startsWith("image/"));
       const files = sending.filter((f) => !f.mimeType.startsWith("image/"));
@@ -10865,8 +10871,7 @@
     if (action.run === "chat") {
       const draft = target.input.value;
       target.mentions.push(...chips);
-      const shown = (target.contextOn && activeTab()?.id === tab.id) || target.pageInThread(tab);
-      if (!shown && !target.mentions.some((c) => c.kind === "page" && c.id === tab.id)) {
+      if (!target.pageInThread(tab) && !target.mentions.some((c) => c.kind === "page" && c.id === tab.id)) {
         target.mentions.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title });
       }
       target.input.value = prompt;
@@ -10914,7 +10919,7 @@
       ? { kind: "selection", text, source: `"${tab.title}" (key: ${tab.key})` }
       : { kind: "page", id: tab.id, key: tab.key, title: tab.title };
     const same = (c) => c.kind === chip.kind && (chip.kind === "page" ? c.id === chip.id : c.text === chip.text);
-    const shownAlready = chip.kind === "page" && ((view.contextOn && activeTab()?.id === tab.id) || view.pageInThread(tab));
+    const shownAlready = chip.kind === "page" && view.pageInThread(tab);
     if (!shownAlready && !view.mentions.some(same)) view.mentions.push(chip);
     view.renderContext();
     setTimeout(() => view.focus(), 70);

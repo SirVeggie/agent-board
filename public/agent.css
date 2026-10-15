@@ -762,11 +762,6 @@ html.tight-small .agent-pane {
   text-overflow: ellipsis;
 }
 
-.ag-chip.toggle.on {
-  color: var(--heading);
-  background: var(--accent-soft);
-}
-
 .ag-chip.img img {
   width: 16px;
   height: 16px;
