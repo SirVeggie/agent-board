@@ -1994,8 +1994,6 @@
     fDue.value = str(v.due);
     syncSelect(fDue);
     clearFilterBtn.classList.toggle("hidden", !filterActive());
-    var archived = allCards().length - liveCards().length;
-    archiveBtn.textContent = archived ? "Archive (" + archived + ")" : "Archive";
     var live = liveCards();
     var shown = filterActive() ? live.filter(matches) : live;
     var done = shown.filter(isDone).length;
