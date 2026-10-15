@@ -45,23 +45,34 @@ export function pageThreadIsStale(
   return thread.finishedAt < now - staleMs;
 }
 
+/**
+ * The floating chat's remembered choice on a page: a thread, or null for a new thread the user
+ * started there. `at` is when the user chose it; a choice keeps the thread fresh for two hours.
+ */
+export type PageDockPick = { id: string | null; at: number };
+
 /** Which thread the floating chat should show on this page, or null to start a new one. */
 export function pageDockThreadId(
   threads: Iterable<PageChatThread>,
-  opts: { pickId?: string | null; pageId?: string | null; now: number; staleMs?: number }
+  opts: { pick?: PageDockPick | null; pageId?: string | null; now: number; staleMs?: number }
 ): string | null {
+  const staleMs = opts.staleMs ?? PAGE_CHAT_STALE_MS;
+  const pick = opts.pick ?? null;
+  // The user started a new thread here: keep it until they send or pick another.
+  if (pick && pick.id === null) return null;
   const list = [...threads].filter((t) => !t.archived);
   const byId = new Map(list.map((t) => [t.id, t]));
-  let id = opts.pickId && byId.has(opts.pickId) ? opts.pickId : null;
-  if (!id && opts.pageId) {
-    let newest: PageChatThread | null = null;
-    for (const t of list) {
-      if (t.scope.kind !== "page" || t.scope.ref !== opts.pageId) continue;
-      if (!newest || t.activityAt > newest.activityAt) newest = t;
-    }
-    id = newest?.id ?? null;
+  const picked = pick?.id ? byId.get(pick.id) : undefined;
+  if (picked) {
+    const last = Math.max(picked.finishedAt ?? 0, pick?.at ?? 0);
+    return pageThreadIsStale({ status: picked.status, finishedAt: last || undefined }, opts.now, staleMs) ? null : picked.id;
   }
-  const t = id ? byId.get(id) : undefined;
-  if (t && pageThreadIsStale(t, opts.now, opts.staleMs)) return null;
-  return id;
+  if (!opts.pageId) return null;
+  let newest: PageChatThread | null = null;
+  for (const t of list) {
+    if (t.scope.kind !== "page" || t.scope.ref !== opts.pageId) continue;
+    if (!newest || t.activityAt > newest.activityAt) newest = t;
+  }
+  if (!newest || pageThreadIsStale(newest, opts.now, staleMs)) return null;
+  return newest.id;
 }

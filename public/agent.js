@@ -800,16 +800,20 @@
     return t.finishedAt < now - PAGE_CHAT_STALE_MS;
   }
 
-  /** Which thread the floating chat should show on this page, or null to start a new one. */
-  function pageDockThreadId(tabId, pickId, now) {
-    const picked = pickId ? S.threads.get(pickId) : null;
-    let id = picked && !picked.archived ? pickId : null;
-    if (!id && tabId) {
-      id = [...S.threads.values()].filter((t) => !t.archived && t.scope.kind === "page" && t.scope.ref === tabId).sort((a, b) => b.activityAt - a.activityAt)[0]?.id || null;
+  /**
+   * Which thread the floating chat should show on this page, or null to start a new one. `pick` is
+   * the user's choice there ({ id, at }; id null for a new thread they started), fresh for two hours from `at`.
+   */
+  function pageDockThreadId(tabId, pick, now) {
+    if (pick && pick.id === null) return null;
+    const picked = pick?.id ? S.threads.get(pick.id) : null;
+    if (picked && !picked.archived) {
+      const last = Math.max(picked.finishedAt || 0, pick.at || 0);
+      return pageThreadIsStale({ status: picked.status, finishedAt: last || undefined }, now) ? null : picked.id;
     }
-    const t = id ? S.threads.get(id) : null;
-    if (t && pageThreadIsStale(t, now)) return null;
-    return id;
+    if (!tabId) return null;
+    const t = [...S.threads.values()].filter((x) => !x.archived && x.scope.kind === "page" && x.scope.ref === tabId).sort((a, b) => b.activityAt - a.activityAt)[0];
+    return t && !pageThreadIsStale(t, now) ? t.id : null;
   }
 
   function deletePrompt(t) {
@@ -880,7 +884,7 @@
       S.threads.set(thread.id, thread);
       S.composers.set(thread.id, content);
       // The floating chat comes back to it on that page, unless it has moved on to another thread there.
-      if (tab && !S.dockPicks.has(tab) && !(dock.view.draft && dock.view.draftTab === tab)) setDockPick(tab, thread.id);
+      if (tab && !S.dockPicks.get(tab)?.id && !(dock.view.draft && dock.view.draftTab === tab)) setDockPick(tab, thread.id);
       renderLists();
     } catch (err) {
       notice(`Could not keep the unsent thread: ${err.message}`);
@@ -1177,11 +1181,18 @@
     else localStorage.removeItem(LS.current);
   }
 
+  /** Per page: the floating chat's thread the user chose there, { id, at }, with id null for a new thread. */
   function loadDockPicks() {
     try {
       const parsed = JSON.parse(localStorage.getItem(LS.dockPicks) || "{}");
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
-      return new Map(Object.entries(parsed).filter(([, id]) => typeof id === "string" && id));
+      const out = new Map();
+      for (const [tabId, v] of Object.entries(parsed)) {
+        // Older saves kept only the thread id.
+        if (typeof v === "string" && v) out.set(tabId, { id: v, at: 0 });
+        else if (v && typeof v === "object" && (v.id === null || typeof v.id === "string")) out.set(tabId, { id: v.id || null, at: Number(v.at) || 0 });
+      }
+      return out;
     } catch {
       return new Map();
     }
@@ -1191,22 +1202,17 @@
     localStorage.setItem(LS.dockPicks, JSON.stringify(Object.fromEntries(S.dockPicks)));
   }
 
+  /** The user chose this thread (null: a new thread) in the floating chat on this page; it stays for two hours from now. */
   function setDockPick(tabId, threadId) {
-    if (!tabId || !threadId) return;
-    if (S.dockPicks.get(tabId) === threadId) return;
-    S.dockPicks.set(tabId, threadId);
-    saveDockPicks();
-  }
-
-  function clearDockPick(tabId) {
-    if (!tabId || !S.dockPicks.delete(tabId)) return;
+    if (!tabId || threadId === undefined || threadId === "") return;
+    S.dockPicks.set(tabId, { id: threadId, at: Date.now() });
     saveDockPicks();
   }
 
   function forgetDockThread(threadId) {
     let changed = false;
-    for (const [tabId, id] of [...S.dockPicks]) {
-      if (id === threadId) {
+    for (const [tabId, pick] of [...S.dockPicks]) {
+      if (pick.id === threadId) {
         S.dockPicks.delete(tabId);
         changed = true;
       }
@@ -1216,8 +1222,8 @@
 
   function pruneDockPicks() {
     let changed = false;
-    for (const [tabId, id] of [...S.dockPicks]) {
-      if (!S.threads.has(id)) {
+    for (const [tabId, pick] of [...S.dockPicks]) {
+      if (pick.id && !S.threads.has(pick.id)) {
         S.dockPicks.delete(tabId);
         changed = true;
       }
@@ -2537,7 +2543,7 @@
       // What setThread loaded is an older copy of the same composer.
       if (snap.composer) this.fillComposer(snap.composer);
       if (this.variant === "dock") {
-        if (snap.threadId) dock.remember(snap.threadId);
+        dock.remember(snap.threadId || null);
         dock.renderTitle();
       }
     }
@@ -6783,7 +6789,7 @@
           items.push({ label: helperName(h), detail: `Helper · ${threadWhenText(h)}`, search: t.title, sub: true, searchOnly: !must(h) && !latest.includes(h), checked: h.id === currentId, run: () => this.pick(h.id) });
         }
       };
-      items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) clearDockPick(tab.id); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
+      items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) setDockPick(tab.id, null); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
       for (const t of pageThreads) add(t, threadWhenText(t));
       if (others.length) items.push({ header: "Recent" });
@@ -10601,7 +10607,7 @@
     const scope = { kind: cur.scope.kind, ref: cur.scope.ref };
     const settings = inheritSettings(view);
     if (where === "dock") {
-      if (scope.kind === "page") clearDockPick(scope.ref);
+      if (scope.kind === "page") setDockPick(scope.ref, null);
       view.startDraft(scope, settings);
       dock.renderTitle();
     } else if (where === "full") {

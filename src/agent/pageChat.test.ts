@@ -69,8 +69,8 @@ test("opening the dock shows the page's last thread unless that reply is older t
   const running = t("run", { finishedAt: now - 5 * hour, activityAt: now, status: "running" });
   assert.equal(pageDockThreadId([fresh], { pageId: "t_page", now }), "fresh");
   assert.equal(pageDockThreadId([stale], { pageId: "t_page", now }), null);
-  assert.equal(pageDockThreadId([stale], { pickId: "stale", pageId: "t_page", now }), null);
-  assert.equal(pageDockThreadId([fresh], { pickId: "fresh", pageId: "t_page", now }), "fresh");
+  assert.equal(pageDockThreadId([stale], { pick: { id: "stale", at: 0 }, pageId: "t_page", now }), null);
+  assert.equal(pageDockThreadId([fresh], { pick: { id: "fresh", at: 0 }, pageId: "t_page", now }), "fresh");
   assert.equal(pageDockThreadId([fresh, stale], { pageId: "t_page", now }), "fresh");
   assert.equal(pageDockThreadId([running], { pageId: "t_page", now }), "run");
 });
@@ -78,7 +78,21 @@ test("opening the dock shows the page's last thread unless that reply is older t
 test("a remembered pick that is gone falls through to the newest page thread", () => {
   const page = t("page", { activityAt: now - 10 });
   const older = t("older", { activityAt: now - 20, finishedAt: now - 20 });
-  assert.equal(pageDockThreadId([page, older], { pickId: "missing", pageId: "t_page", now }), "page");
+  assert.equal(pageDockThreadId([page, older], { pick: { id: "missing", at: now }, pageId: "t_page", now }), "page");
+});
+
+test("a new thread the user started on the page stays new when they come back", () => {
+  const fresh = t("fresh", { finishedAt: now - 60_000, activityAt: now - 60_000 });
+  assert.equal(pageDockThreadId([fresh], { pick: { id: null, at: now - hour }, pageId: "t_page", now }), null);
+});
+
+test("picking an old thread keeps it for two hours from the pick", () => {
+  const old = t("old", { finishedAt: now - 5 * hour, activityAt: now - 5 * hour });
+  assert.equal(pageDockThreadId([old], { pick: { id: "old", at: now - hour }, pageId: "t_page", now }), "old");
+  assert.equal(pageDockThreadId([old], { pick: { id: "old", at: now - 3 * hour }, pageId: "t_page", now }), null);
+  // A recent reply keeps a pick fresh too.
+  const recent = t("recent", { finishedAt: now - hour });
+  assert.equal(pageDockThreadId([recent], { pick: { id: "recent", at: now - 5 * hour }, pageId: "t_page", now }), "recent");
 });
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-page-chat-"));
