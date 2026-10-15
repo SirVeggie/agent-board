@@ -209,3 +209,15 @@ export function ensureReplyToColumn(db: DatabaseSync): void {
   }
   db.exec("ALTER TABLE tabs ADD COLUMN reply_to TEXT");
 }
+
+/**
+ * Boards created before page workspaces have no tabs.workspace.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureWorkspaceColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "workspace")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN workspace TEXT");
+}

@@ -51,7 +51,6 @@ import type {
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
-import { pageThreadWorkspace, type PageChatThread } from "./pageChat.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
@@ -1307,27 +1306,9 @@ export class AgentHost {
     return thread;
   }
 
-  /** Workspace a new thread on this page should start in: latest AI reply there, else none. */
+  /** Workspace a new thread on this page should start in: the page's own, else none. */
   private pageWorkspace(pageId: string): string | null {
-    const rows: PageChatThread[] = [];
-    for (const t of this.threads.values()) {
-      if (t.archived || t.scope.kind !== "page" || t.scope.ref !== pageId) continue;
-      let finishedAt: number | undefined;
-      for (const turn of this.loadTurns(t.id)) {
-        if (turn.endedAt) finishedAt = turn.endedAt;
-      }
-      rows.push({
-        id: t.id,
-        archived: t.archived,
-        scope: t.scope,
-        cwd: t.cwd,
-        worktree: t.worktree,
-        finishedAt,
-        activityAt: t.activityAt,
-        status: this.status.get(t.id) ?? "idle",
-      });
-    }
-    return pageThreadWorkspace(rows, pageId);
+    return (store.get(pageId) ?? store.getDraft(pageId))?.workspace ?? null;
   }
 
   updateThread(id: string, patch: ThreadPatch): ThreadView {
@@ -4304,7 +4285,7 @@ export class AgentHost {
   // ---------- moved workspace folders (#338) ----------
 
   /** The folder in the user's checkout a thread belongs to (not its worktree). */
-  private threadFolder(thread: Thread): string | null {
+  threadFolder(thread: Thread): string | null {
     return openWorktree(thread)?.home ?? thread.cwd ?? (thread.scope.kind === "workspace" ? thread.scope.ref : null);
   }
 

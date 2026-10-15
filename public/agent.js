@@ -779,19 +779,9 @@
   /** Keep in step with src/agent/pageChat.ts. Last AI reply older than this: opening the floating chat on a page starts a new thread. */
   const PAGE_CHAT_STALE_MS = 2 * 60 * 60 * 1000;
 
-  function pageThreadHome(t) {
-    return t?.worktree?.home || t?.cwd || null;
-  }
-
-  /** Workspace for a new thread on this page: the page thread with the latest AI reply. None if it has no threads. */
-  function pageThreadWorkspace(pageId) {
-    if (!pageId) return null;
-    let best = null;
-    for (const t of S.threads.values()) {
-      if (t.archived || t.scope.kind !== "page" || t.scope.ref !== pageId || !t.finishedAt) continue;
-      if (!best || t.finishedAt > best.finishedAt) best = t;
-    }
-    return pageThreadHome(best);
+  /** Workspace for a new thread on this page: the page's own (from the thread that made it, or set by the user). */
+  function pageWorkspace(pageId) {
+    return (pageId && app()?.findAnyTab?.(pageId)?.workspace) || null;
   }
 
   function pageThreadIsStale(t, now) {
@@ -1031,25 +1021,30 @@
     return dock.view.threadId === thread.id || dock.draftMatches(thread) || !dock.view.threadId;
   }
 
-  /** Threads relevant to what the user is looking at: this page, its folders, and global. */
-  function hereMatch(thread) {
-    const tab = activeTab();
+  /**
+   * The Here group a thread falls in, or null when it is not relevant to what the user is looking at:
+   * this page (its threads and the one that made it), its folders, the page's workspace, and global.
+   * A thread shows once, in the first of those that fits.
+   */
+  function hereGroup(thread, tab = activeTab()) {
     const scope = thread.scope;
-    if (scope.kind === "global") return true;
-    // Threads with no Scribe scope (workspace only, or nothing) show in the Workspaces list, not here.
-    if (!tab || scope.kind === "workspace") return false;
-    if (scope.kind === "page") return scope.ref === tab.id;
-    if (scope.kind === "folder") {
+    if (tab && ((scope.kind === "page" && scope.ref === tab.id) || thread.id === tab.provenance?.created?.thread)) return `page:${tab.id}`;
+    if (tab && scope.kind === "folder") {
       const folders = app()?.folders?.() || [];
       const byId = new Map(folders.map((f) => [f.id, f]));
       let cur = tab.folderId ? byId.get(tab.folderId) : null;
       while (cur) {
-        if (cur.id === scope.ref) return true;
+        if (cur.id === scope.ref) return `folder:${scope.ref}`;
         cur = cur.parentId ? byId.get(cur.parentId) : null;
       }
-      return false;
     }
-    return true;
+    const dir = tab?.workspace ? workspaceDir(thread) : null;
+    if (dir && dirKey(dir) === dirKey(tab.workspace)) return `ws:${dirKey(dir)}`;
+    return scope.kind === "global" ? "global" : null;
+  }
+
+  function hereMatch(thread) {
+    return hereGroup(thread) !== null;
   }
 
   function threadRank(t) {
@@ -1573,7 +1568,10 @@
         if (event.key === "Escape") finish(null);
       });
       const actions = el("div", "ag-modal-actions");
-      actions.append(button("Browse here", "ag-btn ghost", () => load(input.value.trim())), el("span", "ag-grow"), button("Cancel", "ag-btn", () => finish(null)));
+      actions.append(button("Browse here", "ag-btn ghost", () => load(input.value.trim())), el("span", "ag-grow"));
+      // opts.clear: a button that resolves "" (no folder), apart from Cancel's null.
+      if (opts.clear) actions.append(button(opts.clear, "ag-btn", () => finish("")));
+      actions.append(button("Cancel", "ag-btn", () => finish(null)));
       panel.append(title, hint, row);
       if (used.childElementCount) panel.append(used);
       panel.append(browser, actions);
@@ -2361,7 +2359,7 @@
           : d.scope.kind === "workspace"
             ? d.scope.ref
             : d.scope.kind === "page"
-              ? pageThreadWorkspace(d.scope.ref)
+              ? pageWorkspace(d.scope.ref)
               : p.scopeWorkspaces?.[scopeKey] || p.recentWorkspaces?.[0] || null;
       const model = d.settings.model || p.models?.[provider] || "default";
       const choice = modelChoice(provider, model, p);
@@ -5880,6 +5878,7 @@
       const dir = workspaceDir(thread);
       return dir ? `ws:${dirKey(dir)}` : "ws";
     }
+    if (S.filter === "here") return hereGroup(thread) || "global";
     const s = thread.scope;
     if (s.kind === "global") return "global";
     return `${s.kind}:${s.ref}`;
@@ -5890,7 +5889,13 @@
       const dir = workspaceDir(thread);
       return { icon: dir ? "box" : "close", text: dir ? R.basename(dir) || dir : "No workspace", kind: "Workspace" };
     }
-    const s = thread.scope;
+    // Here keeps the page's own group for the thread that made it, and groups the page's workspace by folder.
+    const here = S.filter === "here" ? hereGroup(thread) : null;
+    if (here?.startsWith("ws:")) {
+      const dir = activeTab()?.workspace;
+      return { icon: "box", text: R.basename(dir) || dir, kind: "Workspace" };
+    }
+    const s = here?.startsWith("page:") ? { kind: "page", ref: here.slice(5) } : thread.scope;
     const label = scopeLabel(s);
     const kind = s.kind === "page" ? "Page" : s.kind === "folder" ? "Folder" : s.kind === "workspace" ? "Workspace" : "Global";
     return { icon: label.icon, text: s.kind === "global" ? "Global" : label.text, kind };
@@ -5906,8 +5911,8 @@
     const members = [...S.threads.values()].filter((t) => !t.archived && groupKey(t) === key);
     const last = (members.some((t) => !t.fromPage) ? members.filter((t) => !t.fromPage) : members).sort((a, b) => b.activityAt - a.activityAt)[0];
     if (!last) return null;
-    const dir = S.filter === "workspaces" ? workspaceDir(last) : null;
-    const scope = dir ? { kind: "global", ref: null } : { ...last.scope };
+    const dir = S.filter === "workspaces" ? workspaceDir(last) : key.startsWith("ws:") ? activeTab()?.workspace || null : null;
+    const scope = dir ? { kind: "global", ref: null } : key.startsWith("page:") ? { kind: "page", ref: key.slice(5) } : { ...last.scope };
     const settings = { mode: dir ? "code" : last.mode, customMode: dir ? null : last.custom?.id ?? null, web: last.web, cwd: dir || homeDir(last), useWorktree: Boolean(last.useWorktree) };
     if (providerAvailable(last.provider)) {
       Object.assign(settings, { provider: last.provider, model: last.model, effort: last.effort, modelParams: { ...(last.modelParams || {}) }, approval: last.approval });
@@ -6083,7 +6088,7 @@
             "div",
             "ag-list-empty",
             S.filter === "here"
-              ? "No threads for this page yet. Threads for its folder and global threads show here too."
+              ? "No threads for this page yet. Threads for its folder, its workspace and global threads show here too."
               : S.filter === "workspaces"
                 ? "No threads belonging to a workspace yet."
                 : "No threads"
@@ -6107,7 +6112,8 @@
         groups.get(key).push(t);
       }
       const kindRank = { page: 0, folder: 1, workspace: 2, global: 3 };
-      if (S.filter === "here") order.sort((a, b) => kindRank[groups.get(a)[0].scope.kind] - kindRank[groups.get(b)[0].scope.kind]);
+      const keyKind = (key) => (key.startsWith("ws:") ? "workspace" : key.split(":")[0]);
+      if (S.filter === "here") order.sort((a, b) => kindRank[keyKind(a)] - kindRank[keyKind(b)]);
       const now = Date.now();
       let shown = 0;
       for (const key of order) {
@@ -6150,7 +6156,7 @@
         head.append(icon("chevron", "ag-ico ag-chev"), icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
         if (folded) head.append(el("span", "ag-list-group-count", String(members.length)));
         // The folder a workspace group stands for: every group of the Workspaces list, and app scope None elsewhere.
-        const dir = S.filter === "workspaces" ? workspaceDir(first) : first.scope.kind === "workspace" ? first.scope.ref : null;
+        const dir = S.filter === "workspaces" ? workspaceDir(first) : key.startsWith("ws:") ? activeTab()?.workspace : first.scope.kind === "workspace" ? first.scope.ref : null;
         if (dir) head.dataset.tooltip = dir;
         const acts = el("span", "ag-list-group-acts");
         if (dir) acts.append(button(icon("more"), "ag-icon-btn small ag-list-group-new", (event) => workspaceMenu(event.currentTarget, dir), "Hide or delete this workspace"));
@@ -10941,7 +10947,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

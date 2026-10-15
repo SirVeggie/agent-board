@@ -19,20 +19,6 @@ export function pageThreadHome(thread: Pick<PageChatThread, "cwd" | "worktree"> 
   return thread.worktree?.home || thread.cwd || null;
 }
 
-/**
- * Workspace for a new thread on this page: the page thread with the latest AI reply.
- * No such thread (or none on the page) means no workspace — not the last global folder.
- */
-export function pageThreadWorkspace(threads: Iterable<PageChatThread>, pageId: string | null | undefined): string | null {
-  if (!pageId) return null;
-  let best: PageChatThread | null = null;
-  for (const t of threads) {
-    if (t.archived || t.scope.kind !== "page" || t.scope.ref !== pageId || !t.finishedAt) continue;
-    if (!best || t.finishedAt > (best.finishedAt ?? 0)) best = t;
-  }
-  return pageThreadHome(best);
-}
-
 /** Idle threads whose last AI reply is older than staleMs. Running or waiting threads stay. */
 export function pageThreadIsStale(
   thread: Pick<PageChatThread, "finishedAt" | "status"> | null | undefined,

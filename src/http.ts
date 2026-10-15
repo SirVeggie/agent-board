@@ -1309,6 +1309,24 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.post("/api/tabs/:id/workspace", (req, res) => {
+    if (viewerOf(req) === "agent") {
+      res.status(403).json({ error: "Only the board UI can change a page's workspace" });
+      return;
+    }
+    const workspace = req.body?.workspace;
+    if (workspace !== null && typeof workspace !== "string") {
+      res.status(400).json({ error: "workspace must be a folder path or null" });
+      return;
+    }
+    try {
+      const tab = store.setWorkspace(req.params.id, workspace);
+      res.json({ tab: toMeta(tab) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
   app.post("/api/tabs/:id/folder-instructions", (req, res) => {
     if (viewerOf(req) === "agent") {
       res.status(403).json({ error: "Only the board UI can change folder instructions" });
@@ -1849,7 +1867,8 @@ function actorOf(req: express.Request): PageActor | undefined {
   const thread = req.get(THREAD_HEADER)?.slice(0, 60);
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const title = chat?.title?.trim().slice(0, 120);
-  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}) };
+  const workspace = chat && agentHost ? agentHost.threadFolder(chat) : null;
+  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}), ...(workspace ? { workspace } : {}) };
 }
 
 /** The page of the chat thread making this request, when that page is still blank: a new page it shows fills it. */

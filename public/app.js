@@ -360,6 +360,7 @@
     setPinned,
     setAgentHidden,
     setFolderInstructions,
+    pickPageWorkspace,
     managePermissions: (id) => window.scribePermissions?.manage(id),
     copyTabKey,
     downloadExport,
@@ -3491,6 +3492,24 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ hidden }),
+    });
+  }
+
+  /** The folder new chat threads on this page start in. */
+  async function pickPageWorkspace(id) {
+    const tab = findAnyTab(id);
+    const picked = await window.scribeChat?.pickWorkspace?.(tab?.workspace || "", {
+      title: "Page workspace",
+      hint: "New threads on this page start in this folder.",
+      clear: tab?.workspace ? "No workspace" : null,
+    });
+    if (picked === null || picked === undefined) {
+      return;
+    }
+    await fetch(`/api/tabs/${encodeURIComponent(id)}/workspace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace: picked || null }),
     });
   }
 

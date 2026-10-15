@@ -1010,6 +1010,7 @@ window.createLibrary = function createLibrary(host) {
         action: () => host.setFolderInstructions(id, !tab.folderInstructions),
       },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
+      { label: tab.workspace ? "Change workspace…" : "Set workspace…", action: () => host.pickPageWorkspace(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
       madeThread && {
         label: "Open thread",

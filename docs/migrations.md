@@ -9,6 +9,16 @@
 - **How to verify:** `src/agent/workspaceDelete.test.ts`.
 - **When to remove:** Keep. This is the current schema.
 
+## `tabs.workspace` column (additive, schema still 3)
+
+- **What changed:** A page has a workspace folder (#611): `workspace` on the tab, the disk folder new chat threads on the page start in. A page an agent creates takes the creating thread's folder (its worktree's home folder, else its cwd); the page menu **Set workspace…** changes or clears it. This replaces the old default (the folder of the page thread with the latest reply). The thread list's Here filter also shows the page's workspace threads and the thread that created the page. Stored as `tabs.workspace TEXT` (nullable).
+- **Why no version bump:** Existing rows are unchanged (null: no workspace). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureWorkspaceColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged on purpose: the folder is a path on this PC. `EXPORT_VERSION` stays `1`.
+- **Protocol:** additive route `POST /api/tabs/:id/workspace` (board UI only), a `workspace` field on tab meta. `VERSION` stays `3.0.0`.
+- **Where:** `src/schema.ts`, `src/dbMigrate.ts` (`ensureWorkspaceColumn`), `src/types.ts` (`noteAgentWrite`), `src/store.ts` (`setWorkspace`), `src/http.ts` (`actorOf`), `src/agent/host.ts` (`pageWorkspace`), `public/agent.js` (`hereGroup`, `pageWorkspace`), `public/app.js`, `public/library.js`.
+- **How to verify:** `a page takes the workspace of the thread that created it…` in `src/agent/pageChat.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.reply_to` column (additive, schema still 3)
 
 - **What changed:** A page can have a reply target (#320): `replyTo` on the tab, `{ page: <target tab id>, card?: number }`, set by agents with `page_show` / `page_patch` `replyTo` (keys are resolved to ids). The page's `scribe.reply(data, { summary })` sends its answers there after a click; a Kanban target posts them as the user's comment and passes them on to the card's chat (server side, `AgentHost.cardMessage`). Stored as `tabs.reply_to TEXT` (JSON, nullable).

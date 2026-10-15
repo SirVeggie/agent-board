@@ -3,12 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import type { Turn } from "./types.js";
 import {
   PAGE_CHAT_STALE_MS,
   pageDockThreadId,
   pageThreadIsStale,
-  pageThreadWorkspace,
   type PageChatThread,
 } from "./pageChat.js";
 
@@ -26,33 +24,6 @@ function t(id: string, over: Partial<PageChatThread> = {}): PageChatThread {
     ...over,
   };
 }
-
-test("a new page thread takes the workspace of the latest AI reply on that page", () => {
-  const threads = [
-    t("old", { finishedAt: now - 5 * hour, cwd: "S:\\old" }),
-    t("new", { finishedAt: now - hour, cwd: "S:\\notes" }),
-    t("other", { scope: { kind: "page", ref: "t_other" }, cwd: "S:\\other", finishedAt: now }),
-    t("global", { scope: { kind: "global", ref: null }, cwd: "S:\\agent-board", finishedAt: now }),
-  ];
-  assert.equal(pageThreadWorkspace(threads, "t_page"), "S:\\notes");
-});
-
-test("a page with no AI replies has no workspace, even when other threads remember one", () => {
-  const threads = [
-    t("draft", { finishedAt: undefined, cwd: "S:\\notes" }),
-    t("global", { scope: { kind: "global", ref: null }, cwd: "S:\\agent-board", finishedAt: now }),
-  ];
-  assert.equal(pageThreadWorkspace(threads, "t_page"), null);
-  assert.equal(pageThreadWorkspace([], "t_page"), null);
-});
-
-test("archived threads and a worktree's home folder", () => {
-  assert.equal(pageThreadWorkspace([t("gone", { archived: true, cwd: "S:\\gone" })], "t_page"), null);
-  assert.equal(
-    pageThreadWorkspace([t("wt", { cwd: "S:\\wt", worktree: { home: "S:\\proj" } })], "t_page"),
-    "S:\\proj"
-  );
-});
 
 test("a thread is stale only after two hours without an AI reply, unless it is still working", () => {
   assert.equal(pageThreadIsStale(t("fresh", { finishedAt: now - hour }), now), false);
@@ -113,29 +84,6 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-type HostInternals = {
-  loadTurns: (id: string) => Turn[];
-  saveTurn: (turn: Turn) => void;
-  threads: Map<string, { cwd: string | null; worktree?: { home: string } | null }>;
-};
-
-function reply(threadId: string, endedAt: number): void {
-  const internals = host as unknown as HostInternals;
-  const turn: Turn = {
-    id: `tu_${threadId}_${endedAt}`,
-    threadId,
-    seq: internals.loadTurns(threadId).length + 1,
-    status: "done",
-    model: "m",
-    effort: null,
-    mode: "board",
-    startedAt: endedAt - 1000,
-    endedAt,
-  };
-  internals.loadTurns(threadId).push(turn);
-  internals.saveTurn(turn);
-}
-
 test("createThread on a page does not inherit the last global workspace", () => {
   host.setPrefs({ recentWorkspaces: ["S:\\Library\\Projects\\agent-board"], scopeWorkspaces: { "page:t_empty": "S:\\wrong" } });
   const thread = host.createThread(
@@ -145,23 +93,29 @@ test("createThread on a page does not inherit the last global workspace", () => 
   assert.equal(thread.cwd, null);
 });
 
-test("createThread on a page inherits cwd from that page's latest reply", () => {
-  host.setPrefs({ recentWorkspaces: ["S:\\Library\\Projects\\agent-board"] });
-  const prior = host.createThread(
-    { provider: "pi", mode: "board", cwd: "S:\\notes", scope: { kind: "page", ref: "t_notes" } },
+test("a page takes the workspace of the thread that created it, and its new threads start there", () => {
+  const maker = host.createThread(
+    { provider: "pi", mode: "code", cwd: "S:\notes", scope: { kind: "global", ref: null } },
     { remember: false }
   );
-  reply(prior.id, now);
-  const older = host.createThread(
-    { provider: "pi", mode: "board", cwd: "S:\\old-notes", scope: { kind: "page", ref: "t_notes" } },
-    { remember: false }
-  );
-  reply(older.id, now - hour);
-  const next = host.createThread(
-    { provider: "pi", mode: "board", scope: { kind: "page", ref: "t_notes" } },
-    { remember: false }
-  );
-  assert.equal(next.cwd, "S:\\notes");
+  const { tab } = store.upsert({
+    title: "Made by a thread",
+    html: "<p>hi</p>",
+    viewer: "agent",
+    actor: { at: now, thread: maker.id, workspace: "S:\notes" },
+  });
+  assert.equal(tab.workspace, "S:\notes");
+  assert.equal(tab.provenance?.created?.thread, maker.id);
+  assert.equal("workspace" in (tab.provenance?.created ?? {}), false);
+  const next = host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: tab.id } }, { remember: false });
+  assert.equal(next.cwd, "S:\notes");
+  // A later write by another thread leaves the page's workspace alone.
+  store.update(tab.id, { title: "Changed", viewer: "agent", actor: { at: now, thread: "th_other", workspace: "S:\elsewhere" } });
+  assert.equal(store.get(tab.id)?.workspace, "S:\notes");
+  store.setWorkspace(tab.id, null);
+  assert.equal(store.get(tab.id)?.workspace, undefined);
+  const cleared = host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: tab.id } }, { remember: false });
+  assert.equal(cleared.cwd, null);
 });
 
 test("createThread still uses recent workspaces when the thread is not on a page", () => {
@@ -177,11 +131,6 @@ test("createThread still uses recent workspaces when the thread is not on a page
 
 test("createThread keeps an explicit cwd, including none", () => {
   host.setPrefs({ recentWorkspaces: ["S:\\Library\\Projects\\agent-board"] });
-  const prior = host.createThread(
-    { provider: "pi", mode: "board", cwd: "S:\\notes", scope: { kind: "page", ref: "t_explicit" } },
-    { remember: false }
-  );
-  reply(prior.id, now);
   const none = host.createThread(
     { provider: "pi", mode: "board", cwd: null, scope: { kind: "page", ref: "t_explicit" } },
     { remember: false }

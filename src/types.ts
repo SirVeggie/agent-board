@@ -213,6 +213,11 @@ export type Tab = {
    * with the page's metadata, not its HTML or state, so the page's own code cannot change it.
    */
   replyTo?: ReplyTarget;
+  /**
+   * The disk folder new chat threads on this page start in. Taken from the thread that created
+   * the page; the user can change or clear it. Omitted for none.
+   */
+  workspace?: string;
 };
 
 /**
@@ -230,6 +235,8 @@ export type PageActor = {
   thread?: string;
   /** Thread title at write time, so Library still has a label if the thread is gone. */
   title?: string;
+  /** The thread's workspace folder at write time. A page it creates takes it; provenance does not keep it. */
+  workspace?: string;
   at: number;
 };
 
@@ -458,6 +465,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.folderInstructions ? { folderInstructions: true } : {}),
     ...(tab.provenance ? { provenance: tab.provenance } : {}),
     ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
+    ...(tab.workspace ? { workspace: tab.workspace } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(isBlankPage(tab) ? { blank: true } : {}),
     ...(tab.templateId
@@ -549,6 +557,9 @@ export function noteAgentWrite(tab: Tab, actor: PageActor | undefined, created =
     provenance.created = stamped;
   }
   tab.provenance = provenance;
+  if (created && !tab.workspace && actor?.workspace) {
+    tab.workspace = actor.workspace;
+  }
 }
 
 export function normalizeReplyTo(value: unknown): ReplyTarget | undefined {

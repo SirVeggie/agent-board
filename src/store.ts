@@ -412,6 +412,24 @@ export class BoardStore extends EventEmitter {
    * Mark (or unmark) a page as its folder's agent instructions. One flagged page per folder:
    * turning this on clears the flag on siblings. Title "Instructions" still counts without a flag.
    */
+  /** The folder new chat threads on this page start in, or null for none. Board UI only. */
+  setWorkspace(idOrKey: string, workspace: string | null): Tab {
+    const tab = this.requireAny(idOrKey);
+    const next = workspace?.trim() || undefined;
+    if (tab.workspace === next) {
+      return tab;
+    }
+    if (next) {
+      tab.workspace = next;
+    } else {
+      delete tab.workspace;
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
+  }
+
   setFolderInstructions(idOrKey: string, on: boolean): Tab {
     const tab = this.requireAny(idOrKey);
     if (isAppTab(tab)) {
