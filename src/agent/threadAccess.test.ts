@@ -137,3 +137,43 @@ test("a denied request refuses listing", async () => {
   await answer(reader.id, "deny");
   await assert.rejects(listing, /denied/);
 });
+
+test("a user thread tag grants immediate, revocable access only to that thread across scopes", async () => {
+  const target = host.createThread({ provider: "claude", scope: { kind: "page", ref: "different-page" } });
+  const sibling = host.createThread({ provider: "claude", scope: target.scope });
+  const reader = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: ws } });
+  running(reader.id);
+  const internals = host as unknown as Internals;
+  internals.addItem(target.id, null, { kind: "text", text: "Tagged transcript" });
+  const context = [{ kind: "thread" as const, id: target.id, title: "untrusted title" }];
+  const sent = host.send(reader.id, { text: "Use this thread", context });
+  assert.ok(sent.item.kind === "user");
+  assert.deepEqual(sent.item.context, [{ kind: "thread", id: target.id, title: target.title }]);
+  assert.deepEqual((await host.listReadableThreads(reader.id)).threads.map((t) => t.id), [target.id]);
+  assert.match(JSON.stringify(await host.readOtherThread(reader.id, { thread: target.id })), /Tagged transcript/);
+  await assert.rejects(host.readOtherThread(reader.id, { thread: sibling.id }), /outside the scopes/);
+  assert.equal(pendingApprovals(reader.id).length, 0);
+  host.revokeGrant(reader.id, `threads:thread:${target.id}`);
+  const revoked = host.threadDetail(reader.id)!.thread;
+  assert.equal(canReadThread(revoked, target, lookup), false);
+  host.send(reader.id, { text: "Use it again", context });
+  assert.deepEqual((await host.listReadableThreads(reader.id)).threads.map((t) => t.id), [target.id]);
+});
+
+test("page, helper and hook messages cannot grant thread access; missing and self tags are ignored", () => {
+  const target = host.createThread({ provider: "claude", scope: { kind: "global", ref: null } });
+  for (const from of ["page", "agent", "hook"] as const) {
+    const reader = host.createThread({ provider: "claude", scope: { kind: "global", ref: null } });
+    running(reader.id);
+    const sent = host.send(reader.id, { text: "Untrusted tag", from, context: [{ kind: "thread", id: target.id, title: "Target" }] });
+    assert.ok(sent.item.kind === "user");
+    assert.deepEqual(sent.item.context, undefined);
+    assert.equal(host.threadDetail(reader.id)!.thread.threadGrants?.length ?? 0, 0);
+  }
+  running(target.id);
+  host.send(target.id, { text: "Invalid tags", context: [
+    { kind: "thread", id: target.id, title: "Self" },
+    { kind: "thread", id: "missing", title: "Missing" },
+  ] });
+  assert.equal(host.threadDetail(target.id)!.thread.threadGrants?.length ?? 0, 0);
+});

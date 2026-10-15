@@ -5,9 +5,10 @@ import type { Item, Thread } from "./types.js";
  * Reading other threads (thread_list, thread_read). A thread can only ask for threads in its own
  * scopes: its workspace (the folder it works in) and its app scope (its page, or its folder with the
  * pages and folders inside it). A global thread can ask for any thread. Nothing is readable until
- * the user grants it; grants last for the rest of the thread.
+ * the user grants it; grants last for the rest of the thread. A user tag grants one specific
+ * thread independently of these scopes.
  */
-export type AccessScope = { kind: "workspace"; path: string } | { kind: "page"; id: string } | { kind: "folder"; id: string } | { kind: "all" };
+export type AccessScope = { kind: "workspace"; path: string } | { kind: "page"; id: string } | { kind: "folder"; id: string } | { kind: "thread"; id: string } | { kind: "all" };
 
 /** What the user let a thread read. */
 export type ThreadGrants = AccessScope[];
@@ -20,6 +21,7 @@ export type ScopeLookup = {
   folderInside(folderId: string, rootId: string): boolean;
   pageTitle?(pageId: string): string | null;
   folderPath?(folderId: string): string | null;
+  threadTitle?(threadId: string): string | null;
 };
 
 const cleanPath = (p: string): string => {
@@ -58,8 +60,9 @@ export function requestableScopes(thread: Pick<Thread, "cwd" | "worktree" | "sco
 }
 
 /** Whether a scope covers a thread. */
-export function scopeCovers(scope: AccessScope, target: Pick<Thread, "cwd" | "worktree" | "scope">, lookup: ScopeLookup): boolean {
+export function scopeCovers(scope: AccessScope, target: Pick<Thread, "cwd" | "worktree" | "scope"> & { id?: string }, lookup: ScopeLookup): boolean {
   if (scope.kind === "all") return true;
+  if (scope.kind === "thread") return target.id === scope.id;
   if (scope.kind === "workspace") {
     const workspace = threadWorkspace(target);
     return Boolean(workspace && within(workspace, scope.path));
@@ -73,7 +76,7 @@ export function scopeCovers(scope: AccessScope, target: Pick<Thread, "cwd" | "wo
   return false;
 }
 
-/** Whether reader may read target now: it is not itself, and a granted scope it can still ask for covers it. */
+/** Whether reader may read target now: it is not itself, and an effective grant covers it. */
 export function canReadThread(reader: Pick<Thread, "id" | "cwd" | "worktree" | "scope" | "threadGrants">, target: Pick<Thread, "id" | "cwd" | "worktree" | "scope">, lookup: ScopeLookup): boolean {
   if (reader.id === target.id) return false;
   return allowedGrants(reader, reader.threadGrants ?? []).some((scope) => scopeCovers(scope, target, lookup));
@@ -82,13 +85,14 @@ export function canReadThread(reader: Pick<Thread, "id" | "cwd" | "worktree" | "
 /**
  * Keep only grants the thread could ask for (its scopes may have changed since, e.g. a new workspace).
  * A global thread can be granted any workspace, page or folder, since "all" covers them.
+ * Explicit thread tags remain granted independently of the reader's current workspace or page.
  */
 export function allowedGrants(thread: Pick<Thread, "cwd" | "worktree" | "scope">, grants: AccessScope[]): AccessScope[] {
   const asked = requestableScopes(thread);
   const global = asked.some((s) => s.kind === "all");
   const out: AccessScope[] = [];
   for (const scope of grants) {
-    if (!global && !asked.some((s) => sameScope(s, scope))) continue;
+    if (scope.kind !== "thread" && !global && !asked.some((s) => sameScope(s, scope))) continue;
     if (!out.some((s) => sameScope(s, scope))) out.push(scope);
   }
   return out;
@@ -109,6 +113,7 @@ export function scopesGranted(grants: ThreadGrants | undefined, want: AccessScop
 /** A scope as the user and the agent see it. */
 export function scopeLabel(scope: AccessScope, lookup?: ScopeLookup): string {
   if (scope.kind === "all") return "all threads";
+  if (scope.kind === "thread") return `thread "${lookup?.threadTitle?.(scope.id) ?? scope.id}"`;
   if (scope.kind === "workspace") return `threads in workspace ${scope.path}`;
   if (scope.kind === "page") return `threads on page "${lookup?.pageTitle?.(scope.id) ?? scope.id}"`;
   return `threads in folder "${lookup?.folderPath?.(scope.id) ?? scope.id}" (and its pages and subfolders)`;

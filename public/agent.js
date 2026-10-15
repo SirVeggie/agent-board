@@ -328,17 +328,18 @@
   const FILE_LIMITS = { count: 10, image: 8 * 1024 * 1024, file: 20 * 1024 * 1024, total: 50 * 1024 * 1024 };
   const MENTION_LIMIT = 20;
 
-  /** The @token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix; start/end cover the whole token. */
-  function mentionAt(value, cursor) {
+  /** The @ or # token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix; start/end cover the whole token. */
+  function mentionAt(value, cursor, prefix = "@") {
     const before = value.slice(0, cursor);
-    const m = /(^|[\s])@([^\s@]*)$/.exec(before);
+    const m = (prefix === "#" ? /(^|[\s])#([^\s#]*)$/ : /(^|[\s])@([^\s@]*)$/).exec(before);
     if (!m) return null;
     const start = before.length - 1 - m[2].length;
-    const rest = /^[^\s@]*/.exec(value.slice(cursor))?.[0] || "";
+    const rest = (prefix === "#" ? /^[^\s#]*/ : /^[^\s@]*/).exec(value.slice(cursor))?.[0] || "";
     return { start, end: cursor + rest.length, query: m[2] };
   }
 
   function chipKey(chip) {
+    if (chip.kind === "thread") return `thread:${chip.id}`;
     if (chip.kind === "page") return `page:${chip.id}`;
     if (chip.kind === "folder") return `folder:${chip.id}`;
     if (chip.kind === "file") return `file:${chip.path}`;
@@ -346,6 +347,7 @@
   }
 
   function chipIcon(chip) {
+    if (chip.kind === "thread") return "chat";
     if (chip.kind === "page") return "page";
     if (chip.kind === "folder") return "folder";
     if (chip.kind === "selection") return "quote";
@@ -353,6 +355,7 @@
   }
 
   function chipLabel(chip) {
+    if (chip.kind === "thread") return chip.title || "Thread";
     if (chip.kind === "page") return chip.title || chip.key || "Page";
     if (chip.kind === "folder") return chip.path || "Folder";
     if (chip.kind === "file") return R.basename(chip.path) || chip.path;
@@ -364,6 +367,7 @@
   }
 
   function chipTitle(chip) {
+    if (chip.kind === "thread") return `Read access to this thread: ${chip.title || chip.id}`;
     if (chip.kind === "selection") return chip.text.length > 600 ? `${chip.text.slice(0, 600)}…` : chip.text;
     return chip.path || chip.key || "";
   }
@@ -4624,7 +4628,7 @@
       const items = S.details.get(this.threadId)?.items || [];
       for (const it of items) {
         if (it.kind !== "user" || it.dropped) continue;
-        for (const chip of it.context || []) add(chip);
+        for (const chip of it.context || []) if (chip.kind !== "thread") add(chip);
       }
       return keys;
     }
@@ -5035,7 +5039,8 @@
         return;
       }
       const cur = this.input.selectionStart ?? value.length;
-      const mention = mentionAt(value, cur);
+      const threadMention = mentionAt(value, cur, "#");
+      const mention = threadMention ? { ...threadMention, thread: true } : mentionAt(value, cur);
       if (mention) {
         this.showMentions(mention);
         return;
@@ -5113,6 +5118,24 @@
       if (gen !== this.mentionGen) return;
       const q = mention.query;
       const taken = this.knownMentionKeys();
+      if (mention.thread) {
+        if (this.slash.hidden || !this.slash.hasAttribute("aria-busy")) {
+          this.renderMentionPicker({ threads: [], mention, loading: true });
+        }
+        let threads = [];
+        try {
+          const data = await api("GET", "/threads");
+          const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+          threads = (data.threads || [])
+            .filter((t) => t.id !== this.threadId && !taken.has(`thread:${t.id}`) && words.every((w) => `${t.title} ${t.id}`.toLowerCase().includes(w)))
+            .slice(0, 20)
+            .map((t) => ({ kind: "thread", id: t.id, title: t.title }));
+        } catch { /* The picker shows an empty result if the thread list is unavailable. */ }
+        if (gen !== this.mentionGen) return;
+        this.mentionLoading = false;
+        this.renderMentionPicker({ threads, mention, loading: false });
+        return;
+      }
       const s = this.settings();
       const folders = this.localFolderMentions(q, taken);
       const wantFiles = (s.mode === "code" || s.mode === "plan") && s.cwd;
@@ -5186,11 +5209,12 @@
       }
     }
 
-    renderMentionPicker({ pages, folders, files, mention, loading }) {
+    renderMentionPicker({ pages = [], folders = [], files = [], threads = [], mention, loading }) {
       this.slash.classList.toggle("loading", loading);
       this.slash.setAttribute("aria-busy", String(loading));
       this.slash.replaceChildren();
       const sections = [
+        { title: "Threads", items: threads },
         { title: "Pages", items: pages },
         { title: "Folders", items: folders },
         { title: "Files", items: files },
@@ -5204,16 +5228,17 @@
           first = false;
           const row = button("", `ag-slash-item${on ? " on" : ""}`, () => this.pickMention(item, mention));
           row.addEventListener("mousedown", (event) => event.preventDefault());
-          const name = item.kind === "page" ? item.title : item.kind === "folder" ? item.path : item.name || R.basename(item.path);
-          const detail = item.kind === "page" ? item.folder : item.kind === "file" ? R.dirname(item.path) : "";
+          const name = item.kind === "thread" ? item.title || "Thread" : item.kind === "page" ? item.title : item.kind === "folder" ? item.path : item.name || R.basename(item.path);
+          const detail = item.kind === "thread" ? item.id : item.kind === "page" ? item.folder : item.kind === "file" ? R.dirname(item.path) : "";
           row.append(icon(chipIcon(item)), el("span", "ag-slash-title", name));
           if (detail) row.append(el("span", "ag-slash-desc", detail));
-          row.dataset.tooltip = item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
+          row.dataset.tooltip = item.kind === "thread" ? `Give this chat read access to ${item.title || item.id}` : item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
+          if (item.kind === "thread") row.setAttribute("aria-description", row.dataset.tooltip);
           this.slash.append(row);
         }
       }
       if (!this.slash.querySelector(".ag-slash-item")) {
-        this.slash.append(el("div", "ag-slash-empty", loading ? "Searching…" : "No matching pages, folders or files"));
+        this.slash.append(el("div", "ag-slash-empty", loading ? "Searching…" : mention.thread ? "No matching threads" : "No matching pages, folders or files"));
       }
       this.slash.hidden = false;
     }
@@ -5221,7 +5246,9 @@
     pickMention(item, mention) {
       if (this.mentionLoading) return;
       const chip =
-        item.kind === "page"
+        item.kind === "thread"
+          ? { kind: "thread", id: item.id, title: item.title }
+          : item.kind === "page"
           ? { kind: "page", id: item.id, key: item.key, title: item.title }
           : item.kind === "folder"
             ? { kind: "folder", id: item.id, path: item.path }
