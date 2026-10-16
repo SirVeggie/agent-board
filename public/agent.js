@@ -3218,6 +3218,7 @@
             run: () => this.finishWorktree("merge"),
           },
           { label: "Leave branch", detail: "Keep the work on the branch, remove the folder", disabled: t.status !== "idle", run: () => this.finishWorktree("leave") },
+          { label: "Discard worktree…", detail: "Delete the branch and all its changes", danger: true, disabled: t.status !== "idle", run: () => this.finishWorktree("discard") },
         ],
         { width: 300 }
       );
@@ -3276,12 +3277,14 @@
           ? st?.ahead
             ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
             : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
-          : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
+          : how === "discard"
+            ? `Discard all committed and uncommitted work on ${wt.branch}, delete the branch, and remove its worktree folder? This cannot be undone. The main checkout is unchanged.`
+            : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
       const after =
         how === "merge"
           ? `A new message to the thread then opens a worktree again from ${wt.base} as it is then, and goes on in the same agent session.`
-          : "The thread then continues in the main checkout, in a fresh agent session.";
-      if (!(await app().confirm(`${question}\n\n${after}`, how === "merge" ? "Merge" : "Leave"))) return;
+          : "This thread and any other threads sharing the worktree then continue in the main checkout, in fresh agent sessions.";
+      if (!(await app().confirm(`${question}\n\n${after}`, how === "merge" ? "Merge" : how === "discard" ? "Discard worktree" : "Leave"))) return;
       try {
         const res = await api("POST", `/threads/${encodeURIComponent(t.id)}/worktree`, { action: how });
         notice(res.message);
