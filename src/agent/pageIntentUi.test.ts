@@ -102,9 +102,16 @@ test("the floating chat maps page_create signals onto the hint and the creating 
       ["intent", null],
     ]);
 
+    // Background calls never raise a creating screen, while running or finished.
+    assert.deepEqual(await events(`
+      call("b0", "running", { title: "Evidence", background: true });
+      call("b0", "done", { title: "Evidence", background: true });
+    `), []);
+
     // An announced page whose page_show this chat first sees finished still ends the screen; a background page does not.
     assert.deepEqual(await events(`
       signal("confirmed", { title: "Plan" });
+      call("b1", "running", { title: "Evidence", background: true });
       call("b1", "done", { title: "Evidence", background: true });
       call("c2", "done", { title: "Plan" });
     `), [

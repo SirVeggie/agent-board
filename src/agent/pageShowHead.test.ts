@@ -2,14 +2,28 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { pageShowHead } from "./providers/claude.js";
 
-test("a streaming page_show call names its page once the content starts", () => {
-  assert.equal(pageShowHead('{"key": "scribe:trip-plan", "title": "Trip'), null);
-  assert.deepEqual(pageShowHead('{"key": "scribe:trip-plan", "title": "Trip \\"plan\\"", "html": "<h1'), { key: "scribe:trip-plan", title: 'Trip "plan"' });
-  assert.deepEqual(pageShowHead('{"title":"Notes","htmlPath":"C:\\tmp'), { title: "Notes" });
+test("streaming page_show reports early only with an explicit background choice", () => {
+  for (const background of [true, false]) {
+    const input = { key: "scribe:trip-plan", title: 'Trip "plan"', background };
+    assert.deepEqual(pageShowHead(JSON.stringify(input).slice(0, -1) + ',"html":"<h1'), input);
+    assert.deepEqual(pageShowHead(JSON.stringify(input).slice(0, -1) + ',"htmlPath":"C:'), input);
+  }
+  assert.equal(pageShowHead('{"key":"scribe:trip-plan","title":"Trip'), null);
 });
 
-test("fields quoted inside the page's HTML are not taken for the call's own", () => {
-  const html = `{"html": "<script>const o = {\\"key\\": \\"scribe:other\\", \\"title\\": \\"x\\"};${" ".repeat(400)}`;
-  assert.deepEqual(pageShowHead(html), {});
-  assert.deepEqual(pageShowHead(`{"id":"t_1",${" ".repeat(400)}`), { id: "t_1" });
+test("background after the content cannot briefly show the creating screen", () => {
+  const prefix = '{"title":"Evidence","html":"' + "x".repeat(1000);
+  assert.equal(pageShowHead(prefix), null);
+  assert.equal(pageShowHead(prefix + '","background":tru'), null);
+  assert.deepEqual(pageShowHead(prefix + '","background":true}'), { title: "Evidence", background: true });
+  assert.deepEqual(pageShowHead(prefix + '"}'), { title: "Evidence" });
+  assert.equal(pageShowHead('{"title":"Notes","htmlPath":"C:'), null);
+});
+
+test("nested and quoted fields are not taken for the call's own", () => {
+  const input = { state: { background: false, title: "Other" }, html: '"background":false', background: true };
+  assert.deepEqual(pageShowHead(JSON.stringify(input)), { background: true });
+  assert.equal(pageShowHead('{"state":{"background":false},"title":"Evidence","html":"<h1'), null);
+  assert.equal(pageShowHead('{"html":' + JSON.stringify('<script>const o = {"background":false,"key":"scribe:other","title":"x"};').slice(0, -1)), null);
+  assert.equal(pageShowHead(`{"id":"t_1",${" ".repeat(400)}`), null);
 });

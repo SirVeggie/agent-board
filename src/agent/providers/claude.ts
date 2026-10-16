@@ -1538,21 +1538,30 @@ function summarizeInput(input: Record<string, unknown>): string {
   }
 }
 
-/** How much of a streaming page_show call to read for its key and title before reporting what was found. */
-const PAGE_SHOW_HEAD = 400;
-
 /**
- * The key, id and title of a page_show call whose input JSON is still streaming, once the content
- * (html or htmlPath) has started or enough has arrived; null while it is too early to tell.
- * Quotes inside a string value are escaped, so these only match the call's own fields.
+ * Read a streaming page_show only once its foreground/background choice is known.
+ * Without an explicit background field before the content, wait for the complete input:
+ * background may come after a long HTML string. Parse JSON so nested/quoted fields cannot
+ * be mistaken for the call's own fields.
  */
-export function pageShowHead(json: string): { key?: string; id?: string; title?: string } | null {
-  if (json.length < PAGE_SHOW_HEAD && !/"html(Path)?"\s*:/.test(json)) return null;
-  const head: { key?: string; id?: string; title?: string } = {};
-  for (const field of ["key", "id", "title"] as const) {
-    const match = new RegExp(`"${field}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*")`).exec(json);
-    if (!match) continue;
-    try { head[field] = String(JSON.parse(match[1])); } catch { /* A broken escape: leave the field out. */ }
+export function pageShowHead(json: string): { key?: string; id?: string; title?: string; background?: boolean } | null {
+  let input: unknown;
+  // Usually still incomplete; avoid parsing the growing HTML on every delta.
+  if (json.trimEnd().endsWith("}")) {
+    try { input = JSON.parse(json); } catch { /* Try the fields before the content. */ }
   }
+  if (input === undefined) {
+    const content = /"html(Path)?"\s*:/.exec(json);
+    if (!content) return null;
+    try { input = JSON.parse(json.slice(0, content.index).replace(/,\s*$/, "") + "}"); }
+    catch { return null; }
+    if (!isPlainRecord(input) || typeof input.background !== "boolean") return null;
+  }
+  if (!isPlainRecord(input)) return null;
+  const head: { key?: string; id?: string; title?: string; background?: boolean } = {};
+  for (const field of ["key", "id", "title"] as const) {
+    if (typeof input[field] === "string") head[field] = input[field];
+  }
+  if (typeof input.background === "boolean") head.background = input.background;
   return head;
 }
