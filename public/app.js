@@ -3051,7 +3051,7 @@
   function loadFrame(el, tab) {
     cancelPageAudio(tab.id);
     delete el.dataset.loaded;
-    el.allow = tab.embedUrl ? EMBED_ALLOW : "";
+    el.allow = tab.embedUrl ? EMBED_ALLOW : "clipboard-write";
     // Scribe's own pages run the key script; the desktop app catches shortcuts natively in other frames.
     el.toggleAttribute("data-scribe-page", !tab.embedUrl);
     const url = viewUrl(tab);
