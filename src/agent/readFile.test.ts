@@ -97,6 +97,7 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     await fs.writeFile(path.join(cwd, "text.txt"), "one\r\ntwo\r\nthree\r\n");
     const first = await readScopedFile(scope, { path: "text.txt", offset: 2, limit: 1 });
     assert.equal(first.content, "2\ttwo");
+    assert.equal(first.encoding, "utf-8");
     assert.equal(first.totalLines, 3);
     assert.equal(first.nextOffset, 3);
     assert.equal(first.truncated, true);
@@ -121,10 +122,8 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     await assert.rejects(readScopedFile(scope, { path: "escape/outside.txt" }), /link target/);
     await fs.writeFile(path.join(cwd, "binary"), Buffer.from([0, 1, 2]));
     await assert.rejects(readScopedFile(scope, { path: "binary" }), /NUL byte at byte offset 0/);
-    await fs.writeFile(path.join(cwd, "utf16le"), Buffer.from([0xff, 0xfe, 0x61, 0]));
-    await assert.rejects(readScopedFile(scope, { path: "utf16le" }), /UTF-16LE byte-order mark.*convert.*UTF-8/);
-    await fs.writeFile(path.join(cwd, "utf16be"), Buffer.from([0xfe, 0xff, 0, 0x61]));
-    await assert.rejects(readScopedFile(scope, { path: "utf16be" }), /UTF-16BE byte-order mark.*convert.*UTF-8/);
+    await fs.writeFile(path.join(cwd, "unmarked-utf16"), Buffer.from([0x61, 0]));
+    await assert.rejects(readScopedFile(scope, { path: "unmarked-utf16" }), /NUL byte at byte offset 1/);
     await fs.writeFile(path.join(cwd, "late-nul"), Buffer.concat([Buffer.alloc(64 * 1024 + 7, 97), Buffer.from([0])]));
     await assert.rejects(readScopedFile(scope, { path: "late-nul", limit: 1 }), /NUL byte at byte offset 65543/);
     await fs.writeFile(path.join(cwd, "invalid"), Buffer.from([255]));
@@ -165,6 +164,48 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     await fs.unlink(path.join(cwd, "escape")).catch(() => {});
     assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
     assert.ok(path.basename(root).startsWith("scribe-read-test-"));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("BOM-marked UTF-16 reads strip the BOM, paginate and validate the whole stream", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-read-utf16-"));
+  const scope = { cwd: root, mode: "code", approval: "auto" } as const;
+  try {
+    for (const encoding of ["utf-16le", "utf-16be"] as const) {
+      const file = path.join(root, encoding);
+      const write = async (text: string) => {
+        const bytes = Buffer.from(`\uFEFF${text}`, "utf16le");
+        await fs.writeFile(file, encoding === "utf-16be" ? bytes.swap16() : bytes);
+      };
+      await write("héllo 世界 😀\r\nsecond\r\nthird\r\n");
+      const first = await readScopedFile(scope, { path: file, limit: 1 });
+      assert.equal(first.encoding, encoding);
+      assert.equal(first.content, "1\théllo 世界 😀");
+      assert.equal(first.totalLines, 3);
+      assert.equal(first.nextOffset, 2);
+      const rest = await readScopedFile(scope, { path: file, offset: first.nextOffset });
+      assert.equal(rest.content, "2\tsecond\n3\tthird");
+      assert.equal(rest.nextOffset, null);
+      await write("");
+      assert.equal((await readScopedFile(scope, { path: file })).totalLines, 0);
+      // Split a surrogate pair, then a CRLF, at the 64 KiB chunk boundary.
+      for (const prefix of ["a".repeat(32766) + "😀", "a".repeat(32766) + "\r\n"]) {
+        await write(`${prefix}\nlast`);
+        const tail = await readScopedFile(scope, { path: file, offset: 2 });
+        assert.equal(tail.content, prefix.endsWith("\n") ? "2\t\n3\tlast" : "2\tlast");
+      }
+      await write("ok\n" + "a".repeat(32766) + "\0");
+      await assert.rejects(readScopedFile(scope, { path: file, limit: 1 }), /NUL character/);
+      await write("ok\n\uD800");
+      await assert.rejects(readScopedFile(scope, { path: file, limit: 1 }), /invalid UTF-16/);
+      await write("ok\n");
+      await fs.appendFile(file, Buffer.from([0x61]));
+      await assert.rejects(readScopedFile(scope, { path: file, limit: 1 }), /invalid UTF-16/);
+    }
+  } finally {
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith("scribe-read-utf16-"));
     await fs.rm(root, { recursive: true, force: true });
   }
 });

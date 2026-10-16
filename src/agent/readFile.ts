@@ -92,7 +92,8 @@ export async function readScopedFile(thread: ReadScope | null, input: { path?: u
   const handle = await fs.open(real, "r");
   try {
     // Streamed, so a large file's page never holds the whole file, and a long line keeps only its shown part.
-    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let encoding = "utf-8";
+    let decoder = new TextDecoder(encoding, { fatal: true });
     const chunk = Buffer.alloc(64 * 1024);
     let used = 0;
     let line = "";
@@ -132,26 +133,28 @@ export async function readScopedFile(thread: ReadScope | null, input: { path?: u
     };
     const decode = (bytes?: Buffer) => {
       try { return bytes ? decoder.decode(bytes, { stream: true }) : decoder.decode(); }
-      catch { throw new Error("read_file accepts UTF-8 text only."); }
+      catch { throw new Error(`File contains invalid ${encoding.toUpperCase()} text.`); }
     };
     while (used <= READ_FILE_MAX_BYTES) {
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (!bytesRead) break;
       if (used === 0 && bytesRead >= 2) {
-        const encoding = chunk[0] === 0xff && chunk[1] === 0xfe ? "UTF-16LE"
-          : chunk[0] === 0xfe && chunk[1] === 0xff ? "UTF-16BE" : null;
-        if (encoding) throw new Error(`File has a ${encoding} byte-order mark; read_file accepts UTF-8 text. Save or convert the file as UTF-8 before reading it.`);
+        encoding = chunk[0] === 0xff && chunk[1] === 0xfe ? "utf-16le"
+          : chunk[0] === 0xfe && chunk[1] === 0xff ? "utf-16be" : "utf-8";
+        decoder = new TextDecoder(encoding, { fatal: true });
       }
       used += bytesRead;
       const bytes = chunk.subarray(0, bytesRead);
       const nul = bytes.indexOf(0);
-      if (nul !== -1) throw new Error(`NUL byte at byte offset ${used - bytesRead + nul} (zero-based); the file may be binary or use another encoding. read_file accepts UTF-8 text without NUL bytes.`);
-      feed(decode(bytes));
+      if (encoding === "utf-8" && nul !== -1) throw new Error(`NUL byte at byte offset ${used - bytesRead + nul} (zero-based); the file may be binary or use another encoding. read_file accepts UTF-8 or BOM-marked UTF-16 text without NUL characters.`);
+      const text = decode(bytes);
+      if (text.includes("\0")) throw new Error(`NUL character in ${encoding.toUpperCase()} text; the file may be binary.`);
+      feed(text);
     }
     if (used > READ_FILE_MAX_BYTES) throw new Error("File grew past the 64 MiB read limit during the read; retry.");
     feed(decode());
     if (length) end();
-    return page.result(target, "file");
+    return { ...page.result(target, "file"), encoding };
   } finally { await handle.close(); }
 }
 
