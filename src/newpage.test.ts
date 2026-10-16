@@ -29,6 +29,8 @@ function screen(webgl = true, restoring = false) {
   const timers = new Map<number, () => void>();
   const warmTimers = new Map<number, () => void>();
   let timerId = 0;
+  let now = 0;
+  const deadlines = new Map<number, number>();
   let hidden = false;
   const effects: { canvas: any; destroyed: boolean; ready: () => void; fail: () => void }[] = [];
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChange = fn; } };
@@ -90,7 +92,8 @@ function screen(webgl = true, restoring = false) {
       getPropertyValue: (name: string) => themeColors[name] || "",
     }),
     MutationObserver: Observer, ResizeObserver: Observer,
-    setTimeout: (fn: () => void, delay: number) => { const id = ++timerId; (delay === 1200 || delay === 250 ? warmTimers : timers).set(id, fn); return id; },
+    performance: { now: () => now },
+    setTimeout: (fn: () => void, delay: number) => { const id = ++timerId; deadlines.set(id, now + delay); (delay === 1200 || delay === 250 ? warmTimers : timers).set(id, fn); return id; },
     clearTimeout: (id: number) => { timers.delete(id); warmTimers.delete(id); },
   });
   const page = win.createNewPage({
@@ -117,6 +120,14 @@ function screen(webgl = true, restoring = false) {
     uiEffects: (value: boolean) => { uiEffects = value; events["scribe:ui-fx"](); },
     running: () => running,
     effects, warmTimers,
+    advance: (ms: number) => {
+      now += ms;
+      for (const [id, fn] of [...timers]) {
+        if (deadlines.get(id)! > now) continue;
+        timers.delete(id);
+        fn();
+      }
+    },
     warm: () => { for (const [id, fn] of [...warmTimers]) { warmTimers.delete(id); fn(); } },
     restored: () => { restoring = false; events["scribe:restored"](); },
     visibility: (value: boolean) => { hidden = value; events.visibilitychange(); },
@@ -389,6 +400,7 @@ test("the creating screen covers a page, takes a fresh background and dissolves 
   s.page.render({ id: "notes" }, true);
   assert.equal(s.animations.length, 1);
   s.tick(5);
+  s.advance(5000);
   assert.ok(s.draws.at(-1)!.u_work > 0.9);
   // Another page comes to the front: the screen holds until it loads, then fades over it.
   s.page.replace({ id: "made" }, made);
@@ -406,4 +418,54 @@ test("a page that is not covered still drops the screen at once for another page
   s.page.render({ id: "draft" });
   s.page.replace({ id: "other" }, s.frame());
   assert.equal(s.root.hidden, true);
+});
+
+test("adding a creating overlay keeps the visible shader and does not fade it in again", () => {
+  const s = screen();
+  s.choose("nebula,aurora");
+  s.page.render({ id: "draft" });
+  const effect = s.effects.at(-1)!;
+  const shaders = s.shaders.length;
+  s.page.render({ id: "draft" }, true);
+  s.page.render({ id: "made" }, true);
+  assert.equal(s.shaders.length, shaders);
+  assert.equal(effect.destroyed, false);
+  assert.equal(s.animations.length, 0);
+});
+
+test("a fast creating screen stays for 1.5 seconds across rerenders before revealing a loaded page", async () => {
+  const s = screen();
+  const frame = s.frame();
+  s.page.render({ id: "notes" }, true);
+  s.advance(600);
+  s.page.render({ id: "notes" }, true);
+  s.page.replace({ id: "made" }, frame);
+  frame.load();
+  assert.equal(s.animations.length, 1);
+  s.advance(899);
+  assert.equal(s.animations.length, 1);
+  assert.equal(s.root.hidden, false);
+  s.advance(1);
+  assert.equal(s.animations.length, 3);
+  s.animations.forEach(animation => animation.finish());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(s.root.hidden, true);
+});
+
+test("minimum creation time applies without motion and is cancelled when navigating away", () => {
+  const s = screen(false);
+  s.reduce(true);
+  const frame = s.frame();
+  frame.dataset.loaded = "1";
+  s.page.render({ id: "notes" }, true);
+  s.page.replace({ id: "made" }, frame);
+  assert.equal(s.root.hidden, false);
+  s.advance(1500);
+  assert.equal(s.root.hidden, true);
+  s.page.render({ id: "notes" }, true);
+  s.page.replace({ id: "made" }, frame);
+  s.page.render(null);
+  assert.equal(s.timers.size, 0);
+  s.advance(1500);
+  assert.equal(s.animations.length, 0);
 });

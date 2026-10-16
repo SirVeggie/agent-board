@@ -374,6 +374,7 @@ return glow(c,e);}`;
   /** What the creating screen says the agent is at, in turn. */
   const INTENT_WORDS = ["Imagining…", "Sketching…", "Shaping…", "Building…", "Polishing…"];
   const INTENT_WORD_MS = 2600;
+  const CREATION_MIN_MS = 1500;
 
   function el(tag, cls, text) {
     const node = document.createElement(tag);
@@ -413,6 +414,7 @@ return glow(c,e);}`;
     let shown = null;
     let drawn = "";
     let replacement = null;
+    let creationStarted = null;
 
     function cancelReplacement() {
       if (!replacement) return;
@@ -438,6 +440,11 @@ return glow(c,e);}`;
         if (replacement !== pending) return;
         frame.removeEventListener("load", pending.reveal);
         clearTimeout(pending.timer);
+        const remaining = creationStarted === null ? 0 : CREATION_MIN_MS - (performance.now() - creationStarted);
+        if (remaining > 0) {
+          pending.timer = setTimeout(pending.reveal, remaining);
+          return;
+        }
         if (!window.scribeMotion.enabled()) {
           render(null);
           return;
@@ -517,23 +524,32 @@ return glow(c,e);}`;
     function render(tab, cover = false) {
       cancelReplacement();
       const entering = Boolean(tab && cover) && !(covering && current?.id === tab.id);
+      const visible = Boolean(current);
+      const intent = tab ? host.intent?.(tab.id) || null : null;
+      if (tab && current?.id !== tab.id && !covering) creationStarted = null;
+      if (tab && (cover || intent || host.working(tab.id))) creationStarted ??= performance.now();
+      // Adding a creating screen to an existing backdrop must not change its shader.
+      const existingBackground = entering && visible ? background(covering ? "cover" : current.id) : null;
       root.hidden = !tab;
       current = tab || null;
       covering = Boolean(tab && cover);
       // Each new page gets a background of its own.
-      if (entering) picks.delete("cover");
+      if (entering) {
+        if (existingBackground) picks.set("cover", existingBackground);
+        else picks.delete("cover");
+      }
       updateBackdrop();
       if (!tab) {
+        creationStarted = null;
         shown = null;
         drawn = "";
         lastIntent = null;
         setIntent(null);
         return;
       }
-      if (entering && window.scribeMotion.enabled()) {
+      if (entering && !visible && window.scribeMotion.enabled()) {
         window.scribeMotion.animate(root, [{ opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)" }], { token: "slow", easing: "ease-in-out" });
       }
-      const intent = host.intent?.(tab.id) || null;
       const threads = covering ? 1 : host.threads(tab.id);
       const working = covering || host.working(tab.id);
       const list = threads ? [] : templateList();

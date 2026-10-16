@@ -3063,10 +3063,10 @@
       return;
     }
     if (intent.turnId && intent.turnId === pageIntentDismissed) return;
-    if (pageIntent?.itemId === intent.itemId) {
-      pageIntent.title = intent.title;
-    } else if (pageIntent && !pageIntent.ending && intent.turnId && pageIntent.turnId === intent.turnId) {
+    if (pageIntent && (pageIntent.itemId === intent.itemId || (intent.turnId && pageIntent.turnId === intent.turnId))) {
       // The same page, now seen as its page_show call: the screen stays over the page it began on.
+      clearTimeout(pageIntent.ending);
+      pageIntent.ending = 0;
       pageIntent.itemId = intent.itemId;
       pageIntent.title = intent.title || pageIntent.title;
     } else {

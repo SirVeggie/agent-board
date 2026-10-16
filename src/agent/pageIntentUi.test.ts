@@ -1,8 +1,33 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { chromium } from "playwright-core";
 import { launchChromium } from "../chromium.js";
+
+test("page_show during the intent grace period keeps the original screen and cancels its expiry", () => {
+  const source = fs.readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
+  const handler = source.slice(source.indexOf("  function onPageIntent(intent)"), source.indexOf("  /** The floating chat's turn looks"));
+  const timers = new Map<number, () => void>();
+  const context: any = {
+    pageIntent: null, pageIntentDismissed: null, pageIntentToggle: {}, childId: null,
+    state: { activeId: "origin" }, flagOn: () => true, renderFrames() {},
+    PAGE_INTENT_GRACE_MS: 700, endPageIntent() {},
+    setTimeout: (fn: () => void) => { timers.set(1, fn); return 1; },
+    clearTimeout: (id: number) => timers.delete(id),
+  };
+  runInNewContext(handler + `
+    onPageIntent({ itemId: "announcement", turnId: "turn", title: "Plan" });
+    onPageIntent(null);
+    state.activeId = "made";
+    onPageIntent({ itemId: "page_show", turnId: "turn", title: "My plan" });
+  `, context);
+  assert.equal(context.pageIntent.origin, "origin");
+  assert.equal(context.pageIntent.itemId, "page_show");
+  assert.equal(context.pageIntent.title, "My plan");
+  assert.equal(context.pageIntent.ending, 0);
+  assert.equal(timers.size, 0);
+});
 
 test("the floating chat maps page_create signals onto the hint and the creating screen", async (t) => {
   let browser;
