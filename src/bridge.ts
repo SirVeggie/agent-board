@@ -1593,10 +1593,15 @@ ${POINTER_DRAG_JS}
    * { ok, buffer, type }. save(text, { mtime, eol, bom, force }) and saveAs(text, { eol, bom }) need a
    * click or key press; save resolves { ok: false, conflict: true, mtime } when the file changed
    * on disk, saveAs { ok: false, error: "cancelled" } when the user closes the dialog.
+   * view() resolves { ok, view } with what view(value) last kept for this file (a PDF's zoom), so it
+   * outlives the tab (#685).
    */
   var fileApi = {
     read: function () { return askBoard({ type: "scribe-file", op: "read" }, 60000); },
     image: function () { return askBoard({ type: "scribe-file", op: "image" }, 120000); },
+    view: function (value) {
+      return askBoard(value === undefined ? { type: "scribe-file", op: "view" } : { type: "scribe-file", op: "view", view: value }, 10000);
+    },
     save: function (text, opts) {
       if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
       opts = opts || {};

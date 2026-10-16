@@ -1010,11 +1010,11 @@
     } else fit();
   });
   function zoomCenter(factor) {
-    if (file.kind === "pdf") pdfZoom(pdfView.scale * factor);
+    if (file.kind === "pdf") pdfZoomBy(pdfView.scale * factor);
     else zoomAt(factor, imgPane.clientWidth / 2, imgPane.clientHeight / 2);
   }
-  function zoomFit() { if (file.kind === "pdf") pdfZoom(null); else fit(); }
-  function zoomOne() { if (file.kind === "pdf") pdfZoom(1); else { view.fit = false; center(1); } }
+  function zoomFit() { if (file.kind === "pdf") pdfZoomBy(null); else fit(); }
+  function zoomOne() { if (file.kind === "pdf") pdfZoomBy(1); else { view.fit = false; center(1); } }
   $("zoomIn").addEventListener("click", function () { zoomCenter(1.25); });
   $("zoomOut").addEventListener("click", function () { zoomCenter(0.8); });
   $("zoomFit").addEventListener("click", zoomFit);
@@ -1051,9 +1051,13 @@
   function openPdf() {
     var load = ++pdfLoad;
     show("pdfPane");
-    Promise.all([loadPdfjs(), scribe.file.image()]).then(function (got) {
+    var saved = scribe.file.view ? scribe.file.view().catch(function () { return null; }) : null;
+    Promise.all([loadPdfjs(), scribe.file.image(), saved]).then(function (got) {
       var res = got[1];
       if (load !== pdfLoad) return;
+      var kept = got[2] && got[2].ok && got[2].view;
+      if (kept && typeof kept.scale === "number" && kept.scale > 0) { pdfView.fit = false; pdfView.scale = kept.scale; }
+      else if (kept && kept.fit) pdfView.fit = true;
       if (!res || !res.ok) {
         showMessage("Could not open the PDF", (res && res.error) || "", file.path);
         return;
@@ -1107,10 +1111,22 @@
     pdfZoom(pdfView.fit ? null : pdfView.scale);
     pdfPane.scrollTop = top;
   }
+  // Fit fills the pane's width up to a comfortable reading width; zooming in goes past it.
+  var PDF_FIT_MAX = 1000;
   function fitWidthScale() {
-    var w = pdfPane.clientWidth - 32;
+    var w = Math.min(PDF_FIT_MAX, pdfPane.clientWidth - 32);
     return w > 0 ? Math.min(4, w / pdfView.base) : 1;
   }
+  // The zoom the user picks is kept for the file, so it opens that way again (#685).
+  var pdfSaveTimer = 0;
+  function savePdfView() {
+    if (!scribe.file.view) return;
+    clearTimeout(pdfSaveTimer);
+    pdfSaveTimer = setTimeout(function () {
+      scribe.file.view(pdfView.fit ? { fit: true } : { scale: Math.round(pdfView.scale * 1000) / 1000 }).catch(function () {});
+    }, 400);
+  }
+  function pdfZoomBy(scale) { pdfZoom(scale); savePdfView(); }
   /** scale null: fit the widest page to the pane's width. Keeps the page in view where it was. */
   function pdfZoom(scale) {
     if (!pdfDoc) return;
@@ -1178,7 +1194,7 @@
   pdfPane.addEventListener("wheel", function (event) {
     if (!event.ctrlKey) return;
     event.preventDefault();
-    pdfZoom(pdfView.scale * Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)));
+    pdfZoomBy(pdfView.scale * Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)));
   }, { passive: false });
   new ResizeObserver(function () {
     if (file && file.kind === "pdf" && pdfView.fit && pdfDoc) pdfZoom(null);

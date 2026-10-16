@@ -116,6 +116,7 @@
   const LIVE_FRAME_CAP = 5;
   const SIDE_OPEN_KEY = "scribe.archiveOpen";
   const SIDEBAR_TAB_KEY = "scribe.sidebarTab";
+  const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
   const BOARD_VERSION = "3.0.4";
@@ -4253,6 +4254,31 @@
    * scribe.file from a file page (#654): the file on that page's tab, as found from the frame that
    * asked. Saving needs the user's click or key press in the page; Save as asks where.
    */
+  /** A file page's view settings by path (a PDF's zoom, #685), kept past the tab; the newest 200 files. */
+  function fileView(path, value) {
+    const key = String(path || "").replace(/\\/g, "/").toLowerCase();
+    let views = {};
+    try {
+      views = JSON.parse(localStorage.getItem(FILE_VIEWS_KEY) || "{}") || {};
+    } catch {
+      views = {};
+    }
+    if (value === undefined) {
+      return views[key]?.view ?? null;
+    }
+    delete views[key];
+    if (value !== null) {
+      views[key] = { view: value, at: Date.now() };
+    }
+    const kept = Object.entries(views).sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0)).slice(0, 200);
+    try {
+      localStorage.setItem(FILE_VIEWS_KEY, JSON.stringify(Object.fromEntries(kept)));
+    } catch {
+      /* browser storage disabled */
+    }
+    return value;
+  }
+
   async function onPageFile(event) {
     const data = event.data;
     const source = event.source;
@@ -4272,7 +4298,9 @@
       return res.ok ? { ok: true, file: json } : { ok: false, status: res.status, ...json, error: String(json.error || `HTTP ${res.status}`) };
     };
     try {
-      if (data.op === "read") {
+      if (data.op === "view") {
+        reply({ ok: true, view: fileView(tab.file.path, data.view) });
+      } else if (data.op === "read") {
         reply(await call("GET", url));
       } else if (data.op === "image") {
         const res = await fetch(`${url}/raw`);
