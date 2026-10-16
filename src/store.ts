@@ -39,7 +39,8 @@ import {
 } from "./pageAssets.js";
 import { checkPermission, normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionNeed, type PermissionValue } from "./pagePermissions.js";
 import { normalizeSignalName } from "./signal.js";
-import { applyOps } from "./stateOps.js";
+import { applyOps, deepEqual } from "./stateOps.js";
+import { jsonBytes } from "./stateSize.js";
 import { normalizeEvents } from "./events.js";
 import { upgradeLegacyHtml } from "./legacyPages.js";
 import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type InboundReply, type ReplyDelivery, type RunEvent, type SweepContext } from "./actions/index.js";
@@ -1744,8 +1745,8 @@ export class BoardStore extends EventEmitter {
     const result = applyOps(tab.state, ops, { lenient: input.lenient === true });
     const resolved = this.applyResolveIncompatibility(tab, input.resolveIncompatibility);
     const fromRevision = tab.stateRevision;
-    const serialized = JSON.stringify(result.state);
-    const stateChanged = result.applied.length > 0 && serialized !== JSON.stringify(tab.state);
+    // applyOps shares every untouched part with tab.state, so both checks walk only the copied path.
+    const stateChanged = result.applied.length > 0 && !deepEqual(result.state, tab.state);
     if (!stateChanged) {
       if (resolved) {
         this.markDirty(tab.id);
@@ -1754,7 +1755,7 @@ export class BoardStore extends EventEmitter {
       }
       return { ok: true, tab, fromRevision, applied: [], skipped: result.skipped };
     }
-    const bytes = Buffer.byteLength(serialized, "utf8");
+    const bytes = jsonBytes(result.state);
     if (bytes > MAX_STATE_BYTES) {
       throw new Error(`state would be too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
     }

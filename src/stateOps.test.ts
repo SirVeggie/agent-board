@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyOps, applyStateOps, diffState, filterItems, getAt } from "./stateOps.js";
+import { jsonBytes } from "./stateSize.js";
 
 const board = () => ({
   cards: [
@@ -221,4 +222,21 @@ test("the page bridge's embedded engine runs in a bare scope", async () => {
   const state = engine.apply({ cards: [{ id: "c1", title: "One" }] }, [{ op: "set", path: "cards/c1/title", value: "Uno" }]).state;
   assert.deepEqual(state, { cards: [{ id: "c1", title: "Uno" }] });
   assert.deepEqual(engine.diff({ a: 1 }, { a: 2 }), [{ op: "set", path: "a", value: 2 }]);
+});
+
+test("jsonBytes matches JSON.stringify and re-measures only what an apply copied", () => {
+  const exact = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+  const state = {
+    ...board(),
+    text: "ä \u{1F600} \"quoted\"\n",
+    empty: { list: [], obj: {} },
+    gaps: { skipped: undefined, list: [1, undefined, null, 2.5, -0, true] },
+  };
+  assert.equal(jsonBytes(state), exact(state));
+  const next = applyOps(state, [
+    { op: "merge", path: "cards/c2", value: { status: null, title: "Twø" } },
+    { op: "insert", path: "cards", value: { id: "c4", num: 4, title: "Four" } },
+  ]).state;
+  assert.equal(jsonBytes(next), exact(next));
+  assert.equal(jsonBytes(state), exact(state));
 });
