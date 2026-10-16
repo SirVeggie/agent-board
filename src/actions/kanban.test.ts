@@ -954,7 +954,7 @@ test("a reply goes into the running turn of the card's holder, and records how",
 });
 
 test("a reply on a card whose chat is idle continues that chat and claims the card for it", () => {
-  const start = board();
+  const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
   card(start, 2).col = "rev";
   card(start, 2).thread = "th1";
   card(start, 2).assignee = "Opus";
@@ -975,7 +975,8 @@ test("a reply on a card whose chat is idle continues that chat and claims the ca
 });
 
 test("a reply waits for a chat on a plan limit, and offers Continue for a chat that is gone", () => {
-  const start = board();
+  const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
+  card(start, 2).assignee = "Opus";
   card(start, 2).thread = "th1";
   const waiting: ThreadRunInfo = { ...idle, run: { phase: "waiting" } as never };
   const held = kanbanActions.reply!(start, reply(), userCtx(threads({ th1: waiting })));
@@ -984,6 +985,21 @@ test("a reply waits for a chat on a plan limit, and offers Continue for a chat t
   assert.equal(gone.deliver, undefined);
   const state = applyStateOps(start, gone.ops);
   assert.equal((card(state, 2).comments as Array<{ followUp?: string }>)[0].followUp, "offer");
+});
+
+test("a form reply on a person's card offers Ask without resuming or claiming the old chat", () => {
+  for (const assignee of [undefined, "Person"]) for (const defaultWorker of [undefined, "opus"]) {
+    const start = { ...board(), settings: { defaultWorker, workers: { opus: { name: "Opus" } } } };
+    Object.assign(card(start, 2), { assignee, thread: "old", col: "rev" });
+    const outcome = kanbanActions.reply!(start, reply(), userCtx(threads({ old: idle })));
+    assert.equal(outcome.deliver, undefined);
+    const c = card(applyStateOps(start, outcome.ops), 2);
+    assert.equal(c.assignee, assignee);
+    assert.equal(c.col, "rev");
+    assert.equal(c.thread, "old");
+    assert.equal(c.claim, undefined);
+    assert.equal((c.comments as Array<{ followUp?: string }>)[0].followUp, defaultWorker ? "offer" : undefined);
+  }
 });
 
 test("get with cards reads several cards in full and names the missing ones", () => {

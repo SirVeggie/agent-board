@@ -49,8 +49,8 @@ function fn(source: string, name: string): string {
   return match[0];
 }
 
-test("Continue starts the newly assigned worker, but resumes for the same worker or a person", async () => {
-  for (const assignee of ["New", "Old", "Person"]) {
+test("Continue starts the newly assigned worker, but resumes for the same worker", async () => {
+  for (const assignee of ["New", "Old"]) {
     const calls: any[] = [];
     let click: () => void = () => {};
     const c = { id: "card", num: 525, title: "Follow up", col: "review", thread: "earlier", assignee, threadAssignee: "Old" };
@@ -103,6 +103,56 @@ test("Continue starts the newly assigned worker, but resumes for the same worker
       assert.ok(!calls.some(call => call[0] === "start"));
     }
     assert.ok(calls.some(call => call.join() === "comment,continued"));
+  }
+});
+
+test("Ask uses the default worker and only updates the question comment, including on launch failure", async () => {
+  for (const fail of [false, true]) {
+    const c = { id: "card", num: 645, title: "Question", assignee: "Person", col: "review", thread: "old", status: { kind: "info", text: "Waiting" } };
+    const before = JSON.stringify(c);
+    const calls: any[] = [];
+    const w = { name: "Default", provider: "codex", model: "chosen-model", mode: "code", cwd: "C:/project", worktree: true };
+    const context = vm.createContext({
+      card: () => c, settings: () => ({ defaultWorker: "default" }), worker: (id: string) => id === "default" ? w : null,
+      hasWorkerApi: () => true, workerMode: (w: any) => w.mode, workerName: (w: any) => w.name,
+      FOLDER_MODES: { code: true, plan: true }, str: (v: any) => v == null ? "" : String(v),
+      loadAgentOptions: async () => {}, workerOpts: (w: any) => ({ ...w }),
+      boardTitle: () => "Board", workerInstructions: () => "Follow shared instructions", cardBrief: () => "Card context",
+      askingComments: {}, setHint: () => {},
+      setComment: (card: string, cm: string, fields: any) => calls.push(["comment", fields.followUp]),
+      scribe: { id: "board", agent: { start: async (prompt: string, opts: any) => {
+        calls.push(["start", prompt, opts]); return fail ? { ok: false, error: "denied" } : { ok: true, threadId: "ask-chat" };
+      } } }, launchError: () => "Denied",
+    });
+    vm.runInContext(["defaultAskWorker", "askPrompt", "askComment"].map(name => fn(board, name)).join("\n"), context);
+    assert.equal(await vm.runInContext("askComment('card', 'comment', 'Why does this happen?')", context), !fail);
+    assert.equal(JSON.stringify(c), before);
+    const [, prompt, opts] = calls[0];
+    assert.match(prompt, /Why does this happen\?/);
+    assert.match(prompt, /NOT been claimed/);
+    assert.match(prompt, /peek:scribe:page-key/);
+    assert.equal(opts.model, "chosen-model");
+    assert.equal(opts.provider, "codex");
+    assert.equal(opts.worktree, true);
+    assert.equal(opts.run.data.ask, true);
+    assert.equal(opts.run.data.solo, undefined);
+    assert.equal(calls[1][1], fail ? "askOffer" : "asked");
+    assert.equal(vm.runInContext("Object.keys(askingComments).length", context), 0);
+  }
+});
+
+test("comments on a person's card offer Ask only with a default worker, never send to its old chat", () => {
+  for (const hasDefault of [false, true]) {
+    const calls: any[] = [];
+    const context = vm.createContext({
+      hasCardApi: () => true, workerIdFor: () => null, defaultAskWorker: () => hasDefault ? "default" : null,
+      setComment: (...args: any[]) => calls.push(args),
+      scribe: { agent: { card: () => { throw new Error("Must not resume the old chat"); } } },
+    });
+    vm.runInContext(fn(board, "handOffComment"), context);
+    vm.runInContext("handOffComment({ id: 'card', num: 645, thread: 'old', assignee: 'Person' }, 'comment', 'Question')", context);
+    assert.equal(calls.length, hasDefault ? 1 : 0);
+    if (hasDefault) assert.equal(calls[0][2].followUp, "offer");
   }
 });
 

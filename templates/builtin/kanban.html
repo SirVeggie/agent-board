@@ -1129,7 +1129,7 @@
           <div class="comments" id="comments"></div>
           <div class="inline-add" style="flex-direction:column">
             <textarea class="field comment-box" id="commentBox" placeholder="Write a comment. Ctrl+Enter posts."></textarea>
-            <div><button class="primary" id="commentPost" type="button">Comment</button></div>
+            <div><button class="primary" id="commentPost" type="button">Comment</button> <button id="commentAsk" type="button" class="hidden">Ask</button></div>
           </div>
         </div>
         <div class="side">
@@ -1565,7 +1565,7 @@
       var out = { id: cm.id || newId("cm"), by: isUserComment(by) ? "user" : by, at: Number(cm.at) || Date.now(), text: str(cm.text) };
       // Card comment hand-off (#182): sent to the working agent, or Continue offered to the last one.
       if (cm.sent === "steered" || cm.sent === "queued") out.sent = cm.sent;
-      if (cm.followUp === "offer" || cm.followUp === "continued" || cm.followUp === "dismissed") out.followUp = cm.followUp;
+      if (["offer", "askOffer", "continued", "dismissed", "asked"].indexOf(cm.followUp) !== -1) out.followUp = cm.followUp;
       return out;
     });
     out.images = arr(out.images).filter(function (im) { return im && im.data; }).map(function (im) {
@@ -3145,7 +3145,8 @@
 
     // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
     if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
-    var commentsSig = JSON.stringify([c.id, c.title, c.thread, imagesSig, c.comments.map(function (cm) {
+    $("commentAsk").classList.toggle("hidden", !defaultAskWorker());
+    var commentsSig = JSON.stringify([c.id, c.title, c.thread, workerIdFor(c.assignee), defaultAskWorker(), imagesSig, c.comments.map(function (cm) {
       return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp];
     })]);
     if (commentsEl._sig !== commentsSig) renderComments(c, commentsSig);
@@ -3268,7 +3269,8 @@
       keepImages(body, oldImages);
       box.appendChild(body);
       commentsEl.appendChild(box);
-      if (i === c.comments.length - 1 && isUserComment(cm.by) && cm.followUp === "offer" && c.thread) box.appendChild(followUpButtons(c, cm));
+      var offer = cm.followUp === "askOffer" ? defaultAskWorker() : cm.followUp === "offer" && (workerIdFor(c.assignee) ? c.thread : defaultAskWorker());
+      if (i === c.comments.length - 1 && isUserComment(cm.by) && offer) box.appendChild(followUpButtons(c, cm));
       // Long comments other than the latest fold to a faded preview; a click opens one until the card closes.
       if (i < c.comments.length - 1 && !expandedComments[cm.id]) {
         box.setAttribute("data-comment", cm.id);
@@ -3507,9 +3509,11 @@
     });
   });
 
-  function postComment() {
+  function postComment(ask) {
+    ask = ask === true;
     var text = commentBox.value.trim();
     if (!text || !openId) return false;
+    if (ask && !defaultAskWorker()) return false;
     commentBox.value = "";
     var cmId = newId("cm");
     updateCard(openId, function (x) {
@@ -3518,7 +3522,10 @@
     });
     var commented = card(openId);
     scribe.signal("comment", { card: openId, num: commented ? commented.num : null });
-    if (commented) handOffComment(commented, cmId, text);
+    if (commented) {
+      if (ask) askComment(commented.id, cmId, text);
+      else handOffComment(commented, cmId, text);
+    }
     return true;
   }
 
@@ -3535,8 +3542,60 @@
       return x;
     });
   }
+  function defaultAskWorker() {
+    var id = str(settings().defaultWorker);
+    return hasWorkerApi() && worker(id) ? id : null;
+  }
+  function askPrompt(w, c, text) {
+    var lines = [
+      "You are answering a question about #" + c.num + " on the Kanban board " + boardTitle() + " (Scribe page id " + scribe.id + ").",
+      "Use page_action on that board to read the card and comment with your answer. This is a one-off question or quick investigation, not a request to implement the issue.",
+      "The card has NOT been claimed or assigned to you. Do not claim, finish, release, move, reassign, or change its status unless the user's comment explicitly asks you to. Do not take other cards.",
+      "Short answers can be comments. For investigation or design, create a report page in the background and post a short comment linking it with a peek link ([[peek:scribe:page-key]]), instead of a long comment. Only use page keys you created or found.",
+      "Shared and worker instructions (apply them within the question's scope):",
+      workerInstructions(w),
+      "", cardBrief(c), "", "The user's question:", text,
+      "", "Answer the question, then end your turn."
+    ];
+    var prompt = lines.join("\n");
+    if (prompt.length > 19000) prompt = prompt.replace(cardBrief(c), function () { return "Card #" + c.num + ": get it first for the details."; });
+    return prompt;
+  }
+  var askingComments = {};
+  function askComment(cardId, cmId, text) {
+    var c = card(cardId);
+    var id = defaultAskWorker();
+    var w = id && worker(id);
+    if (!c || !w || askingComments[cmId]) return Promise.resolve(false);
+    if (FOLDER_MODES[workerMode(w)] && !str(w.cwd).trim()) {
+      setHint("Set a folder for the default worker first.", true);
+      setComment(cardId, cmId, { followUp: "askOffer" });
+      return Promise.resolve(false);
+    }
+    askingComments[cmId] = true;
+    setHint("Asking " + workerName(w) + " about #" + c.num + "…");
+    return loadAgentOptions().then(function () {
+      var opts = workerOpts(w, c);
+      opts.title = ("Ask · #" + c.num + " " + c.title).slice(0, 120);
+      opts.run = { tag: "ask:" + id, data: { worker: id, card: c.num, ask: true }, merge: Boolean(FOLDER_MODES[workerMode(w)]), resumePrompt: "Continue answering the user's question about #" + c.num + ". Do not claim, move, reassign or finish the card unless explicitly requested. Post your answer on the card, using a linked peek report page for longer investigations." };
+      return scribe.agent.start(askPrompt(w, c, text), opts);
+    }).then(function (r) {
+      if (!r || !r.ok) throw new Error(launchError(r));
+      setComment(cardId, cmId, { followUp: "asked" });
+      setHint(workerName(w) + " is answering about #" + c.num + ".");
+      return true;
+    }).catch(function (err) {
+      setComment(cardId, cmId, { followUp: "askOffer" });
+      setHint(str(err && err.message) || "Could not ask the agent.", true);
+      return false;
+    }).finally(function () { delete askingComments[cmId]; });
+  }
   function handOffComment(c, cmId, text) {
     if (!hasCardApi()) return;
+    if (!workerIdFor(c.assignee)) {
+      if (defaultAskWorker()) setComment(c.id, cmId, { followUp: "offer" });
+      return;
+    }
     var holder = c.claim && !c.claim.stale && c.claim.thread;
     if (!holder) {
       if (c.thread) setComment(c.id, cmId, { followUp: "offer" });
@@ -3557,13 +3616,15 @@
     if (cm.sent === "steered") return " · sent to the agent";
     if (cm.sent === "queued") return " · queued for the agent";
     if (cm.followUp === "continued") return " · agent continued";
+    if (cm.followUp === "asked") return " · agent asked";
     return "";
   }
   function followUpButtons(c, cm) {
     var row = el("div", "comment-follow");
-    var go = el("button", "primary", "Continue");
+    var asking = cm.followUp === "askOffer" || !workerIdFor(c.assignee);
+    var go = el("button", "primary", asking ? "Ask" : "Continue");
     go.type = "button";
-    go.dataset.tooltip = "Resume worker";
+    if (!asking) go.dataset.tooltip = "Resume worker";
     var skip = el("button", "", "Dismiss");
     skip.type = "button";
     go.addEventListener("click", function (e) {
@@ -3571,6 +3632,12 @@
       go.disabled = skip.disabled = true;
       c = card(c.id) || c;
       var assigned = workerIdFor(c.assignee);
+      if (asking || !assigned) {
+        askComment(c.id, cm.id, cm.text).then(function (ok) {
+          if (!ok) go.disabled = skip.disabled = false;
+        });
+        return;
+      }
       if (assigned && changedCommentWorker(c, assigned)) {
         runSolo(c.id, assigned, true).then(function (ok) {
           if (ok) setComment(c.id, cm.id, { followUp: "continued" });
@@ -3600,6 +3667,7 @@
     return row;
   }
   $("commentPost").addEventListener("click", postComment);
+  $("commentAsk").addEventListener("click", function () { postComment(true); });
   commentBox.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); postComment(); }
   });
@@ -5141,6 +5209,7 @@
     delete all[id];
     var next = Object.assign({}, settings());
     if (Object.keys(all).length) next.workers = all; else delete next.workers;
+    if (next.defaultWorker === id) delete next.defaultWorker;
     scribe.set({ settings: next });
   }
   function addWorker() {
@@ -5935,7 +6004,7 @@
     var rows = JSON.stringify([workerIds().map(function (id) {
       return [workerState(id), workerErrors[id] || "", Boolean(launching[id]), workerCards(id).length, atLimit(id)];
     }), columns().map(function (c) { return isReadyCol(c) ? (isPausedCol(c) ? 1 : 2) : 0; })]);
-    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.maxWorkers, workersLogOpen && s.workerLog,
+    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.defaultWorker, s.maxWorkers, workersLogOpen && s.workerLog,
       workersLogOpen, panelOpen, panelEditor, agentOptions, optionsFailed], buildWorkersPanel);
   }
   function buildWorkersPanel() {
@@ -5973,6 +6042,14 @@
     sharedSummary.appendChild(sharedEdit);
     workersPop.appendChild(sharedSummary);
     var ids = workerIds();
+    var defaultRow = el("label", "wp-shared");
+    defaultRow.appendChild(el("span", null, "Default model"));
+    var defaultSelect = el("select", "field");
+    defaultSelect.setAttribute("aria-label", "Default model");
+    fillSelect(defaultSelect, [["", "None"]].concat(ids.map(function (id) { return [id, workerName(worker(id)) || "Unnamed"]; })), str(settings().defaultWorker));
+    defaultSelect.addEventListener("change", function () { saveSetting("defaultWorker", defaultSelect.value); });
+    defaultRow.appendChild(defaultSelect);
+    workersPop.appendChild(defaultRow);
     if (!ids.length) workersPop.appendChild(el("p", "worker-note", "No workers yet. Add one, give it instructions, then assign cards to it and start it."));
     if (panelOpen && !worker(panelOpen)) { panelOpen = null; panelEditor = null; }
     ids.forEach(function (id) {

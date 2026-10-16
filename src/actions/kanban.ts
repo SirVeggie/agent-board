@@ -993,6 +993,14 @@ export const kanbanActions: ActionSet = {
     if (holder && holderInfo?.exists && holderInfo.running) {
       return { ops, result: { num: card.num }, events, deliver: { thread: holder, num: card.num, title, text, resume: false, ref: { card: card.id, comment: id } } };
     }
+    // A form answer on a person's/unassigned card must not restart its old worker and claim it.
+    // The page offers Ask using the default worker, just as it does for a typed comment.
+    const assignedWorker = str(card.assignee).trim() && workerList(state).some(([, w]) => str(w.name).trim().toLowerCase() === str(card.assignee).trim().toLowerCase());
+    if (!assignedWorker) {
+      const defaultId = str((state.settings as { defaultWorker?: unknown } | undefined)?.defaultWorker);
+      if (workerMap(state)[defaultId]) ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
+      return { ops, result: { num: card.num }, events };
+    }
     const last = holder || str(card.thread);
     const info = last ? ctx.thread?.(last) : undefined;
     if (last && info?.exists && !info.running && info.run?.phase !== "waiting") {
@@ -1134,7 +1142,7 @@ export const kanbanActions: ActionSet = {
     if (!w || typeof w !== "object") return null;
     const card = Number(data.card) || undefined;
     const solo = data.solo === true;
-    const what = solo ? `One-card run${card ? ` #${card}` : ""}` : "";
+    const what = data.ask === true ? `Ask${card ? ` #${card}` : ""}` : solo ? `One-card run${card ? ` #${card}` : ""}` : "";
     const kind: string = event.kind;
     let text: string;
     if (event.kind === "limit") {
