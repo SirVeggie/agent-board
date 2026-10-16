@@ -1,4 +1,5 @@
 import { MlError, type AdapterReply, type MlAdapter, type MlAnswer, type MlAnswers, type MlQuestion, type MlQuestions, type MlSource, type MlState } from "../types.js";
+import { jevAnswer } from "./jev.js";
 
 export type FakeCall = { source: MlSource; state: MlState; questions: MlQuestions };
 
@@ -34,7 +35,7 @@ export function fakeAnswer(q: MlQuestion): MlAnswer {
 }
 
 /** A backend for tests, like the agent's fake provider: no network, scripted answers, a record of calls. */
-export function fakeAdapter(): FakeAdapter {
+export function fakeAdapter(options: { script?: string } = {}): FakeAdapter {
   const adapter: FakeAdapter = {
     calls: [],
     answers: {},
@@ -60,7 +61,19 @@ export function fakeAdapter(): FakeAdapter {
         throw failure;
       }
       const answers: MlAnswers = {};
-      for (const [id, q] of Object.entries(questions)) answers[id] = adapter.answers[id] ?? fakeAnswer(q);
+      let script: Record<string, unknown> = {};
+      if (options.script) {
+        try {
+          const parsed: unknown = JSON.parse(options.script);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+          script = parsed as Record<string, unknown>;
+        } catch {
+          throw new MlError("invalid_response", "SCRIBE_FAKE_ML_ANSWERS must be a JSON object keyed by question id");
+        }
+      }
+      for (const [id, q] of Object.entries(questions)) {
+        answers[id] = adapter.answers[id] ?? (Object.hasOwn(script, id) ? jevAnswer(id, q, script[id]) : fakeAnswer(q));
+      }
       // About four characters to a token, so the counters have something to add up.
       const inputTokens = Math.ceil(JSON.stringify({ state, questions }).length / 4);
       return { answers, model: `${source.model}-fake`, usage: { inputTokens, outputTokens: 0 } };

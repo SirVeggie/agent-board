@@ -832,6 +832,9 @@
   .arch-row .row { display: flex; gap: 4px; }
   .label-edit { display: flex; align-items: center; gap: 6px; }
   .label-edit .field { flex: 1; }
+  .label-settings { padding: 4px 0 10px; border-bottom: 1px solid var(--border); }
+  .label-settings > .field { width: 100%; margin: 0 0 6px; }
+  .label-suggest { display: flex; align-items: center; gap: 6px; font-size: 12px; }
   .swatch { width: 22px; height: 22px; border-radius: 7px; flex: 0 0 auto; box-shadow: var(--depth); }
   .palette { display: flex; gap: 5px; flex-wrap: wrap; padding: 4px 0 2px; }
   .palette button { width: 20px; height: 20px; border-radius: 6px; }
@@ -2300,7 +2303,8 @@
     chosen.forEach(function (l) {
       var bar = el("span", "chip-bar");
       bar.style.background = l.color;
-      bar.dataset.tooltip = l.name;
+      bar.dataset.tooltip = l.name + (l.description ? "\n" + l.description : "");
+      bar.setAttribute("aria-description", bar.dataset.tooltip);
       chips.appendChild(bar);
     });
     // The assignee: name in the top-right corner; a worker's name in its color.
@@ -3666,6 +3670,7 @@
       var chip = el("button", "label-chip");
       chip.type = "button";
       chip.setAttribute("aria-label", "Remove " + l.name);
+      labelDescription(chip, l);
       chip.style.setProperty("--chip", l.color);
       chip.appendChild(el("span", "sw"));
       chip.appendChild(document.createTextNode(l.name));
@@ -3720,6 +3725,7 @@
             sw.style.background = row.label.color;
             b.appendChild(sw);
             b.appendChild(document.createTextNode(row.label.name));
+            labelDescription(b, row.label);
           } else {
             b.appendChild(el("span", "sw"));
             b.lastChild.style.background = PALETTE[all.length % PALETTE.length];
@@ -4260,6 +4266,11 @@
   });
 
   // ---------- labels popover ----------
+  function labelDescription(node, l) {
+    if (!str(l.description).trim()) return;
+    node.dataset.tooltip = l.description;
+    node.setAttribute("aria-description", l.description);
+  }
   labelsBtn.addEventListener("click", function (e) {
     e.stopPropagation();
     openLabelsMenu();
@@ -4282,6 +4293,7 @@
         });
         var name = el("input", "field");
         name.value = l.name;
+        name.setAttribute("aria-label", "Label name");
         name.addEventListener("click", function (ev) { ev.stopPropagation(); });
         name.addEventListener("change", function () {
           var v = name.value.trim();
@@ -4304,6 +4316,27 @@
         row.appendChild(name);
         row.appendChild(rm);
         menu.appendChild(row);
+        var details = el("div", "label-settings");
+        var description = el("textarea", "field");
+        description.rows = 2;
+        description.placeholder = "Description";
+        description.setAttribute("aria-label", "Description for " + l.name);
+        description.value = str(l.description);
+        description.addEventListener("change", function () {
+          saveLabels(labels().map(function (x) { return x.id === l.id ? Object.assign({}, x, { description: description.value.trim() }) : x; }));
+        });
+        details.appendChild(description);
+        var never = el("label", "label-suggest");
+        var check = el("input");
+        check.type = "checkbox";
+        check.checked = l.neverSuggest === true;
+        check.addEventListener("change", function () {
+          saveLabels(labels().map(function (x) { return x.id === l.id ? Object.assign({}, x, { neverSuggest: check.checked }) : x; }));
+        });
+        never.appendChild(check);
+        never.appendChild(document.createTextNode("Never suggest"));
+        details.appendChild(never);
+        menu.appendChild(details);
       });
       var addRow = el("div", "menu-row label-edit");
       var input = el("input", "field");
@@ -4319,7 +4352,6 @@
       });
       addRow.appendChild(input);
       menu.appendChild(addRow);
-      menu.appendChild(el("div", "note", "Click a swatch to change its colour."));
     });
   }
   function saveLabels(next) {
@@ -4429,7 +4461,7 @@
     var no = arr(c.suggest && c.suggest.no);
     var questions = {}, ids = {};
     labels().filter(function (l) {
-      return str(l.name).trim() && c.labels.indexOf(l.id) === -1 && no.indexOf(l.id) === -1;
+      return !l.neverSuggest && str(l.name).trim() && c.labels.indexOf(l.id) === -1 && no.indexOf(l.id) === -1;
     }).slice(0, SUGGEST_LABELS).forEach(function (l, i) {
       var about = str(l.description).trim().slice(0, 500);
       ids["label" + i] = l.id;
@@ -4473,7 +4505,7 @@
     // The card changed while the classifier was answering: drop this answer, the newer text gets its own.
     if (!c || c.archived || c.title !== ask.title || c.description !== ask.description) return;
     var known = {};
-    labels().forEach(function (l) { known[l.id] = true; });
+    labels().forEach(function (l) { known[l.id] = !l.neverSuggest; });
     var picks = Object.keys(ask.ids).map(function (q) {
       var a = answers[q];
       return { id: ask.ids[q], yes: a && a.type === "yesno" ? Number(a.yes) || 0 : 0 };
@@ -4548,12 +4580,16 @@
       byId = {};
       labels().forEach(function (l) { byId[l.id] = l; });
     }
-    var found = arr(s.labels).map(function (id) { return c.labels.indexOf(id) === -1 ? byId[id] : null; }).filter(Boolean);
+    var found = arr(s.labels).map(function (id) { return c.labels.indexOf(id) === -1 ? byId[id] : null; }).filter(function (l) { return l && !l.neverSuggest; });
     var level = c.priority ? 0 : clamp(Math.floor(Number(s.priority) || 0), 0, 4);
     if (!found.length && !level) return null;
     var row = el("div", "suggest-row");
     row.appendChild(el("span", "suggest-lead", "Suggested"));
-    found.forEach(function (l) { row.appendChild(suggestChip(c.id, l.id, l.name, l.color)); });
+    found.forEach(function (l) {
+      var chip = suggestChip(c.id, l.id, l.name, l.color);
+      labelDescription(chip.querySelector(".suggest-yes"), l);
+      row.appendChild(chip);
+    });
     if (level) row.appendChild(suggestChip(c.id, "priority", PRIORITIES[level] + " priority", ""));
     return row;
   }

@@ -408,5 +408,5 @@ let service: MlService | undefined;
 
 /** The daemon's one decision service. */
 export function mlService(): MlService {
-  return (service ??= new MlService(FAKE_ML ? { adapter: fakeAdapter() } : {}));
+  return (service ??= new MlService(FAKE_ML ? { adapter: fakeAdapter({ script: process.env.SCRIBE_FAKE_ML_ANSWERS }) } : {}));
 }

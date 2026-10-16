@@ -82,6 +82,51 @@ const calls = (page: Page) => page.evaluate(() => (window as any).scribe.ml.call
 const waitCalls = (page: Page, count: number) => page.waitForFunction((n) => (window as any).scribe.ml.calls.length === n, count);
 const cardOf = (page: Page, id: string) => page.evaluate((id) => (window as any).scribe.state.cards.find((c: any) => c.id === id), id);
 
+test("label settings persist descriptions and exclude never-suggest labels, including late answers", async (t) => {
+  const open = await board(t);
+  if (!open) return;
+  const { browser, page, errors } = open;
+  try {
+    await page.locator("#labelsBtn").click();
+    const description = page.getByRole("textbox", { name: "Description for Bug", exact: true });
+    await description.fill("Broken existing behaviour");
+    await description.press("Tab");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      const s = (window as any).scribe;
+      s.state.cards[0].title = "Crash on save";
+      s.changed();
+    });
+    await waitCalls(page, 1);
+    assert.match(await page.evaluate(() => (window as any).scribe.ml.calls[0].questions.label0.instructions), /Broken existing behaviour/);
+
+    // Disable while the answer is in flight: it must not reintroduce the label.
+    await page.locator("#labelsBtn").click();
+    await page.getByRole("checkbox", { name: "Never suggest", exact: true }).first().check();
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => (window as any).answer(["Bug", "Feature"]));
+    await page.locator('.card[data-id="c1"] .suggest-yes').waitFor();
+    assert.deepEqual((await cardOf(page, "c1")).suggest, { labels: ["lb2"] });
+
+    await page.evaluate(() => {
+      const s = (window as any).scribe;
+      s.state.cards[0].description = "More detail";
+      s.changed();
+    });
+    await waitCalls(page, 2);
+    const request = await page.evaluate(() => (window as any).scribe.ml.calls[1]);
+    assert.equal(Object.values(request.questions).some((q: any) => q.instructions.includes('"Bug"')), false);
+
+    await page.locator('.card[data-id="c2"] .card-title').click();
+    assert.equal(await page.locator("#mLabels .label-chip").getAttribute("data-tooltip"), "Broken existing behaviour");
+    await page.keyboard.press("Escape");
+    await page.locator("#labelsBtn").click();
+    assert.equal(await page.getByRole("textbox", { name: "Description for Bug", exact: true }).inputValue(), "Broken existing behaviour");
+    assert.equal(await page.getByRole("checkbox", { name: "Never suggest", exact: true }).first().isChecked(), true);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test("a new card gets label and priority suggestions the user accepts or dismisses", async (t) => {
   const open = await board(t);
   if (!open) return;

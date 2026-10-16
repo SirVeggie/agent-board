@@ -44,6 +44,18 @@ Sources and switches are in `ml-settings.json` in the data folder; today's count
 
 `SCRIBE_FAKE_ML=1` makes the daemon answer from `adapters/fake.ts` (no network), like `SCRIBE_FAKE_AGENTS` for agents. Tests build their own `new MlService({ store: memoryStore(), adapter: fakeAdapter() })`.
 
+Set `SCRIBE_FAKE_ML_ANSWERS` before starting a fake daemon to a JSON object of Jev answers keyed by question id. For board suggestions, for example:
+
+```powershell
+$env:SCRIBE_FAKE_ML = '1'
+$env:SCRIBE_FAKE_ML_ANSWERS = '{"label0":{"noul":0.9},"priority":{"choice":"high","probabilities":{"unspecified":0.05,"low":0.05,"medium":0.05,"high":0.8,"urgent":0.05},"confidence":0.7}}'
+npm start
+```
+
+Unspecified ids keep the default fake answer (yes 0.5, first choice, lowest score). Invalid JSON or an answer incompatible with its question returns `invalid_response`. Restart to change answers; the usual service cache still applies. Tests can pass the same JSON as `fakeAdapter({ script })`; `adapter.answers` takes precedence.
+
+Board labels can carry `description` and `neverSuggest` (editable in Labels). Descriptions appear in chip tooltips and label questions; `neverSuggest: true` excludes a label from questions and hides its pending suggestions. Existing boards need their saved HTML updated to use these controls.
+
 ## Routes (`/api/ml`, board shell only)
 
 | Route | Does |
