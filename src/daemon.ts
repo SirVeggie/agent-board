@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, SESSION_HEADER, THREAD_HEADER, VERSION, baseUrl } from "./config.js";
+import path from "node:path";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, INSTALL_ROOT, SESSION_HEADER, THREAD_HEADER, VERSION, baseUrl } from "./config.js";
 
 /** Identifies this MCP process to the daemon, so claims can tell a live agent from one that stopped. */
 const SESSION_ID = randomBytes(6).toString("hex");
@@ -16,6 +17,7 @@ import { log } from "./log.js";
 type Health = {
   ok: boolean;
   version?: string;
+  root?: string;
   url: string;
   viewers: number;
   tabs: number;
@@ -34,10 +36,20 @@ export async function health(): Promise<Health | null> {
   }
 }
 
-export async function ensureDaemon(): Promise<string> {
+/**
+ * Starts the daemon if none is running. A running daemon of another version is replaced only when it runs from this
+ * install (an update), or always with `replace` (the desktop app's --ensure launch). An MCP process from another
+ * checkout (a worktree, a test, a tool script) uses the running daemon instead of killing the live board.
+ */
+export async function ensureDaemon(options: { replace?: boolean } = {}): Promise<string> {
   const url = baseUrl();
   const running = await health();
   if (running?.version === VERSION) {
+    return url;
+  }
+  // Older daemons don't report their root; treat them as this install's, as before.
+  if (running && !options.replace && running.root && !sameInstall(running.root)) {
+    log(`Using scribe daemon ${running.version ?? "unknown"} from ${running.root}; this process is ${VERSION} from ${INSTALL_ROOT}`);
     return url;
   }
   if (running) {
@@ -61,6 +73,11 @@ export async function ensureDaemon(): Promise<string> {
     }
   }
   throw new Error(`Scribe daemon did not start at ${url}`);
+}
+
+function sameInstall(root: string): boolean {
+  const norm = (dir: string) => (process.platform === "win32" ? path.resolve(dir).toLowerCase() : path.resolve(dir));
+  return norm(root) === norm(INSTALL_ROOT);
 }
 
 /** A daemon from another build answers health but speaks a different API, so it must be replaced. */

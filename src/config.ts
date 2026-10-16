@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Daemon/UI protocol version. Bump with any API or event change; public/app.js BOARD_VERSION must match. */
 export const VERSION = "3.0.4";
+/** The install (checkout) this process runs from: the folder above src/ or dist/. */
+export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 export const HOST = "127.0.0.1";
 /** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
 export const CONTENT_HOST = "127.0.0.2";

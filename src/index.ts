@@ -30,7 +30,7 @@ async function main(): Promise<void> {
 
   // The desktop app starts (or replaces) the daemon this way before loading the board.
   if (args.has("--ensure")) {
-    await ensureDaemon();
+    await ensureDaemon({ replace: true });
     return;
   }
 

@@ -8,7 +8,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
@@ -183,6 +183,7 @@ export async function startHttp(): Promise<http.Server> {
     res.json({
       ok: true,
       version: VERSION,
+      root: INSTALL_ROOT,
       url: baseUrl(),
       viewers: viewerCount(),
       tabs: store.list().length,
