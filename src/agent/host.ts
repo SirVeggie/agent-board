@@ -123,6 +123,38 @@ const SCAN_HOLD_MS = 2500;
  */
 const HOOK_GRACE_MS = 400;
 
+/** In a thread nobody watches (a board worker, its helpers), a hook's ask is refused after this long, as a useful web request is. */
+const HOOK_ASK_WAIT_MS = WEB_IMPORTANCE_WAIT_MS.useful ?? 15 * 60 * 1000;
+const HOOK_ASK_TIMEOUT = "Nobody answered the hook's approval in time, so the call was not run. Leave it out, and mention it in your result.";
+
+/** The approval's line saying when an unanswered request is refused. */
+function refusedBy(waitMs: number): string {
+  return `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.`;
+}
+
+/** `signal`, also aborted after `waitMs` (null: never), for a wait nobody may answer. */
+function withDeadline(waitMs: number | null, signal?: AbortSignal): { signal?: AbortSignal; timedOut: () => boolean; done: () => void } {
+  if (waitMs === null) return { signal, timedOut: () => false, done: () => {} };
+  const abort = new AbortController();
+  const onAbort = () => abort.abort();
+  if (signal?.aborted) abort.abort();
+  else signal?.addEventListener("abort", onAbort);
+  let late = false;
+  const timer = setTimeout(() => {
+    late = true;
+    abort.abort();
+  }, waitMs);
+  timer.unref?.();
+  return {
+    signal: abort.signal,
+    timedOut: () => late,
+    done: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 /** At most this often, a running thread is sent again because its live step changed. */
 const ACTIVITY_MS = 1000;
 const MAX_TOOL_OUTPUT = 20_000;
@@ -3633,7 +3665,7 @@ export class AgentHost {
         await host.rememberBefore(run, thread(), file, true);
       },
       approval(req: ApprovalRequest, signal) {
-        const decide = async (req: ApprovalRequest): Promise<ApprovalDecision> => {
+        const decide = async (req: ApprovalRequest, wait: AbortSignal | undefined = signal): Promise<ApprovalDecision> => {
           const t = thread();
           // A lowered turn answers from the lowered level (sessionThread), like its provider does.
           const auto = autoApproval(t && host.sessionThread(t), req);
@@ -3649,7 +3681,7 @@ export class AgentHost {
               (state, questions, options) => host.hookBackend.decide(state, questions, options),
               req.detail ?? "", workspace, run.hooks.lastUser,
             );
-            if (run.cancelled || signal?.aborted || host.runs.get(threadId) !== run) throw new Error("Auto review cancelled.");
+            if (run.cancelled || wait?.aborted || host.runs.get(threadId) !== run) throw new Error("Auto review cancelled.");
             // Recheck after the asynchronous review: settings may have changed while it waited.
             const current = thread();
             if (review.allowed && current?.provider === "pi" && host.sessionThread(current).approval === "auto" && (current.worktree?.path ?? current.cwd) === workspace) {
@@ -3671,7 +3703,7 @@ export class AgentHost {
             options,
             status: "pending",
           });
-          const answer = waitFor<ApprovalDecision>("approval", item.id, signal);
+          const answer = waitFor<ApprovalDecision>("approval", item.id, wait);
           if (!ceiling) return answer;
           return answer.then((decision) => {
             if (decision.optionId !== LIFT_OPTION) return decision;
@@ -3689,7 +3721,19 @@ export class AgentHost {
             if (!reject) throw new Error(hook.reason);
             return { optionId: reject.id, note: hook.reason };
           }
-          return decide(hook?.kind === "ask" ? { ...req, humanOnly: true, detail: [req.detail, hook.reason].filter(Boolean).join("\n\n") } : req);
+          if (hook?.kind !== "ask") return decide(req);
+          // Nobody may be watching a worker's thread: its ask is refused once the wait is up.
+          const waitMs = host.unattended(threadId) ? HOOK_ASK_WAIT_MS : null;
+          const asked = { ...req, humanOnly: true, detail: [req.detail, hook.reason, waitMs !== null ? refusedBy(waitMs) : ""].filter(Boolean).join("\n\n") };
+          const deadline = withDeadline(waitMs, signal);
+          return decide(asked, deadline.signal)
+            .catch((err: unknown) => {
+              if (!deadline.timedOut()) throw err;
+              const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+              if (!reject) throw new Error(HOOK_ASK_TIMEOUT);
+              return { optionId: reject.id, note: HOOK_ASK_TIMEOUT };
+            })
+            .finally(deadline.done);
         });
       },
       question(req: QuestionRequest, signal) {
@@ -4106,7 +4150,8 @@ export class AgentHost {
     }
     this.closeBlocks(run);
     const title = (call.title || call.name).slice(0, 300);
-    const detail = [call.detail ?? toolCallText({ name: "", input: call.input }), says.reason].filter(Boolean).join("\n\n");
+    const waitMs = this.unattended(threadId) ? HOOK_ASK_WAIT_MS : null;
+    const detail = [call.detail ?? toolCallText({ name: "", input: call.input }), says.reason, waitMs !== null ? refusedBy(waitMs) : ""].filter(Boolean).join("\n\n");
     const approval = this.addItem(threadId, run.turn.id, {
       kind: "approval",
       requestId: "",
@@ -4120,13 +4165,16 @@ export class AgentHost {
       ],
       status: "pending",
     });
+    const deadline = withDeadline(waitMs, signal);
     try {
-      const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", approval.id, signal);
+      const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", approval.id, deadline.signal);
       if (decision.optionId !== "allow") return { allowed: false, reason: decision.note ? `The user denied this call: ${decision.note}` : "The user denied this call." };
       if (call.toolId) run.hooks.approved.add(call.toolId);
       return { allowed: true };
     } catch {
-      return { allowed: false, reason: "The approval was cancelled." };
+      return { allowed: false, reason: deadline.timedOut() ? HOOK_ASK_TIMEOUT : "The approval was cancelled." };
+    } finally {
+      deadline.done();
     }
   }
 
