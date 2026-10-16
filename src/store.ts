@@ -2617,8 +2617,7 @@ export class BoardStore extends EventEmitter {
 
   /**
    * Open folder (#654): a Library folder for the disk folder and each subfolder in it, and a file
-   * page for each file, all in the Library (no tabs). Files that already have a page keep it.
-   */
+   * page for each file, all in the Library (no tabs). Files that already have a page keep it.   */
   openDiskFolder(root: string, parentId: string | null): { folder: Folder; pages: number; reused: number; truncated: boolean } {
     const { tree, truncated } = scanFolder(root);
     let pages = 0;
@@ -2631,13 +2630,14 @@ export class BoardStore extends EventEmitter {
           make(child, folder.id);
           continue;
         }
+        // A file that already has a page moves into the folder with the rest.
         const { tab, created } = this.openFilePage({ path: child.path, activate: false });
         if (created) {
           pages += 1;
-          this.movePage(tab.id, folder.id, index++);
         } else {
           reused += 1;
         }
+        this.movePage(tab.id, folder.id, index++);
       }
       return folder;
     };

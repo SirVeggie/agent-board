@@ -670,9 +670,17 @@
     } catch (err) { /* plain */ }
   }
   function editBlock(el, start, end, caretAtEnd) {
-    commitBlock();
-    // A click that landed as the last block's edit was re-rendering: the same block, rendered again.
-    if (el && !el.isConnected) el = mdDoc.querySelector('.blk[data-start="' + start + '"]');
+    // Going from one block's edit to another: show the first one rendered again.
+    if (editing) {
+      commitBlock();
+      renderMarkdown();
+    }
+    // The clicked block may have been rendered again since: the same block, found by where it starts.
+    if (el && !el.isConnected) {
+      el = mdDoc.querySelector('.blk[data-start="' + start + '"]');
+      if (!el) return;
+      end = Number(el.dataset.end);
+    }
     var text = ta.value;
     var area = document.createElement("textarea");
     area.className = "blk-edit";
@@ -914,6 +922,9 @@
       if (imgUrl) URL.revokeObjectURL(imgUrl);
       imgUrl = URL.createObjectURL(new Blob([res.buffer], { type: res.type || "image/png" }));
       img.onload = function () {
+        // An SVG without a size of its own would otherwise be drawn at the default 300 × 150.
+        img.style.width = img.naturalWidth + "px";
+        img.style.height = img.naturalHeight + "px";
         $("stPos").textContent = img.naturalWidth + " × " + img.naturalHeight;
         if (view.fit) fit();
         else applyView();
@@ -924,7 +935,7 @@
   }
   function fitScale() {
     var w = imgPane.clientWidth - 40, h = imgPane.clientHeight - 40;
-    if (!img.naturalWidth || !img.naturalHeight) return 1;
+    if (!img.naturalWidth || !img.naturalHeight || w <= 0 || h <= 0) return 1;
     return Math.min(1, w / img.naturalWidth, h / img.naturalHeight);
   }
   function center(scale) {
@@ -989,9 +1000,10 @@
     else if (event.key === "0") fit();
     else if (event.key === "1") { view.fit = false; center(1); }
   });
-  window.addEventListener("resize", function () {
-    if (file && file.kind === "image" && view.fit) fit();
-  });
+  // Also covers a tab that opened hidden: the pane has no size until it shows.
+  new ResizeObserver(function () {
+    if (file && file.kind === "image" && view.fit && img.naturalWidth) fit();
+  }).observe(imgPane);
 
   load(false);
 })();

@@ -161,7 +161,7 @@ export function readFileForPage(file: string, copy?: boolean): FileText | FileIn
   }
   const bytes = fs.readFileSync(file);
   if (!looksLikeText(bytes)) {
-    return { ...info, kind: "unsupported", reason: "Scribe cannot show this kind of file." };
+    return { ...info, kind: "unsupported", reason: "Viewing this kind of file is not supported." };
   }
   const bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   const raw = bytes.subarray(bom ? 3 : 0).toString("utf8");
