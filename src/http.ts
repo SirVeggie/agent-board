@@ -2260,14 +2260,10 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
       return;
     }
     var chatKey = event.key.toLowerCase();
-    // The apostrophe key: by character (" with Shift), or by position on Nordic layouts (the '* key next to Enter).
-    var quote = event.key === "'" || event.key === '"' || (event.code === "Backslash" && event.key !== "\\\\" && event.key !== "|");
-    var action = quote ? (event.shiftKey ? (event.altKey ? "" : "mode") : event.altKey ? "effort" : "model")
-      : event.altKey ? ""
-      : event.code === "Period" ? (event.shiftKey ? "scope" : "workspace")
-      : chatKey === "k" ? (event.shiftKey ? "new" : "dock")
-      : chatKey === "l" ? (event.shiftKey ? "full" : "side")
-      : chatKey === "j" && !event.shiftKey ? "threads" : "";
+    // Only shortcuts that open chat belong to a page; thread actions require chat focus.
+    var action = event.altKey ? ""
+      : chatKey === "k" && !event.shiftKey ? "dock"
+      : chatKey === "l" ? (event.shiftKey ? "full" : "side") : "";
     if (action) {
       event.preventDefault();
       // With text selected, Ctrl+K and Ctrl+L open the chat with the selection attached.

@@ -8305,8 +8305,7 @@
   /** The chat a cycling shortcut applies to: the one in focus, else the most prominent one open. */
   function targetView() {
     if (S.fullOpen) return full.view;
-    const active = document.activeElement;
-    if (S.dockShown && (dock.root?.contains(active) || !S.sideOpen)) return dock.view;
+    if (S.dockShown && (focusedChat() === "dock" || !S.sideOpen)) return dock.view;
     if (S.sideOpen) return sidebar.view;
     return dock.view;
   }
@@ -11202,6 +11201,9 @@
   /* ---------- keys ---------- */
 
   function shortcut(action) {
+    if (document.querySelector("dialog[open]")) return false;
+    // Opening chat is global; actions on its contents require focus in that chat.
+    if (!["side", "dock", "full"].includes(action) && !focusedChat()) return false;
     if (action === "side" && SOLO) action = "dock";
     if (action === "side") {
       if (S.fullOpen) leaveFull("side");
@@ -11209,7 +11211,7 @@
     } else if (action === "dock") {
       if (S.dockShown && document.activeElement !== dock.view.input) {
         dock.view.focus();
-        return;
+        return true;
       }
       dock.setShown(!S.dockShown);
     } else if (action === "full") {
@@ -11234,6 +11236,17 @@
     } else if (action === "down") {
       chatDown();
     }
+    return true;
+  }
+
+  function focusedChat() {
+    const active = document.activeElement;
+    if (S.fullOpen) return full.root?.contains(active) ? "full" : null;
+    if (dockFocused()) return "dock";
+    if (sideFocused()) return "side";
+    // The floating thread picker is mounted on body, outside the chat root.
+    if (S.dockShown && openMenuAnchor === dock.titleBtn && openMenuEl?.contains(active)) return "dock";
+    return null;
   }
 
   function dockFocused() {
@@ -11246,6 +11259,8 @@
 
   /** The chat a thread shortcut acts on: the full window, the focused (or only) floating chat, else the sidebar, opened if needed. */
   function shortcutChat() {
+    const focused = focusedChat();
+    if (focused) return focused;
     if (S.fullOpen) return "full";
     if (SOLO && !S.dockShown) dock.setShown(true);
     if (S.dockShown && (dockFocused() || !S.sideOpen)) return "dock";
@@ -11471,17 +11486,19 @@
       modalStack[modalStack.length - 1]();
       return true;
     }
-    const helperOwner = [sidebar.view, full.view, dock.view].find((view) => view.helperView?.visible());
+    const where = focusedChat();
+    const view = where === "full" ? full.view : where === "dock" ? dock.view : where === "side" ? sidebar.view : null;
+    const helperOwner = view?.helperView?.visible() ? view : null;
     if (helperOwner) {
       helperOwner.closeHelper();
       return true;
     }
-    if (S.fullOpen) {
+    if (S.fullOpen && where === "full") {
       if (CHAT) return false;
       leaveFull();
       return true;
     }
-    if (S.dockShown && (dock.root?.contains(document.activeElement) || S.dockExpanded)) {
+    if (where === "dock") {
       if (S.dockExpanded) dock.setExpanded(false);
       else dock.setShown(false);
       return true;
@@ -11490,39 +11507,33 @@
   }
 
   window.addEventListener("keydown", (event) => {
-    if (!(event.ctrlKey || event.metaKey)) return;
+    if (event.defaultPrevented || event.isComposing || !(event.ctrlKey || event.metaKey)) return;
+    const run = (action) => { if (shortcut(action)) event.preventDefault(); };
     // The apostrophe key by character, or by position on Nordic layouts (the '* key next to Enter).
     // With Shift the US key types ", the Nordic one *.
     const quote = event.key === "'" || event.key === '"' || (event.code === "Backslash" && event.key !== "\\" && event.key !== "|");
     if (quote) {
       if (event.shiftKey && event.altKey) return;
-      event.preventDefault();
-      shortcut(event.shiftKey ? "mode" : event.altKey ? "effort" : "model");
+      run(event.shiftKey ? "mode" : event.altKey ? "effort" : "model");
       return;
     }
     if (event.altKey) return;
     // Period key by position so Ctrl+Shift+. stays on that key when Shift types > or :.
     if (event.code === "Period") {
-      event.preventDefault();
-      shortcut(event.shiftKey ? "scope" : "workspace");
+      run(event.shiftKey ? "scope" : "workspace");
       return;
     }
     const key = event.key.toLowerCase();
     if (key === "k") {
-      event.preventDefault();
-      shortcut(event.shiftKey ? "new" : "dock");
+      run(event.shiftKey ? "new" : "dock");
     } else if (key === "l") {
-      event.preventDefault();
-      shortcut(event.shiftKey ? "full" : "side");
+      run(event.shiftKey ? "full" : "side");
     } else if (key === "j" && !event.shiftKey) {
-      event.preventDefault();
-      shortcut("threads");
+      run("threads");
     } else if (event.key === "ArrowUp" && !event.shiftKey && (dockFocused() || sideFocused())) {
-      event.preventDefault();
-      shortcut("up");
+      run("up");
     } else if (event.key === "ArrowDown" && !event.shiftKey && (S.fullOpen || dockFocused())) {
-      event.preventDefault();
-      shortcut("down");
+      run("down");
     }
   });
 

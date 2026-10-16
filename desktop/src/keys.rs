@@ -20,7 +20,7 @@ use webview2_com::{
 use std::sync::Mutex;
 use windows::core::{w, Interface};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, MapVirtualKeyW, MAPVK_VK_TO_CHAR, VK_CONTROL, VK_F5, VK_MENU, VK_SHIFT,
+    GetKeyState, VK_CONTROL, VK_F5, VK_MENU, VK_SHIFT,
 };
 
 use crate::layout;
@@ -66,35 +66,13 @@ fn reserved(shortcut: &Shortcut) -> bool {
 const VK_TAB: u32 = 0x09;
 const VK_PRIOR: u32 = 0x21;
 const VK_NEXT: u32 = 0x22;
-const VK_OEM_PERIOD: u32 = 0xBE;
 const VK_OEM_COMMA: u32 = 0xBC;
-
-/// The key that types an apostrophe in the current layout (on Nordic layouts the '* key next to
-/// Enter), so the model shortcuts follow the label rather than a US key position.
-fn is_apostrophe(key: u32) -> bool {
-    unsafe { MapVirtualKeyW(key, MAPVK_VK_TO_CHAR) & 0x7fff_ffff == u32::from(b'\'') }
-}
 
 fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
     if ctrl && ((alt && key == u32::from(b'S')) || (!alt && key == VK_OEM_COMMA)) {
         return Some(Shortcut::Board(if shift { "agent-settings" } else { "settings" }));
     }
-    // Agent chat: Ctrl+' cycles favourite models, Ctrl+Alt+' cycles reasoning, Ctrl+Shift+' cycles the
-    // mode. Ctrl+Alt is also AltGr on Windows, which is fine here: AltGr+' types nothing on the
-    // layouts this is for.
-    if ctrl && is_apostrophe(key) {
-        return match (shift, alt) {
-            (false, false) => Some(Shortcut::Board("agent-model")),
-            (false, true) => Some(Shortcut::Board("agent-effort")),
-            (true, false) => Some(Shortcut::Board("agent-mode")),
-            (true, true) => None,
-        };
-    }
-    // Ctrl+. next workspace (then none), Ctrl+Shift+. next Scribe access. Physical period key so
-    // Shift still hits it when the layout types > or :.
-    if ctrl && !alt && key == VK_OEM_PERIOD {
-        return Some(Shortcut::Board(if shift { "agent-scope" } else { "agent-workspace" }));
-    }
+    // Thread settings and actions are handled in chat, where focus can be checked.
     if alt {
         return None;
     }
@@ -121,8 +99,6 @@ fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut
         (b'B', false) => Some(Shortcut::Board("library")),
         (b'W', false) => Some(Shortcut::Board("close-tab")),
         (b'K', false) => Some(Shortcut::Board("agent-dock")),
-        (b'K', true) => Some(Shortcut::Board("agent-new")),
-        (b'J', false) => Some(Shortcut::Board("agent-threads")),
         (b'L', false) => Some(Shortcut::Board("agent-side")),
         (b'L', true) => Some(Shortcut::Board("agent-full")),
         (b'R', false | true) => Some(Shortcut::Reload),
@@ -263,7 +239,7 @@ mod tests {
 
     #[test]
     fn pages_get_first_refusal_except_on_browser_keys() {
-        for key in [b'K', b'L', b'J', b'E', b'B', b'D', b'S', b'H'] {
+        for key in [b'K', b'L', b'E', b'B', b'D', b'S', b'H'] {
             assert!(!reserved_key(key, false), "Ctrl+{}", key as char);
         }
         for key in [b'T', b'N', b'W', b'R'] {
@@ -272,6 +248,13 @@ mod tests {
         assert!(reserved_key(b'T', true));
         assert!(reserved(&shortcut_for(VK_TAB, true, false, false).unwrap()));
         assert!(reserved(&shortcut_for(u32::from(VK_F5.0), false, false, false).unwrap()));
+    }
+
+    #[test]
+    fn thread_shortcuts_stay_with_the_focused_frame() {
+        for (key, shift) in [(0xBE, false), (0xBE, true), (0xDE, false), (u32::from(b'J'), false), (u32::from(b'K'), true)] {
+            assert!(shortcut_for(key, true, shift, false).is_none());
+        }
     }
 
     #[test]
