@@ -9458,7 +9458,7 @@
         })
       );
       const forkSummaries = el("section", "settings-section");
-      forkSummaries.append(helpHeading("Summary models", "Choose a model for summaries written by Scribe, including forks. Provider-managed context compaction uses the provider's own model."));
+      forkSummaries.append(helpHeading("Summary models", "Choose a model for summaries written by Scribe, including forks and Native context compaction. Claude, Codex, and Cursor manage their own context compaction, including provider /compact commands; this setting does not apply to those summaries."));
       this.forkSummaryRows = el("div");
       forkSummaries.append(this.forkSummaryRows);
       this.forkSummarizers = new Map();

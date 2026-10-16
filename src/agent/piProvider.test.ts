@@ -9,6 +9,77 @@ import type { Prefs } from "./prefs.js";
 import type { Thread } from "./types.js";
 import { normalizeSource } from "./openaiSources.js";
 import type { RunSink, SessionContext } from "./providers/provider.js";
+import type { SessionBeforeCompactEvent, SessionBeforeCompactResult } from "@earendil-works/pi-coding-agent";
+
+test("Native compaction delegates manual, threshold and overflow summaries without changing the retained boundary", async () => {
+  const provider = new PiProvider();
+  const thread = { id: "compact-test", provider: "pi", model: "native/chat", scope: { kind: "global", ref: null } } as Thread;
+  const signal = new AbortController().signal;
+  const prompts: string[] = [];
+  const session = provider.createSession(thread, {
+    summarizeContext: async (actual, prompt, actualSignal) => {
+      assert.equal(actual, thread);
+      assert.equal(actualSignal, signal);
+      prompts.push(prompt);
+      return "  Carry on with the pending edit.  ";
+    },
+  } as SessionContext) as unknown as { beforeCompact(event: SessionBeforeCompactEvent): Promise<SessionBeforeCompactResult>; dispose(): void };
+  try {
+    for (const reason of ["manual", "threshold", "overflow"] as const) {
+      const event: SessionBeforeCompactEvent = {
+        type: "session_before_compact", reason, willRetry: reason === "overflow", signal,
+        branchEntries: [], customInstructions: "Keep the migration steps",
+        preparation: {
+          firstKeptEntryId: "retained-entry", tokensBefore: 90000, previousSummary: "Earlier decisions",
+          messagesToSummarize: [{ role: "user", content: "Update src/example.ts", timestamp: 1 }],
+          turnPrefixMessages: [{ role: "user", content: "Now fix the tests", timestamp: 2 }],
+          isSplitTurn: true,
+          fileOps: { read: new Set(["src/example.ts", "README.md"]), written: new Set(["new.ts"]), edited: new Set(["src/example.ts"]) },
+          settings: { enabled: true, reserveTokens: 6000, keepRecentTokens: 10000 },
+        },
+      };
+      const result = await session.beforeCompact(event);
+      assert.equal(result.compaction?.firstKeptEntryId, "retained-entry");
+      assert.equal(result.compaction?.tokensBefore, 90000);
+      assert.match(result.compaction!.summary, /^Carry on with the pending edit\./);
+      assert.match(result.compaction!.summary, /<modified-files>\nnew.ts\nsrc\/example.ts/);
+      assert.deepEqual(result.compaction?.details, { readFiles: ["README.md"], modifiedFiles: ["new.ts", "src/example.ts"] });
+      assert.match(prompts.at(-1)!, /Earlier decisions/);
+      assert.match(prompts.at(-1)!, /Update src\/example.ts/);
+      assert.match(prompts.at(-1)!, /Now fix the tests/);
+      assert.match(prompts.at(-1)!, /Keep the migration steps/);
+    }
+    assert.equal(prompts.length, 3);
+  } finally { session.dispose(); provider.dispose(); }
+});
+
+test("Native compaction cancels on empty, failed or aborted summaries", async () => {
+  const provider = new PiProvider();
+  const warnings: string[] = [];
+  let complete = async () => "";
+  const session = provider.createSession({ id: "compact-failure", scope: { kind: "global", ref: null } } as Thread, {
+    summarizeContext: async () => complete(),
+  } as unknown as SessionContext) as any;
+  session.sink = { notice: (_level: string, text: string) => warnings.push(text) };
+  const event = {
+    signal: new AbortController().signal,
+    preparation: { messagesToSummarize: [], settings: { reserveTokens: 6000 }, fileOps: { read: new Set(), written: new Set(), edited: new Set() } },
+  };
+  try {
+    assert.deepEqual(await session.beforeCompact(event), { cancel: true });
+    assert.match(warnings.at(-1)!, /empty summary/);
+    complete = async () => { throw new Error("Summary model unavailable"); };
+    assert.deepEqual(await session.beforeCompact(event), { cancel: true });
+    assert.match(warnings.at(-1)!, /Summary model unavailable/);
+    assert.deepEqual(await session.beforeCompact({ ...event, signal: AbortSignal.abort() }), { cancel: true });
+    assert.equal(warnings.length, 2);
+    const controller = new AbortController();
+    event.signal = controller.signal;
+    complete = async () => { controller.abort(); return "Late summary"; };
+    assert.deepEqual(await session.beforeCompact(event), { cancel: true });
+    assert.equal(warnings.length, 2);
+  } finally { session.sink = null; session.dispose(); provider.dispose(); }
+});
 
 test("Native Auto review sends every command and edit to host approval", async () => {
   const provider = new PiProvider();

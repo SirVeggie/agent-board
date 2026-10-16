@@ -517,6 +517,7 @@ export class AgentHost {
     const env: Record<string, string> = { SCRIBE_PORT: String(PORT) };
     if (process.env.SCRIBE_HOME) env.SCRIBE_HOME = process.env.SCRIBE_HOME;
     this.ctx = {
+      summarizeContext: (thread, prompt, signal) => this.summarizeContext(thread, prompt, signal),
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
       isWorker: (id) => this.unattended(id),
@@ -4761,6 +4762,15 @@ export class AgentHost {
     const { provider, model } = summaryChoice(this.prefs(), thread);
     const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
     return `${label} (${this.providers[provider].label})`;
+  }
+
+  /** Context compaction follows the thread's summary choice, including cross-provider selections. */
+  private async summarizeContext(thread: Thread, prompt: string, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    const { provider, model } = summaryChoice(this.prefs(), thread);
+    const text = await this.agent(provider).complete(prompt, model, signal);
+    signal.throwIfAborted();
+    return text;
   }
 
   /** Utility completion uses the shared summary choices, falling back when usage runs out. */

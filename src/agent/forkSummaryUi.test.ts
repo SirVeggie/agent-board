@@ -153,7 +153,9 @@ test("fork model settings populate after startup and follow provider changes", a
     assert.equal(await claude.isVisible(), true);
     assert.match(await claude.innerText(), /Haiku/);
     assert.match(await codex.innerText(), /Use chat's model/);
-    assert.match(await page.getByRole("button", { name: "About Summary models" }).getAttribute("aria-description") || "", /summaries/);
+    const summaryHelp = await page.getByRole("button", { name: "About Summary models" }).getAttribute("aria-description") || "";
+    assert.match(summaryHelp, /forks and Native context compaction/);
+    assert.match(summaryHelp, /Claude, Codex, and Cursor manage their own context compaction/);
     await codex.click();
     await page.getByText("Mini", { exact: true }).first().click();
     await page.waitForFunction(() => (window as any).forkTest.settings.forkSummarizers.get("codex").textContent.includes("Mini"));

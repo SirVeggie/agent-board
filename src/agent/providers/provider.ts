@@ -156,6 +156,8 @@ export interface ProviderSession {
 }
 
 export type SessionContext = {
+  /** Scribe-managed context summaries, using this thread provider's Summary models choice. */
+  summarizeContext?(thread: Thread, prompt: string, signal: AbortSignal): Promise<string>;
   /** Whether this is an unattended page worker, checked at the start of every turn. */
   isWorker?(threadId: string): boolean;
   /** Observed provider policy, including warmed sessions before their first turn. */

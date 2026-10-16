@@ -39,6 +39,20 @@ test("regular summaries dispatch cross-provider choices from Summary models", as
   assert.deepEqual(calls, [{ provider: "pi", model: "local-summary" }]);
 });
 
+test("context compaction uses the thread provider's current Summary models choice", async () => {
+  const { host, calls } = fixture();
+  const thread = { provider: "pi", model: "native-chat" };
+  const signal = new AbortController().signal;
+  host.prefs = () => ({ ...DEFAULT_PREFS, forkSummarizers: { pi: { provider: "codex", model: "summary-model" } } });
+  assert.equal(await host.summarizeContext(thread, "History", signal), "Answer");
+  assert.deepEqual(calls, [{ provider: "codex", model: "summary-model" }]);
+  host.prefs = () => ({ ...DEFAULT_PREFS, forkSummarizers: { pi: null } });
+  await host.summarizeContext(thread, "History", signal);
+  assert.deepEqual(calls.at(-1), { provider: "pi", model: "native-chat" });
+  await assert.rejects(host.summarizeContext(thread, "History", AbortSignal.abort()));
+  assert.equal(calls.length, 2);
+});
+
 test("usage failures follow Cursor, Claude, Codex, Native with summary models", async () => {
   const { host, calls } = fixture({ primary: "cursor", failures: {
     cursor: new Error("Out of usage"), claude: new Error("Usage limit reached"), codex: new Error("429 rate limit"),
