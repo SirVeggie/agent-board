@@ -118,7 +118,7 @@ test("Ask uses the default worker and only updates the question comment, includi
       FOLDER_MODES: { code: true, plan: true }, str: (v: any) => v == null ? "" : String(v),
       loadAgentOptions: async () => {}, workerOpts: (w: any) => ({ ...w }),
       boardTitle: () => "Board", workerInstructions: () => "Follow shared instructions", cardBrief: () => "Card context",
-      askingComments: {}, setHint: () => {},
+      askingComments: {}, threadStatus: {}, renderLater: () => {}, setHint: () => {},
       setComment: (card: string, cm: string, fields: any) => calls.push(["comment", fields.followUp]),
       scribe: { id: "board", agent: { start: async (prompt: string, opts: any) => {
         calls.push(["start", prompt, opts]); return fail ? { ok: false, error: "denied" } : { ok: true, threadId: "ask-chat" };

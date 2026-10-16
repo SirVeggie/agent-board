@@ -802,6 +802,8 @@
   .m-feed-line:last-child .dot { background: var(--agent); animation: pulse 1.4s ease-in-out infinite; }
   .m-feed-line.reason .t { font-style: italic; }
   .m-feed-line.error { color: var(--danger); }
+  .comment-feed { margin-top: 8px; font-size: 12.5px; }
+  .comment-feed .dot { background: var(--agent); animation: pulse 1.4s ease-in-out infinite; }
   @keyframes feed-in { from { opacity: 0; transform: translateY(10px); filter: blur(4px); } }
   @media (prefers-reduced-motion: reduce) {
     .m-feed-line.new { animation: none; }
@@ -1568,6 +1570,7 @@
       // Card comment hand-off (#182): sent to the working agent, or Continue offered to the last one.
       if (cm.sent === "steered" || cm.sent === "queued") out.sent = cm.sent;
       if (["offer", "askOffer", "continued", "dismissed", "asked"].indexOf(cm.followUp) !== -1) out.followUp = cm.followUp;
+      if (typeof cm.askThread === "string") out.askThread = cm.askThread;
       return out;
     });
     out.images = arr(out.images).filter(function (im) { return im && im.data; }).map(function (im) {
@@ -3190,9 +3193,10 @@
     // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
     if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
     var commentsSig = JSON.stringify([c.id, c.title, c.thread, workerIdFor(c.assignee), defaultAskWorker(), imagesSig, c.comments.map(function (cm) {
-      return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp];
+      return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp, cm.askThread];
     })]);
     if (commentsEl._sig !== commentsSig) renderComments(c, commentsSig);
+    renderCommentFeeds(c);
 
     // Times read the clock ("5 min ago"): a new minute paints them again.
     region(mTimes, [c, col, scribe.state.columns, scribe.state.cards, scribe.state.labels, workers(),
@@ -3324,6 +3328,12 @@
       body.innerHTML = renderMarkdown(cm.text, c.images);
       keepImages(body, oldImages);
       box.appendChild(body);
+      var feed = el("div", "comment-feed m-feed-line hidden");
+      feed.dataset.askComment = cm.id;
+      feed.setAttribute("role", "status");
+      feed.appendChild(el("span", "dot"));
+      feed.appendChild(el("span", "step-text"));
+      box.appendChild(feed);
       commentsEl.appendChild(box);
       var offer = cm.followUp === "askOffer" ? defaultAskWorker() : cm.followUp === "offer" && (workerIdFor(c.assignee) ? c.thread : defaultAskWorker());
       if (i === c.comments.length - 1 && isUserComment(cm.by) && offer) box.appendChild(followUpButtons(c, cm));
@@ -3620,7 +3630,8 @@
       setComment(cardId, cmId, { followUp: "askOffer" });
       return Promise.resolve(false);
     }
-    askingComments[cmId] = true;
+    askingComments[cmId] = workerName(w);
+    renderLater();
     setHint("Asking " + workerName(w) + " about #" + c.num + "…");
     return loadAgentOptions().then(function () {
       var opts = workerOpts(w, c);
@@ -3629,14 +3640,40 @@
       return scribe.agent.start(askPrompt(w, c, text), opts);
     }).then(function (r) {
       if (!r || !r.ok) throw new Error(launchError(r));
-      setComment(cardId, cmId, { followUp: "asked" });
+      if (r.threadId && !threadStatus[r.threadId]) threadStatus[r.threadId] = { status: "running", queued: 0 };
+      setComment(cardId, cmId, { followUp: "asked", askThread: r.threadId });
       setHint(workerName(w) + " is answering about #" + c.num + ".");
       return true;
     }).catch(function (err) {
       setComment(cardId, cmId, { followUp: "askOffer" });
       setHint(str(err && err.message) || "Could not ask the agent.", true);
       return false;
-    }).finally(function () { delete askingComments[cmId]; });
+    }).finally(function () { delete askingComments[cmId]; renderLater(); });
+  }
+  /** Keep Ask progress under its source comment, independent of the card's worker and workflow. */
+  function renderCommentFeeds(c) {
+    c.comments.forEach(function (cm) {
+      var box = Array.prototype.find.call(commentsEl.querySelectorAll(".comment-feed"), function (n) { return n.dataset.askComment === cm.id; });
+      if (!box) return;
+      var tid = cm.askThread;
+      if (tid && !threadStatus[tid] && scribe.agent && typeof scribe.agent.get === "function") {
+        threadStatus[tid] = { status: "idle", unknown: true };
+        scribe.agent.get(tid).then(function (r) {
+          if (r && r.ok && r.thread) threadStatus[tid] = threadState(r.thread);
+          else threadStatus[tid] = { status: "idle", gone: true };
+          renderLater();
+        }).catch(function () { threadStatus[tid] = { status: "idle", gone: true }; renderLater(); });
+      }
+      var steps = liveSteps(tid);
+      var t = tid && threadStatus[tid];
+      var starting = askingComments[cm.id];
+      var active = t && !t.gone && (t.unknown || t.status !== "idle" || t.queued > 0 || (t.run && t.run.phase !== "ended"));
+      box.classList.toggle("hidden", !starting && !active);
+      if (!starting && !active) return;
+      var waiting = t && t.run && t.run.phase === "waiting";
+      var step = waiting ? { key: "waiting", text: "Waiting for usage limit to reset…" } : steps[steps.length - 1];
+      setStepLine(box.lastChild, step || { key: "ask", text: starting ? "Asking " + starting + "…" : "Agent is answering…" });
+    });
   }
   function handOffComment(c, cmId, text) {
     if (!hasCardApi()) return;
@@ -5367,7 +5404,9 @@
 
   /** The steps of the chat that claimed the card, asking Scribe for them (and their changes) the first time. */
   function cardSteps(c) {
-    var tid = c.thread;
+    return liveSteps(c.thread);
+  }
+  function liveSteps(tid) {
     if (!tid || !scribe.agent || typeof scribe.agent.steps !== "function") return [];
     if (!threadSteps[tid]) {
       threadSteps[tid] = [];
@@ -5439,6 +5478,8 @@
   function paintSteps(tid, steps) {
     var had = (threadSteps[tid] || []).length;
     threadSteps[tid] = steps;
+    var open = card(openId);
+    if (open) renderCommentFeeds(open);
     // Starting or ending a feed swaps the dialog's status box and feed: a full render.
     if (!had !== !steps.length) {
       renderLater();
