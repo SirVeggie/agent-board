@@ -9070,6 +9070,36 @@
       if (name && !this.layer()[name]) return notice(`${name} is no longer in Scribe's list.`);
       this.edit(name || null);
     },
+    async permissionsDialog() {
+      const { panel } = modal("ag-mcp");
+      const heading = () => helpHeading("Saved MCP permissions", "Revoking a grant applies to future permission checks; full access and servers set to run without asking still bypass approval. Older grants whose configuration no longer matches appear as unavailable servers. Grants for deleted threads are removed automatically.");
+      const render = (grants) => {
+        const list = el("div", "ag-mcp-list");
+        if (!grants.length) list.append(el("div", "ag-muted", "No saved permissions."));
+        for (const grant of grants) {
+          const row = el("div", "setting-row ag-mcp-row");
+          const label = el("span", "ag-mcp-label");
+          const name = grant.server?.name || `Unavailable server (${grant.key.slice(0, 12)})`;
+          label.append(el("strong", null, name),
+            el("span", "ag-mcp-target", grant.tool ? `Tool: ${grant.tool} · All threads` : `All tools · Thread: ${grant.threadTitle || grant.thread}`));
+          if (grant.server) label.append(el("span", "ag-mcp-target", grant.server.layer === "global" ? "Everywhere" : grant.server.layer));
+          const revoke = button("Revoke", "ag-btn small", async () => {
+            revoke.disabled = true;
+            try {
+              const result = await api("DELETE", "/mcp/permissions", { key: grant.key, tool: grant.tool, thread: grant.thread });
+              render(result.grants);
+            } catch (err) { notice(err.message); revoke.disabled = false; }
+          });
+          revoke.setAttribute("aria-label", `Revoke ${name}: ${grant.tool || "all tools"} for ${grant.thread ? grant.threadTitle || grant.thread : "all threads"}`);
+          row.append(label, revoke);
+          list.append(row);
+        }
+        panel.replaceChildren(heading(), list);
+      };
+      panel.append(heading(), el("div", "ag-muted", "Loading…"));
+      try { render((await api("GET", "/mcp/permissions")).grants); }
+      catch (err) { panel.replaceChildren(heading(), el("p", "ag-source-error", err.message)); }
+    },
     async findImports() {
       const query = this.workspaces().map((d) => `cwd=${encodeURIComponent(d)}`).join("&");
       return (await api("GET", `/mcp/import${query ? `?${query}` : ""}`)).candidates || [];
@@ -9191,6 +9221,7 @@
         button("Add server…", "ag-btn", () => this.edit(null)),
         button("Import…", "ag-btn", () => void this.importDialog()),
         button("Edit JSON…", "ag-btn ghost", () => this.editJson()),
+        button("Saved permissions…", "ag-btn ghost", () => void this.permissionsDialog()),
         el("span", "ag-grow"),
         button("Done", "ag-btn primary", () => this.close())
       );

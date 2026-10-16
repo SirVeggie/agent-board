@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import { listPermissions, setRules } from "./permissions.js";
+import { McpPermissions } from "./mcpPermissions.js";
 import type { AgentHost } from "./host.js";
 import { shellOrigins } from "../config.js";
 import { browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
@@ -152,6 +153,14 @@ export function agentRouter(host: AgentHost): express.Router {
 
   // Scribe's MCP servers (data/agent/mcp.json): the global list and one per workspace.
   router.get("/mcp", wrap(() => mcpView()));
+  router.get("/mcp/permissions", wrap(() => host.mcpGrants()));
+  router.delete("/mcp/permissions", wrap((req) => {
+    const { key, tool, thread } = isPlainRecord(req.body) ? req.body : {};
+    if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
+      (typeof tool === "string" && !!tool) === (typeof thread === "string" && !!thread)) throw new Error("Expected a grant key and either a tool or thread.");
+    new McpPermissions().revoke(key, typeof tool === "string" ? tool : undefined, typeof thread === "string" ? thread : undefined);
+    return host.mcpGrants();
+  }));
 
   router.put(
     "/mcp/layer",

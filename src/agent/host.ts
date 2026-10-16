@@ -53,6 +53,7 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
+import { McpPermissions } from "./mcpPermissions.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
@@ -508,6 +509,8 @@ export class AgentHost {
       }
       if (turns.at(-1)?.interrupted && interruptedRun(turns) <= MAX_RESUMES) this.resuming.add(thread.id);
     }
+    try { new McpPermissions().pruneThreads(this.threads.keys()); }
+    catch (err) { log(`Pruning MCP permissions failed: ${(err as Error).message}`); }
     // Worktrees left behind by a crash or a lost thread: cut their node_modules links, so removing them by hand is safe.
     const openWorktrees = [...this.threads.values()].flatMap((t) => openWorktree(t)?.path ?? []);
     for (const link of unlinkOrphanedWorktrees(openWorktrees)) log(`Unlinked ${link} from a worktree no thread uses`);
@@ -1026,6 +1029,15 @@ export class AgentHost {
 
   // ---------- threads ----------
 
+  mcpGrants() {
+    const permissions = new McpPermissions();
+    permissions.pruneThreads(this.threads.keys());
+    const file = readMcpFile();
+    const layers = [{ path: "global", mcpServers: file.mcpServers }, ...Object.values(file.workspaces)];
+    const servers = layers.flatMap((layer) => Object.entries(layer.mcpServers).flatMap(([name, server]) => resolveServer(name, layer.path, server) ?? []));
+    return { grants: permissions.list(servers).map((grant) => ({ ...grant, threadTitle: grant.thread ? this.threads.get(grant.thread)?.title : undefined })) };
+  }
+
   listThreads(): ThreadView[] {
     return [...this.threads.values()].sort((a, b) => b.activityAt - a.activityAt).map((thread) => this.view(thread));
   }
@@ -1469,6 +1481,8 @@ export class AgentHost {
       if (item.threadId === id) this.dirty.delete(key);
     }
     this.db.deleteThread(id);
+    try { new McpPermissions().pruneThreads(this.threads.keys()); }
+    catch (err) { log(`Pruning MCP permissions failed: ${(err as Error).message}`); }
     this.db.deleteSetting(`fork:${id}`);
     try {
       removeThreadFiles(id);

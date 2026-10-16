@@ -12,7 +12,9 @@ export const mcpApprovalOptions: ApprovalOption[] = [
   { id: "reject", label: "Deny", kind: "reject_once" },
 ];
 
-type Grants = { tools: string[]; threads: Record<string, string[]> };
+type ServerLabel = { name: string; layer: string };
+type Grants = { tools: string[]; threads: Record<string, string[]>; servers?: Record<string, ServerLabel> };
+export type McpGrant = { key: string; tool?: string; thread?: string; server: ServerLabel | null };
 export class McpPermissions {
   constructor(private file = path.join(dataDir(), "agent", "mcp-permissions.json")) {}
 
@@ -32,6 +34,48 @@ export class McpPermissions {
     return createHash("sha256").update(serversKey([{ ...server, approve: "ask" }])).digest("hex");
   }
 
+  private write(grants: Grants): void {
+    // Keep only display metadata for configurations that still have grants.
+    const keys = new Set([...grants.tools.map((entry) => entry.split(":")[0]), ...Object.values(grants.threads).flat()]);
+    if (grants.servers) for (const key of Object.keys(grants.servers)) if (!keys.has(key)) delete grants.servers[key];
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    fs.writeFileSync(`${this.file}.tmp`, JSON.stringify(grants, null, 2) + "\n");
+    fs.renameSync(`${this.file}.tmp`, this.file);
+  }
+
+  list(servers: ResolvedMcpServer[] = []): McpGrant[] {
+    const grants = this.read();
+    const labels = new Map(servers.map((server) => [this.key(server), { name: server.name, layer: server.layer }]));
+    const server = (key: string) => labels.get(key) ?? grants.servers?.[key] ?? null;
+    return [
+      ...grants.tools.map((entry) => {
+        const colon = entry.indexOf(":");
+        const key = entry.slice(0, colon);
+        return { key, tool: entry.slice(colon + 1), server: server(key) };
+      }),
+      ...Object.entries(grants.threads).flatMap(([thread, keys]) => keys.map((key) => ({ key, thread, server: server(key) }))),
+    ];
+  }
+
+  revoke(key: string, tool?: string, thread?: string): void {
+    const grants = this.read();
+    if (thread) {
+      const remaining = grants.threads[thread]?.filter((entry) => entry !== key) ?? [];
+      if (remaining.length) grants.threads[thread] = remaining;
+      else delete grants.threads[thread];
+    } else if (tool) grants.tools = grants.tools.filter((entry) => entry !== `${key}:${tool}`);
+    else throw new Error("A tool or thread is required.");
+    this.write(grants);
+  }
+
+  pruneThreads(existing: Iterable<string>): void {
+    const grants = this.read(), keep = new Set(existing);
+    const stale = Object.keys(grants.threads).filter((thread) => !keep.has(thread));
+    if (!stale.length) return;
+    for (const thread of stale) delete grants.threads[thread];
+    this.write(grants);
+  }
+
   allows(server: ResolvedMcpServer, tool: string, thread?: string): boolean {
     const grants = this.read(), key = this.key(server);
     return grants.tools.includes(`${key}:${tool}`) || Boolean(thread && grants.threads[thread]?.includes(key));
@@ -45,9 +89,8 @@ export class McpPermissions {
     const list = option === "whitelist" ? grants.tools : (grants.threads[thread!] ??= []);
     const entry = option === "whitelist" ? `${key}:${tool}` : key;
     if (!list.includes(entry)) list.push(entry);
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(`${this.file}.tmp`, JSON.stringify(grants, null, 2) + "\n");
-    fs.renameSync(`${this.file}.tmp`, this.file);
+    (grants.servers ??= {})[key] = { name: server.name, layer: server.layer };
+    this.write(grants);
     return true;
   }
 }
