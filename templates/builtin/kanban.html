@@ -3636,7 +3636,8 @@
     return loadAgentOptions().then(function () {
       var opts = workerOpts(w, c);
       opts.title = ("Ask · #" + c.num + " " + c.title).slice(0, 120);
-      opts.run = { tag: "ask:" + id, data: { worker: id, card: c.num, ask: true }, merge: Boolean(FOLDER_MODES[workerMode(w)]), resumePrompt: "Continue answering the user's question about #" + c.num + ". Do not claim, move, reassign or finish the card unless explicitly requested. Post your answer on the card, using a linked peek report page for longer investigations." };
+      opts.worktree = false;
+      opts.run = { tag: "ask:" + id, data: { worker: id, card: c.num, ask: true }, merge: false, resumePrompt: "Continue answering the user's question about #" + c.num + ". Do not claim, move, reassign or finish the card unless explicitly requested. Post your answer on the card, using a linked peek report page for longer investigations." };
       return scribe.agent.start(askPrompt(w, c, text), opts);
     }).then(function (r) {
       if (!r || !r.ok) throw new Error(launchError(r));

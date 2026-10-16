@@ -27,7 +27,7 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
         id: 'board', title: 'Board', local: {},
         state: {
           columns: [{ id: 'todo', title: 'Todo' }], labels: [], nextNum: 2,
-          settings: { workers: { sol: { name: 'Sol', provider: 'codex', model: 'chosen', mode: 'ask' } } },
+          settings: { workers: { sol: { name: 'Sol', provider: 'codex', model: 'chosen', mode: 'code', cwd: 'C:/project', worktree: true } } },
           cards: [{ id: 'c1', num: 1, col: 'todo', title: 'Question', assignee: 'Person', thread: 'old',
             comments: [], createdAt: 1, movedAt: 1 }]
         },
@@ -99,6 +99,12 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
     assert.match(await feed.locator('..').textContent() || '', /A direct question/);
     const launches = await page.evaluate(() => (window as any).launches);
     assert.equal(launches[0].opts.model, "chosen");
+    for (const launch of launches) {
+      assert.equal(launch.opts.cwd, "C:/project");
+      assert.equal(launch.opts.worktree, false);
+      assert.equal(launch.opts.run.merge, false);
+    }
+    assert.equal(await page.evaluate(() => (window as any).scribe.state.settings.workers.sol.worktree), true);
     assert.match(launches[1].prompt, /A direct question/);
     // A reload must reconnect to the Ask chat saved on the comment.
     await page.evaluate(() => {

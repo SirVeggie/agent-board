@@ -133,7 +133,10 @@ test("Ask uses the default worker and only updates the question comment, includi
     assert.match(prompt, /peek:scribe:page-key/);
     assert.equal(opts.model, "chosen-model");
     assert.equal(opts.provider, "codex");
-    assert.equal(opts.worktree, true);
+    assert.equal(opts.cwd, "C:/project");
+    assert.equal(opts.worktree, false);
+    assert.equal(opts.run.merge, false);
+    assert.equal(w.worktree, true);
     assert.equal(opts.run.data.ask, true);
     assert.equal(opts.run.data.solo, undefined);
     assert.equal(calls[1][1], fail ? "askOffer" : "asked");
