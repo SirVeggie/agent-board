@@ -653,15 +653,28 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_open",
-    "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from library_search. The page stays where it is in the Library.",
+    "Open a closed Library page as a tab (appended to the strip and focused), or focus it if it is already open. Identify the page by id or key from library_search. The page stays where it is in the Library. Or pass file to show the user a file on disk in Scribe's file viewer: a temporary tab that stays out of the Library (keep: true adds it), or the page that already has that file. Only files this thread may read: its workspace and read roots, or any file in Code mode with Full access. To only point the user at a file, link it instead ([[file:C:\\path\\shot.png]]).",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
+      file: z.string().optional().describe("A file to open as a page instead: absolute or workspace-relative path."),
+      keep: z.boolean().optional().describe("With file: add the page to the Library instead of a temporary tab. Default false."),
     },
-    async ({ id, key }) => {
+    async ({ id, key, file, keep }) => {
+      if (file) {
+        const { status, data } = await api("POST", "/api/agent-open-file", { path: file, keep: keep === true });
+        if (status >= 400) {
+          return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        const payload = data as { tab: TabMeta };
+        return jsonResult({
+          ...withAgentDates(payload.tab as TabMeta & { folder: string | null }),
+          note: payload.tab.temp ? "Open as a temporary tab: not in the Library, gone once the user closes it." : "Open in the tab strip.",
+        });
+      }
       const which = id || key;
       if (!which) {
-        return errorResult("Provide id or key");
+        return errorResult("Provide id, key, or file");
       }
       const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/open`, { activate: true });
       if (status >= 400) {

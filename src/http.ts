@@ -45,6 +45,7 @@ import { AgentHost } from "./agent/host.js";
 import { worktreePreviewRouter } from "./worktreePreview.js";
 import { agentRouter } from "./agent/routes.js";
 import { readScopedFile } from "./agent/readFile.js";
+import { openFileForAgent } from "./agent/openFile.js";
 import { searchScopedFiles } from "./agent/searchFiles.js";
 import { formatAnswers, parseQuestionInput } from "./agent/questionTool.js";
 import { findSettings, parseShowInput, setSettingsCatalog, settingsCatalog } from "./agent/settingsTool.js";
@@ -790,6 +791,20 @@ export async function startHttp(): Promise<http.Server> {
           res.status(browserHttpStatus(err.message)).json({ error: err.message.split("\n")[0] });
         }
       });
+  });
+
+  /** page_open's file (#655): a file the agent's thread may read, opened as a page for the user. */
+  app.post("/api/agent-open-file", async (req, res) => {
+    const id = req.get(THREAD_HEADER);
+    const thread = id && agentHost ? agentHost.getThread(id) : null;
+    if (!thread) { res.status(403).json({ error: "Opening a file needs a Scribe chat thread with file access." }); return; }
+    try {
+      const body = isPlainObject(req.body) ? req.body : {};
+      const { tab, created } = await openFileForAgent(thread, store, body);
+      res.status(created ? 201 : 200).json({ tab: toMeta(tab), created });
+    } catch (err) {
+      res.status(403).json({ error: (err as Error).message });
+    }
   });
 
   app.post("/api/read-file", async (req, res) => {
