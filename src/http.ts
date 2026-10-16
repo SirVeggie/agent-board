@@ -58,8 +58,8 @@ import { PageAudio } from "./audio/page.js";
 import { AudioService } from "./audio/service.js";
 import { shellAssets } from "./shellAssets.js";
 import { appearanceRouter } from "./appearance.js";
-import { contentOriginGate, isContentHost } from "./contentOrigin.js";
-import { FileConflictError, fileViewerHtml, listFolder, readFileForPage, readImageBytes, samePath, writeFileText } from "./filePages.js";
+import { PDFJS_PATH, contentOriginGate, isContentHost } from "./contentOrigin.js";
+import { FileConflictError, fileViewerHtml, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
 
@@ -171,6 +171,9 @@ export async function startHttp(): Promise<http.Server> {
   app.use(noteAgentSession);
   app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));
+  // pdf.js for PDF file pages: the library, its worker, and the fonts, CMaps and decoders it fetches.
+  app.use("/vendor/pdfjs", (req, res, next) => (PDFJS_PATH.test(req.path) ? next() : res.status(404).end()),
+    express.static(path.join(publicDir, "..", "node_modules", "pdfjs-dist"), { fallthrough: false, index: false }));
 
   app.param("id", (req, res, next, id: string) => {
     if (!req.path.startsWith("/api/templates/") && store.get(id) && !store.get(id, viewerOf(req))) {
@@ -1778,7 +1781,7 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     try {
-      const { bytes, type } = readImageBytes(tab.file.path);
+      const { bytes, type } = readFileBytes(tab.file.path);
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");

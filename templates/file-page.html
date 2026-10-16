@@ -247,6 +247,18 @@
     image-rendering: auto;
   }
   .imgview.pixelated img { image-rendering: pixelated; }
+  /* pdf: pages drawn by pdf.js, with a text layer for selecting and copying */
+  .pdfview { overflow: auto; background: #151517; }
+  .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; width: max-content; min-width: 100%; box-sizing: border-box; }
+  .pdf-page { position: relative; flex: none; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
+  .pdf-page canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .textLayer { color-scheme: only light; position: absolute; inset: 0; overflow: clip; line-height: 1; text-align: initial; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; z-index: 0; }
+  .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text; }
+  .textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; --font-height: 0; font-size: calc(var(--total-scale-factor) * var(--font-height)); --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)); }
+  .textLayer .markedContent { display: contents; }
+  .textLayer span[role="img"] { user-select: none; cursor: default; }
+  .textLayer ::selection { background: rgba(0, 100, 255, 0.3); color: transparent; }
+  .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
   .zoom-label { min-width: 48px; text-align: center; color: var(--muted); font-size: 12px; }
 
   /* messages */
@@ -321,6 +333,7 @@
     <div class="pane md hidden" id="mdPane"><div class="md-doc" id="mdDoc"></div></div>
     <div class="pane htmlview hidden" id="htmlPane"></div>
     <div class="pane imgview hidden" id="imgPane"><img id="img" alt=""></div>
+    <div class="pane pdfview hidden" id="pdfPane"><div class="pdf-pages" id="pdfPages"></div></div>
     <div class="pane message hidden" id="messagePane"><h2 id="msgTitle"></h2><p id="msgText"></p><p id="msgPath"></p></div>
   </main>
   <footer class="status" id="status">
@@ -343,7 +356,7 @@
   var HIGHLIGHT_MAX = 200 * 1024;
   // Unsaved text survives a reload in this viewer's local state, up to its size limit.
   var DRAFT_MAX = 48 * 1024;
-  var LANG_LABEL = { text: "Plain text", markdown: "Markdown", json: "JSON", html: "HTML", image: "Image" };
+  var LANG_LABEL = { text: "Plain text", markdown: "Markdown", json: "JSON", html: "HTML", image: "Image", pdf: "PDF" };
 
   var file = null;       // the last read: { path, name, kind, lang, size, mtime, copy, eol, bom }
   var saved = "";        // the text on disk
@@ -357,7 +370,7 @@
 
   // ---------- small helpers ----------
   function show(id) {
-    ["loading", "editorPane", "mdPane", "htmlPane", "imgPane", "messagePane"].forEach(function (pane) {
+    ["loading", "editorPane", "mdPane", "htmlPane", "imgPane", "pdfPane", "messagePane"].forEach(function (pane) {
       $(pane).classList.toggle("hidden", pane !== id);
     });
   }
@@ -373,7 +386,8 @@
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
     return (n / 1024 / 1024).toFixed(1) + " MB";
   }
-  function textKind() { return file && file.kind !== "image" && file.kind !== "unsupported"; }
+  function textKind() { return file && file.kind !== "image" && file.kind !== "pdf" && file.kind !== "unsupported"; }
+  function zoomKind() { return file && (file.kind === "image" || file.kind === "pdf"); }
   function current() { return ta.value; }
   function isDirty() { return textKind() && current() !== saved; }
 
@@ -394,7 +408,7 @@
     $("saveAs").classList.toggle("hidden", !editable);
     $("prettify").classList.toggle("hidden", file.kind !== "json");
     $("modeSeg").classList.toggle("hidden", file.kind !== "markdown" && file.kind !== "html");
-    $("zoomBar").classList.toggle("hidden", file.kind !== "image");
+    $("zoomBar").classList.toggle("hidden", !zoomKind());
     $("stLang").textContent = file.kind === "code" ? langLabel() : LANG_LABEL[file.kind] || "";
     $("stEnc").textContent = editable ? (file.bom ? "UTF-8 BOM" : "UTF-8") : "";
     $("stEol").textContent = editable ? (file.eol === "\r\n" ? "CRLF" : "LF") : "";
@@ -429,6 +443,10 @@
       }
       if (file.kind === "image") {
         openImage();
+        return;
+      }
+      if (file.kind === "pdf") {
+        openPdf();
         return;
       }
       openText(file.text, keepCaret);
@@ -889,9 +907,12 @@
     scribe.file.read().then(function (res) {
       checking = false;
       if (!res || !res.ok || !res.file || res.file.mtime === file.mtime) return;
-      if (file.kind === "image") {
+      if (file.kind === "image" || file.kind === "pdf") {
         file = res.file;
-        openImage();
+        showHeader();
+        if (file.kind === "pdf") openPdf();
+        else if (file.kind === "image") openImage();
+        else load(false);
         return;
       }
       if (!textKind()) return;
@@ -988,22 +1009,180 @@
       zoomAt(1 / view.scale, event.clientX - box.left, event.clientY - box.top);
     } else fit();
   });
-  function zoomCenter(factor) { zoomAt(factor, imgPane.clientWidth / 2, imgPane.clientHeight / 2); }
+  function zoomCenter(factor) {
+    if (file.kind === "pdf") pdfZoom(pdfView.scale * factor);
+    else zoomAt(factor, imgPane.clientWidth / 2, imgPane.clientHeight / 2);
+  }
+  function zoomFit() { if (file.kind === "pdf") pdfZoom(null); else fit(); }
+  function zoomOne() { if (file.kind === "pdf") pdfZoom(1); else { view.fit = false; center(1); } }
   $("zoomIn").addEventListener("click", function () { zoomCenter(1.25); });
   $("zoomOut").addEventListener("click", function () { zoomCenter(0.8); });
-  $("zoomFit").addEventListener("click", fit);
-  $("zoomOne").addEventListener("click", function () { view.fit = false; center(1); });
+  $("zoomFit").addEventListener("click", zoomFit);
+  $("zoomOne").addEventListener("click", zoomOne);
   window.addEventListener("keydown", function (event) {
-    if (!file || file.kind !== "image" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (!zoomKind() || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "+" || event.key === "=") zoomCenter(1.25);
     else if (event.key === "-") zoomCenter(0.8);
-    else if (event.key === "0") fit();
-    else if (event.key === "1") { view.fit = false; center(1); }
+    else if (event.key === "0") zoomFit();
+    else if (event.key === "1") zoomOne();
   });
   // Also covers a tab that opened hidden: the pane has no size until it shows.
   new ResizeObserver(function () {
     if (file && file.kind === "image" && view.fit && img.naturalWidth) fit();
   }).observe(imgPane);
+
+  // ---------- pdf ----------
+  // pdf.js draws the pages: the browser's own PDF viewer does not run in a page's sandboxed frame.
+  var pdfPane = $("pdfPane"), pdfPages = $("pdfPages");
+  var PDFJS = location.origin + "/vendor/pdfjs/";
+  var pdfjs = null;      // the library, once loaded
+  var pdfDoc = null;     // the open document
+  var pdfLoad = 0;       // bumps on each open, so a slow older one is dropped
+  var pdfView = { scale: 1, fit: true, base: 1 };  // base: the widest page's width at scale 1
+  var pdfObserver = null;
+  function loadPdfjs() {
+    if (pdfjs) return Promise.resolve(pdfjs);
+    return import(PDFJS + "build/pdf.min.mjs").then(function (lib) {
+      lib.GlobalWorkerOptions.workerSrc = PDFJS + "build/pdf.worker.min.mjs";
+      pdfjs = lib;
+      return lib;
+    });
+  }
+  function openPdf() {
+    var load = ++pdfLoad;
+    show("pdfPane");
+    Promise.all([loadPdfjs(), scribe.file.image()]).then(function (got) {
+      var res = got[1];
+      if (load !== pdfLoad) return;
+      if (!res || !res.ok) {
+        showMessage("Could not open the PDF", (res && res.error) || "", file.path);
+        return;
+      }
+      return got[0].getDocument({
+        data: new Uint8Array(res.buffer),
+        cMapUrl: PDFJS + "cmaps/",
+        cMapPacked: true,
+        standardFontDataUrl: PDFJS + "standard_fonts/",
+        wasmUrl: PDFJS + "wasm/",
+        isEvalSupported: false,
+      }).promise.then(function (doc) {
+        if (load !== pdfLoad) { doc.destroy(); return; }
+        var pages = [];
+        for (var n = 1; n <= doc.numPages; n++) pages.push(doc.getPage(n));
+        return Promise.all(pages).then(function (list) {
+          if (load !== pdfLoad) { doc.destroy(); return; }
+          if (pdfDoc) pdfDoc.destroy();
+          pdfDoc = doc;
+          buildPdfPages(list);
+        });
+      });
+    }).catch(function (err) {
+      if (load !== pdfLoad) return;
+      var text = String((err && err.message) || err || "");
+      if (err && err.name === "PasswordException") text = "The PDF is password protected.";
+      showMessage("Scribe can't show " + file.name, text, file.copy ? "" : file.path);
+    });
+  }
+  function buildPdfPages(list) {
+    var top = pdfPane.scrollTop;
+    if (pdfObserver) pdfObserver.disconnect();
+    pdfPages.replaceChildren();
+    pdfView.base = 1;
+    list.forEach(function (page) {
+      var box = page.getViewport({ scale: 1 });
+      pdfView.base = Math.max(pdfView.base, box.width);
+      var div = document.createElement("div");
+      div.className = "pdf-page";
+      div._page = page;
+      pdfPages.append(div);
+    });
+    // Pages are drawn when they come near the view, and dropped again far from it.
+    pdfObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) drawPdfPage(entry.target);
+        else clearPdfPage(entry.target);
+      });
+    }, { root: pdfPane, rootMargin: "100% 0px" });
+    Array.prototype.forEach.call(pdfPages.children, function (div) { pdfObserver.observe(div); });
+    pdfZoom(pdfView.fit ? null : pdfView.scale);
+    pdfPane.scrollTop = top;
+  }
+  function fitWidthScale() {
+    var w = pdfPane.clientWidth - 32;
+    return w > 0 ? Math.min(4, w / pdfView.base) : 1;
+  }
+  /** scale null: fit the widest page to the pane's width. Keeps the page in view where it was. */
+  function pdfZoom(scale) {
+    if (!pdfDoc) return;
+    var before = pdfView.scale;
+    pdfView.fit = scale === null;
+    pdfView.scale = Math.min(8, Math.max(0.1, pdfView.fit ? fitWidthScale() : scale));
+    var ratio = pdfView.scale / before;
+    var cx = pdfPane.scrollLeft + pdfPane.clientWidth / 2, cy = pdfPane.scrollTop + pdfPane.clientHeight / 2;
+    Array.prototype.forEach.call(pdfPages.children, function (div) {
+      var box = div._page.getViewport({ scale: pdfView.scale });
+      div.style.width = Math.floor(box.width) + "px";
+      div.style.height = Math.floor(box.height) + "px";
+      div.style.setProperty("--total-scale-factor", String(pdfView.scale));
+      if (div._scale !== pdfView.scale) clearPdfPage(div);
+    });
+    pdfPane.scrollLeft = cx * ratio - pdfPane.clientWidth / 2;
+    pdfPane.scrollTop = cy * ratio - pdfPane.clientHeight / 2;
+    $("zoomLabel").textContent = Math.round(pdfView.scale * 100) + "%";
+    // The observer only reports changes: draw the pages already in view at the new size.
+    if (pdfObserver) {
+      pdfObserver.disconnect();
+      Array.prototype.forEach.call(pdfPages.children, function (div) { pdfObserver.observe(div); });
+    }
+    pdfStatus();
+  }
+  function drawPdfPage(div) {
+    if (div._scale === pdfView.scale) return;
+    clearPdfPage(div);
+    var scale = pdfView.scale;
+    var viewport = div._page.getViewport({ scale: scale });
+    var ratio = window.devicePixelRatio || 1;
+    var canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width * ratio);
+    canvas.height = Math.floor(viewport.height * ratio);
+    var text = document.createElement("div");
+    text.className = "textLayer";
+    div.append(canvas, text);
+    div._scale = scale;
+    div._task = div._page.render({
+      canvas: canvas,
+      canvasContext: canvas.getContext("2d"),
+      viewport: viewport,
+      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
+    });
+    div._task.promise.catch(function () { /* cancelled by a zoom or scrolled away */ });
+    div._text = new pdfjs.TextLayer({ textContentSource: div._page.streamTextContent(), container: text, viewport: viewport });
+    div._text.render().catch(function () { /* cancelled */ });
+  }
+  function clearPdfPage(div) {
+    if (div._task) div._task.cancel();
+    if (div._text) div._text.cancel();
+    div._task = div._text = null;
+    div._scale = 0;
+    div.replaceChildren();
+  }
+  function pdfStatus() {
+    if (!pdfDoc) return;
+    var mid = pdfPane.scrollTop + pdfPane.clientHeight / 2, n = 1;
+    Array.prototype.forEach.call(pdfPages.children, function (div, i) {
+      if (div.offsetTop <= mid) n = i + 1;
+    });
+    $("stPos").textContent = "Page " + n + " of " + pdfDoc.numPages;
+  }
+  pdfPane.addEventListener("scroll", pdfStatus, { passive: true });
+  pdfPane.addEventListener("wheel", function (event) {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    pdfZoom(pdfView.scale * Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)));
+  }, { passive: false });
+  new ResizeObserver(function () {
+    if (file && file.kind === "pdf" && pdfView.fit && pdfDoc) pdfZoom(null);
+  }).observe(pdfPane);
 
   load(false);
 })();

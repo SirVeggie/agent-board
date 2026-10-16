@@ -8,6 +8,7 @@ import {
   kindByName,
   listFolder,
   looksLikeText,
+  readFileBytes,
   readFileForPage,
   samePath,
   scanFolder,
@@ -60,6 +61,7 @@ test("kindByName classifies by extension and known file names", () => {
   assert.deepEqual(kindByName("index.ts"), { kind: "code", lang: "typescript" });
   assert.deepEqual(kindByName("page.HTML"), { kind: "html", lang: "xml" });
   assert.deepEqual(kindByName("logo.png"), { kind: "image" });
+  assert.deepEqual(kindByName("Report.PDF"), { kind: "pdf" });
   assert.deepEqual(kindByName("todo.txt"), { kind: "text" });
   assert.deepEqual(kindByName("Dockerfile"), { kind: "code", lang: "dockerfile" });
   assert.deepEqual(kindByName("LICENSE"), { kind: "text" });
@@ -124,6 +126,15 @@ test("images are returned without text", () => {
   const info = readFileForPage(file);
   assert.equal(info.kind, "image");
   assert.equal("text" in info, false);
+});
+
+test("PDFs are returned without text, and their bytes are served as application/pdf", () => {
+  const file = write(path.join(work, "paper.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x00, 0xff]));
+  const info = readFileForPage(file);
+  assert.equal(info.kind, "pdf");
+  assert.equal("text" in info, false);
+  assert.equal(readFileBytes(file).type, "application/pdf");
+  assert.throws(() => readFileBytes(write(path.join(work, "notes.txt"), "x")), /not an image or PDF/);
 });
 
 test("scanFolder skips dot entries, dependency folders and empty folders", () => {

@@ -9,8 +9,11 @@ import { dataDir } from "./config.js";
  * write it. The file a page may touch is the one on its tab (Tab.file), never one the page names.
  */
 
-/** How the page shows a file. code and text share the editor; code is highlighted. */
-export type FileKind = "text" | "code" | "markdown" | "json" | "html" | "image" | "unsupported";
+/**
+ * How the page shows a file. code and text share the editor; code is highlighted. A pdf is drawn
+ * with pdf.js: the browser's own PDF viewer refuses to run in a page's sandboxed frame.
+ */
+export type FileKind = "text" | "code" | "markdown" | "json" | "html" | "image" | "pdf" | "unsupported";
 
 export type FileInfo = {
   path: string;
@@ -91,6 +94,7 @@ export function kindByName(file: string): { kind: FileKind; lang?: string } {
   const ext = extOf(file);
   const base = path.basename(file).toLowerCase();
   if (IMAGE_TYPES[ext]) return { kind: "image" };
+  if (ext === "pdf") return { kind: "pdf" };
   if (MARKDOWN.has(ext)) return { kind: "markdown", lang: "markdown" };
   if (JSON_EXT.has(ext)) return { kind: "json", lang: "json" };
   if (HTML_EXT.has(ext)) return { kind: "html", lang: "xml" };
@@ -101,6 +105,10 @@ export function kindByName(file: string): { kind: FileKind; lang?: string } {
 
 export function imageType(file: string): string | undefined {
   return IMAGE_TYPES[extOf(file)];
+}
+
+export function isPdfFile(file: string): boolean {
+  return extOf(file) === "pdf";
 }
 
 /** Whether bytes look like text: no NUL bytes, and they decode as UTF-8 (or UTF-16 with a BOM, which we do not edit). */
@@ -145,7 +153,7 @@ function baseInfo(file: string, stat: fs.Stats, copy?: boolean): Omit<FileInfo, 
   return { path: file, name: path.basename(file), size: stat.size, mtime: Math.floor(stat.mtimeMs), ...(copy ? { copy: true } : {}) };
 }
 
-/** Read a file for its page: text kinds with their text, images and unsupported files with just their info. */
+/** Read a file for its page: text kinds with their text, images, PDFs, and unsupported files with just their info. */
 export function readFileForPage(file: string, copy?: boolean): FileText | FileInfo {
   const stat = statFile(file);
   const info = baseInfo(file, stat, copy);
@@ -155,6 +163,12 @@ export function readFileForPage(file: string, copy?: boolean): FileText | FileIn
       return { ...info, kind: "unsupported", reason: `The image is too large to show (${formatBytes(stat.size)}).` };
     }
     return { ...info, kind: "image" };
+  }
+  if (named.kind === "pdf") {
+    if (stat.size > MAX_IMAGE_FILE_BYTES) {
+      return { ...info, kind: "unsupported", reason: `The PDF is too large to show (${formatBytes(stat.size)}).` };
+    }
+    return { ...info, kind: "pdf" };
   }
   if (stat.size > MAX_TEXT_FILE_BYTES) {
     return { ...info, kind: "unsupported", reason: `The file is too large to open (${formatBytes(stat.size)}, at most ${formatBytes(MAX_TEXT_FILE_BYTES)}).` };
@@ -171,11 +185,12 @@ export function readFileForPage(file: string, copy?: boolean): FileText | FileIn
   return { ...info, ...named, text: raw.replace(/\r\n/g, "\n"), eol, bom };
 }
 
-export function readImageBytes(file: string): { bytes: Buffer; type: string } {
-  const type = imageType(file);
-  if (!type) throw new Error("not an image");
+/** An image's or PDF's bytes, for the viewer to draw. */
+export function readFileBytes(file: string): { bytes: Buffer; type: string } {
+  const type = imageType(file) ?? (isPdfFile(file) ? "application/pdf" : undefined);
+  if (!type) throw new Error("not an image or PDF");
   const stat = statFile(file);
-  if (stat.size > MAX_IMAGE_FILE_BYTES) throw new Error("image is too large");
+  if (stat.size > MAX_IMAGE_FILE_BYTES) throw new Error("file is too large");
   return { bytes: fs.readFileSync(file), type };
 }
 

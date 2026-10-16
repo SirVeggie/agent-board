@@ -42,6 +42,7 @@
     "dompurify": "^3.4.16",
     "express": "^4.21.2",
     "marked": "^18.0.14",
+    "pdfjs-dist": "^6.4.299",
     "playwright-core": "^1.63.0",
     "smol-toml": "^1.4.2",
     "ws": "^8.18.3",

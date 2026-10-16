@@ -14,6 +14,8 @@ const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
 const BLOB_PATH = /^\/blob\/[^/]+$/;
 const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify)\.js$/;
+/** The parts of pdfjs-dist a PDF file page loads, under /vendor/pdfjs. */
+export const PDFJS_PATH = /^\/(build\/pdf(\.worker)?\.min\.mjs|(cmaps|standard_fonts|wasm)\/[\w.-]+)$/;
 
 export function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (isContentHost(req)) {
@@ -23,7 +25,7 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
       return;
     }
     // Shared, data-free libraries; the file viewer (file pages) highlights and renders with them.
-    if (req.method === "GET" && VENDOR_PATH.test(req.path)) {
+    if (req.method === "GET" && (VENDOR_PATH.test(req.path) || (req.path.startsWith("/vendor/pdfjs/") && PDFJS_PATH.test(req.path.slice("/vendor/pdfjs".length))))) {
       next();
       return;
     }
