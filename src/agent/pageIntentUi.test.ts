@@ -1,3 +1,4 @@
+import { loadChatFixture } from "../testSupport/shell.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
@@ -48,12 +49,9 @@ test("the floating chat maps page_create signals onto the hint and the creating 
       body: '<div class="workspace"><main></main></div><aside id="agent-pane"><div class="agent-inner"></div><div class="agent-resizer"></div></aside>',
     }));
     await page.goto("http://intent.test/");
-    await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) {
-      await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
-    }
+
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.intentTest = { S, dock };") });
+    await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.intentTest = { S, dock };"));
     await page.evaluate(() => {
       const { S, dock } = (window as any).intentTest;
       S.config.providers = [{ id: "codex", label: "Codex", available: true }];

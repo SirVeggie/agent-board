@@ -1,3 +1,4 @@
+import { loadChatFixture } from "../testSupport/shell.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test, { type TestContext } from "node:test";
@@ -34,6 +35,7 @@ async function launch(t: TestContext): Promise<Browser | null> {
 async function openHooks(t: TestContext) {
   const browser = await launch(t);
   if (!browser) return null;
+  t.after(() => browser.close());
   const page = await browser.newPage();
   page.setDefaultTimeout(5000);
   const state = { rules: INITIAL_RULES.map((rule) => ({ ...rule })), failNext: false };
@@ -55,10 +57,9 @@ async function openHooks(t: TestContext) {
     });
   });
   await page.goto("http://hooks.test/");
-  await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-  for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+
   const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-  await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.hooksTest = { agentSettings, editHookRule, hookFlags, S };") });
+  await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.hooksTest = { agentSettings, editHookRule, hookFlags, S };"));
   await page.evaluate(async () => {
     const { agentSettings } = (window as any).hooksTest;
     agentSettings.hookList = document.createElement("div");

@@ -1,3 +1,4 @@
+import { loadChatFixture } from "../testSupport/shell.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
@@ -10,12 +11,8 @@ const read = (name: string) => fs.readFileSync(new URL(`../../public/${name}`, i
 async function load(page: Page, url: string, boot: string) {
   await page.goto(url);
   await page.addScriptTag({ content: "window.__name = (fn) => fn; window.opened = []; window.open = (url) => { window.opened.push(url); return { closed: false, focus() {}, close() {} }; };" });
-  for (const name of ["motion.js", "popout.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js"]) {
-    await page.addScriptTag({ content: read(name) });
-  }
-  await page.addScriptTag({
-    content: read("agent.js").replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `  window.chatTest = { S, sidebar, dock, full, chatFromWindow };\n  ${boot}`),
-  });
+
+  await loadChatFixture(page, read("agent.js").replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `  window.chatTest = { S, sidebar, dock, full, chatFromWindow };\n  ${boot}`));
   await page.evaluate(() => {
     const { S, sidebar, dock, full } = (window as any).chatTest;
     S.config.providers = [{ id: "codex", label: "Codex", available: true }];

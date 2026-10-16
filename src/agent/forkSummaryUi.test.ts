@@ -1,3 +1,4 @@
+import { loadChatFixture } from "../testSupport/shell.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
@@ -38,12 +39,9 @@ test("provider switches fork on send and archive only after an accepted message"
       return route.fulfill({ json: data });
     });
     await page.goto("http://fork.test/");
-    await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js", "settings-ui.js"]) {
-      await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
-    }
+
     const js = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await page.addScriptTag({ content: js.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  renderAll = () => {}; window.switchTest = { ChatView, S };") });
+    await loadChatFixture(page, js.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  renderAll = () => {}; window.switchTest = { ChatView, S };"));
     await page.evaluate((source) => {
       const w = window as any;
       const { ChatView, S } = w.switchTest;
@@ -133,12 +131,9 @@ test("fork model settings populate after startup and follow provider changes", a
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
     });
     await page.goto("http://fork.test/");
-    await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
-    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js", "settings-ui.js"]) {
-      await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
-    }
+
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await page.addScriptTag({ content: source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  renderAll = () => {}; window.forkTest = { settings: agentSettings, loadConfig };") });
+    await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  renderAll = () => {}; window.forkTest = { settings: agentSettings, loadConfig };"));
     await page.evaluate(() => {
       const w = window as any;
       w.scribeSettingsUI.mount(document.getElementById("panel"), [{ label: "General", sections: [] }]);

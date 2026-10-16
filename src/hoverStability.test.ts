@@ -1,3 +1,4 @@
+import { loadChatFixture } from "./testSupport/shell.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
@@ -161,18 +162,13 @@ test("shell updates retain composer pills, thread controls and template rows wit
     page.on("pageerror", error => errors.push(error.stack || error.message));
     await page.route("http://hover.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="threads"></div><div id="bar"></div><div id="tail"></div><div id="templates"></div>' }));
     await page.goto("http://hover.test/");
-    await page.addScriptTag({ content: source("../public/dom-sync.js") });
-    await page.addScriptTag({ content: source("../public/motion.js") });
     const agent = source("../public/agent.js");
     const app = source("../public/app.js");
-    await page.addScriptTag({ content: source("../public/agent-render.js") });
-    await page.addScriptTag({ content: source("../public/audio.js") });
-    await page.addScriptTag({ content: source("../public/audio-composer.js") });
     // Load all thread-list helpers in their production closure; replace only shell startup.
-    await page.addScriptTag({ content: agent.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
+    await loadChatFixture(page, agent.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
       S.filter = 'all';
       window.renderHoverThreads = () => renderThreadList(document.querySelector('#threads'), {});
-    `) });
+    `));
     // Exercise the production renderers with a small host, without starting the shell or a daemon.
     await page.addScriptTag({ content: `
       const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
