@@ -3524,7 +3524,7 @@
       const railed = true;
       let rail = null;
       const put = (node) => {
-        const step = railed && (node.classList.contains("ag-reason") || node.classList.contains("ag-tool") || node.classList.contains("ag-group"));
+        const step = railed && !node.classList.contains("ag-helper-call") && (node.classList.contains("ag-reason") || node.classList.contains("ag-tool") || node.classList.contains("ag-group"));
         if (!step) {
           rail = null;
           body.append(node);
