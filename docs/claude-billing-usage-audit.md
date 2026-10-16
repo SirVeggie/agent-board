@@ -1,5 +1,9 @@
 # Claude billing source and usage visibility audit (#453)
 
+Status 2026-10-16: the user approved all three reporting fixes for personal local
+use, with future totals prioritized. Implemented in `8ac9583`; details below.
+The findings describe the code as audited on October 11.
+
 Investigated 2026-10-11. Investigation only; no product changes, credential reads,
 auth commands, account switching, network quota probes, or model requests. Local
 source and installed SDK 0.3.296 types were inspected. Official pages were fetched
@@ -161,5 +165,48 @@ charge, verify a particular credential combination, or establish vendor approval
 
 For future source tests, use synthetic SDK metadata and captured fixtures with
 secrets removed. Actual account tests or paid turns require a separate decision.
-The linked Scribe form on #453 asks which fixes to implement and whether prior
-distribution approval exists. Leave this investigation in Needs input.
+The linked Scribe form on #453 recorded the scope decision used below.
+
+## Implementation and validation (2026-10-16)
+
+- Active queries read `accountInfo()` before releasing user input and attach only
+  documented backend/auth-source/account metadata to future turn usage. The global
+  auth-status formatter also preserves backend/auth-method/key-source metadata
+  alongside an email. Neither reports which individual credit balance funded a
+  request. Credentials and environment values are never inspected for reporting.
+- Thread quota snapshots are isolated in the host by thread/query. A new or closed
+  query clears its snapshot; failed and non-subscription reports show unavailable.
+  They never fall back to another thread's or the default environment's quota.
+  Settings use a separate default-environment read with its own source metadata.
+  Previously persisted Claude provider quotas are discarded at daemon startup.
+- Extra usage retains enabled state, billing-period spend, cap, currency and its
+  observation time, including zero/null utilization. Only a live SDK
+  `isUsingOverage` value describes the last request; after five minutes it displays
+  unknown. Historical spend cannot set that flag. Expired Claude windows retain
+  observed percentages and show stale/awaiting-update states rather than invented
+  zero utilization. Console API balances remain explicitly unavailable.
+- A read-only `/usage` session baseline is captured on query initialization,
+  including resume/fork. SDK result totals become per-turn token/cost deltas;
+  context-window capacity is retained as capacity, and SDK child result frames
+  cannot independently finish or count a parent turn. Counter decreases on a
+  successful result start a new epoch. Zeroed/error regressions leave the prior
+  baseline intact. A missing baseline suppresses that first ambiguous total,
+  marks accounting partial, and establishes a baseline for following results.
+- SDK dollar values now use the existing estimated-cost display and aggregation
+  fields. Account-wide quota changes no longer replace Claude turn cost with a
+  subscription percentage. Historical stored usage is not rewritten.
+
+Validation: `npx tsc --noEmit`, `node --check public/agent.js`, and
+`git diff --check` passed. The focused suite passed 47 tests, including a headless
+browser fixture using intercepted local data, with no skips:
+
+```powershell
+npx tsx --test --test-isolation=none src/agent/claudeUsage.test.ts src/agent/claudeUsageUi.test.ts src/agent/planLimits.test.ts src/agent/usageWindowStarts.test.ts src/agent/usageWindowRequests.test.ts src/agent/pricing.test.ts src/agent/sparePool.test.ts
+```
+
+The shell sandbox blocked the test runner/browser child processes, so the final
+suite ran with approved process access. No login, account switching, credential
+reads, actual quota probes or paid model turns were used. The SDK usage API is
+experimental: unavailable fields remain unknown/partial instead of being inferred.
+This reporting implementation does not resolve the separate distribution-approval
+question; the user's scope decision was personal local use only.
