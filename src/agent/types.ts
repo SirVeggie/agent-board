@@ -150,6 +150,10 @@ export type RunStatus = "idle" | "running" | "waiting";
 
 /** How much of a subscription's usage windows is used, as the provider last reported it. */
 export type PlanLimits = {
+  /** Active-query metadata; never credential values or proof of a particular credit balance. */
+  billingSource?: ClaudeBillingSource;
+  extraUsage?: { at?: number; enabled?: boolean; usedCredits?: number; monthlyLimit?: number; currency?: string };
+  overageAt?: number;
   /** Background window-start activity; never a provider quota or proof of a reset. */
   windowStart?: { reset?: number; attempted?: number; result?: string };
   /** When the provider reported it. */
@@ -160,8 +164,8 @@ export type PlanLimits = {
   windows: Array<{ id: string; label: string; utilization: number; resetsAt?: number; expired?: true }>;
   /** Requests are being billed as extra usage beyond the plan. */
   overage?: boolean;
-  /** Codex snapshots remain authoritative past a reset; never synthesize recovery. */
-  source?: "codex";
+  /** Identifies snapshots whose observed percentages must survive a passed reset. */
+  source?: "codex" | "claude";
   availability?: "available" | "unavailable" | "authentication_required";
   detail?: string;
   ordinaryUsageAllowed?: boolean | null;
@@ -169,8 +173,19 @@ export type PlanLimits = {
   buckets?: Array<{ id: string; label: string; planType?: string; credits?: { hasCredits: boolean; unlimited: boolean; balance?: string } }>;
 };
 
+export type ClaudeBillingSource = {
+  apiProvider?: string;
+  email?: string;
+  organization?: string;
+  subscriptionType?: string;
+  tokenSource?: string;
+  apiKeySource?: string;
+};
+
 /** Thread plus runtime fields the UI needs in lists. */
 export type ThreadView = Thread & {
+  /** Isolated to this query; never fall back to another thread's quota. */
+  claudeLimits?: PlanLimits;
   effectivePermissions?: EffectivePermissions;
   status: RunStatus;
   /** True when the last turn finished and the user has not opened the thread. Never set on page-owned threads. */
@@ -218,6 +233,7 @@ export type FileChange = {
 };
 
 export type Usage = {
+  billingSource?: ClaudeBillingSource;
   costRecords?: import("./pricing.js").CostRecord[];
   estimatedCostUsd?: number;
   reportedCostUsd?: number;

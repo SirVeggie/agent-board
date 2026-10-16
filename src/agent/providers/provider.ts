@@ -178,6 +178,7 @@ export type SessionContext = {
   mcpServers?(thread: Thread): ResolvedMcpServer[];
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
+  claudeLimits?(threadId: string, limits: import("../types.js").PlanLimits): void;
   /**
    * A task started by a tool call changed: a subagent or background command. It can arrive between
    * turns (a background agent still working), so it names the thread instead of going through a run.

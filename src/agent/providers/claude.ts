@@ -1,6 +1,8 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { claudeToolsOff, customKey, scribeToolsOff } from "../customModes.js";
 import { randomUUID } from "node:crypto";
+import { ClaudeUsageDelta, claudeBillingSource, claudePlanSnapshot } from "../claudeUsage.js";
+import { planLimitsFromRateLimitInfo } from "../planLimits.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 import fs from "node:fs";
@@ -131,10 +133,8 @@ function claudeAuthStatus(binary: string): Promise<ClaudeAuth | null> {
 }
 
 function authDetail(auth: ClaudeAuth): string {
-  if (auth.email) return `Claude Agent SDK · ${auth.email}`;
-  if (auth.apiKeySource && auth.apiKeySource !== "none") return `Claude Agent SDK · ${auth.apiKeySource}`;
-  if (auth.apiProvider && auth.apiProvider !== "firstParty") return `Claude Agent SDK · ${auth.apiProvider}`;
-  return "Claude Agent SDK";
+  return ["Claude Agent SDK", auth.apiProvider, auth.authMethod,
+    auth.apiKeySource && auth.apiKeySource !== "none" ? `API key: ${auth.apiKeySource}` : undefined, auth.email].filter(Boolean).join(" · ");
 }
 
 function stopChild(child: ChildProcess): void {
@@ -476,18 +476,10 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   /**
-   * Plan usage from Claude Code's /usage path: no model message. Uses a live session
-   * when one is already up, otherwise a short-lived query.
+   * Default-environment plan usage without a model message. Thread queries report
+   * separately so project credentials never overwrite this default snapshot.
    */
   async fetchPlanUsage(): Promise<unknown | null> {
-    let tried = false;
-    for (const session of this.sessions) {
-      if (!session.hasQuery()) continue;
-      tried = true;
-      const report = await session.fetchPlanUsage();
-      if (report) return report;
-    }
-    if (tried) return null;
     return this.fetchPlanUsageStandalone();
   }
 
@@ -498,7 +490,8 @@ export class ClaudeProvider implements AgentProvider {
     const timer = setTimeout(() => abortController.abort(), 45_000);
     const q = sdk.query({ prompt: input, options: { settingSources: ["user"], tools: [], persistSession: false, abortController } });
     try {
-      return await queryPlanUsage(q);
+      const source = await q.accountInfo().then(claudeBillingSource, () => ({}));
+      return { report: await queryPlanUsage(q), billingSource: source };
     } catch (err) {
       log(`Claude usage fetch failed: ${(err as Error).message}`);
       return null;
@@ -639,6 +632,9 @@ function resultText(content: unknown): string {
 }
 
 class ClaudeSession implements ProviderSession {
+  private accounting = new ClaudeUsageDelta();
+  private queryReady: Promise<void> = Promise.resolve();
+  private queryLimits = claudePlanSnapshot(null, {});
   private query: Query | null = null;
   private input: InputQueue | null = null;
   private abortController: AbortController | null = null;
@@ -699,14 +695,6 @@ class ClaudeSession implements ProviderSession {
   measureOptions(instructions: string): Options {
     this.instructions = instructions;
     return this.buildOptions();
-  }
-
-  hasQuery(): boolean {
-    return this.query !== null;
-  }
-
-  fetchPlanUsage(): Promise<unknown | null> {
-    return this.query ? queryPlanUsage(this.query) : Promise.resolve(null);
   }
 
   /** Options that need a new process when they change. */
@@ -915,7 +903,10 @@ class ClaudeSession implements ProviderSession {
 
   private async ensureQuery(): Promise<Query> {
     if (this.query && this.live?.key === this.restartKey(this.thread)) {
-      return this.query;
+      const existing = this.query;
+      await this.queryReady;
+      if (this.query !== existing) throw new Error("Claude query closed during initialization");
+      return existing;
     }
     this.close();
     const sdk = await loadSdk();
@@ -924,8 +915,21 @@ class ClaudeSession implements ProviderSession {
     const options = { ...this.buildOptions(), abortController: this.abortController };
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;
+    this.accounting = new ClaudeUsageDelta();
+    this.queryLimits = claudePlanSnapshot(null, {});
+    this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
     this.live = { model: this.thread.model, effort: this.thread.effort, permission: permissionModeFor(this.thread), key: this.restartKey(this.thread) };
     void this.readLoop(q);
+    this.queryReady = (async () => {
+      const source = await q.accountInfo().then(claudeBillingSource, () => ({}));
+      const report = await queryPlanUsage(q);
+      if (this.query !== q) return;
+      this.accounting.baseline(report);
+      this.queryLimits = claudePlanSnapshot(report, source);
+      this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
+    })();
+    await this.queryReady;
+    if (this.query !== q) throw new Error("Claude query closed during initialization");
     return q;
   }
 
@@ -938,6 +942,7 @@ class ClaudeSession implements ProviderSession {
       if (this.query === q) {
         // The process ended; the next turn starts a new one and resumes the session.
         this.query = null;
+        this.ctx.claudeLimits?.(this.thread.id, claudePlanSnapshot(null, {}));
         this.live = null;
         this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `Claude stopped unexpectedly. ${this.stderrTail.slice(-600)}`.trim() });
       }
@@ -945,6 +950,7 @@ class ClaudeSession implements ProviderSession {
       if (this.query === q) {
         const message = (err as Error).message || String(err);
         this.query = null;
+        this.ctx.claudeLimits?.(this.thread.id, claudePlanSnapshot(null, {}));
         this.live = null;
         this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `${message} ${this.stderrTail.slice(-600)}`.trim() });
       }
@@ -1067,6 +1073,7 @@ class ClaudeSession implements ProviderSession {
     this.buffer = [];
     try {
       await this.ensureQuery();
+      sink.usage({ billingSource: this.queryLimits.billingSource, costPartial: true });
       // The init message may have arrived during a warm-up, before there was a sink to tell.
       if (this.sessionId) sink.nativeId(this.sessionId);
       const content: unknown[] = [{ type: "text", text: input.text }];
@@ -1100,6 +1107,7 @@ class ClaudeSession implements ProviderSession {
     try {
       if (this.carry !== steerId || !this.query) return { status: "error", error: "The steered message was lost." };
       if (this.sessionId) this.sink?.nativeId(this.sessionId);
+      this.sink?.usage({ billingSource: this.queryLimits.billingSource, costPartial: true });
       const done = new Promise<TurnResult>((resolve) => {
         this.finish = resolve;
       });
@@ -1198,6 +1206,7 @@ class ClaudeSession implements ProviderSession {
     }
     const q = this.query;
     this.query = null;
+    if (q) this.ctx.claudeLimits?.(this.thread.id, claudePlanSnapshot(null, {}));
     this.live = null;
     this.input?.close();
     this.input = null;
@@ -1328,7 +1337,11 @@ class ClaudeSession implements ProviderSession {
       return;
     }
     if (m.type === "rate_limit_event") {
-      this.ctx.limits?.("claude", m.rate_limit_info);
+      const limits = planLimitsFromRateLimitInfo(m.rate_limit_info, Date.now(), this.queryLimits);
+      if (limits) {
+        this.queryLimits = { ...limits, source: "claude", availability: "available", billingSource: this.queryLimits.billingSource };
+        this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
+      }
       return;
     }
     if (m.type === "system" && (m.subtype === "task_started" || m.subtype === "task_progress" || m.subtype === "task_updated" || m.subtype === "task_notification" || m.subtype === "background_tasks_changed")) {
@@ -1336,7 +1349,10 @@ class ClaudeSession implements ProviderSession {
       return;
     }
     if (this.swallowing) {
-      if (m.type === "result") this.swallowing = null;
+      if (m.type === "result") {
+        this.accounting.result(m);
+        this.swallowing = null;
+      }
       return;
     }
     // Between turns, Claude Code starts one of its own when a background agent it is waiting on
@@ -1365,7 +1381,10 @@ class ClaudeSession implements ProviderSession {
       }
       return;
     }
-    if (!sink) return;
+    if (!sink) {
+      if (m.type === "result" && !m.parent_tool_use_id) this.accounting.result(m);
+      return;
+    }
     const parent = typeof m.parent_tool_use_id === "string" ? m.parent_tool_use_id : null;
     if (parent && !this.turnTools.has(parent)) return;
     if (!parent && (m.type === "assistant" || m.type === "user") && typeof m.uuid === "string") sink.checkpoint?.(m.uuid);
@@ -1380,19 +1399,16 @@ class ClaudeSession implements ProviderSession {
         this.onUser(m as never);
         return;
       case "result": {
-        const usage = isPlainRecord(m.modelUsage) ? Object.values(m.modelUsage as Record<string, Record<string, number>>) : [];
-        const total = usage.reduce(
-          (acc, u) => ({
-            inputTokens: acc.inputTokens + (u.inputTokens ?? 0),
-            outputTokens: acc.outputTokens + (u.outputTokens ?? 0),
-            cacheReadTokens: acc.cacheReadTokens + (u.cacheReadInputTokens ?? 0),
-            cacheWriteTokens: acc.cacheWriteTokens + (u.cacheCreationInputTokens ?? 0),
-            reasoningTokens: acc.reasoningTokens + (u.thinkingTokens ?? 0),
-            contextWindow: Math.max(acc.contextWindow, u.contextWindow ?? 0),
-          }),
-          { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, contextWindow: 0 }
-        );
-        sink.usage({ ...total, costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined, reportedCostUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined, ...(this.contextTokens ? { contextTokens: this.contextTokens } : {}) });
+        if (parent) return; // modelUsage already includes SDK subagent calls.
+        sink.usage({ ...this.accounting.result(m), billingSource: this.queryLimits.billingSource, ...(this.contextTokens ? { contextTokens: this.contextTokens } : {}) });
+        const activeQuery = this.query;
+        if (activeQuery) void queryPlanUsage(activeQuery).then((report) => {
+          if (this.query !== activeQuery) return;
+          const current = this.queryLimits;
+          this.queryLimits = { ...claudePlanSnapshot(report, current.billingSource ?? {}),
+            ...(current.overageAt ? { overage: current.overage, overageAt: current.overageAt } : {}) };
+          this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
+        });
         // A steer this turn took in, in case its lifecycle frame went missing.
         for (const id of Array.isArray(m.user_message_uuids) ? (m.user_message_uuids as string[]) : []) {
           if (this.steers.get(id) === "pending") {

@@ -44,10 +44,12 @@ export function planLimitsFromRateLimitInfo(info: unknown, now: number, prev?: P
     add(info.rateLimitType, info);
   }
   return {
-    at: now,
+    at: windows.length ? now : prev?.at ?? now,
     ...(typeof info.status === "string" ? { status: info.status } : {}),
     windows: windows.length ? windows : prev?.windows ?? [],
-    ...(info.isUsingOverage === true ? { overage: true } : {}),
+    ...(prev?.extraUsage ? { extraUsage: prev.extraUsage } : {}),
+    ...(prev?.billingSource ? { billingSource: prev.billingSource } : {}),
+    ...(typeof info.isUsingOverage === "boolean" ? { overage: info.isUsingOverage, overageAt: now } : {}),
   };
 }
 
@@ -131,20 +133,27 @@ export function planLimitsFromUsageReport(report: unknown, now: number): PlanLim
     }
   }
   const extra = isPlainRecord(limits.extra_usage) ? limits.extra_usage : null;
-  if (extra && typeof extra.utilization === "number" && extra.utilization > 0) {
+  if (extra && typeof extra.utilization === "number" && Number.isFinite(extra.utilization)) {
     const w = windowFromUsage("overage", extra);
     if (w) windows.push(w);
   }
-  if (!windows.length) return null;
+  if (!windows.length && !extra) return null;
   return {
     at: now,
     windows,
-    ...(extra?.is_enabled === true && typeof extra.utilization === "number" && extra.utilization > 0 ? { overage: true } : {}),
+    ...(extra ? { extraUsage: {
+      at: now,
+      ...(typeof extra.is_enabled === "boolean" ? { enabled: extra.is_enabled } : {}),
+      ...(typeof extra.used_credits === "number" && Number.isFinite(extra.used_credits) && extra.used_credits >= 0 ? { usedCredits: extra.used_credits } : {}),
+      ...(typeof extra.monthly_limit === "number" && Number.isFinite(extra.monthly_limit) && extra.monthly_limit >= 0 ? { monthlyLimit: extra.monthly_limit } : {}),
+      ...(typeof extra.currency === "string" ? { currency: extra.currency } : {}),
+    } } : {}),
   };
 }
 
 /**
- * Zero windows whose reset has passed and flag them expired. The old reset stays as reported:
+ * Flag passed resets as expired; keep observed Claude values, zero legacy projected windows.
+ * The old reset stays as reported:
  * a new window starts on first use, so nothing is projected until the provider reports again.
  */
 export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanLimits {
@@ -153,7 +162,7 @@ export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanL
   const windows = limits.windows.map((w) => {
     if (w.expired || !w.resetsAt || w.resetsAt > now) return w;
     changed = true;
-    return { ...w, utilization: 0, expired: true as const };
+    return { ...w, ...(limits.source === "claude" ? {} : { utilization: 0 }), expired: true as const };
   });
   if (!changed) return limits;
   return { ...limits, windows };

@@ -4623,7 +4623,7 @@
       }
       const usage = turn.usage || {};
       if (usage.plan?.length) parts.append(el("span", null, usage.plan.map((w) => `${planPct(w.used)} of ${planWindowShort(w)}`).join(" · ")));
-      else if (usage.costUsd !== undefined || usage.costRecords?.length) {
+      else if (usage.costUsd !== undefined || usage.costRecords?.length || usage.billingSource) {
         const label = usage.costUsd === undefined ? "Cost unknown" : `${usage.costPartial ? "Partial" : usage.estimatedCostUsd !== undefined ? "Estimated" : usage.reportedCostUsd !== undefined ? "Provider-reported" : "Recorded"} $${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`;
         const cost = el("span", null, label);
         const detail = () => (usage.costRecords || []).map((r) => {
@@ -4631,7 +4631,7 @@
           const timing = r.timing ? `\nMessage ended ${new Date(r.timing.endedAt).toISOString()}; HTTP attempt timing unavailable` : "";
           const tariff = r.tariff ? `\nTariff unresolved · ${r.tariff.profile.id} · reviewed ${new Date(r.tariff.profile.verifiedAt).toLocaleDateString()}${Date.now() - r.tariff.profile.verifiedAt > 30 * 86400000 ? "; review prices" : ""}\nCalendar ${r.tariff.profile.calendar.id} (${r.tariff.profile.calendar.coverageFrom} to ${r.tariff.profile.calendar.coverageTo}, end excluded); holiday timezone unconfirmed${r.tariff.observedWindow ? "\nObserved window: " + r.tariff.observedWindow + "; boundary: " + r.tariff.boundary : ""}${r.tariffCandidatesUsd ? "\nReviewed rate candidates: $" + r.tariffCandidatesUsd.lower.toFixed(6) + "–$" + r.tariffCandidatesUsd.upper.toFixed(6) + "; catalog estimate retained" : ""}` : "";
           return `${r.rate.provider}/${r.rate.model} · ${r.rate.origin} · ${rates} per 1M tokens\n${r.rate.endpoint || ""}\n${r.rate.updatedAt ? "Entered " + new Date(r.rate.updatedAt).toLocaleDateString() + (Date.now() - r.rate.updatedAt > 30 * 86400000 ? "; review prices" : "") : "Verification date unknown"}${r.rate.origin === "catalog" ? "; tariff discounts not applied" : ""}${timing}${tariff}${r.missing.length ? "\n" + r.missing.join("; ") : ""}`;
-        }).join("\n\n") || (usage.reportedCostUsd !== undefined ? "Amount supplied by the provider adapter." : "Recorded cost; rate and origin unavailable.");
+        }).join("\n\n") || (usage.billingSource ? `${claudeSourceLabel(usage.billingSource)}\nSDK estimate; actual charges and credit balances unavailable.${usage.costPartial ? "\nAccounting baseline or result unavailable; totals may be incomplete." : ""}` : usage.reportedCostUsd !== undefined ? "Amount supplied by the provider adapter." : "Recorded cost; rate and origin unavailable.");
         cost.setAttribute("aria-description", detail());
         bindHoverTip(cost, () => noteTip(detail()));
         parts.append(cost);
@@ -5264,7 +5264,7 @@
         web.setAttribute("aria-label", `${wm.label}: ${detail}`);
         bar.append(web);
       }
-      const meter = usageChip(s.provider, this.variant !== "full", s.model);
+      const meter = usageChip(s.provider, this.variant !== "full", s.model, this.thread());
       const mic = button("", "ag-pill ag-mic", () => this.audioComposer.toggle(), "Dictate (Ctrl+Shift+Space)", false);
       mic.append(icon("mic"), el("span"));
       mic.setAttribute("aria-label", "Dictate (Ctrl+Shift+Space)");
@@ -8409,10 +8409,44 @@
     return (windows || []).map((w) => (w.resetsAt && w.resetsAt <= now ? { ...w, utilization: 0 } : w));
   }
 
-  function planLimits(provider) {
-    const limits = S.config.limits?.[provider];
+  function planLimits(provider, thread = null) {
+    const limits = provider === "claude" && thread ? thread.claudeLimits : S.config.limits?.[provider];
     if (!limits) return null;
-    return { ...limits, windows: provider === "codex" ? limits.windows || [] : liveWindows(limits.windows) };
+    return { ...limits, windows: provider === "codex" || provider === "claude" ? limits.windows || [] : liveWindows(limits.windows) };
+  }
+
+  function claudeSourceLabel(source) {
+    const s = source || {};
+    const backend = s.apiProvider === "firstParty" ? "Anthropic" : s.apiProvider || "Backend unknown";
+    const auth = s.apiKeySource && s.apiKeySource !== "none" ? `API key (${s.apiKeySource})` :
+      s.tokenSource && s.tokenSource !== "none" ? `Token (${s.tokenSource})` : "Auth source unknown";
+    return [backend, auth, s.email, s.organization, s.subscriptionType].filter(Boolean).join(" · ");
+  }
+
+  function claudeQuotaNotes(limits) {
+    const notes = [claudeSourceLabel(limits.billingSource)];
+    if (limits.availability === "unavailable") notes.push(limits.detail || "Claude quota unavailable");
+    if (Date.now() - limits.at > 5 * 60_000) notes.push("Quota snapshot is stale");
+    const e = limits.extraUsage;
+    if (e) {
+      notes.push(`Subscription extra usage: ${e.enabled === true ? "enabled" : e.enabled === false ? "disabled" : "enabled state unknown"}`);
+      const amount = (n) => {
+        if (!e.currency) return `${n} minor units (currency unavailable)`;
+        try {
+          const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: e.currency });
+          const digits = formatter.resolvedOptions().maximumFractionDigits;
+          return formatter.format(n / 10 ** digits);
+        } catch { return `${n} minor units (${e.currency})`; }
+      };
+      if (e.usedCredits !== undefined) notes.push(`Billing-period spend: ${amount(e.usedCredits)}${e.monthlyLimit !== undefined ? ` / ${amount(e.monthlyLimit)} cap` : " · cap unavailable"}`);
+      else if (e.monthlyLimit !== undefined) notes.push(`Billing-period cap: ${amount(e.monthlyLimit)} · spend unavailable`);
+      if (e.at && Date.now() - e.at > 5 * 60_000) notes.push(`Extra-usage snapshot is stale · reported ${R.timeAgo(e.at)}`);
+    }
+    if (limits.overageAt && Date.now() - limits.overageAt <= 5 * 60_000) {
+      notes.push(`Last request: ${limits.overage ? "using subscription extra usage" : "not using subscription extra usage"}`);
+    } else notes.push("Current paid-credit use unknown");
+    notes.push("Console API credit balances are unavailable");
+    return notes;
   }
 
   function quotaPercent(provider, utilization) {
@@ -8543,8 +8577,8 @@
     hideHoverTip();
   }
 
-  function usageTip(provider) {
-    const limits = planLimits(provider);
+  function usageTip(provider, thread = null) {
+    const limits = planLimits(provider, thread);
     if (!limits) return null;
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
@@ -8558,7 +8592,8 @@
       if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaReset(provider, w.resetsAt)));
       tip.append(row);
     }
-    if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
+    if (provider === "claude") for (const note of claudeQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
+    else if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
     return tip;
   }
@@ -8761,13 +8796,15 @@
   }
 
   /** Plan usage on the composer: one percent in the floating chat and sidebar, or "5h 84%" windows in the full window. Nothing until the provider has reported. */
-  function usageChip(provider, compact = false, model = null) {
-    const limits = planLimits(provider);
+  function usageChip(provider, compact = false, model = null, thread = null) {
+    const limits = planLimits(provider, thread);
     if (!limits) return null;
-    if (provider === "codex" && limits.availability !== "available") {
-      const chip = button("Quota unavailable", "ag-usage", () => agentSettings.open(), "");
-      chip.setAttribute("aria-label", limits.detail || "Codex quota unavailable");
-      bindHoverTip(chip, () => usageTip(provider));
+    if ((provider === "codex" || provider === "claude") && limits.availability !== "available") {
+      const source = limits.billingSource || {};
+      const backend = source.apiProvider && source.apiProvider !== "firstParty" ? source.apiProvider : source.apiKeySource && source.apiKeySource !== "none" ? "API" : source.tokenSource && source.tokenSource !== "none" ? "Token" : "Source unknown";
+      const chip = button(provider === "claude" ? `${backend} · quota unavailable` : "Quota unavailable", "ag-usage", () => agentSettings.open(), "");
+      chip.setAttribute("aria-label", limits.detail || `${PROVIDER_LABEL[provider]} quota unavailable`);
+      bindHoverTip(chip, () => usageTip(provider, thread));
       return chip;
     }
     const listed = chipWindows(limits);
@@ -8785,7 +8822,14 @@
       chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
       for (const w of listed) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${quotaPercent(provider, w.utilization)}`));
     }
-    bindHoverTip(chip, () => usageTip(provider));
+    if (provider === "claude") {
+      const s = limits.billingSource || {};
+      const route = s.apiProvider && s.apiProvider !== "firstParty" ? s.apiProvider : s.apiKeySource && s.apiKeySource !== "none" ? "API" : s.tokenSource && s.tokenSource !== "none" ? "Token" : "Source unknown";
+      const stale = Date.now() - limits.at > 5 * 60_000 || limits.windows.some((w) => w.resetsAt && w.resetsAt <= Date.now());
+      chip.prepend(el("span", "ag-usage-w", `${route}${stale ? " · stale" : ""}`));
+      chip.setAttribute("aria-description", claudeSourceLabel(s));
+    }
+    bindHoverTip(chip, () => usageTip(provider, thread));
     return chip;
   }
 
@@ -8795,7 +8839,7 @@
     const limits = planLimits(provider);
     const head = el("div", "ag-meter-head");
     head.append(el("strong", null, PROVIDER_LABEL[provider] || provider));
-    if (limits) head.append(el("span", "ag-muted", ` · updated ${R.timeAgo(limits.at)}${limits.overage ? " · using extra usage" : ""}`));
+    if (limits) head.append(el("span", "ag-muted", ` · updated ${R.timeAgo(limits.at)}${provider !== "claude" && limits.overage ? " · using extra usage" : ""}`));
     box.append(head);
     if (!limits) {
       box.append(
@@ -8817,6 +8861,13 @@
       box.append(row);
     }
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
+    if (provider === "claude") {
+      const details = el("details", "ag-muted ag-meter-none");
+      details.append(el("summary", null, "Billing source and extra usage"));
+      details.append(el("p", null, "Default query · thread queries can use different credentials"));
+      for (const note of claudeQuotaNotes(limits)) details.append(el("p", null, note));
+      box.append(details);
+    }
     return box;
   }
 

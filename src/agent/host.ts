@@ -50,7 +50,9 @@ import type {
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
-import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, planLimitsFromUsageReport, usageLimitResetsAt } from "./planLimits.js";
+import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, usageLimitResetsAt } from "./planLimits.js";
+import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
+import { isPlainRecord } from "./types.js";
 import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
@@ -575,6 +577,12 @@ export class AgentHost {
       // Not for board workers: nobody watches their threads to approve commands.
       cursorHostShell: (threadId) => this.prefs().cursorHostShell && !this.unattended(threadId),
       limits: (provider, info) => this.recordLimits(provider, info),
+      claudeLimits: (threadId, limits) => {
+        if (this.closed) return;
+        this.claudeThreadLimits.set(threadId, limits);
+        this.emitThread(threadId);
+        if (limits.availability === "available" && !this.fakes) void this.refreshClaudeUsage();
+      },
       task: (threadId, toolId, patch) => this.patchTask(threadId, toolId, patch),
       followUp: (threadId, id) => this.followUp(threadId, id),
       approval: (threadId, req) => this.approveBetweenTurns(threadId, req),
@@ -583,6 +591,8 @@ export class AgentHost {
       scanResult: (threadId, call) => this.scanResult(threadId, call),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
+    // Persisted Claude quotas predate this query/environment; do not revive an unrelated meter.
+    delete this.planLimits.claude;
     this.usageWindowStarts = new UsageWindowStarts({
       now: () => Date.now(),
       enabled: () => this.prefs().usageWindowStarts,
@@ -595,7 +605,7 @@ export class AgentHost {
           if (parsed) this.commitLimits(provider, parsed, false);
           return parsed;
         }
-        const parsed = planLimitsFromUsageReport(await (this.providers.claude as ClaudeProvider).fetchPlanUsage(), Date.now());
+        const parsed = this.claudeUsageSnapshot(await (this.providers.claude as ClaudeProvider).fetchPlanUsage());
         if (this.closed) return null;
         if (parsed) this.commitLimits(provider, applyExpiredWindows(parsed), false);
         return parsed;
@@ -725,6 +735,12 @@ export class AgentHost {
   }
 
   private planLimits: Partial<Record<ProviderId, PlanLimits>> = {};
+  private claudeThreadLimits = new Map<string, PlanLimits>();
+
+  private claudeUsageSnapshot(value: unknown): PlanLimits {
+    const wrapper = isPlainRecord(value) ? value : {};
+    return claudePlanSnapshot(wrapper.report, claudeBillingSource(wrapper.billingSource));
+  }
   private usageWindowStarts: UsageWindowStarts;
   private usageWindowTimer: NodeJS.Timeout | null = null;
   private usageTimer: NodeJS.Timeout | null = null;
@@ -878,17 +894,19 @@ export class AgentHost {
     try {
       const report = await (this.providers.claude as ClaudeProvider).fetchPlanUsage();
       if (this.closed) return;
-      const parsed = planLimitsFromUsageReport(report, Date.now());
+      const parsed = this.claudeUsageSnapshot(report);
       if (parsed) this.usageWindowStarts.observe("claude", parsed);
       if (parsed) this.commitLimits("claude", applyExpiredWindows(parsed), false);
     } catch {
-      /* overlay already applied; the next turn still reports */
+      this.commitLimits("claude", claudePlanSnapshot(null, {}), false);
     }
     this.scheduleClaudeUsageRefresh();
   }
 
   /** Attach this report's window deltas to the turn that was running when it started. */
   private applyPlanCost(provider: ProviderId, next: PlanLimits): void {
+    // Account-wide quota movement includes other apps and cannot price a Claude turn.
+    if (provider === "claude") return;
     const slot = this.limitTurn;
     if (!slot || slot.provider !== provider || !slot.before.length) return;
     const plan = planUsed(slot.before, next.windows);
@@ -1692,6 +1710,7 @@ export class AgentHost {
     const pageRun = this.pageRuns.get(thread.id);
     return {
       ...thread,
+      ...(thread.provider === "claude" ? { claudeLimits: this.claudeThreadLimits.get(thread.id) ?? claudePlanSnapshot(null, {}) } : {}),
       ...(this.effectivePermissions.has(thread.id) ? { effectivePermissions: this.effectivePermissions.get(thread.id) } : {}),
       status,
       unread,
@@ -3370,7 +3389,7 @@ export class AgentHost {
     if (thread.provider === "cursor") this.refreshCursorUsage();
     if (thread.provider === "codex") void this.refreshCodexUsage();
     if (result.status === "error") {
-      const resetsAt = usageLimitResetsAt(result.error, this.planLimits[thread.provider], turn.startedAt, turn.endedAt);
+      const resetsAt = usageLimitResetsAt(result.error, thread.provider === "claude" ? this.claudeThreadLimits.get(threadId) : this.planLimits[thread.provider], turn.startedAt, turn.endedAt);
       if (resetsAt) turn.limitResetsAt = resetsAt;
     }
     this.saveTurn(turn);

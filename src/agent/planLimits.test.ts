@@ -89,7 +89,7 @@ test("a rate_limit_event without window figures keeps the last known ones", () =
   const next = planLimitsFromRateLimitInfo({ status: "allowed_warning" }, 2, prev);
   assert.equal(next?.windows[0]?.utilization, 0.5);
   assert.equal(next?.status, "allowed_warning");
-  assert.equal(next?.at, 2);
+  assert.equal(next?.at, 1); // A status event did not refresh the inherited quota figures.
 });
 
 test("get_usage report converts percent utilization and ISO reset times", () => {
