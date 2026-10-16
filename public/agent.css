@@ -1521,7 +1521,6 @@ html[data-theme="cream"] .ag-md {
   inset: 0;
   z-index: var(--z-indicator);
   background: var(--bg);
-  border: 1px solid var(--border);
   border-radius: inherit;
 }
 
