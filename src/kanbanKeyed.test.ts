@@ -33,18 +33,52 @@ test("a remote change repaints only the cards it touched, in place", async (t) =
   }
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const kanban = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
-    const frameHtml = kanban.replace("<head>", `<head><script>window.__SCRIBE_BOOT__=${JSON.stringify(BOOT)};</script><script>${BOARD_BRIDGE_JS}</script>`);
+    const boot = structuredClone(BOOT) as any;
+    boot.state.cards[0].images = [{ id: "im_1", name: "shot.png", data: "data:image/png;base64,aGVsbG8=" }];
+    boot.state.cards[0].description = "![shot](#img-im_1)";
+    const assetUrl = "/blob/pa_aaaaaaaaaaaaaaaaaaaaaaaa";
+    let uploads = 0;
+    let serverRevision = 1;
+    const frameHtml = kanban.replace("<head>", `<head><script>window.__SCRIBE_BOOT__=${JSON.stringify(boot)};</script><script>${BOARD_BRIDGE_JS}</script>`);
     await page.route("http://kanban.test/**", (route) => {
       const url = route.request().url();
+      if (url.endsWith("/assets") && route.request().method() === "POST") {
+        uploads++;
+        return route.fulfill({ json: { asset: { name: "shot.png", url: assetUrl }, usage: {} } });
+      }
+      if (url.endsWith("/state") && route.request().method() === "PUT") {
+        const fromRevision = serverRevision++;
+        return route.fulfill({ json: { ok: true, fromRevision, stateRevision: serverRevision, applied: route.request().postDataJSON().ops, skipped: [] } });
+      }
       if (url.includes("/api/tabs/")) return route.fulfill({ json: {} });
       return route.fulfill({ contentType: "text/html", body: url.endsWith("/frame") ? frameHtml : '<iframe src="/frame" style="width:1100px;height:700px"></iframe>' });
     });
+    const saved = page.waitForResponse(response => response.url().endsWith("/state") && response.request().method() === "PUT");
     await page.goto("http://kanban.test/");
     const frame = page.frames()[1];
     await frame.locator('.card[data-id="c"]').waitFor();
+    await frame.waitForFunction(() => (window as any).scribe.state.cards[0].images[0].data.startsWith("/blob/"));
+    assert.equal(uploads, 1);
+    assert.equal(await frame.locator('.card[data-id="a"] img').getAttribute("src"), assetUrl);
+    await frame.locator('.card[data-id="a"] .card-title').click();
+    assert.equal(await frame.locator('#gallery img').getAttribute("src"), assetUrl);
+    assert.equal(await frame.locator('#mdPreview img').getAttribute("src"), assetUrl);
+    await frame.evaluate(() => (window as any).scribe.flush());
+    await saved;
+    await page.evaluate((revision) => {
+      const w = document.querySelector("iframe")!.contentWindow as any;
+      const state = structuredClone(w.scribe.state);
+      state.cards[0].images[0].data = "/blob/pa_bbbbbbbbbbbbbbbbbbbbbbbb";
+      document.querySelector("iframe")!.contentWindow!.postMessage({ type: "scribe-state", id: "board", stateRevision: revision + 1, fromRevision: revision,
+        ops: [{ op: "merge", path: "cards/a", value: state.cards[0] }] }, "*");
+    }, serverRevision);
+    serverRevision++;
+    await frame.waitForFunction(() => document.querySelector('#gallery img')?.getAttribute("src") === "/blob/pa_bbbbbbbbbbbbbbbbbbbbbbbb");
+    await frame.locator('#mClose').click();
 
     const watched = await frame.evaluate(() => {
       const w = window as any;
@@ -56,12 +90,12 @@ test("a remote change repaints only the cards it touched, in place", async (t) =
       return true;
     });
     assert.equal(watched, true);
-    await page.evaluate(() => {
+    await page.evaluate((revision) => {
       document.querySelector("iframe")!.contentWindow!.postMessage({
-        type: "scribe-state", id: "board", stateRevision: 2, fromRevision: 1,
+        type: "scribe-state", id: "board", stateRevision: revision + 1, fromRevision: revision,
         ops: [{ op: "merge", path: "cards/b", value: { title: "Two, renamed" } }],
       }, "*");
-    });
+    }, serverRevision);
     await frame.locator('.card[data-id="b"] .card-title', { hasText: "Two, renamed" }).waitFor();
     const after = await frame.evaluate(() => {
       const w = window as any;

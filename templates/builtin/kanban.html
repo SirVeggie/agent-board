@@ -3168,7 +3168,7 @@
     // images
     coverToggle.classList.toggle("hidden", !c.images.length);
     coverSwitch.checked = c.cover !== false;
-    var imagesSig = c.id + "|" + c.images.map(function (im) { return im.id + ":" + str(im.data).length; }).join(",");
+    var imagesSig = JSON.stringify([c.id, c.images.map(function (im) { return [im.id, im.name, im.data]; })]);
     if (galleryEl._sig !== imagesSig) renderGallery(c, imagesSig);
 
     // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
@@ -4011,6 +4011,38 @@
   $("mChanges").addEventListener("click", function () { requestChanges(openId); });
 
   // ---------- images ----------
+  /** Older boards kept image bytes in state. Save them before replacing any reference. */
+  async function migrateLegacyImages() {
+    var pending = [];
+    allCards().forEach(function (c) {
+      c.images.forEach(function (im) {
+        if (/^data:image\//i.test(im.data)) pending.push({ card: c.id, image: im });
+      });
+    });
+    var failed = false;
+    // One upload at a time bounds memory even on boards full of attachments.
+    for (var i = 0; i < pending.length; i++) {
+      var item = pending[i], before = item.image;
+      try {
+        var blob = await fetch(before.data).then(function (response) { return response.blob(); });
+        var asset = await scribe.saveAsset(blob, { name: before.name || "image" });
+        if (!asset) continue; // The bridge suppresses writes during preview capture.
+        var current = card(item.card);
+        if (!current || !current.images.some(function (im) { return im.id === before.id && im.data === before.data; })) continue;
+        updateCard(item.card, function (c) {
+          c.images = c.images.map(function (im) {
+            return im.id === before.id && im.data === before.data ? Object.assign({}, im, { data: asset.url }) : im;
+          });
+          return c;
+        });
+      } catch (e) {
+        // Keep the original readable and try it again next time the board opens.
+        failed = true;
+      }
+    }
+    if (failed) setHint("Some older images could not be moved to storage. They are still available; reopen the board to retry.", true);
+  }
+
   function addImageFiles(files, intoDescription) {
     var c = openId && card(openId);
     if (!c) return;
@@ -6614,6 +6646,7 @@
   ensureShape();
   bookkeeping();
   render();
+  migrateLegacyImages();
   // A link to one card (scribe:board-key#card=12, or a search hit): open its dialog.
   if (scribe.onOpen) scribe.onOpen(function (request) {
     var num = Number(request.args.card || request.args.record);
