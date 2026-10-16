@@ -1585,12 +1585,13 @@ export async function startMcp(): Promise<void> {
     }
   );
 
-  // The agent browser and page_ask are for Scribe chat threads only; other MCP clients have their own.
+  // The agent browser, page_ask and ask_user are for Scribe chat threads only; other MCP clients have their own.
   if (process.env.SCRIBE_THREAD) {
     // Tool groups the thread's custom mode turns off (customModes.ts).
     const off = new Set((process.env.SCRIBE_TOOLS_OFF ?? "").split(","));
     if (!off.has("browser")) registerBrowserTools(server);
     if (pages) registerAsk(server);
+    registerQuestion(server);
     registerWebRequest(server);
     registerThreadUpdate(server);
     if (!off.has("threads")) registerThreadTools(server);
@@ -1653,6 +1654,65 @@ function registerAsk(server: McpServer): void {
         return jsonResult(data);
       } catch (err) {
         return errorResult((err as Error).message || "page_ask failed");
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
+  );
+}
+
+/**
+ * ask_user: Scribe's own question tool, the same on every provider. The chat shows the questions as
+ * a card (a form dialog when there are many) and the turn waits for the answers.
+ */
+function registerQuestion(server: McpServer): void {
+  const question = z.object({
+    question: z.string().describe("The full question."),
+    header: z.string().optional().describe("A short tag shown above it, at most a few words, e.g. \"Database\"."),
+    type: z.enum(["choice", "text", "number", "scale"]).optional().describe("choice (default when options are given), text, number, or scale (a row of numbered steps)."),
+    options: z
+      .array(z.union([z.string(), z.object({ label: z.string(), description: z.string().optional() })]))
+      .optional()
+      .describe("choice: 2 to 12 options, each a label or { label, description }. The user can always add their own words."),
+    multiSelect: z.boolean().optional().describe("choice: let the user pick several."),
+    long: z.boolean().optional().describe("text: a multi-line answer."),
+    placeholder: z.string().optional().describe("text or number: a hint inside the empty field."),
+    min: z.number().optional().describe("number: lowest allowed. scale: first step (default 1)."),
+    max: z.number().optional().describe("number: highest allowed. scale: last step (default 5, at most 10 steps past min)."),
+    minLabel: z.string().optional().describe("scale: what the low end means, e.g. \"Not at all\"."),
+    maxLabel: z.string().optional().describe("scale: what the high end means, e.g. \"Very\"."),
+    optional: z.boolean().optional().describe("The user may leave it blank."),
+  });
+  server.tool(
+    "ask_user",
+    "Ask the user one or more questions in the chat and wait for the answers. Use it when you need a decision or detail you cannot work out yourself. Questions can be choices (single or multi-select), free text, numbers, or scales; every question also takes a note in the user's own words, and the user can skip. A few questions show as a card in the chat; more than 3 (or a long text answer) open as a form, which display can force. Returns the answers as text, or that the user skipped. For a richer layout (mockups, tables), build a page and use page_ask instead.",
+    {
+      title: z.string().optional().describe("One line on what you are asking, e.g. \"A few choices before I build the importer\"."),
+      questions: z.array(question).min(1).max(20).describe("The questions, in order."),
+      display: z.enum(["auto", "inline", "dialog"]).optional().describe("auto (default): inline for up to 3 short questions, else a form dialog."),
+    },
+    { readOnlyHint: true },
+    async (input, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({
+                  method: "notifications/progress",
+                  params: { progressToken, progress: seconds, message: `Waiting for the user's answer (${seconds}s)` },
+                })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api("POST", "/api/question", input, { signal: extra.signal });
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return { content: [{ type: "text" as const, text: String((data as { text?: string }).text ?? "") }] };
+      } catch (err) {
+        return errorResult((err as Error).message || "ask_user failed");
       } finally {
         clearInterval(heartbeat);
       }

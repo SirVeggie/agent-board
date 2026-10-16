@@ -1477,6 +1477,209 @@
   }
   const modalStack = [];
 
+  /* ---------- questions: ask_user and the providers' own ---------- */
+
+  /** What the user has entered so far, per question item: kept across re-renders and the form dialog. */
+  const questionDrafts = new Map();
+  const questionForms = new Map();
+  function questionDraft(id) {
+    let draft = questionDrafts.get(id);
+    if (!draft) questionDrafts.set(id, (draft = { picks: new Map(), values: new Map(), notes: new Map(), onChange: null }));
+    return draft;
+  }
+  const questionType = (q) => q.type || "choice";
+  function questionAnswered(q, draft) {
+    if (questionType(q) === "choice") return (draft.picks.get(q.id) || []).length > 0 || Boolean(draft.notes.get(q.id)?.trim());
+    return Boolean((draft.values.get(q.id) || "").trim());
+  }
+  /** An answer as the user gave it: option labels for choices, the value otherwise. */
+  function questionAnswerText(q, values) {
+    return questionType(q) === "choice" ? values.map((id) => q.options.find((o) => o.id === id)?.label || id) : values.filter((v) => v.trim());
+  }
+
+  /** The questions as fields that write into the draft. */
+  function questionFields(it, draft, onChange, numbered) {
+    const list = el("div", "ag-q-list");
+    it.questions.forEach((q, index) => {
+      const block = el("div", "ag-q");
+      block.dataset.q = q.id;
+      const changed = () => {
+        block.classList.remove("missing");
+        onChange?.();
+        draft.onChange?.();
+      };
+      const top = el("div", "ag-q-top");
+      if (numbered) top.append(el("span", "ag-q-num", String(index + 1)));
+      if (q.header) top.append(el("span", "ag-q-header", q.header));
+      if (q.optional) top.append(el("span", "ag-q-optional", "Optional"));
+      if (top.childElementCount) block.append(top);
+      block.append(el("div", "ag-q-prompt", q.prompt));
+      const type = questionType(q);
+      if (type === "choice") {
+        const opts = el("div", `ag-q-opts${q.multi ? " multi" : ""}`);
+        const sync = () => {
+          const cur = new Set(draft.picks.get(q.id) || []);
+          for (const x of opts.children) {
+            x.classList.toggle("on", cur.has(x.dataset.opt));
+            x.setAttribute("aria-pressed", String(cur.has(x.dataset.opt)));
+          }
+        };
+        for (const o of q.options) {
+          const b = button("", "ag-q-opt", () => {
+            const cur = new Set(draft.picks.get(q.id) || []);
+            if (q.multi) {
+              if (cur.has(o.id)) cur.delete(o.id);
+              else cur.add(o.id);
+            } else {
+              const was = cur.has(o.id);
+              cur.clear();
+              if (!was) cur.add(o.id);
+            }
+            draft.picks.set(q.id, [...cur]);
+            sync();
+            changed();
+          });
+          b.dataset.opt = o.id;
+          b.append(el("span", "ag-q-mark"));
+          const text = el("span", "ag-q-opt-text");
+          text.append(el("span", "ag-q-label", o.label));
+          if (o.description) text.append(el("span", "ag-q-desc", o.description));
+          b.append(text);
+          opts.append(b);
+        }
+        sync();
+        block.append(opts);
+      } else if (type === "scale") {
+        const min = q.min ?? 1;
+        const max = q.max ?? 5;
+        const row = el("div", "ag-q-scale");
+        row.style.setProperty("--steps", String(max - min + 1));
+        const sync = () => {
+          for (const x of row.children) x.classList.toggle("on", x.dataset.value === draft.values.get(q.id));
+        };
+        for (let v = min; v <= max; v++) {
+          const b = button(String(v), "ag-q-step", () => {
+            draft.values.set(q.id, draft.values.get(q.id) === String(v) ? "" : String(v));
+            sync();
+            changed();
+          });
+          b.dataset.value = String(v);
+          row.append(b);
+        }
+        sync();
+        block.append(row);
+        if (q.minLabel || q.maxLabel) {
+          const ends = el("div", "ag-q-scale-ends");
+          ends.append(el("span", null, q.minLabel || ""), el("span", null, q.maxLabel || ""));
+          block.append(ends);
+        }
+      } else {
+        const long = type === "text" && q.long;
+        const input = el(long ? "textarea" : "input", "ag-input ag-q-input");
+        if (long) input.rows = 4;
+        if (type === "number") {
+          input.type = "number";
+          input.step = "any";
+          if (q.min !== undefined) input.min = String(q.min);
+          if (q.max !== undefined) input.max = String(q.max);
+        }
+        input.placeholder = q.placeholder || (type === "number" ? "A number" : "Your answer");
+        input.value = draft.values.get(q.id) || "";
+        input.addEventListener("input", () => {
+          draft.values.set(q.id, input.value);
+          changed();
+        });
+        block.append(input);
+      }
+      if (type !== "text") {
+        const other = el("input", "ag-input small ag-q-note");
+        other.placeholder = type === "choice" ? "Other / add detail" : "Add detail";
+        other.value = draft.notes.get(q.id) || "";
+        other.addEventListener("input", () => {
+          draft.notes.set(q.id, other.value);
+          changed();
+        });
+        block.append(other);
+      }
+      list.append(block);
+    });
+    return list;
+  }
+
+  /** Sends the answers; marks unanswered required questions instead. Resolves true once sent. */
+  async function submitQuestion(it, draft, root) {
+    const missing = it.questions.filter((q) => !q.optional && !questionAnswered(q, draft));
+    if (missing.length) {
+      for (const q of missing) root.querySelector(`.ag-q[data-q="${CSS.escape(q.id)}"]`)?.classList.add("missing");
+      root.querySelector(".ag-q.missing")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return false;
+    }
+    const answers = Object.fromEntries(
+      it.questions.map((q) => [q.id, questionType(q) === "choice" ? draft.picks.get(q.id) || [] : [(draft.values.get(q.id) || "").trim()].filter(Boolean)])
+    );
+    const notes = Object.fromEntries(it.questions.map((q) => [q.id, (draft.notes.get(q.id) || "").trim()]).filter(([, v]) => v));
+    try {
+      await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { answers, notes });
+      questionDrafts.delete(it.id);
+      return true;
+    } catch (err) {
+      notice(err.message);
+      return false;
+    }
+  }
+
+  /** Many questions (ask_user's dialog display): the form over the app. Closing keeps the draft. */
+  function openQuestionForm(it) {
+    if (it.status !== "pending") return;
+    questionForms.get(it.id)?.();
+    const draft = questionDraft(it.id);
+    const { panel, close } = modal("ag-qform", () => questionForms.delete(it.id));
+    questionForms.set(it.id, close);
+    panel.setAttribute("aria-label", it.title || "Questions");
+    const head = el("div", "ag-qform-head");
+    const titles = el("div", "ag-qform-titles");
+    titles.append(el("h2", "ag-modal-title", it.title || "The agent has questions"), el("p", "ag-modal-hint", `${it.questions.length} questions`));
+    head.append(icon("question", "ag-qform-ico"), titles, button(icon("close"), "ag-icon-btn small", () => close(), "Close (your answers are kept)"));
+    const progress = el("div", "ag-qform-progress");
+    const bar = el("span", "ag-qform-bar");
+    const fill = el("span", "ag-qform-fill");
+    const count = el("span", "ag-qform-count");
+    bar.append(fill);
+    progress.append(bar, count);
+    const update = () => {
+      const done = it.questions.filter((q) => questionAnswered(q, draft)).length;
+      fill.style.width = `${(done / it.questions.length) * 100}%`;
+      count.textContent = `${done} of ${it.questions.length} answered`;
+    };
+    update();
+    const body = el("div", "ag-qform-body");
+    body.append(questionFields(it, draft, update, true));
+    const submit = async () => {
+      if (await submitQuestion(it, draft, body)) close();
+    };
+    const actions = el("div", "ag-modal-actions ag-qform-actions");
+    actions.append(
+      progress,
+      button("Skip all", "ag-btn small ghost", async () => {
+        await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { skip: true }).then(close, (err) => notice(err.message));
+      }),
+      button("Submit", "ag-btn primary", submit)
+    );
+    panel.append(head, body, actions);
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        submit();
+      }
+    });
+    requestAnimationFrame(() => body.querySelector("button, input, textarea")?.focus({ preventScroll: true }));
+  }
+  function closeQuestionForm(id) {
+    questionForms.get(id)?.();
+    questionDrafts.delete(id);
+  }
+
+
   /* ---------- rewind confirmation ---------- */
 
   /** Resolves { keepChanges } to go ahead, or null. Only asked when the rewind would drop more than the one turn. */
@@ -4032,11 +4235,12 @@
       const node = el("div", `ag-card ag-question s-${it.status}`);
       node.dataset.itemId = it.id;
       if (it.status !== "pending") {
+        closeQuestionForm(it.id);
         node.classList.add("done");
         const parts = it.questions.map((q) => {
-          const picked = (it.answers?.[q.id] || []).map((id) => q.options.find((o) => o.id === id)?.label || id);
+          const given = questionAnswerText(q, it.answers?.[q.id] || []);
           const note = it.notes?.[q.id];
-          const answer = picked.length ? picked.join(", ") : it.status === "skipped" ? "Skipped" : "—";
+          const answer = given.length ? given.join(", ") : it.status === "skipped" ? "Skipped" : "—";
           return `${q.prompt}: ${answer}${note ? ` (${note})` : ""}`;
         });
         const line = el("span", "ag-card-line", parts.join(" · ") || (it.status === "skipped" ? "Skipped" : "Not answered"));
@@ -4050,49 +4254,37 @@
       const head = el("div", "ag-card-head");
       head.append(icon("question"), el("span", "ag-card-title", it.title || (it.questions.length > 1 ? "The agent has questions" : "The agent has a question")));
       node.append(head);
-      const picks = new Map();
-      const notes = new Map();
-      for (const q of it.questions) {
-        const block = el("div", "ag-q");
-        if (q.header) block.append(el("div", "ag-q-header", q.header));
-        block.append(el("div", "ag-q-prompt", q.prompt));
-        const opts = el("div", "ag-q-opts");
-        for (const o of q.options) {
-          const b = button("", "ag-q-opt", () => {
-            const cur = new Set(picks.get(q.id) || []);
-            if (q.multi) {
-              if (cur.has(o.id)) cur.delete(o.id);
-              else cur.add(o.id);
-            } else {
-              cur.clear();
-              cur.add(o.id);
-            }
-            picks.set(q.id, [...cur]);
-            for (const x of opts.children) x.classList.toggle("on", cur.has(x.dataset.opt));
-          });
-          b.dataset.opt = o.id;
-          b.append(el("span", "ag-q-label", o.label));
-          if (o.description) b.append(el("span", "ag-q-desc", o.description));
-          opts.append(b);
-        }
-        block.append(opts);
-        const other = el("input", "ag-input small");
-        other.placeholder = "Other / add detail";
-        other.addEventListener("input", () => notes.set(q.id, other.value));
-        block.append(other);
-        node.append(block);
-      }
+      const draft = questionDraft(it.id);
+      const skip = button("Skip", "ag-btn small", async () => {
+        await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { skip: true }).catch((err) => notice(err.message));
+      });
       const actions = el("div", "ag-card-actions");
-      actions.append(
-        button("Submit", "ag-btn small primary", async () => {
-          const answers = Object.fromEntries(it.questions.map((q) => [q.id, picks.get(q.id) || []]));
-          const noteObj = Object.fromEntries([...notes].filter(([, v]) => v.trim()));
-          await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { answers, notes: noteObj }).catch((err) => notice(err.message));
-        }),
-        button("Skip", "ag-btn small", async () => {
-          await api("POST", `/questions/${encodeURIComponent(it.requestId)}`, { skip: true }).catch((err) => notice(err.message));
-        })
-      );
+      if (it.display === "dialog") {
+        // Many questions: a banner here, the form in a dialog.
+        node.classList.add("ag-q-banner");
+        const status = el("div", "ag-q-banner-line");
+        const count = () => {
+          const done = it.questions.filter((q) => questionAnswered(q, draft)).length;
+          status.textContent = `${it.questions.length} questions${done ? ` · ${done} answered` : ""}`;
+        };
+        count();
+        draft.onChange = count;
+        node.append(status);
+        actions.append(button("Answer", "ag-btn small primary ag-q-open", () => openQuestionForm(it)), skip);
+      } else {
+        const fields = questionFields(it, draft, null, false);
+        node.append(fields);
+        actions.append(
+          button("Submit", "ag-btn small primary", () => submitQuestion(it, draft, node)),
+          skip
+        );
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            submitQuestion(it, draft, node);
+          }
+        });
+      }
       node.append(actions);
       return node;
     }
@@ -7248,17 +7440,25 @@
   }
 
   /** Open a waiting thread in the sidebar and bring its question into view. */
-  function openAsk(threadId, itemId) {
+  function openAsk(threadId, itemId, openForm) {
     if (!openThread(threadId)) return false;
-    if (!itemId) return true;
+    if (itemId) revealItem(() => (S.fullOpen ? full.view : sidebar.view).root, itemId, openForm);
+    return true;
+  }
+
+  /** Scrolls to an item once its thread has rendered; openForm also opens a question's form dialog. */
+  function revealItem(root, itemId, openForm) {
     let tries = 0;
     const reveal = () => {
-      const node = (S.fullOpen ? full.view : sidebar.view).root?.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`);
-      if (node) node.scrollIntoView({ block: "center" });
-      else if (++tries < 20) setTimeout(reveal, 50);
+      const node = root()?.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`);
+      if (!node) {
+        if (++tries < 20) setTimeout(reveal, 50);
+        return;
+      }
+      node.scrollIntoView({ block: "center" });
+      if (openForm) node.querySelector(".ag-q-open")?.click();
     };
     requestAnimationFrame(reveal);
-    return true;
   }
 
   /* ---------- activity flyout and needs-you toasts ---------- */
@@ -7601,10 +7801,12 @@
 
   /** Open a thread from the flyout or a toast: in the dock (expanded), else in the sidebar at its question. */
   function openActive(t, inDock) {
+    const ask = t.status === "waiting" && t.asking ? t.asking : null;
     if (inDock) {
       showPageThread(t.id, "dock", { reveal: true });
       dock.setExpanded(true);
-    } else if (t.status === "waiting" && t.asking) openAsk(t.id, t.asking.itemId);
+      if (ask?.form) revealItem(() => dock.view.root, ask.itemId, true);
+    } else if (ask) openAsk(t.id, ask.itemId, ask.form);
     else openThread(t.id);
   }
 
@@ -7707,13 +7909,16 @@
         body.append(title, " finished");
         if (t.activity?.lastText) body.append(el("span", "ag-toast-text", t.activity.lastText));
       }
-      actions.append(
-        button("Open", "ag-btn tiny", () => {
-          this.remove(entry.key);
-          openActive(t, S.dockShown);
-        })
-      );
+      const open = () => {
+        this.remove(entry.key);
+        openActive(t, S.dockShown);
+      };
+      actions.append(button(entry.kind === "ask" && t.asking?.form ? "Answer" : "Open", "ag-btn tiny", open));
       body.append(actions);
+      // A click anywhere else on the toast does what Open does: the thread, or a question's form.
+      node.addEventListener("click", (event) => {
+        if (!event.target.closest("button, a, input, textarea, select")) open();
+      });
       node.append(
         el("span", `ag-dot s-${entry.kind === "ask" ? "waiting" : "ready"}`),
         body,

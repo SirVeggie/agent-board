@@ -100,3 +100,43 @@ test("page_ask needs a running turn", async () => {
   const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
   await assert.rejects(host.askPage(thread.id, { page: "ask-idle", events: ["submit"], timeoutMs: 1000, signal: new AbortController().signal }), /turn running/);
 });
+
+test("ask_user shows Scribe's own question card and answers with labels and values", async () => {
+  const { parseQuestionInput, formatAnswers } = await import("./questionTool.js");
+  const req = parseQuestionInput({
+    title: "Before I start",
+    questions: [
+      { question: "Which database?", options: ["Postgres", { label: "SQLite", description: "file" }] },
+      { question: "Name it", type: "text" },
+      { question: "How sure?", type: "scale", min: 1, max: 5, minLabel: "Not", maxLabel: "Very" },
+      { question: "Port", type: "number", optional: true },
+    ],
+  });
+  assert.equal(req.display, "dialog");
+  assert.equal(req.questions[1].type, "text");
+  assert.equal(req.questions[0].type, undefined);
+  const threadId = runningThread();
+  const pending = host.askQuestions(threadId, req, new AbortController().signal);
+  await new Promise((r) => setImmediate(r));
+  const item = host.threadDetail(threadId)?.items.find((it) => it.kind === "question" && !it.page);
+  assert.ok(item && item.kind === "question");
+  assert.equal(item.display, "dialog");
+  assert.equal(status(threadId), "waiting");
+  assert.equal(host.listThreads().find((t) => t.id === threadId)?.asking?.form, true);
+  host.resolveQuestion(item.requestId, { answers: { q1: ["o2"], q2: ["importer"], q3: ["4"], q4: [] }, notes: { q1: "for now" } });
+  const text = formatAnswers(req, await pending);
+  assert.match(text, /Which database\?\n→ SQLite\nNote: for now/);
+  assert.match(text, /Name it\n→ importer/);
+  assert.match(text, /How sure\?\n→ 4/);
+  assert.match(text, /Port\n→ \(no answer\)/);
+  assert.equal(status(threadId), "running");
+});
+
+test("ask_user rejects questions it cannot show", async () => {
+  const { parseQuestionInput } = await import("./questionTool.js");
+  assert.throws(() => parseQuestionInput({ questions: [] }), /at least one/);
+  assert.throws(() => parseQuestionInput({ questions: [{ question: "One?", options: ["only"] }] }), /two options/);
+  assert.throws(() => parseQuestionInput({ questions: [{ question: "Big?", type: "scale", min: 0, max: 50 }] }), /scale/);
+  assert.equal(parseQuestionInput({ questions: [{ question: "Short?", type: "text" }] }).display, "inline");
+  assert.equal(parseQuestionInput({ questions: [{ question: "Long?", type: "text", long: true }] }).display, "dialog");
+});

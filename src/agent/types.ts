@@ -193,6 +193,8 @@ export type ThreadView = Thread & {
     itemId: string;
     title: string;
     page?: { id: string; key: string; title: string };
+    /** Questions: answered in a form dialog, which a toast click opens. */
+    form?: boolean;
     /** Approvals: the command or path it is about, and the answers it offers. */
     detail?: string;
     options?: ApprovalOption[];
@@ -307,8 +309,19 @@ export type QuestionSpec = {
   id: string;
   prompt: string;
   header?: string;
+  /** Absent for choices (what the providers' own question tools send). ask_user adds the others. */
+  type?: "text" | "number" | "scale";
   multi: boolean;
   options: Array<{ id: string; label: string; description?: string }>;
+  optional?: boolean;
+  placeholder?: string;
+  /** Text: a multi-line answer. */
+  long?: boolean;
+  /** Number bounds, or a scale's ends (whole steps). */
+  min?: number;
+  max?: number;
+  minLabel?: string;
+  maxLabel?: string;
 };
 
 /** A file sent with a message, as base64. Images go to the model as images; other files see attachments.ts. */
@@ -415,6 +428,8 @@ export type ItemBody =
       requestId: string;
       title?: string;
       questions: QuestionSpec[];
+      /** dialog: a banner in the chat opens the questions as a form (ask_user with many questions). */
+      display?: "inline" | "dialog";
       status: "pending" | "answered" | "skipped" | "expired";
       answers?: Record<string, string[]>;
       notes?: Record<string, string>;

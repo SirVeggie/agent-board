@@ -61,6 +61,7 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "page_screenshot",
   "page_intent",
   "page_ask",
+  "ask_user",
   "page_wait",
   "library_folders",
   "scribe_docs",

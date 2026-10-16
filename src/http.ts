@@ -46,6 +46,7 @@ import { worktreePreviewRouter } from "./worktreePreview.js";
 import { agentRouter } from "./agent/routes.js";
 import { readScopedFile } from "./agent/readFile.js";
 import { searchScopedFiles } from "./agent/searchFiles.js";
+import { formatAnswers, parseQuestionInput } from "./agent/questionTool.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
@@ -846,6 +847,38 @@ export async function startHttp(): Promise<http.Server> {
       })
       .catch((err: Error) => {
         if (!res.writableEnded) res.status(err.message.startsWith("tab not found") ? 404 : 400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
+  /** ask_user from a Scribe chat's MCP: Scribe's own question card in the thread's turn, answered in the chat. */
+  app.post("/api/question", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "ask_user only works in Scribe chat threads." });
+      return;
+    }
+    let question;
+    try {
+      question = parseQuestionInput(req.body);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .askQuestions(thread, question, abort.signal)
+      .then((answer) => {
+        if (!res.writableEnded) res.json({ ...("skipped" in answer ? { skipped: true } : { answered: true }), text: formatAnswers(question, answer) });
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message === "aborted" ? "The question was cancelled." : err.message });
       })
       .finally(() => res.off("close", onClientGone));
   });

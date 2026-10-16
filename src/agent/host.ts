@@ -1620,7 +1620,7 @@ export class AgentHost {
       }
       if (item.kind === "question") {
         const title = item.title || item.questions[0]?.prompt || item.page?.title || "Question";
-        return { kind: "question", itemId: item.id, title, ...(item.page ? { page: item.page } : {}) };
+        return { kind: "question", itemId: item.id, title, ...(item.page ? { page: item.page } : {}), ...(item.display === "dialog" ? { form: true } : {}) };
       }
       if (item.kind === "plan") return { kind: "plan", itemId: item.id, title: item.title || "Plan to review" };
     }
@@ -3392,6 +3392,22 @@ export class AgentHost {
     }
   }
 
+  /** ask_user: Scribe's own question card in the thread's running turn, whatever the provider. */
+  async askQuestions(threadId: string, req: QuestionRequest, signal: AbortSignal): Promise<QuestionAnswer> {
+    const run = this.runs.get(threadId);
+    if (!run) throw new Error("ask_user only works while this chat thread has a turn running.");
+    this.closeBlocks(run);
+    const item = this.addItem(threadId, run.turn.id, {
+      kind: "question",
+      requestId: "",
+      ...(req.title ? { title: req.title } : {}),
+      questions: req.questions,
+      ...(req.display ? { display: req.display } : {}),
+      status: "pending",
+    });
+    return this.waitPending<QuestionAnswer>(threadId, run, "question", item.id, signal);
+  }
+
   private makeSink(threadId: string, run: RunState): RunSink {
     const turnId = run.turn.id;
     const host = this;
@@ -3567,7 +3583,7 @@ export class AgentHost {
         });
       },
       question(req: QuestionRequest, signal) {
-        const item = host.addItem(threadId, turnId, { kind: "question", requestId: "", ...(req.title ? { title: req.title } : {}), questions: req.questions, status: "pending" });
+        const item = host.addItem(threadId, turnId, { kind: "question", requestId: "", ...(req.title ? { title: req.title } : {}), questions: req.questions, ...(req.display ? { display: req.display } : {}), status: "pending" });
         return waitFor<QuestionAnswer>("question", item.id, signal);
       },
       plan(req: PlanRequest, signal) {

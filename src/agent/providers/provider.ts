@@ -77,7 +77,7 @@ export type ToolGateResult = { allowed: true } | { allowed: false; reason: strin
 /** The result of one of Scribe's own tools, for SessionContext.scanResult. */
 export type ToolScanCall = { toolId?: string; name: string; tool: ToolKind; title?: string; text: string };
 
-export type QuestionRequest = { title?: string; questions: QuestionSpec[] };
+export type QuestionRequest = { title?: string; questions: QuestionSpec[]; display?: "inline" | "dialog" };
 
 export type QuestionAnswer = { answers: Record<string, string[]>; notes?: Record<string, string> } | { skipped: true; reason?: string };
 

@@ -1832,11 +1832,11 @@ html[data-theme="cream"] .ag-md {
   min-height: 30px;
   width: 100%;
   min-width: 0;
-  padding: 5px 10px;
-  flex-direction: column;
+  padding: 6px 10px;
+  flex-direction: row;
   align-items: flex-start;
-  justify-content: center;
-  gap: 1px;
+  justify-content: flex-start;
+  gap: 8px;
   text-align: left;
   overflow-wrap: anywhere;
   background: var(--ag-sunken);
@@ -1851,6 +1851,234 @@ html[data-theme="cream"] .ag-md {
 
 .ag-q-label {
   font-size: 12.5px;
+}
+
+.ag-q-opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* A radio dot, or a check box for multi-select. */
+.ag-q-mark {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--muted);
+  transition: box-shadow var(--dur-enter) var(--ease), background var(--dur-enter) var(--ease);
+}
+
+.ag-q-opts.multi .ag-q-mark {
+  border-radius: 4px;
+}
+
+.ag-q-opt.on .ag-q-mark {
+  box-shadow: inset 0 0 0 4px var(--accent);
+}
+
+.ag-q-opts.multi .ag-q-opt.on .ag-q-mark {
+  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat;
+  box-shadow: none;
+}
+
+.ag-q-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ag-q-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ag-q-num {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ag-q-optional {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ag-q-input {
+  width: 100%;
+  min-width: 0;
+}
+
+textarea.ag-q-input {
+  resize: vertical;
+  min-height: 64px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.ag-q-scale {
+  display: grid;
+  grid-template-columns: repeat(var(--steps, 5), minmax(0, 1fr));
+  gap: 4px;
+}
+
+.ag-q-step {
+  height: 30px;
+  min-width: 0;
+  padding: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  background: var(--ag-sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.ag-q-step.on {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.ag-q-scale-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ag-q.missing .ag-q-prompt::after {
+  content: " · needs an answer";
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
+.ag-q.missing .ag-q-opt,
+.ag-q.missing .ag-q-step,
+.ag-q.missing .ag-q-input {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.ag-q-banner-line {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ask_user with many questions: the form dialog. */
+.ag-qform .ag-modal-panel {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.ag-qform-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 16px 14px 20px;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.ag-qform-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ag-qform-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ag-qform-ico svg {
+  width: 17px;
+  height: 17px;
+}
+
+.ag-qform-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.ag-qform-body .ag-q-list {
+  gap: 10px;
+}
+
+.ag-qform-body .ag-q {
+  gap: 8px;
+  padding: 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ag-sunken) 55%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.ag-qform-body .ag-q-prompt {
+  font-size: 13.5px;
+  color: var(--heading);
+  line-height: 1.45;
+}
+
+.ag-qform-body .ag-q.missing {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.ag-qform-actions {
+  padding: 12px 20px;
+  box-shadow: inset 0 1px 0 var(--border);
+}
+
+.ag-qform-progress {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.ag-qform-bar {
+  flex: 0 1 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.ag-qform-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-enter) var(--ease);
 }
 
 .ag-q-desc {
@@ -5624,6 +5852,7 @@ html.tight-small .agent-full {
 }
 
 .ag-toast {
+  cursor: pointer;
   display: flex;
   align-items: flex-start;
   gap: 9px;
