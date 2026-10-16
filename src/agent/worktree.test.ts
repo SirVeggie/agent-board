@@ -88,6 +88,63 @@ test("discard removes committed and uncommitted work without touching the main c
   assert.equal(fs.readFileSync(path.join(repo, "node_modules", "dep", "index.js"), "utf8"), "x");
 });
 
+test("cleanup accepts an already deregistered worktree with a leftover folder", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "Already removed");
+  await removeWorktree(wt);
+  fs.mkdirSync(wt.path);
+  await removeWorktree(wt);
+  await removeWorktree(wt);
+  assert.equal(fs.existsSync(wt.path), false);
+  assert.equal(fs.readFileSync(path.join(repo, "node_modules", "dep", "index.js"), "utf8"), "x");
+  assert.ok(await dropBranchIfEmpty(wt));
+});
+
+test("a landed merge closes successfully when its deregistered folder cannot be removed", async (t) => {
+  const { AgentHost } = await import("./host.js");
+  const { worktree: wt } = await createWorktree(repo, repo, "Cleanup fails");
+  fs.writeFileSync(path.join(wt.path, "cleanup.txt"), "merged\n");
+  await commitAll(wt, "merge despite cleanup failure");
+  const commit = sh(wt.path, "rev-parse", "HEAD");
+  const thread = { id: "cleanup-test", title: "Cleanup fails", cwd: wt.path, worktree: wt, nativeId: "session" };
+  const notices: { text: string }[] = [];
+  const threads = new Map([[thread.id, thread]]);
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    runs: new Map(), threads,
+    requireThread: (id: string) => threads.get(id),
+    sharers: () => [],
+    sessions: new Map([[thread.id, { dispose() {
+      // Reproduce Git having removed its registration before folder cleanup fails.
+      fs.unlinkSync(path.join(wt.path, "node_modules"));
+      sh(repo, "worktree", "remove", "--force", wt.path);
+      fs.mkdirSync(wt.path);
+    } }]]),
+    db: { saveThread() {} },
+    addItem: (_id: string, _turn: null, item: { text: string }) => notices.push(item),
+    emitThread() {}, flushNow() {},
+  });
+  const rm = fs.rmSync;
+  const blocked = t.mock.method(fs, "rmSync", (...args: Parameters<typeof fs.rmSync>) => {
+    if (args[0] === wt.path) throw new Error("EPERM: folder still in use");
+    return rm(...args);
+  });
+  try {
+    const result = await host.finishWorktree(thread.id, "merge");
+    assert.equal(result.ok, true);
+    assert.match(result.message, /Merged 1 commit/);
+    assert.match(result.message, /Worktree cleanup failed:.*EPERM/);
+    assert.equal(sh(repo, "rev-parse", "HEAD"), commit);
+    assert.equal(threads.get(thread.id)?.worktree.closed?.how, "merged");
+    assert.equal(threads.get(thread.id)?.cwd, repo);
+    assert.match(notices[0].text, /Worktree cleanup failed/);
+    assert.doesNotMatch(notices[0].text, /Worktree removed/);
+    assert.equal(sh(repo, "branch", "--list", wt.branch).trim(), wt.branch);
+  } finally {
+    blocked.mock.restore();
+    await removeWorktree(wt);
+    await dropBranchIfEmpty(wt);
+  }
+});
+
 test("a merged worktree reopens in the same folder from the latest base", async () => {
   const { worktree: wt } = await createWorktree(repo, repo, "Reopen me");
   fs.writeFileSync(path.join(wt.path, "r.txt"), "r1\n");

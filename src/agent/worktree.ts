@@ -226,13 +226,16 @@ export async function removeWorktree(wt: ThreadWorktree): Promise<void> {
       const res = await git([...LONG, "worktree", "remove", "--force", wt.path], wt.repo, { timeoutMs: 120_000 });
       if (res.code === 0 || !fs.existsSync(wt.path)) break;
       last = res.stderr.trim();
+      // Git may already have deregistered the worktree while a Windows process still
+      // holds its empty folder open. Retrying Git cannot remove that leftover folder.
+      if (last.includes("is not a working tree")) break;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     if (fs.existsSync(wt.path)) {
       try {
         fs.rmSync(wt.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
       } catch (err) {
-        throw new Error(`Could not remove the worktree folder ${wt.path}: ${last || (err as Error).message}`);
+        throw new Error(`Could not remove the worktree folder ${wt.path}: ${(err as Error).message}`);
       }
     }
   }

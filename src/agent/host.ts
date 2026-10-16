@@ -4207,11 +4207,21 @@ export class AgentHost {
       this.sessions.delete(id);
       forgetGuides(id);
     }
-    if (how === "discard") {
-      const deleted = await discardWorktree(wt);
-      if (!deleted) message += ` The branch could not be deleted and remains in the repository.`;
-    } else await removeWorktree(wt);
-    if (how === "merge") await dropBranchIfEmpty(wt);
+    let cleanupWarning = "";
+    try {
+      if (how === "discard") {
+        const deleted = await discardWorktree(wt);
+        if (!deleted) message += ` The branch could not be deleted and remains in the repository.`;
+      } else await removeWorktree(wt);
+      if (how === "merge") await dropBranchIfEmpty(wt);
+    } catch (err) {
+      if (how !== "merge") throw err;
+      // The merge has landed. Close the worktree even if cleanup fails, otherwise
+      // the board asks the agent to rebase in a folder Git may already have removed.
+      cleanupWarning = `Worktree cleanup failed: ${(err as Error).message}`;
+      log(`${threadId}: ${cleanupWarning}`);
+      message += ` ${cleanupWarning}`;
+    }
     // Agent sessions are tied to their folder. Forks that shared the worktree can't all reopen its
     // folder, so only the thread itself keeps its session; the others start over in the main checkout.
     const closed = { how: how === "merge" ? ("merged" as const) : ("left" as const), at: Date.now() };
@@ -4231,7 +4241,7 @@ export class AgentHost {
       const by = id === threadId ? "" : ` (from “${thread.title}”, which shared it)`;
       // A merged thread goes on as before (the next message opens a new worktree); say only what changes.
       const after = reopen ? "" : " The next message starts a new agent session in the folder.";
-      this.addItem(id, null, { kind: "notice", level: "info", text: `${message}${by} Worktree removed.${after}` });
+      this.addItem(id, null, { kind: "notice", level: cleanupWarning ? "warn" : "info", text: `${message}${by}${cleanupWarning ? "" : " Worktree removed."}${after}` });
       this.emitThread(id);
     }
     this.flushNow();
