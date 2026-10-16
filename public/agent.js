@@ -8165,7 +8165,7 @@
   }
 
   function quotaReset(provider, at) {
-    return provider === "codex" && at && at <= Date.now() ? "Reset passed · awaiting update" : resetText(at);
+    return at && at <= Date.now() ? "Reset passed · awaiting update" : resetText(at);
   }
 
   function codexQuotaNotes(limits) {

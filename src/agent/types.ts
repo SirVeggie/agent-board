@@ -156,7 +156,8 @@ export type PlanLimits = {
   at: number;
   /** "allowed", "allowed_warning" or "rejected" (Claude). */
   status?: string;
-  windows: Array<{ id: string; label: string; utilization: number; resetsAt?: number }>;
+  /** expired: resetsAt has passed and the provider has not reported the next window yet. */
+  windows: Array<{ id: string; label: string; utilization: number; resetsAt?: number; expired?: true }>;
   /** Requests are being billed as extra usage beyond the plan. */
   overage?: boolean;
   /** Codex snapshots remain authoritative past a reset; never synthesize recovery. */

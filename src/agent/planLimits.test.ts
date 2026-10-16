@@ -5,7 +5,6 @@ import {
   codexUsageRecoveryAllowed,
   planLimitsFromCodexRateLimits,
   nextRefreshAt,
-  nextResetAfter,
   parseResetsAt,
   planLimitsFromCursorUsage,
   planLimitsFromRateLimitInfo,
@@ -117,7 +116,7 @@ test("get_usage is ignored when plan limits do not apply", () => {
   assert.equal(planLimitsFromUsageReport({ rate_limits_available: true, rate_limits: {} }, 1), null);
 });
 
-test("expired windows drop to 0% and roll the 5-hour reset forward", () => {
+test("expired windows drop to 0% and keep their reported reset", () => {
   const now = 1_700_000_000_000;
   const limits = {
     at: now - 60_000,
@@ -128,10 +127,13 @@ test("expired windows drop to 0% and roll the 5-hour reset forward", () => {
   };
   const next = applyExpiredWindows(limits, now);
   assert.equal(next.windows[0]?.utilization, 0);
-  assert.equal(next.windows[0]?.resetsAt, now - 1000 + 5 * 60 * 60 * 1000);
+  assert.equal(next.windows[0]?.resetsAt, now - 1000);
+  assert.equal(next.windows[0]?.expired, true);
   assert.equal(next.windows[1]?.utilization, 0.4);
-  assert.equal(next.at, now);
-  assert.equal(applyExpiredWindows(next, now), next);
+  assert.equal(next.windows[1]?.expired, undefined);
+  assert.equal(next.at, now - 60_000);
+  assert.equal(applyExpiredWindows(next, now + 6 * 60 * 60 * 1000), next);
+  assert.equal(nextRefreshAt(next), now + 86_400_000);
 });
 
 test("nextRefreshAt is the soonest window reset", () => {
@@ -151,13 +153,6 @@ test("parseResetsAt accepts seconds, milliseconds, and ISO strings", () => {
   assert.equal(parseResetsAt(1_700_000_000_000), 1_700_000_000_000);
   assert.equal(parseResetsAt("2024-01-01T00:00:00.000Z"), Date.parse("2024-01-01T00:00:00.000Z"));
   assert.equal(parseResetsAt("nope"), undefined);
-});
-
-test("nextResetAfter walks forward in window-sized steps", () => {
-  const start = 1_000;
-  assert.equal(nextResetAfter("five_hour", start, start), start + 5 * 60 * 60 * 1000);
-  assert.equal(nextResetAfter("seven_day_opus", start, start + 8 * 24 * 60 * 60 * 1000), start + 14 * 24 * 60 * 60 * 1000);
-  assert.equal(nextResetAfter("overage", start, start), undefined);
 });
 
 test("usageLimitResetsAt tells a plan limit from other failures and finds when it resets", () => {

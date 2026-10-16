@@ -105,6 +105,8 @@ export { workspaceKey } from "./prefs.js";
 const FLUSH_MS = 700;
 /** Cursor's usage comes from a private API call, so refresh it at most this often (after turns). */
 const CURSOR_USAGE_TTL_MS = 10 * 60 * 1000;
+/** How often to check Claude usage again while a window has reset but no new one is reported. */
+const EXPIRED_USAGE_RETRY_MS = 60 * 60 * 1000;
 /** Characters of earlier conversation sent after a rewind to a provider that cannot fork. */
 const MAX_RECAP = 24_000;
 /** Providers drop the saved sessions no thread uses a few minutes after start, then every few hours. */
@@ -734,7 +736,7 @@ export class AgentHost {
   private codexUsageFetchAt = 0;
   private closed = false;
 
-  /** Last reported plan usage per provider. Expired windows read as 0% until a fetch or turn updates them. */
+  /** Last reported plan usage per provider. Expired windows read as 0% (flagged expired) until a fetch or turn updates them. */
   limits(): Partial<Record<ProviderId, PlanLimits>> {
     return this.liveLimits();
   }
@@ -831,9 +833,12 @@ export class AgentHost {
       this.usageTimer = null;
     }
     if (this.closed) return;
-    const at = nextRefreshAt(this.planLimits.claude);
-    if (at == null) return;
-    const delay = Math.max(0, at - Date.now() + 2000);
+    const limits = this.planLimits.claude;
+    const at = nextRefreshAt(limits);
+    // A passed reset is not a new window; check again now and then until Claude reports one.
+    const waiting = limits?.windows.some((w) => w.expired) ? EXPIRED_USAGE_RETRY_MS : null;
+    if (at == null && waiting == null) return;
+    const delay = Math.min(at == null ? Infinity : Math.max(0, at - Date.now() + 2000), waiting ?? Infinity);
     this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), Math.min(delay, 7 * 24 * 60 * 60 * 1000));
     this.usageTimer.unref?.();
   }

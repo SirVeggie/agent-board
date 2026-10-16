@@ -22,7 +22,7 @@ type Internals = {
   codexUsageTimer: NodeJS.Timeout | null;
 };
 
-test("sparse Claude notifications cannot schedule the locally projected next window", () => {
+test("expired Claude windows keep the reported reset, and sparse notifications cannot reschedule them", () => {
   const host = new AgentHost(() => {}, async () => quota(true));
   const internal = host as unknown as Internals;
   try {
@@ -30,7 +30,9 @@ test("sparse Claude notifications cannot schedule the locally projected next win
     internal.recordLimits("claude", { rateLimitType: "five_hour", utilization: 0.2, resetsAt: reset });
     const before = internal.usageWindowStarts.view("claude")!.reset;
     const projected = host.limits().claude!;
-    assert.ok(projected.windows[0].resetsAt! > reset);
+    assert.equal(projected.windows[0].resetsAt, reset);
+    assert.equal(projected.windows[0].expired, true);
+    assert.equal(projected.windows[0].utilization, 0);
     (host as unknown as { planLimits: { claude: PlanLimits } }).planLimits.claude = projected;
     internal.recordLimits("claude", { status: "allowed" });
     assert.equal(internal.usageWindowStarts.view("claude")!.reset, before);

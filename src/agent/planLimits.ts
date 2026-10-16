@@ -12,17 +12,8 @@ export const LIMIT_LABELS: Record<string, string> = {
 
 const USAGE_WINDOW_IDS = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included", "seven_day_oauth_apps"] as const;
 
-const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
-const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
-
 function limitLabel(id: string): string {
   return LIMIT_LABELS[id] ?? id.replaceAll("_", " ");
-}
-
-function windowPeriodMs(id: string): number | undefined {
-  if (id === "five_hour") return FIVE_HOUR_MS;
-  if (id.startsWith("seven_day")) return SEVEN_DAY_MS;
-  return undefined;
 }
 
 /** Unix seconds, unix ms, or ISO 8601 → epoch ms. */
@@ -152,34 +143,26 @@ export function planLimitsFromUsageReport(report: unknown, now: number): PlanLim
   };
 }
 
-/** Next reset strictly after `now`, or undefined when the window length is unknown. */
-export function nextResetAfter(id: string, resetsAt: number, now: number): number | undefined {
-  const period = windowPeriodMs(id);
-  if (!period) return undefined;
-  let at = resetsAt;
-  while (at <= now) at += period;
-  return at;
-}
-
-/** Zero windows whose reset has passed, and roll their next reset forward. */
+/**
+ * Zero windows whose reset has passed and flag them expired. The old reset stays as reported:
+ * a new window starts on first use, so nothing is projected until the provider reports again.
+ */
 export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanLimits {
   if (limits.source === "codex") return limits;
   let changed = false;
   const windows = limits.windows.map((w) => {
-    if (!w.resetsAt || w.resetsAt > now) return w;
+    if (w.expired || !w.resetsAt || w.resetsAt > now) return w;
     changed = true;
-    const resetsAt = nextResetAfter(w.id, w.resetsAt, now);
-    const { resetsAt: _was, ...rest } = w;
-    return { ...rest, utilization: 0, ...(resetsAt ? { resetsAt } : {}) };
+    return { ...w, utilization: 0, expired: true as const };
   });
   if (!changed) return limits;
-  return { ...limits, at: now, windows };
+  return { ...limits, windows };
 }
 
-/** Soonest window reset, including ones already due. Null when none are known. */
+/** Soonest reset not yet handled, including ones already due. Null when none are known. */
 export function nextRefreshAt(limits: PlanLimits | undefined): number | null {
   if (!limits) return null;
-  const times = limits.windows.map((w) => w.resetsAt).filter((t): t is number => typeof t === "number");
+  const times = limits.windows.filter((w) => !w.expired).map((w) => w.resetsAt).filter((t): t is number => typeof t === "number");
   if (!times.length) return null;
   return Math.min(...times);
 }

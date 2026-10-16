@@ -59,12 +59,12 @@ near a reset can also lose unused allowance sooner.
 ## Current Scribe behavior
 
 - `src/agent/planLimits.ts`: `applyExpiredWindows` zeros expired Claude windows
-  and `nextResetAfter` advances their timestamps by fixed five-hour/week periods.
-  This local projection is not evidence that a server session has started. Codex
-  snapshots explicitly bypass that projection.
+  and flags them `expired`, keeping the reported reset time (#554). It no longer
+  projects a next reset, since a new window starts only on first use. Codex
+  snapshots bypass the overlay.
 - `src/agent/host.ts`: Claude refreshes quota with `fetchPlanUsage` after reset;
-  Codex uses `readRateLimits`. These reads do not send model messages. The Claude
-  refresh path applies the local projection both before and after the read.
+  Codex uses `readRateLimits`. These reads do not send model messages. While a
+  Claude window is expired and no new one is reported, it checks again hourly.
 - `src/agent/providers/claude.ts`: `complete` uses a tools-free, one-turn query
   with no settings sources and no session persistence. That is a useful starting
   point for a probe, but tools-free does not establish subscription-only billing
