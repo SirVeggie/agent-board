@@ -157,6 +157,8 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
     }
     case "plan":
       return `[plan ${item.status}] ${clip(item.text, max * 2)}`;
+    case "settings":
+      return `[settings shown] ${item.ids.join(", ")}`;
     case "todos":
       return `[todos] ${item.todos.map((t) => `${t.status === "completed" ? "x" : t.status === "in_progress" ? "~" : " "} ${t.content}`).join("; ")}`;
     case "notice":

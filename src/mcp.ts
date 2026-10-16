@@ -1591,6 +1591,7 @@ export async function startMcp(): Promise<void> {
     if (!off.has("browser")) registerBrowserTools(server);
     if (pages) registerAsk(server);
     registerQuestion(server);
+    registerSettings(server);
     registerWebRequest(server);
     registerThreadUpdate(server);
     if (!off.has("threads")) registerThreadTools(server);
@@ -1655,6 +1656,46 @@ function registerAsk(server: McpServer): void {
         return errorResult((err as Error).message || "page_ask failed");
       } finally {
         clearInterval(heartbeat);
+      }
+    }
+  );
+}
+
+/**
+ * settings_find and settings_show: where a Scribe setting lives, and its rows from the settings
+ * dialogs shown in the chat, working, so the user changes it there.
+ */
+function registerSettings(server: McpServer): void {
+  server.tool(
+    "settings_find",
+    "Search Scribe's own settings (the Settings and Agent settings dialogs): each match's id, where it is (dialog › category › section › label), its current value and choices. Use it when the user asks where a Scribe setting is or wants one changed, then show the ones that fit with settings_show. Without a query it lists them all.",
+    { query: z.string().optional().describe("Words to look for in the settings' labels, sections and descriptions, e.g. \"send enter\".") },
+    { readOnlyHint: true },
+    async ({ query }) => {
+      try {
+        const { status, data } = await api("GET", `/api/settings/find${query ? `?q=${encodeURIComponent(query)}` : ""}`);
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return { content: [{ type: "text" as const, text: String((data as { text?: string }).text ?? "") }] };
+      } catch (err) {
+        return errorResult((err as Error).message || "settings_find failed");
+      }
+    }
+  );
+  server.tool(
+    "settings_show",
+    "Show Scribe settings in the chat as they are in the settings dialogs, under their section headings and in the dialogs' order, working: the user changes them right there. You cannot change them yourself, so to change a setting, show it and say what to pick. Show only the settings that answer the request (a few; a section id shows a whole section). Returns at once.",
+    {
+      ids: z.array(z.string()).min(1).max(30).describe("Setting or section ids exactly as settings_find lists them."),
+      title: z.string().optional().describe("Optional line above them, e.g. \"Where to change the send key\"."),
+    },
+    { readOnlyHint: true },
+    async (input) => {
+      try {
+        const { status, data } = await api("POST", "/api/settings/show", input);
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return { content: [{ type: "text" as const, text: String((data as { text?: string }).text ?? "") }] };
+      } catch (err) {
+        return errorResult((err as Error).message || "settings_show failed");
       }
     }
   );

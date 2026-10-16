@@ -71,7 +71,8 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   }
   if (!thread.helperOf) {
     lines.push(
-      `Questions: when you need the user's decision or details to carry on, ask with ask_user on the \`${server}\` server rather than your own built-in question tool. It takes choices (single or multi-select), free text, numbers and scales, shows a few questions as a card in the chat and more as a form, and returns the answers.`
+      `Questions: when you need the user's decision or details to carry on, ask with ask_user on the \`${server}\` server rather than your own built-in question tool. It takes choices (single or multi-select), free text, numbers and scales, shows a few questions as a card in the chat and more as a form, and returns the answers.`,
+      `Scribe settings: when the user asks where one of Scribe's own settings is or wants one changed, look it up with settings_find and show the rows that fit with settings_show. They appear in the chat as in the settings dialog and the user changes them there.`
     );
   }
   switch (thread.mode) {

@@ -5938,3 +5938,9 @@ html.tight-small .agent-full {
 .ag-mode .ag-mcp-modes[hidden] {
   display: none;
 }
+
+/* settings_show: the settings dialogs' own rows, lent to the chat, at the dialog's type size. */
+.ag-settings-card {
+  font-size: 13px;
+  line-height: normal;
+}

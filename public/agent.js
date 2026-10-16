@@ -3654,6 +3654,8 @@
           return this.renderQuestion(it);
         case "plan":
           return this.renderPlan(it);
+        case "settings":
+          return this.renderSettings(it);
         case "todos":
           return this.renderTodos(it);
         case "notice": {
@@ -4286,6 +4288,22 @@
         });
       }
       node.append(actions);
+      return node;
+    }
+
+    /** settings_show: the settings dialogs' own rows, lent to the chat (settings-ui.js), so they work here too. */
+    renderSettings(it) {
+      const node = el("div", "ag-card ag-settings-card");
+      node.dataset.itemId = it.id;
+      if (it.title) {
+        const head = el("div", "ag-card-head");
+        head.append(icon("gear"), el("span", "ag-card-title", it.title));
+        node.append(head);
+      }
+      const body = el("div");
+      const { missing } = window.scribeSettingsUI.lend(body, it.ids);
+      node.append(body);
+      if (missing.length) node.append(el("div", "ag-muted", missing.length === it.ids.length ? "These settings are no longer in Scribe." : `Not found any more: ${missing.join(", ")}`));
       return node;
     }
 

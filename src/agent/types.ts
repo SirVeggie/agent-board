@@ -446,6 +446,8 @@ export type ItemBody =
       status: "pending" | "accepted" | "rejected" | "shown";
       note?: string;
     }
+  /** settings_show: rows of Scribe's settings dialogs, shown in the chat to change there (ids from the client's settings index). */
+  | { kind: "settings"; ids: string[]; title?: string }
   | { kind: "todos"; todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | { kind: "notice"; level: "info" | "warn" | "error"; text: string };
 

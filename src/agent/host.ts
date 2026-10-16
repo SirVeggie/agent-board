@@ -3422,6 +3422,14 @@ export class AgentHost {
     return this.waitPending<QuestionAnswer>(threadId, run, "question", item.id, signal);
   }
 
+  /** settings_show: the settings dialogs' own rows as a card in the thread's running turn. */
+  showSettings(threadId: string, ids: string[], title?: string): void {
+    const run = this.runs.get(threadId);
+    if (!run) throw new Error("settings_show only works while this chat thread has a turn running.");
+    this.closeBlocks(run);
+    this.addItem(threadId, run.turn.id, { kind: "settings", ids, ...(title ? { title } : {}) });
+  }
+
   private makeSink(threadId: string, run: RunState): RunSink {
     const turnId = run.turn.id;
     const host = this;

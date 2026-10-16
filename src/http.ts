@@ -47,6 +47,7 @@ import { agentRouter } from "./agent/routes.js";
 import { readScopedFile } from "./agent/readFile.js";
 import { searchScopedFiles } from "./agent/searchFiles.js";
 import { formatAnswers, parseQuestionInput } from "./agent/questionTool.js";
+import { findSettings, parseShowInput, setSettingsCatalog, settingsCatalog } from "./agent/settingsTool.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
@@ -881,6 +882,38 @@ export async function startHttp(): Promise<http.Server> {
         if (!res.writableEnded) res.status(400).json({ error: err.message === "aborted" ? "The question was cancelled." : err.message });
       })
       .finally(() => res.off("close", onClientGone));
+  });
+
+  /** The app window's list of its settings dialogs' sections and rows, for settings_find. */
+  app.put("/api/settings/index", (req, res) => {
+    res.json({ count: setSettingsCatalog(req.body) });
+  });
+
+  /** settings_find from an MCP client: the settings matching q, as text for the model. */
+  app.get("/api/settings/find", (req, res) => {
+    try {
+      res.json({ text: findSettings(req.query.q) });
+    } catch (err) {
+      res.status(503).json({ error: (err as Error).message });
+    }
+  });
+
+  /** settings_show from a Scribe chat's MCP: the rows as a card in the thread's turn, to change there. */
+  app.post("/api/settings/show", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "settings_show only works in Scribe chat threads." });
+      return;
+    }
+    try {
+      const { ids, title } = parseShowInput(req.body);
+      agentHost.showSettings(thread, ids, title);
+      const byId = new Map(settingsCatalog().map((e) => [e.id, e]));
+      const names = ids.map((id) => byId.get(id)?.label ?? id);
+      res.json({ text: `Shown in the chat: ${names.join(", ")}. The user can change them there.` });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   /**
