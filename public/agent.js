@@ -658,6 +658,11 @@
         pageStepsChanged(msg.item.threadId);
         return;
       }
+      case "agent_page_show": {
+        // A chat Scribe started for a page (a Kanban worker's card), set to show: only where that page is in front.
+        if (app()?.activeTab?.()?.id === msg.pageId) showPageThread(msg.threadId, msg.where);
+        return;
+      }
       case "agent_limits": {
         S.config.limits = msg.limits || {};
         pageLimitsChanged();
@@ -10881,6 +10886,20 @@
         const { thread: watched } = await api("POST", `/threads/${encodeURIComponent(thread.id)}/run`, pageRunInput(data.run));
         if (watched) S.threads.set(watched.id, watched);
         return { ok: true, thread: pageBrief(watched || thread) };
+      }
+      case "allow": {
+        // What Scribe needs to start the page's agents on its own (a Kanban board's workers): asked after a click.
+        if (!activated) return { ok: false, error: "no_gesture" };
+        const may = await pageMayWrite(tab, false);
+        if (!may.ok) return may;
+        if (FOLDER_MODES.has(data.mode)) {
+          const cwd = typeof data.cwd === "string" ? data.cwd.trim() : "";
+          if (!cwd) return { ok: false, error: "needs_folder" };
+          const approval = APPROVALS.some((a) => a.id === data.approval) ? data.approval : "auto";
+          const folder = await pageMayUseFolder(tab, cwd, approval);
+          if (!folder.ok) return folder;
+        }
+        return { ok: true };
       }
       case "release": {
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };

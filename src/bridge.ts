@@ -1286,6 +1286,16 @@ export const BOARD_BRIDGE_JS = `
       var message = { op: "watch", threadId: agentText(threadId), run: agentRun(opts || {}) };
       return agentCall(message, AGENT_ASK_MS);
     },
+    /**
+     * Ask the user now (needs a click) for what the page's own agents need to start chats without
+     * one: agent chats without a click, and for Code and Plan the folder at that approval. A Kanban
+     * board's ▶ calls it, since Scribe then starts its workers' chats itself. opts: { mode, cwd,
+     * approval }. Resolves { ok } or { ok: false, error: "denied", permission }.
+     */
+    allow: function (opts) {
+      opts = opts || {};
+      return agentCall({ op: "allow", mode: agentText(opts.mode), cwd: agentText(opts.cwd), approval: agentText(opts.approval) }, AGENT_ASK_MS);
+    },
     /** Scribe stops seeing the thread through, and forgets an ended run once the page has dealt with it: { ok }. */
     release: function (threadId) {
       return agentCall({ op: "release", threadId: agentText(threadId) });
