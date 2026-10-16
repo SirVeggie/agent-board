@@ -2838,14 +2838,19 @@
     if (fromCol !== colId) askAssigneeAfterMove(id, colId);
   }
 
+  // Cancel selection alone: cancelling pointerdown also suppresses mouse events used by click-away UI.
+  boardEl.addEventListener("selectstart", function (e) {
+    if (isInteractive(e.target)) return;
+    if (e.target.closest(".card, .col-head, .composer, .worker-error, .need-reload")) return;
+    e.preventDefault();
+  });
+
   /** Dragging the board's background (between and under cards) pans it sideways. */
   boardEl.addEventListener("pointerdown", function (e) {
     if (e.button !== 0 || e.pointerType === "touch" || isInteractive(e.target)) return;
     if (e.target.closest(".card, .col-head, .composer, .worker-error, .need-reload")) return;
     // Clicks on a scrollbar land on the scrolling element itself; leave those to the browser.
     if (e.offsetX >= e.target.clientWidth || e.offsetY >= e.target.clientHeight) return;
-    // Background presses should never start text selection, even when there is nothing to pan.
-    e.preventDefault();
     if (boardEl.scrollWidth <= boardEl.clientWidth) return;
     var startX = e.clientX;
     var startLeft = boardEl.scrollLeft;
