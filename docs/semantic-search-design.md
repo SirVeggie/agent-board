@@ -213,7 +213,7 @@ The weights and the cut-off are first guesses from 28 queries. Keep the query se
 ### Images
 
 - Index image page assets and `page_show` assets with the vision encoder: 1.3 s each on CPU, on idle.
-- An image's score for text queries is `0.3 × image vector + 0.7 × its owner's text chunk`, since the text around a screenshot was the better signal here (lowered from 0.5 in #395 after the [image eval](semantic-search-index.md#image-eval)).
+- Text queries rank images by their owner's text chunk only, with an image weight of 0 (#395, user's decision after the [image eval](semantic-search-index.md#image-eval)). Image queries compare image vectors. Image vectors do not contribute to page or content scores.
 - An image as the query (paste a screenshot into the palette) finds similar images and their cards. This needs no text-to-image alignment and should work better than text queries; untested.
 - A mixed input (`{card text} <|image|>` in one vector) is supported by the model and untested here.
 

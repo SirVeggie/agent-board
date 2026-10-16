@@ -240,8 +240,8 @@ test("images are embedded after the text, score with their owner's text, and lea
     // Query: 0.6 along the image axis of #2's first picture, 0.8 along the text axis of card #1.
     const only = await f.index.queryImages("shot", () => true, 8, false, 1);
     assert.deepEqual(only.map(h => [h.anchor, +h.score.toFixed(2)]), [[PA(2), 0.6], [PA(1), 0], [PA(4), 0]]);
-    const blended = await f.index.queryImages("shot", () => true, 8, false);
-    assert.deepEqual(blended.map(h => [h.anchor, +h.score.toFixed(2), h.label, h.ownerRow?.anchor]), [[PA(1), 0.56, "#1 Shot card", "1"], [PA(2), 0.18, "#2 Other card", "2"], [PA(4), 0, "#2 Other card", "2"]]);
+    const textOnly = await f.index.queryImages("shot", () => true, 8, false);
+    assert.deepEqual(textOnly.map(h => [h.anchor, +h.score.toFixed(2), h.label, h.ownerRow?.anchor]), [[PA(1), 0.8, "#1 Shot card", "1"], [PA(2), 0, "#2 Other card", "2"], [PA(4), 0, "#2 Other card", "2"]]);
     assert.deepEqual((await f.index.queryImages("shot", () => true)).map(h => h.anchor), [PA(1)]);
     assert.equal((await f.index.queryImages("shot", () => false)).length, 0);
     // An image as the query compares pictures only.

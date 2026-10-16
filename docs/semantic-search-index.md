@@ -16,7 +16,7 @@ Image assets are indexed with the pack's vision encoder: the blobs a page's code
 - Images are embedded one at a time, only while no page waits for its text, and not within three seconds of a search. A search therefore waits behind one image at most (about 1.3 s on CPU). The vision encoder loads with the first image and leaves with the model process after ten idle minutes.
 - A page asset never changes, so its id is its hash; a `page_show` file is hashed by its bytes. An unchanged image is not embedded again when its card is edited: only its owner and label are updated.
 - An image leaves the index when the page stops referring to it, when the asset is deleted, and with its page. An image that cannot be decoded is skipped until search is switched on again; three failures in a row stop image indexing until then, and `imageError` in the index status says why.
-- A text query scores an image `0.3 × image + 0.7 × its owner's text chunk` (the page's vector when the owner has no chunk), and keeps images within 0.04 of the best. An image as the query compares pictures only and keeps those within 0.08.
+- A text query ranks images by their owner's text chunk only (the page's vector when the owner has no chunk), and keeps images within 0.04 of the best. The image weight is 0. An image as the query compares pictures only and keeps those within 0.08. Page and content results exclude image vectors.
 - Image rows never count as a page's chunks in page or content results.
 
 ## HTTP
@@ -86,11 +86,11 @@ Rank of the owner's image among the 30:
 | 1 (image only) | 11 of 28 | 19 | 4 of 20 | 7 | 0.364 |
 | 0.7 | 24 | 27 | 12 | 18 | 0.743 |
 | 0.5 | 28 | 28 | 16 | 19 | 0.863 |
-| **0.3 (blended, used)** | **28** | **28** | **17** | **19** | **0.902** |
-| 0 (owner's text only) | 28 | 28 | 18 | 20 | 0.933 |
+| 0.3 | 28 | 28 | 17 | 19 | 0.902 |
+| **0 (owner's text only, used)** | **28** | **28** | **18** | **20** | **0.933** |
 
 - The blend beats image-only by a wide margin. The title check is circular for any text weight, since the owner's chunk holds its title; the reworded queries are the fairer test.
-- On these screenshots the image signal adds nothing to a text query: the owner's text alone ranks slightly better than the blend. The pool is 30 app screenshots that look alike, so this says little about photos or diagrams. Text queries now use an image weight of 0.3 (#395), closer to text-only on these screenshots while retaining some image signal for photos and diagrams; a library with those kinds of images still needs measuring.
+- On these screenshots the image signal adds nothing to a text query: the owner's text alone ranks slightly better than the blend. The pool is 30 app screenshots that look alike, so this says little about photos or diagrams. Text queries now use an image weight of 0 (#395, user's decision); image queries still compare image vectors.
 - Plain descriptions ("a context menu", "error message dialog") still mostly return unrelated screenshots, with or without the blend. All 30 images score 0.62 to 0.72 against any of them, which is why the blended cut-off is 0.04 and the palette shows four at most.
 - An image as the query works: the cropped copy found its original first for 28 of 30, with a median lead of 0.105 over the next image. Unrelated screenshots still score about 0.8 against each other, so a pasted image that is not in the library returns loosely similar ones.
 
