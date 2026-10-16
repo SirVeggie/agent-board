@@ -84,7 +84,7 @@ export type FakeDeps = {
   runAction(page: string, name: string, args: Record<string, unknown>, caller: ActionCaller): unknown;
   runInfo(threadId: string): ThreadRunInfo;
   /** agent_run as that thread: start a helper, wait for its turn, return its report. */
-  runHelper?(threadId: string, opts: { task: string; provider: string; signal: AbortSignal }): Promise<Record<string, unknown>>;
+  runHelper?(threadId: string, opts: { title: string; task: string; provider: string; signal: AbortSignal }): Promise<Record<string, unknown>>;
   /** Turn delay when the message names none. */
   delayMs?: number;
 };
@@ -202,10 +202,11 @@ class FakeSession implements ProviderSession {
     await Promise.all(
       Array.from({ length: count }, async (_, i) => {
         const toolId = `fake-helper-${i}-${Date.now().toString(36)}`;
+        const title = `Widget rename ${i + 1}`;
         const task = `Fake helper task ${i + 1}: rename the widget and run its tests. [fake:stream=6 delay=${delay}]`;
-        sink.toolStart({ toolId, name: "agent_run", tool: "mcp", title: "Scribe: agent_run", input: { task, provider: "pi" }, status: "running" });
+        sink.toolStart({ toolId, name: "agent_run", tool: "mcp", title: "Scribe: agent_run", input: { title, task, provider: "pi" }, status: "running" });
         try {
-          sink.toolUpdate(toolId, { status: "done", output: JSON.stringify(await runHelper(this.thread.id, { task, provider: "pi", signal })) });
+          sink.toolUpdate(toolId, { status: "done", output: JSON.stringify(await runHelper(this.thread.id, { title, task, provider: "pi", signal })) });
         } catch (err) {
           sink.toolUpdate(toolId, { status: "error", output: (err as Error).message });
         }

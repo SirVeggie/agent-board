@@ -104,19 +104,31 @@ test("helpers are refused when the user turns them off", async () => {
   assert.equal(host.prefs().helpers, false);
   host.setPrefs({ memory: true });
   assert.equal(host.prefs().helpers, false);
-  await assert.rejects(host.runHelper(parent(), { task: "x", provider: "pi" }), /turned off/);
+  await assert.rejects(host.runHelper(parent(), { task: "x", title: "Inspect files", provider: "pi" }), /turned off/);
   await assert.rejects(host.helperModels(parent()), /turned off/);
+});
+
+test("new helpers require a nonblank title before starting a thread", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent();
+  const before = host.listThreads().length;
+  for (const title of [undefined, "", " \n\t "]) {
+    await assert.rejects(host.runHelper(id, { task: "inspect the files", provider: "pi", title }), /title is required for a new helper/);
+  }
+  assert.equal(host.listThreads().length, before);
 });
 
 test("a helper runs the brief on the named model with the caller's settings and returns its reply", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();
   asked.length = 0;
-  const result = await host.runHelper(id, { task: "rename foo to bar", provider: "pi", model: "qwen coder" });
+  const result = await host.runHelper(id, { task: "rename foo to bar", title: "  Rename\n  symbol  ", provider: "pi", model: "qwen coder" });
   assert.equal(result.status, "done");
   assert.equal(result.reply, "did: rename foo to bar");
   assert.deepEqual(result.usage, { turns: 1, inputTokens: 20, cacheReadTokens: 10, outputTokens: 5, promptTokens: 30, costPartial: true });
   const helper = host.getThread(String(result.thread))!;
+  assert.equal(helper.title, "Helper: Rename symbol");
+  assert.equal(helper.titleLocked, true);
   assert.equal(helper.helperOf, id);
   assert.equal(helper.model, "local/qwen-coder");
   assert.equal(helper.mode, "ask");
@@ -131,6 +143,7 @@ test("a helper runs the brief on the named model with the caller's settings and 
   const again = await host.runHelper(id, { task: "now the tests", thread: helper.id });
   assert.equal(again.thread, helper.id);
   assert.equal(again.reply, "did: now the tests");
+  assert.equal(host.getThread(helper.id)!.title, "Helper: Rename symbol");
   assert.equal((again.usage as { promptTokens: number }).promptTokens, 60);
   const info = host.runInfo(id);
   assert.ok(info.exists);
@@ -146,7 +159,7 @@ test("new helpers inherit or reduce file mode and follow-ups retain the selected
   const id = host.createThread({ provider: "codex", mode: "code", approval: "full", cwd: dir, scope: { kind: "workspace", ref: dir } }).id;
   for (const mode of [undefined, "plan", "ask"] as const) {
     asked.length = 0;
-    const result = await host.runHelper(id, { task: "inspect the files", provider: "pi", mode });
+    const result = await host.runHelper(id, { task: "inspect the files", title: "Inspect files", provider: "pi", mode });
     const helper = host.getThread(String(result.thread))!;
     assert.equal(helper.mode, mode ?? "code");
     assert.equal(asked[0].thread.mode, mode ?? "code");
@@ -158,7 +171,7 @@ test("new helpers inherit or reduce file mode and follow-ups retain the selected
     assert.equal(host.getThread(helper.id)!.mode, mode ?? "code");
   }
   host.updateThread(id, { mode: "plan" });
-  const result = await host.runHelper(id, { task: "inspect", provider: "pi", mode: "ask" });
+  const result = await host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "ask" });
   assert.equal(host.getThread(String(result.thread))!.mode, "ask");
 });
 
@@ -169,7 +182,7 @@ test("a helper of a thread in a worktree keeps the user's folder as its workspac
   fs.mkdirSync(tree, { recursive: true });
   const threads = (host as unknown as { threads: Map<string, Thread> }).threads;
   threads.set(id, { ...threads.get(id)!, cwd: tree, useWorktree: true, worktree: { home: dir, repo: dir, path: tree, branch: "agent/helper-tree", base: "master", baseCommit: "abc", links: [], createdAt: Date.now() } });
-  const result = await host.runHelper(id, { task: "inspect the files", provider: "pi" });
+  const result = await host.runHelper(id, { task: "inspect the files", title: "Inspect files", provider: "pi" });
   const helper = host.getThread(String(result.thread))!;
   assert.equal(helper.cwd, tree);
   assert.equal(helper.worktree?.path, tree);
@@ -182,11 +195,11 @@ test("helpers cannot raise file mode or cross the Pages tool boundary", async ()
     const id = host.createThread({ provider: "codex", mode, approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
     const denied = { code: ["board"], plan: ["code", "board"], ask: ["code", "plan", "board"], board: ["code", "plan", "ask"] }[mode];
     for (const requested of [...denied, "invalid", ""]) {
-      await assert.rejects(host.runHelper(id, { task: "inspect", provider: "pi", mode: requested }), /Helper mode .* is not allowed/);
+      await assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: requested }), /Helper mode .* is not allowed/);
     }
   }
   const id = host.createThread({ provider: "codex", mode: "board", approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
-  const result = await host.runHelper(id, { task: "inspect the pages", provider: "pi", mode: "board" });
+  const result = await host.runHelper(id, { task: "inspect the pages", title: "Inspect files", provider: "pi", mode: "board" });
   assert.equal(host.getThread(String(result.thread))!.mode, "board");
   assert.deepEqual(host.getThread(String(result.thread))!.scope, { kind: "global", ref: null });
 });
@@ -196,7 +209,7 @@ test("helper mode is rechecked if the parent changes while approval is pending",
   const id = host.createThread({ provider: "codex", mode: "code", approval: "ask", cwd: null, scope: { kind: "workspace", ref: null } }).id;
   running(id);
   const internals = host as unknown as Internals;
-  const rejected = assert.rejects(host.runHelper(id, { task: "inspect", provider: "pi", mode: "plan" }), /not allowed from ask mode/);
+  const rejected = assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "plan" }), /not allowed from ask mode/);
   const request = await approvalFor(id);
   host.updateThread(id, { mode: "ask" });
   host.resolveApproval(request.itemId, "once");
@@ -207,16 +220,16 @@ test("helper mode is rechecked if the parent changes while approval is pending",
 test("a helper cannot start helpers, and only its own thread can send it on", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();
-  const { thread } = await host.runHelper(id, { task: "one", provider: "pi" });
-  await assert.rejects(host.runHelper(String(thread), { task: "two", provider: "pi" }), /cannot start helpers/);
+  const { thread } = await host.runHelper(id, { task: "one", title: "Inspect files", provider: "pi" });
+  await assert.rejects(host.runHelper(String(thread), { task: "two", title: "Inspect files", provider: "pi" }), /cannot start helpers/);
   await assert.rejects(host.runHelper(parent(), { task: "two", thread: String(thread) }), /No helper/);
 });
 
 test("an unknown or ambiguous model lists the models to pick from", async () => {
   host.setPrefs({ helpers: true });
-  await assert.rejects(host.runHelper(parent(), { task: "x", provider: "pi", model: "qwen" }), /matches several pi models\. Pick one of: local\/qwen-coder, local\/qwen-small/);
-  await assert.rejects(host.runHelper(parent(), { task: "x", provider: "pi", model: "gpt" }), /No pi model "gpt"/);
-  await assert.rejects(host.runHelper(parent(), { task: "x", provider: "nope" }), /provider is required/);
+  await assert.rejects(host.runHelper(parent(), { task: "x", title: "Inspect files", provider: "pi", model: "qwen" }), /matches several pi models\. Pick one of: local\/qwen-coder, local\/qwen-small/);
+  await assert.rejects(host.runHelper(parent(), { task: "x", title: "Inspect files", provider: "pi", model: "gpt" }), /No pi model "gpt"/);
+  await assert.rejects(host.runHelper(parent(), { task: "x", title: "Inspect files", provider: "nope" }), /provider is required/);
   const { providers } = await host.helperModels(parent(), "pi");
   assert.deepEqual((providers[0].models as Array<{ id: string }>).map((m) => m.id), ["local/qwen-coder", "local/qwen-small"]);
 });
@@ -231,16 +244,16 @@ test("without full access the user is asked first, and Allow for this thread sti
     return status();
   });
   const id = parent("ask");
-  await assert.rejects(host.runHelper(id, { task: "x", provider: "pi" }), /cannot be asked/);
+  await assert.rejects(host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" }), /cannot be asked/);
   running(id);
-  const denied = assert.rejects(host.runHelper(id, { task: "x", provider: "pi" }), /denied the helper/);
+  const denied = assert.rejects(host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" }), /denied the helper/);
   host.resolveApproval((await approvalFor(id)).itemId, "deny");
   await denied;
-  const allowed = host.runHelper(id, { task: "x", provider: "pi" });
+  const allowed = host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" });
   host.resolveApproval((await approvalFor(id)).itemId, "thread");
   assert.equal((await allowed).status, "done");
   assert.equal(host.getThread(id)?.helpersAllowed, true);
-  assert.equal((await host.runHelper(id, { task: "y", provider: "pi" })).status, "done");
+  assert.equal((await host.runHelper(id, { task: "y", title: "Inspect files", provider: "pi" })).status, "done");
   // The permissions list takes it back.
   assert.deepEqual(host.listThreads().find((t) => t.id === id)?.grants, [{ kind: "helpers", key: "helpers", label: "Start helpers without asking" }]);
   assert.equal(host.revokeGrant(id, "helpers").grants, undefined);
@@ -250,7 +263,7 @@ test("without full access the user is asked first, and Allow for this thread sti
 test("a thread made with helpers allowed (a board worker) is not asked", async () => {
   host.setPrefs({ helpers: true });
   const id = host.createThread({ provider: "codex", mode: "ask", approval: "ask", cwd: null, scope: { kind: "global", ref: null }, helpersAllowed: true }).id;
-  assert.equal((await host.runHelper(id, { task: "x", provider: "pi" })).status, "done");
+  assert.equal((await host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" })).status, "done");
 });
 
 test("the caller's agent_run call names its helper thread", async () => {
@@ -258,13 +271,13 @@ test("the caller's agent_run call names its helper thread", async () => {
   const id = parent();
   running(id);
   const internals = host as unknown as Internals & { addItem: (thread: string, turn: string, body: unknown) => { helper?: string } };
-  const call = (task: string) => internals.addItem(id, `tu_${id}`, { kind: "tool", toolId: `c_${task}`, name: "mcp__scribe__agent_run", tool: "mcp", title: "Scribe: agent_run", input: { task, provider: "pi" }, status: "running", startedAt: Date.now() });
+  const call = (task: string) => internals.addItem(id, `tu_${id}`, { kind: "tool", toolId: `c_${task}`, name: "mcp__scribe__agent_run", tool: "mcp", title: "Scribe: agent_run", input: { task, title: "Inspect files", provider: "pi" }, status: "running", startedAt: Date.now() });
   const one = call("one");
   const two = call("two");
-  const second = await host.runHelper(id, { task: "two", provider: "pi" });
+  const second = await host.runHelper(id, { task: "two", title: "Inspect files", provider: "pi" });
   assert.equal(two.helper, second.thread);
   assert.equal(one.helper, undefined);
-  const first = await host.runHelper(id, { task: "one", provider: "pi" });
+  const first = await host.runHelper(id, { task: "one", title: "Inspect files", provider: "pi" });
   assert.equal(one.helper, first.thread);
   internals.runs.delete(id);
 });
@@ -272,7 +285,7 @@ test("the caller's agent_run call names its helper thread", async () => {
 test("thread with no task waits for a working helper and returns its report", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();
-  const { thread } = await host.runHelper(id, { task: "one", provider: "pi" });
+  const { thread } = await host.runHelper(id, { task: "one", title: "Inspect files", provider: "pi" });
   // Idle: its last report again.
   assert.equal((await host.runHelper(id, { thread: String(thread), task: "" })).reply, "did: one");
   hanging = true;
@@ -294,7 +307,7 @@ test("thread with no task waits for a working helper and returns its report", as
 test("archiving or deleting a thread takes its helpers along", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();
-  const { thread } = await host.runHelper(id, { task: "one", provider: "pi" });
+  const { thread } = await host.runHelper(id, { task: "one", title: "Inspect files", provider: "pi" });
   host.updateThread(id, { archived: true });
   assert.equal(host.getThread(String(thread))?.archived, true);
   host.updateThread(id, { archived: false });
@@ -308,7 +321,7 @@ test("stopping the caller stops its helper", async () => {
   const id = parent();
   hanging = true;
   try {
-    const call = host.runHelper(id, { task: "long", provider: "pi" });
+    const call = host.runHelper(id, { task: "long", title: "Inspect files", provider: "pi" });
     await new Promise((resolve) => setTimeout(resolve, 30));
     await host.cancel(id);
     assert.equal((await call).status, "cancelled");
@@ -323,11 +336,11 @@ test("a thread allows ten working helpers and refuses an eleventh", async () => 
   hanging = true;
   try {
     for (let i = 0; i < 10; i++) {
-      const result = await host.runHelper(id, { task: `helper ${i}`, provider: "pi", background: true });
+      const result = await host.runHelper(id, { task: `helper ${i}`, title: "Inspect files", provider: "pi", background: true });
       assert.equal(result.status, "running");
     }
     await assert.rejects(
-      host.runHelper(id, { task: "one too many", provider: "pi", background: true }),
+      host.runHelper(id, { task: "one too many", title: "Inspect files", provider: "pi", background: true }),
       /already has 10 helpers working/
     );
   } finally {
@@ -344,7 +357,7 @@ test("background launches overlap and steering or an aborted wait keeps helpers 
   try {
     // Sequential launch calls must return even though none of the helpers has finished.
     for (const task of ["alpha", "beta", "gamma"]) {
-      const result = await host.runHelper(id, { task, provider: "pi", background: true });
+      const result = await host.runHelper(id, { task, title: "Inspect files", provider: "pi", background: true });
       assert.equal(result.status, "running");
       helpers.push(String(result.thread));
     }

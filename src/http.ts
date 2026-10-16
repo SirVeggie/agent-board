@@ -1127,6 +1127,7 @@ export async function startHttp(): Promise<http.Server> {
       if (op === "models") return host.helperModels(thread, str(body.provider, 40));
       if (op === "run") {
         return host.runHelper(thread, {
+          title: str(body.title, 200),
           task: typeof body.task === "string" ? body.task : "",
           provider: str(body.provider, 40),
           model: str(body.model, 200),

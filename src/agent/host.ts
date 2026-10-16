@@ -522,7 +522,7 @@ export class AgentHost {
       const deps = {
         runAction: (page: string, name: string, args: Record<string, unknown>, caller: ActionCaller) => store.runAction(page, name, args, caller, (id) => this.runInfo(id)).result,
         runInfo: (id: string) => this.runInfo(id),
-        runHelper: (id: string, opts: { task: string; provider: string; signal: AbortSignal }) => this.runHelper(id, opts),
+        runHelper: (id: string, opts: { title: string; task: string; provider: string; signal: AbortSignal }) => this.runHelper(id, opts),
         delayMs: Number(process.env.SCRIBE_FAKE_AGENT_DELAY) || undefined,
       };
       this.fakes = { claude: new FakeProvider("claude", "Claude", deps), cursor: new FakeProvider("cursor", "Cursor", deps), codex: new FakeProvider("codex", "Codex", deps), pi: new FakeProvider("pi", "Native", deps) };
@@ -2912,7 +2912,7 @@ export class AgentHost {
    */
   async runHelper(
     threadId: string,
-    opts: { task: string; provider?: string; model?: string; effort?: string; mode?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
+    opts: { title?: string; task: string; provider?: string; model?: string; effort?: string; mode?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
     const parent = this.helperParent(threadId);
     const task = opts.task.trim();
@@ -2930,6 +2930,8 @@ export class AgentHost {
       if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
       helper = existing;
     } else {
+      const title = opts.title?.replace(/\s+/g, " ").trim();
+      if (!title) throw new Error("title is required for a new helper: a short name describing its task.");
       const mode = this.helperMode(parent, opts.mode);
       if (!opts.provider || !isProviderId(opts.provider)) throw new Error(`provider is required: one of ${Object.keys(this.providers).join(", ")}. agent_models lists their models.`);
       const provider = opts.provider;
@@ -2951,7 +2953,7 @@ export class AgentHost {
       const now = this.requireThread(threadId);
       const wt = openWorktree(now);
       const draft = this.draftThread({
-        title: `Helper: ${titleFrom(task)}`,
+        title: `Helper: ${title.slice(0, 200)}`,
         provider,
         ...(model ? { model: model.id } : {}),
         ...(opts.effort ? { effort: opts.effort } : {}),

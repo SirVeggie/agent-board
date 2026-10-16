@@ -1757,6 +1757,7 @@ function registerHelperTools(server: McpServer): void {
     "Hand a task to a helper agent on another provider or model, in a chat thread of its own in this workspace. Use it ONLY when the user, or this chat's instructions, told you to, with the model and for the work they named; never on your own to save effort, go faster or get a second opinion: it spends the user's quota. The helper sees none of this conversation, so the task must stand on its own (goal, files, what done looks like, how to check, what to leave alone). A task launches in the background and returns the helper's thread; call again with that thread and no task to wait for its report (final reply, changed files), and collect every report before ending your turn. Helpers share the folder, so run several at once only on different files. Check their work before building on it.",
     {
       task: z.string().optional().describe("The self-contained brief. Omit with thread to wait for that helper's report."),
+      title: z.string().optional().describe("Required for a new helper: a short, descriptive thread title, not an excerpt of the brief. Omit for follow-ups, waits and stops; they keep the existing title."),
       provider: z.string().optional().describe("claude, cursor, codex or pi (Native: the user's own model sources). Required for a new helper."),
       model: z.string().optional().describe("Model from agent_models. Default: the provider's last used."),
       effort: z.string().optional().describe("One of the model's efforts in agent_models. Default: its last used."),
@@ -1765,7 +1766,7 @@ function registerHelperTools(server: McpServer): void {
       background: z.boolean().optional().describe("Default true. false waits for the report during launch."),
       stop: z.boolean().optional().describe("With thread and no task: stop that helper."),
     },
-    async ({ task, provider, model, effort, mode, thread, background, stop }, extra) => {
+    async ({ title, task, provider, model, effort, mode, thread, background, stop }, extra) => {
       const progressToken = extra._meta?.progressToken;
       const startedAt = Date.now();
       const heartbeat =
@@ -1778,7 +1779,7 @@ function registerHelperTools(server: McpServer): void {
                 .catch(() => {});
             }, WAIT_HEARTBEAT_MS);
       try {
-        const { status, data } = await api("POST", "/api/helper/run", { task, provider, model, effort, mode, thread, stop, background: background ?? true }, { signal: extra.signal });
+        const { status, data } = await api("POST", "/api/helper/run", { title, task, provider, model, effort, mode, thread, stop, background: background ?? true }, { signal: extra.signal });
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }
