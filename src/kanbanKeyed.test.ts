@@ -108,6 +108,25 @@ test("a remote change repaints only the cards it touched, in place", async (t) =
     assert.equal(after.records.a, 0);
     assert.equal(after.records.c, 0);
     assert.ok(after.records.b > 0);
+
+    // A write the board's regions don't show paints from its local notice and leaves them alone.
+    await frame.locator('.card[data-id="c"] .card-title').click();
+    await frame.locator("#mTimes").waitFor();
+    const regions = await frame.evaluate(async () => {
+      const w = window as any;
+      const nodes = ['.col-head[data-col="todo"]', "#meta", "#workersBtn", "#mdPreview", "#checklist", "#mTimes"]
+        .map((sel) => document.querySelector(sel)!);
+      const seen: string[] = [];
+      const observer = new MutationObserver((list) => {
+        list.forEach((r) => seen.push(((r.target as Element).id || (r.target as Element).className) + " " + r.type));
+      });
+      nodes.forEach((node) => observer.observe(node, { subtree: true, childList: true, attributes: true, characterData: true }));
+      w.scribe.update([{ op: "set", path: "settings/workerLog", value: [] }]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      observer.disconnect();
+      return { seen, painted: nodes.every((node) => node.isConnected) };
+    });
+    assert.deepEqual(regions, { seen: [], painted: true });
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

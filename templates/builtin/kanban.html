@@ -1643,7 +1643,6 @@
 
   function setCards(next) {
     scribe.set({ cards: next });
-    render();
   }
   function updateCard(id, fn) {
     var changed = false;
@@ -1656,7 +1655,6 @@
   }
   function setColumns(next) {
     scribe.set({ columns: next });
-    render();
   }
 
   /** A card entering a column: timestamps, done time, and the agent hand-off signal. */
@@ -2069,9 +2067,23 @@
     sel.value = value == null || sel.hasAttribute("data-filter") ? "" : String(value);
     syncSelect(sel);
   }
+  /**
+   * Build a part of the board only when its signature changed. sig is a list compared item by
+   * item: state slices by identity (writes copy only what they change), the rest as plain values.
+   */
+  function region(node, sig, build) {
+    var last = node._regionSig;
+    if (last && last.length === sig.length && sig.every(function (v, i) { return v === last[i]; })) return;
+    node._regionSig = null;
+    build();
+    node._regionSig = sig;
+  }
   function renderToolbar() {
     var v = view();
     if (document.activeElement !== searchEl) searchEl.value = str(v.q);
+    region(metaEl, [JSON.stringify(v), scribe.state.labels, scribe.state.columns, scribe.state.cards, new Date().toDateString()], function () { buildToolbar(v); });
+  }
+  function buildToolbar(v) {
     fillSelect(fLabel, [["", "Any label"]].concat(labels().map(function (l) { return [l.id, l.name]; })), v.label);
     fillSelect(fPriority, [["", "Any priority"]].concat(PRIORITIES.map(function (p, i) { return [String(i), p]; })), v.priority);
     fillSelect(fAssignee, [["", "Anyone"], ["__none", "Unassigned"]].concat(assigneeNames().map(function (n) { return [n, n]; })), v.assignee);
@@ -2089,6 +2101,8 @@
   // ---------- board rendering ----------
   var renderCache = null;
   var renderedView = null;
+  /** The state last painted: a local notice for writes already on screen paints nothing. */
+  var renderedState = null;
   var paintFrame = null, paintTimer = null;
   function cancelPaint() {
     if (paintFrame !== null) cancelAnimationFrame(paintFrame);
@@ -2115,6 +2129,7 @@
     // A queued paint can outlive this board when the host replaces the document.
     if (!boardEl.isConnected) return;
     renderedView = JSON.stringify(view());
+    renderedState = scribe.state;
     renderCache = { colIds: new Set(columns().map(function (c) { return c.id; })), cardsIn: new Map(), workerCards: new Map(), nextCard: new Map(), labels: {} };
     try {
       renderToolbar();
@@ -2150,63 +2165,64 @@
       var colEl = Array.from(boardEl.children).find(function (node) { return node.dataset.col === col.id; }) || el("section", "column");
       var colNodes = [];
       colEl.dataset.col = col.id;
-      var head = el("div", "col-head");
-      head.dataset.col = col.id;
-      if (editingCol === col.id) {
-        var existingInput = colEl.querySelector(".col-title-input");
-        var input = existingInput || el("input", "col-title-input");
-        if (!existingInput) input.value = col.title;
-        if (!existingInput) input.addEventListener("keydown", function (e) {
-          if (e.key === "Enter") input.blur();
-          if (e.key === "Escape") { editingCol = null; render(); }
-        });
-        if (!existingInput) input.addEventListener("blur", function () {
-          if (editingCol !== col.id) return;
-          editingCol = null;
-          var title = input.value.trim();
-          if (title && title !== col.title) {
-            setColumns(columns().map(function (c) { return c.id === col.id ? Object.assign({}, c, { title: title }) : c; }));
-          } else render();
-        });
-        if (!existingInput) {
-          head.appendChild(input);
-          setTimeout(function () { if (input.isConnected && editingCol === col.id && !openId) { input.focus(); input.select(); } }, 0);
-        }
-      } else {
-        var title = el("span", "col-title", col.title || "Untitled");
-        title.addEventListener("click", function (e) {
-          e.stopPropagation();
-          editingCol = col.id;
-          render();
-        });
-        head.appendChild(title);
-        if (col.role && ROLE_TAG[col.role]) {
-          head.appendChild(col.role === "agent" ? renderInboxTag(col) : el("span", "role " + col.role, ROLE_TAG[col.role]));
-        }
-      }
       var list = cardsIn(col.id);
       var visible = filtering ? list.filter(matches) : list;
-      var count = el("span", "col-count", col.wip ? list.length + " / " + col.wip : String(visible.length));
-      if (col.wip && list.length === col.wip) count.classList.add("at");
-      if (col.wip && list.length > col.wip) count.classList.add("over");
-      if (col.wip) count.dataset.tooltip = "Work-in-progress limit " + col.wip;
-      head.appendChild(count);
-      var menuBtn = el("button", "col-menu-btn", "⋯");
-      menuBtn.type = "button";
-      menuBtn.setAttribute("aria-label", "Column menu");
-      menuBtn.addEventListener("click", function (e) {
-        e.stopPropagation();
-        openColumnMenu(column(col.id), e.currentTarget);
-      });
-      head.appendChild(menuBtn);
-      head.addEventListener("pointerdown", function (e) { startColumnDrag(e, col.id, colEl); });
-      var oldHead = colEl.querySelector(".col-head");
-      if (oldHead) {
-        var headNodes = Array.from(head.childNodes);
-        if (editingCol === col.id && existingInput) headNodes.unshift(existingInput);
-        window.scribeSyncChildren(oldHead, headNodes);
-        head = oldHead;
+      var countText = col.wip ? list.length + " / " + col.wip : String(visible.length);
+      var head = colEl.querySelector(".col-head");
+      if (!head) {
+        head = el("div", "col-head");
+        head.dataset.col = col.id;
+        head.addEventListener("pointerdown", function (e) { startColumnDrag(e, col.id, colEl); });
       }
+      region(head, [col, countText, list.length, editingCol === col.id], function () {
+        var headNodes = [];
+        if (editingCol === col.id) {
+          var existingInput = colEl.querySelector(".col-title-input");
+          var input = existingInput || el("input", "col-title-input");
+          if (!existingInput) input.value = col.title;
+          if (!existingInput) input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") input.blur();
+            if (e.key === "Escape") { editingCol = null; render(); }
+          });
+          if (!existingInput) input.addEventListener("blur", function () {
+            if (editingCol !== col.id) return;
+            editingCol = null;
+            var title = input.value.trim();
+            if (title && title !== col.title) {
+              setColumns(columns().map(function (c) { return c.id === col.id ? Object.assign({}, c, { title: title }) : c; }));
+            } else render();
+          });
+          headNodes.push(input);
+          if (!existingInput) {
+            setTimeout(function () { if (input.isConnected && editingCol === col.id && !openId) { input.focus(); input.select(); } }, 0);
+          }
+        } else {
+          var title = el("span", "col-title", col.title || "Untitled");
+          title.addEventListener("click", function (e) {
+            e.stopPropagation();
+            editingCol = col.id;
+            render();
+          });
+          headNodes.push(title);
+          if (col.role && ROLE_TAG[col.role]) {
+            headNodes.push(col.role === "agent" ? renderInboxTag(col) : el("span", "role " + col.role, ROLE_TAG[col.role]));
+          }
+        }
+        var count = el("span", "col-count", countText);
+        if (col.wip && list.length === col.wip) count.classList.add("at");
+        if (col.wip && list.length > col.wip) count.classList.add("over");
+        if (col.wip) count.dataset.tooltip = "Work-in-progress limit " + col.wip;
+        headNodes.push(count);
+        var menuBtn = el("button", "col-menu-btn", "⋯");
+        menuBtn.type = "button";
+        menuBtn.setAttribute("aria-label", "Column menu");
+        menuBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          openColumnMenu(column(col.id), e.currentTarget);
+        });
+        headNodes.push(menuBtn);
+        window.scribeSyncChildren(head, headNodes);
+      });
       colNodes.push(head);
 
       var ul = colEl.querySelector(".cards") || el("ul", "cards");
@@ -2277,6 +2293,7 @@
       var col = { id: newId("col"), title: "New column" };
       editingCol = col.id;
       setColumns(columns().concat([col]));
+      render();
       boardEl.scrollLeft = boardEl.scrollWidth;
     });
     if (!settings().hideAddColumn) boardNodes.push(addCol);
@@ -3105,6 +3122,41 @@
 
     var feed = c.status && c.status.kind === "working" ? cardSteps(c) : [];
     renderFeed(c, feed);
+    region(mStatus, [c.id, c.status, feed.length > 0], function () { buildModalStatus(c, feed); });
+
+    region(mdPreview, [c.id, c.description, c.images, scribe.state.cards, editingDesc], function () {
+      if (editingDesc) return;
+      if (c.description.trim()) {
+        mdPreview.className = "md-preview";
+        setHtml(mdPreview, renderMarkdown(c.description, c.images));
+      } else {
+        mdPreview.className = "md-preview placeholder";
+        setHtml(mdPreview, escapeHtml("Click or press Enter to add a description. Markdown works; paste an image to embed it."));
+      }
+    });
+
+    region(checklistEl, [c.id, c.checklist, editingCheck], function () { buildModalChecklist(c); });
+
+    // images
+    coverToggle.classList.toggle("hidden", !c.images.length);
+    coverSwitch.checked = c.cover !== false;
+    var imagesSig = JSON.stringify([c.id, c.images.map(function (im) { return [im.id, im.name, im.data]; })]);
+    if (galleryEl._sig !== imagesSig) renderGallery(c, imagesSig);
+
+    // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
+    if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
+    var commentsSig = JSON.stringify([c.id, c.title, c.thread, imagesSig, c.comments.map(function (cm) {
+      return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp];
+    })]);
+    if (commentsEl._sig !== commentsSig) renderComments(c, commentsSig);
+
+    // Times read the clock ("5 min ago"): a new minute paints them again.
+    region(mTimes, [c, col, scribe.state.columns, scribe.state.cards, scribe.state.labels, workers(),
+      Math.floor(Date.now() / 60000)], function () { renderModalSide(c, col); });
+    if (overlay.scrollTop !== scrollTop) overlay.scrollTop = scrollTop;
+  }
+
+  function buildModalStatus(c, feed) {
     if (feed.length) {
       mStatus.className = "m-status hidden";
     } else if (c.status && str(c.status.text || c.status.kind).trim()) {
@@ -3120,24 +3172,17 @@
     } else {
       mStatus.className = "m-status hidden";
     }
+  }
 
-    if (!editingDesc) {
-      if (c.description.trim()) {
-        mdPreview.className = "md-preview";
-        setHtml(mdPreview, renderMarkdown(c.description, c.images));
-      } else {
-        mdPreview.className = "md-preview placeholder";
-        setHtml(mdPreview, escapeHtml("Click or press Enter to add a description. Markdown works; paste an image to embed it."));
-      }
-    }
-
+  function buildModalChecklist(c) {
     // checklist
     var doneCount = c.checklist.filter(function (i) { return i.done; }).length;
     clProgress.classList.toggle("hidden", !c.checklist.length);
     clProgress.firstElementChild.style.width = c.checklist.length ? (100 * doneCount / c.checklist.length) + "%" : "0";
     clCount.textContent = c.checklist.length ? doneCount + "/" + c.checklist.length : "";
-    if (!editingCheck) checklistEl.replaceChildren();
-    if (!editingCheck) c.checklist.forEach(function (item) {
+    if (editingCheck) return;
+    checklistEl.replaceChildren();
+    c.checklist.forEach(function (item) {
       var li = el("li", item.done ? "done" : "");
       li.dataset.id = item.id;
       var tick = el("input", "tick");
@@ -3164,22 +3209,6 @@
       li.appendChild(rm);
       checklistEl.appendChild(li);
     });
-
-    // images
-    coverToggle.classList.toggle("hidden", !c.images.length);
-    coverSwitch.checked = c.cover !== false;
-    var imagesSig = JSON.stringify([c.id, c.images.map(function (im) { return [im.id, im.name, im.data]; })]);
-    if (galleryEl._sig !== imagesSig) renderGallery(c, imagesSig);
-
-    // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
-    if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
-    var commentsSig = JSON.stringify([c.id, c.title, c.thread, imagesSig, c.comments.map(function (cm) {
-      return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp];
-    })]);
-    if (commentsEl._sig !== commentsSig) renderComments(c, commentsSig);
-
-    renderModalSide(c, col);
-    if (overlay.scrollTop !== scrollTop) overlay.scrollTop = scrollTop;
   }
 
   function renderGallery(c, sig) {
@@ -3431,6 +3460,8 @@
   /** Swap an item's text for an input: Enter or click-away saves, Esc cancels, empty removes the item. */
   function editCheckItem(cardId, item, span) {
     editingCheck = item.id;
+    // The input replaces the row outside the checklist's region: it is built again afterwards.
+    checklistEl._regionSig = null;
     var input = el("input", "field ck-edit");
     input.value = item.text;
     span.replaceWith(input);
@@ -3848,7 +3879,6 @@
     cards.splice(cards.findIndex(function (x) { return x.id === c.id; }) + 1, 0, copy);
     scribe.set({ cards: cards, nextNum: num + 1 });
     if (open) openCard(copy.id);
-    render();
     setHint("Duplicated as #" + num + ".");
   }
   function toggleArchive(id) {
@@ -3983,7 +4013,6 @@
     }
     scribe.set({ cards: cards });
     scribe.signal("approved", { card: id, num: c.num });
-    render();
     setHint("#" + c.num + " approved.");
   }
   function requestChanges(id) {
@@ -4004,7 +4033,6 @@
     commentBox.value = "";
     scribe.set({ cards: cards });
     scribe.signal("changes", { card: id, num: c.num });
-    render();
     setHint("Sent back" + (target ? " to " + target.title : "") + ".");
   }
   $("mApprove").addEventListener("click", function () { approve(openId); });
@@ -4436,7 +4464,6 @@
   }
   function saveLabels(next) {
     scribe.set({ labels: next });
-    render();
   }
 
   // ---------- archive drawer ----------
@@ -4606,7 +4633,6 @@
     // Only this field is written, so nothing else on the card can be overwritten by a late answer.
     var path = "cards/id=" + c.id + "/suggest";
     scribe.update([Object.keys(next).length ? { op: "set", path: path, value: next } : { op: "remove", path: path }]);
-    render();
   }
   /** Accept (accept true) or dismiss one suggestion: a label id, or "priority". A dismissed one is not offered again. */
   function settleSuggestion(id, what, accept) {
@@ -4716,7 +4742,6 @@
     if (on) next[key] = on;
     else delete next[key];
     scribe.set({ settings: next });
-    render();
   }
   settingsBtn.addEventListener("click", function () {
     if (settingsBack.classList.contains("hidden")) openSettings();
@@ -4813,9 +4838,11 @@
   function hasWorkerApi() {
     return Boolean(scribe.agent && typeof scribe.agent.options === "function");
   }
+  var NO_WORKERS = Object.freeze({});
   function workers() {
     var w = settings().workers;
-    return w && typeof w === "object" ? w : {};
+    // One empty object, so a board without workers keeps the same region signature.
+    return w && typeof w === "object" ? w : NO_WORKERS;
   }
   function worker(id) {
     var w = id ? workers()[id] : null;
@@ -4833,7 +4860,6 @@
     ids.splice(index, 1);
     ids.splice(target, 0, id);
     scribe.update([{ op: "set", path: "settings/workerOrder", value: ids }]);
-    render();
     var button = workersPop.querySelector('[data-worker="' + id + '"] [data-direction="' + direction + '"]');
     if (button && button.disabled) button = button.parentElement.querySelector('button:not(:disabled)');
     if (button) button.focus();
@@ -5073,7 +5099,6 @@
         askConfirm({ title: "Clear the worker log?", text: "Starts, pauses, and merges already recorded are dropped. New lines still appear.", ok: "Clear" }).then(function (ok) {
           if (!ok) return;
           scribe.update([{ op: "set", path: "settings/workerLog", value: [] }]);
-          render();
         });
       });
       head.appendChild(clear);
@@ -5859,6 +5884,10 @@
     if (!sharedInstructionsBack.classList.contains("hidden")) resizeSharedInstructions();
   });
   function renderWorkersButton() {
+    var open = !workersPop.classList.contains("hidden");
+    region(workersBtn, [workers(), settings().workerOrder, JSON.stringify(workerErrors), open], buildWorkersButton);
+  }
+  function buildWorkersButton() {
     workersBtn.replaceChildren();
     var running = workerIds().filter(function (id) { return workerOn(worker(id)); });
     if (running.length) {
@@ -5900,7 +5929,16 @@
     workersPop.style.maxHeight = Math.max(200, window.innerHeight - r.bottom - 20) + "px";
   }
   function renderWorkersPanel() {
-    if (workersPop.classList.contains("hidden")) return;
+    if (workersPop.classList.contains("hidden")) { workersPop._regionSig = null; return; }
+    var s = settings();
+    // What the rows show, worked out: thread status, launching, errors and card counts change it.
+    var rows = JSON.stringify([workerIds().map(function (id) {
+      return [workerState(id), workerErrors[id] || "", Boolean(launching[id]), workerCards(id).length, atLimit(id)];
+    }), columns().map(function (c) { return isReadyCol(c) ? (isPausedCol(c) ? 1 : 2) : 0; })]);
+    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.maxWorkers, workersLogOpen && s.workerLog,
+      workersLogOpen, panelOpen, panelEditor, agentOptions, optionsFailed], buildWorkersPanel);
+  }
+  function buildWorkersPanel() {
     var scroll = workersPop.scrollTop;
     var logListEl = workersPop.querySelector(".wp-log-list");
     var logScroll = logListEl ? logListEl.scrollTop : 0;
@@ -6101,6 +6139,11 @@
     return { percent: percent, reset: reset };
   }
   function renderBoardLimits() {
+    // Reset times read the clock: a new minute paints them again.
+    region($("boardUsage"), [workerLimits, workerLimitsLoaded, workerLimitsError, agentOptions, workers(),
+      Math.floor(Date.now() / 60000)], buildBoardLimits);
+  }
+  function buildBoardLimits() {
     var section = $("boardUsage");
     var providers = {};
     ((agentOptions && agentOptions.providers) || []).forEach(function (p) {
@@ -6633,8 +6676,10 @@
     sweepUnmerged();
   }
   scribe.onChange(function (state, info) {
+    // The board's own writes paint here, once the code that made them has finished.
     if (info && info.source === "local") {
       bookkeeping();
+      if (scribe.state !== renderedState) render();
       return;
     }
     ensureShape();

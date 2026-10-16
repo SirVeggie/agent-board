@@ -20,7 +20,7 @@ const STUB = `<script>
       ]
     }, local: {},
     // Like the bridge: writes replace what they change, and listeners with { local: true } hear them.
-    set(patch) { Object.assign(this.state, patch); this.wrote(); },
+    set(patch) { this.state = { ...this.state, ...patch }; this.wrote(); },
     setLocal(patch) { Object.assign(this.local, patch); },
     onChange(fn, opts) { this.changed = fn; this.hearsLocal = Boolean(opts && opts.local); },
     wrote() { if (this.hearsLocal) queueMicrotask(() => this.changed(this.state, { source: 'local', ops: null })); },
@@ -33,7 +33,7 @@ const STUB = `<script>
         if (op.op === 'set') card.suggest = op.value;
         else if (op.op === 'remove') delete card.suggest;
         else throw new Error('unexpected op ' + op.op);
-        this.state.cards = this.state.cards.slice();
+        this.state = { ...this.state, cards: this.state.cards.slice() };
         this.state.cards[at] = card;
       }
       this.wrote();

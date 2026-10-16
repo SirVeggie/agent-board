@@ -32,9 +32,11 @@ test("Kanban columns load batches independently and retain them through live upd
         }, local: {}, title: 'Project board', template: { values: { agentMode: false } },
         onTitle(fn) { this.titleChanged = fn; },
         setTitle(title) { this.title = title; this.titleChanged(); return Promise.resolve({ ok: true }); },
-        set(patch) { Object.assign(this.state, patch); },
+        set(patch) { this.state = { ...this.state, ...patch }; this.wrote(); },
         setLocal(patch) { Object.assign(this.local, patch); },
         onChange(fn) { this.changed = fn; },
+        // Like the bridge: the board hears its own writes once the writing code has finished.
+        wrote() { queueMicrotask(() => this.changed && this.changed(this.state, { source: 'local', ops: null })); },
         agent: { show(id, options) { window.openedCreator = { id, options }; return Promise.resolve({ ok: true }); } }
       };
     </script>${html}`);
@@ -154,9 +156,14 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
       window.scribe = {
         state: { columns: [{ id: 'todo', title: 'Ready', role: 'agent' }], labels: [], cards: [], nextNum: 1,
           settings: { workers: { a: { name: 'Sol', provider: 'codex' }, b: { name: 'Luna', provider: 'pi' } } } },
-        local: {}, set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); },
-        update(ops) { for (const op of ops) if (op.path === 'settings/workerOrder') this.state.settings.workerOrder = op.value; },
+        local: {}, set(patch) { this.state = { ...this.state, ...patch }; this.wrote(); }, setLocal(patch) { Object.assign(this.local, patch); },
+        update(ops) {
+          for (const op of ops) if (op.path === 'settings/workerOrder') this.state = { ...this.state, settings: { ...this.state.settings, workerOrder: op.value } };
+          this.wrote();
+        },
         onChange(fn) { this.changed = fn; },
+        // Like the bridge: the board hears its own writes once the writing code has finished.
+        wrote() { queueMicrotask(() => this.changed && this.changed(this.state, { source: 'local', ops: null })); },
         agent: {
           options() { return Promise.resolve({ ok: true, providers: ['codex', 'claude', 'cursor'].map(id => ({ id, available: true })), models: {} }); },
           limits() { return Promise.resolve({ ok: true, limits: { codex: { at: Date.now(), ordinaryUsageAllowed: false,
@@ -283,9 +290,11 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
           ]
         },
         local: {},
-        set(patch) { Object.assign(this.state, patch); },
+        set(patch) { this.state = { ...this.state, ...patch }; this.wrote(); },
         setLocal(patch) { Object.assign(this.local, patch); },
-        onChange(fn) { this.changed = fn; }
+        onChange(fn) { this.changed = fn; },
+        // Like the bridge: the board hears its own writes once the writing code has finished.
+        wrote() { queueMicrotask(() => this.changed && this.changed(this.state, { source: 'local', ops: null })); }
       };
     </script>${html}`);
     const shown = () => page.locator(".cards .card").evaluateAll(nodes => nodes.map(n => (n as HTMLElement).dataset.id).sort());
