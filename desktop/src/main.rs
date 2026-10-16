@@ -76,6 +76,15 @@ async fn window_action(window: WebviewWindow, action: String) -> Result<(), Stri
     result.map_err(|err| err.to_string())
 }
 
+/// The shell reports whether focus is in an embedded site, which gets the board's shortcuts natively.
+#[tauri::command]
+fn key_focus(window: WebviewWindow, embed: bool) {
+    #[cfg(windows)]
+    keys::set_embed_focus(window.label(), embed);
+    #[cfg(not(windows))]
+    let _ = (window, embed);
+}
+
 #[tauri::command]
 async fn set_desktop_setting(
     window: WebviewWindow,
@@ -244,7 +253,8 @@ fn main() {
             window_action,
             set_desktop_setting,
             daemon_status,
-            child_window
+            child_window,
+            key_focus
         ])
         .on_window_event(layout::on_window_event)
         .setup(move |app| {
@@ -267,7 +277,8 @@ fn main() {
                     .permission("allow-window-action")
                     .permission("allow-set-desktop-setting")
                     .permission("allow-daemon-status")
-                    .permission("allow-child-window"),
+                    .permission("allow-child-window")
+                    .permission("allow-key-focus"),
             )?;
             let layout = layout::load(app.handle());
             let close_to_tray = layout.close_to_tray();

@@ -2,7 +2,10 @@
 //!
 //! A cross-origin embed keeps its key events to itself, so neither the board page nor its
 //! injected key script ever sees them. WebView2 raises AcceleratorKeyPressed for the whole
-//! webview before any frame does, so the shortcuts are caught here instead.
+//! webview before any frame does, so the shortcuts are caught here instead, but only while focus
+//! is in such an embed (the shell reports it through `key_focus`). The board and Scribe's page
+//! frames get first refusal, as in a browser: pages that use a shortcut keep it, and the key
+//! script forwards the rest. Keys a browser keeps for itself are caught here everywhere.
 
 use tauri::WebviewWindow;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -14,6 +17,7 @@ use webview2_com::{
     AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler,
     ClearBrowsingDataCompletedHandler, ZoomFactorChangedEventHandler,
 };
+use std::sync::Mutex;
 use windows::core::{w, Interface};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, MapVirtualKeyW, MAPVK_VK_TO_CHAR, VK_CONTROL, VK_F5, VK_MENU, VK_SHIFT,
@@ -29,7 +33,34 @@ enum Shortcut {
     /// Ctrl+Shift+T reopens without that caveat.
     Board(&'static str),
     /// F5 / Ctrl+R: drop WebView2's HTTP cache, then reload, so embedded sites are not stale.
+    /// In an embed only that frame reloads.
     Reload,
+}
+
+/// Windows whose focus is in a frame that is neither the board nor one of its pages.
+static EMBED_FOCUS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn set_embed_focus(label: &str, embed: bool) {
+    let mut focused = EMBED_FOCUS.lock().unwrap();
+    focused.retain(|other| other != label);
+    if embed {
+        focused.push(label.to_owned());
+    }
+}
+
+fn embed_focused(label: &str) -> bool {
+    EMBED_FOCUS.lock().unwrap().iter().any(|other| other == label)
+}
+
+/// Keys a browser keeps from pages (tabs, windows, reload), and the app's own window key.
+/// Everything else reaches the focused frame first unless that frame is an embed.
+fn reserved(shortcut: &Shortcut) -> bool {
+    matches!(
+        shortcut,
+        Shortcut::Compact
+            | Shortcut::Reload
+            | Shortcut::Board("next-tab" | "prev-tab" | "close-tab" | "new-page" | "reopen" | "prev-space" | "next-space")
+    )
 }
 
 const VK_TAB: u32 = 0x09;
@@ -109,21 +140,22 @@ fn pressed(key: u16) -> bool {
 }
 
 /// Drop the HTTP cache (disk + memory), then reload. A plain Reload reuses cached embed HTML.
-unsafe fn reload_dropping_http_cache(controller: &ICoreWebView2Controller) {
+/// `reload` runs once the cache is gone (or could not be dropped).
+unsafe fn reload_dropping_http_cache(controller: &ICoreWebView2Controller, reload: impl Fn(&ICoreWebView2) + Clone + 'static) {
     let Ok(core) = controller.CoreWebView2() else {
         return;
     };
-    if drop_http_cache_then_reload(core.clone()).is_err() {
-        let _ = core.Reload();
+    if drop_http_cache_then(core.clone(), reload.clone()).is_err() {
+        reload(&core);
     }
 }
 
-unsafe fn drop_http_cache_then_reload(core: ICoreWebView2) -> windows::core::Result<()> {
+unsafe fn drop_http_cache_then(core: ICoreWebView2, reload: impl Fn(&ICoreWebView2) + Clone + 'static) -> windows::core::Result<()> {
     let after_disk = core.clone();
     let handler = ClearBrowsingDataCompletedHandler::create(Box::new(move |_| {
         unsafe {
-            if clear_memory_cache_then_reload(after_disk.clone()).is_err() {
-                let _ = after_disk.Reload();
+            if clear_memory_cache_then(after_disk.clone(), reload.clone()).is_err() {
+                reload(&after_disk);
             }
         }
         Ok(())
@@ -134,15 +166,22 @@ unsafe fn drop_http_cache_then_reload(core: ICoreWebView2) -> windows::core::Res
         .ClearBrowsingData(COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, &handler)
 }
 
-unsafe fn clear_memory_cache_then_reload(core: ICoreWebView2) -> windows::core::Result<()> {
+unsafe fn clear_memory_cache_then(core: ICoreWebView2, reload: impl Fn(&ICoreWebView2) + 'static) -> windows::core::Result<()> {
     let to_reload = core.clone();
     let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |_, _| {
-        unsafe {
-            let _ = to_reload.Reload();
-        }
+        reload(&to_reload);
         Ok(())
     }));
     core.CallDevToolsProtocolMethod(w!("Network.clearBrowserCache"), w!("{}"), &handler)
+}
+
+/// Run a board action in the shell, outside the WebView2 callback.
+fn run_board_action(window: &WebviewWindow, action: &str) {
+    let window = window.clone();
+    let script = format!("window.scribeShortcut && window.scribeShortcut({action:?})");
+    std::thread::spawn(move || {
+        let _ = window.eval(script);
+    });
 }
 
 pub fn install(window: &WebviewWindow) {
@@ -182,6 +221,10 @@ pub fn install(window: &WebviewWindow) {
             else {
                 return Ok(());
             };
+            let in_embed = embed_focused(target.label());
+            if !in_embed && !reserved(&shortcut) {
+                return Ok(());
+            }
             args.SetHandled(true)?;
             let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
             args.PhysicalKeyStatus(&mut status)?;
@@ -189,24 +232,54 @@ pub fn install(window: &WebviewWindow) {
                 return Ok(());
             }
             match shortcut {
-                Shortcut::Reload => reload_dropping_http_cache(&for_keys),
+                Shortcut::Reload if in_embed => {
+                    let window = target.clone();
+                    reload_dropping_http_cache(&for_keys, move |_| run_board_action(&window, "reload-frame"));
+                }
+                Shortcut::Reload => reload_dropping_http_cache(&for_keys, |core| {
+                    let _ = core.Reload();
+                }),
                 Shortcut::Compact => {
                     let window = target.clone();
                     // Leave the WebView2 callback before touching the window.
                     std::thread::spawn(move || layout::toggle_compact(&window));
                 }
-                Shortcut::Board(action) => {
-                    let window = target.clone();
-                    std::thread::spawn(move || {
-                        let _ = window.eval(format!(
-                            "window.scribeShortcut && window.scribeShortcut({action:?})"
-                        ));
-                    });
-                }
+                Shortcut::Board(action) => run_board_action(&target, action),
             }
             Ok(())
         }));
         let mut token = 0i64;
         let _ = controller.add_AcceleratorKeyPressed(&handler, &mut token);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reserved_key(key: u8, shift: bool) -> bool {
+        reserved(&shortcut_for(u32::from(key), true, shift, false).unwrap())
+    }
+
+    #[test]
+    fn pages_get_first_refusal_except_on_browser_keys() {
+        for key in [b'K', b'L', b'J', b'E', b'B', b'D', b'S', b'H'] {
+            assert!(!reserved_key(key, false), "Ctrl+{}", key as char);
+        }
+        for key in [b'T', b'N', b'W', b'R'] {
+            assert!(reserved_key(key, false), "Ctrl+{}", key as char);
+        }
+        assert!(reserved_key(b'T', true));
+        assert!(reserved(&shortcut_for(VK_TAB, true, false, false).unwrap()));
+        assert!(reserved(&shortcut_for(u32::from(VK_F5.0), false, false, false).unwrap()));
+    }
+
+    #[test]
+    fn embed_focus_is_per_window() {
+        set_embed_focus("a", true);
+        set_embed_focus("b", false);
+        assert!(embed_focused("a") && !embed_focused("b"));
+        set_embed_focus("a", false);
+        assert!(!embed_focused("a"));
+    }
 }

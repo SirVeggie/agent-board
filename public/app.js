@@ -3019,6 +3019,8 @@
     cancelPageAudio(tab.id);
     delete el.dataset.loaded;
     el.allow = tab.embedUrl ? EMBED_ALLOW : "";
+    // Scribe's own pages run the key script; the desktop app catches shortcuts natively in other frames.
+    el.toggleAttribute("data-scribe-page", !tab.embedUrl);
     const url = viewUrl(tab);
     if (el.dataset.src && el.contentWindow) {
       try {
@@ -3811,6 +3813,14 @@
 
   /** Shortcuts the desktop app catches natively, so they also work while an embedded site has focus. */
   function runShortcut(action) {
+    if (action === "reload-frame") {
+      // F5 / Ctrl+R in an embedded site (desktop app): reload just that frame.
+      const frame = document.activeElement;
+      if (frame?.tagName === "IFRAME") {
+        frame.src = frame.src;
+      }
+      return;
+    }
     if (document.querySelector("dialog[open]")) {
       return;
     }

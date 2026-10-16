@@ -469,6 +469,31 @@
   new ResizeObserver(() => { if (!zoomPopup.hidden) positionZoom(); }).observe(chrome);
   window.scribeDesktop = { setState, showZoom };
 
+  // The app catches the board's shortcuts natively only while focus is in an embedded site, which
+  // keeps its key events from the board. The board and its pages see their keys first, as in a browser.
+  let embedFocus = false;
+  let focusPoll = 0;
+  function reportFocus() {
+    const el = document.activeElement;
+    const inFrame = el?.tagName === "IFRAME";
+    const embed = inFrame && !el.hasAttribute("data-scribe-page");
+    // Moving between two frames raises nothing up here, so look again while one has focus.
+    if (inFrame && !focusPoll) {
+      focusPoll = setInterval(reportFocus, 250);
+    } else if (!inFrame && focusPoll) {
+      clearInterval(focusPoll);
+      focusPoll = 0;
+    }
+    if (embed !== embedFocus) {
+      embedFocus = embed;
+      invoke("key_focus", { embed }).catch(console.error);
+    }
+  }
+  addEventListener("focusin", reportFocus);
+  addEventListener("focus", reportFocus);
+  // Focus going into a frame blurs this window before activeElement names the frame.
+  addEventListener("blur", () => setTimeout(reportFocus, 0));
+
   // Lost the daemon for more than a moment (it restarts for a new build in about that long):
   // the app swaps in its offline page, which brings the board back once the daemon answers.
   let offlineTimer = 0;
