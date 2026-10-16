@@ -3057,13 +3057,54 @@
   }
 
   // ---------- card modal ----------
+  // One pair of editors serves every card, so flush before changing openId.
+  // Draft comments belong to this viewer, never to the shared card or its agent chat.
+  var editorSaveTimer = null;
+  var editorSaveSince = 0;
+  function saveCommentDraft() {
+    if (!openId) return;
+    var drafts = Object.assign({}, scribe.local.commentDrafts || {});
+    if (str(drafts[openId]) === commentBox.value) return;
+    if (commentBox.value) drafts[openId] = commentBox.value;
+    else delete drafts[openId];
+    scribe.setLocal({ commentDrafts: Object.keys(drafts).length ? drafts : undefined });
+  }
+  function persistDescription() {
+    var c = editingDesc && openId && card(openId);
+    if (c && c.description !== mdEditor.value) {
+      scribe.update([{ op: "set", path: "cards/" + c.id + "/description", value: mdEditor.value }]);
+    }
+  }
+  function flushCardEditors() {
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = null;
+    editorSaveSince = 0;
+    saveCommentDraft();
+    persistDescription();
+    if (scribe.flush) scribe.flush();
+  }
+  function scheduleEditorSave() {
+    if (!openId) return;
+    if (!editorSaveSince) editorSaveSince = Date.now();
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = setTimeout(flushCardEditors, Math.min(500, Math.max(0, editorSaveSince + 2000 - Date.now())));
+  }
+  commentBox.addEventListener("input", scheduleEditorSave);
+  commentBox.addEventListener("blur", flushCardEditors);
+  mdEditor.addEventListener("input", scheduleEditorSave);
+  window.addEventListener("pagehide", flushCardEditors);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") flushCardEditors();
+  });
+
   function openCard(id) {
+    flushCardEditors();
     closeMenu();
     composerCol = null;
     openId = id;
     editingDesc = false;
     editingTitle = false;
-    commentBox.value = "";
+    commentBox.value = str((scribe.local.commentDrafts || {})[id]);
     setHint("");
     overlay.classList.remove("hidden");
     var c = card(id);
@@ -3073,6 +3114,7 @@
     modal.focus({ preventScroll: true });
   }
   function closeCard() {
+    flushCardEditors();
     if (editingDesc) saveDescription();
     if (editingTitle) saveTitle();
     openId = null;
@@ -3358,16 +3400,11 @@
     renderModal();
   }
   function saveDescription() {
+    persistDescription();
     editingDesc = false;
     mdEditor.classList.add("hidden");
     mdPreview.classList.remove("hidden");
-    var c = openId && card(openId);
-    if (c && c.description !== mdEditor.value) {
-      var text = mdEditor.value;
-      updateCard(c.id, function (x) { x.description = text; return x; });
-    } else {
-      renderModal();
-    }
+    renderModal();
   }
   function startEditTitle() {
     var c = openId && card(openId);
@@ -3431,6 +3468,7 @@
       e.preventDefault();
       startEditDesc();
       insertAtCursor(mdEditor, e.key);
+      scheduleEditorSave();
     }
   });
   mdEditor.addEventListener("blur", function () { if (editingDesc) saveDescription(); });
@@ -3527,6 +3565,7 @@
     var text = commentBox.value.trim();
     if (!text || !openId) return false;
     commentBox.value = "";
+    saveCommentDraft();
     var cmId = newId("cm");
     updateCard(openId, function (x) {
       x.comments = x.comments.concat([{ id: cmId, by: "user", at: Date.now(), text: text }]);
@@ -4633,7 +4672,12 @@
     changed.forEach(function (id) {
       // Typing saves as it goes: ask once it has been quiet for a moment.
       clearTimeout(suggestTimers[id]);
-      suggestTimers[id] = setTimeout(function () {
+      suggestTimers[id] = setTimeout(function ready() {
+        // Autosaves keep the shared description current; classify once editing ends.
+        if (editingDesc && openId === id) {
+          suggestTimers[id] = setTimeout(ready, SUGGEST_WAIT_MS);
+          return;
+        }
         delete suggestTimers[id];
         if (suggestQueue.indexOf(id) === -1) suggestQueue.push(id);
         suggestNext();
