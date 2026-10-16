@@ -2555,9 +2555,10 @@
   /* ---------- chat view ---------- */
 
   class ChatView {
-    /** variant: "side" | "full" | "dock" */
-    constructor(variant) {
+    /** variant: "side" | "full" | "dock" | "helper"; floating helpers keep the dock layout. */
+    constructor(variant, floating = variant === "dock") {
       this.variant = variant;
+      this.floating = floating;
       this.threadId = null;
       /** A thread that does not exist yet: { scope, settings }. */
       this.draft = null;
@@ -2593,6 +2594,25 @@
       this.composer = this.buildComposer();
       if (variant !== "dock") this.root.append(this.header);
       this.root.append(this.scroll, this.queueDock, this.composer);
+      if (variant === "helper" && floating) {
+        this.root.classList.add("ag-helper-floating");
+        const head = el("div", "dock-head");
+        const out = el("div", "dock-out");
+        const history = el("div", "dock-history");
+        history.append(this.scroll, this.queueDock);
+        out.append(this.header, history);
+        head.append(out);
+        const input = el("div", "dock-input");
+        this.helperOrb = button("", "dock-orb", (event) => this.modelMenu(event.currentTarget));
+        this.helperOrbFx = window.scribeOrb?.create(this.helperOrb, input);
+        input.append(this.helperOrb, this.composer, this.sendSlot);
+        const bar = el("div", "dock-bar");
+        const right = el("div", "dock-bar-right");
+        right.append(this.bar);
+        bar.append(right);
+        this.root.replaceChildren(head, input, bar);
+        this.helperBackground = [head, input, bar];
+      }
       this.stick = true;
       this.stickAnim = 0;
       this.stickLock = false;
@@ -2796,7 +2816,7 @@
     openHelper(id) {
       if (this.variant === "dock") dock.setExpanded(true);
       if (!this.helperView) {
-        this.helperView = new ChatView("helper");
+        this.helperView = new ChatView("helper", this.floating);
         this.helperView.owner = this;
       }
       for (const node of this.helperBackground || [this.header, this.scroll, this.queueDock, this.composer]) node.inert = true;
@@ -2977,6 +2997,10 @@
       const t = this.thread();
       const helper = this.variant === "helper" || !!t?.helperOf;
       const s = this.settings();
+      if (this.helperOrb) {
+        this.helperOrbFx?.setProvider(s.provider);
+        this.helperOrb.setAttribute("aria-label", `Model: ${modelLabel(s.provider, s.model)}`);
+      }
       this.header.replaceChildren();
       const top = el("div", "ag-thead-top");
       if (this.variant === "side") {
@@ -4917,7 +4941,7 @@
       this.helperApprovals = el("div", "ag-helper-approvals");
       this.helperApprovals.hidden = true;
       box.append(this.slash, this.helperApprovals, this.helperDock, this.forkNote, this.ctxRow);
-      if (this.variant === "dock") {
+      if (this.floating) {
         box.append(this.input);
       } else {
         const row = el("div", "ag-compose-row");

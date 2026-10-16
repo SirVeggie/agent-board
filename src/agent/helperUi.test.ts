@@ -182,13 +182,37 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       dock.view.input.value = "Floating parent draft";
     });
     const floating = page.locator(".agent-dock");
+    const capsuleStyle = await floating.locator(".dock-input").evaluate(node => {
+      const style = getComputedStyle(node);
+      return [style.borderRadius, style.padding, style.boxShadow];
+    });
     await floating.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
     const helper = floating.locator(".ag-view-helper");
     assert.equal(await helper.evaluate(node => getComputedStyle(node).pointerEvents), "auto");
     const helperBox = await helper.boundingBox();
     assert.ok(helperBox && helperBox.height >= 500 && helperBox.y >= 0);
-    assert.equal(await floating.locator(".dock-head").evaluate(node => (node as HTMLElement).inert), true);
+    assert.equal(await floating.locator(".dock-panel > .dock-head").evaluate(node => (node as HTMLElement).inert), true);
+    assert.deepEqual(await helper.locator(".dock-input").evaluate(node => {
+      const style = getComputedStyle(node);
+      return [style.borderRadius, style.padding, style.boxShadow];
+    }), capsuleStyle);
+    const layers = await helper.evaluate(node => {
+      const input = node.querySelector(".dock-input")!;
+      const output = node.querySelector(".dock-out")!;
+      const surface = getComputedStyle(output, "::before");
+      const parentSurface = getComputedStyle(document.querySelector(".dock-panel > .dock-head .dock-out")!, "::before");
+      return {
+        transparent: getComputedStyle(node).backgroundColor === "rgba(0, 0, 0, 0)",
+        overlap: output.getBoundingClientRect().bottom - input.getBoundingClientRect().top,
+        inset: input.getBoundingClientRect().left < output.getBoundingClientRect().left,
+        sameEdge: surface.borderRadius === parentSurface.borderRadius && surface.boxShadow === parentSurface.boxShadow,
+        dark: surface.backgroundColor === getComputedStyle(input).backgroundColor,
+        sidebarComposer: !!node.querySelector(".ag-compose-row"),
+      };
+    });
+    assert.deepEqual(layers, { transparent: true, overlap: 14, inset: true, sameEdge: true, dark: true, sidebarComposer: false });
     await helper.locator('textarea:not([aria-hidden])').fill("Floating helper draft");
+    if (process.env.SCRIBE_HELPER_SCREENSHOT) await page.screenshot({ path: process.env.SCRIBE_HELPER_SCREENSHOT.replace(/\.png$/, "-floating.png") });
     await helper.getByRole("button", { name: "Close helper and return to parent chat" }).click();
     assert.equal(await floating.locator('.dock-input textarea:not([aria-hidden])').inputValue(), "Floating parent draft");
     await floating.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
