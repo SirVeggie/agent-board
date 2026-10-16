@@ -318,6 +318,7 @@ export type ChatImage = ChatFile;
 export type FileRef = { id: string; name: string; mimeType: string; size: number; path?: string };
 
 export type ContextChip =
+  | { kind: "thread"; id: string; title: string }
   | { kind: "page"; id: string; key: string; title: string }
   | { kind: "folder"; id: string; path: string }
   | { kind: "file"; path: string }

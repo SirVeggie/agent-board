@@ -1874,7 +1874,17 @@ export class AgentHost {
     }
     const text = input.text.trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
-    const context = freshContext(input.context, this.knownContext(threadId, thread));
+    // Only the person's composer may authorize a tag; page/agent/hook messages cannot grant access.
+    const tagged: Extract<ContextChip, { kind: "thread" }>[] = [];
+    const supplied = (input.context ?? []).flatMap((chip): ContextChip[] => {
+      if (chip.kind !== "thread") return [chip];
+      const target = !input.from && typeof chip.id === "string" ? this.threads.get(chip.id) : null;
+      if (!target || target.id === threadId) return [];
+      const canonical = { kind: "thread" as const, id: target.id, title: target.title };
+      tagged.push(canonical);
+      return [canonical];
+    });
+    const context = freshContext(supplied, this.knownContext(threadId, thread).filter((chip) => chip.kind !== "thread"));
     const wt = openWorktree(thread);
     if (wt && !fs.existsSync(wt.path)) {
       throw new Error(`This thread's worktree is gone (${wt.path}). Use Leave branch in the branch menu to go back to the main checkout; the branch ${wt.branch} keeps its commits.`);
@@ -1891,6 +1901,11 @@ export class AgentHost {
       ...(input.card ? { card: input.card } : {}),
       ...(input.dock && !input.from ? { dock: true } : {}),
     };
+    if (tagged.length) {
+      thread.threadGrants = grantScopes(thread.threadGrants, tagged.map((chip) => ({ kind: "thread" as const, id: chip.id })));
+      this.db.saveThread(thread);
+      this.emitThread(threadId);
+    }
     if (!input.from && thread.draft) {
       // The user sent what they had left in the composer.
       thread.draft = null;
@@ -2243,6 +2258,7 @@ export class AgentHost {
       folderInside: (folderId, rootId) => store.folderInside(folderId, rootId),
       pageTitle: (id) => store.get(id, "agent")?.title ?? null,
       folderPath: (id) => store.folderPath(id),
+      threadTitle: (id) => this.threads.get(id)?.title ?? null,
     };
   }
 
@@ -2278,7 +2294,7 @@ export class AgentHost {
     ]
       .filter(Boolean)
       .join("\n");
-    const short: Record<AccessScope["kind"], string> = { workspace: "workspace", page: "page", folder: "folder", all: "all threads" };
+    const short: Record<AccessScope["kind"], string> = { workspace: "workspace", page: "page", folder: "folder", thread: "thread", all: "all threads" };
     const options: ApprovalOption[] = [
       { id: "all", label: want.length === 1 ? "Allow for this thread" : "Allow all of these", kind: "allow_always" },
       ...(want.length > 1 ? want.map((s, i) => ({ id: `s${i}`, label: `Only ${short[s.kind]}`, kind: "allow_always" as const })) : []),

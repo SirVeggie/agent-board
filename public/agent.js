@@ -145,7 +145,8 @@
   const EXPLORE = new Set(["read", "search", "think"]);
   const SCOPE_KIND = { page: "Page", folder: "Folder", workspace: "Workspace", global: "Global" };
   const SCOPE_CHIP_TITLE = "Page, folder, or workspace this thread belongs to (Ctrl+. next workspace · Ctrl+Shift+. next Scribe access)";
-  const SCOPE_SLASH = [
+  const LOCAL_SLASH = [
+    { name: "clear", description: "New thread with the current page's default chat settings" },
     { name: "here", description: "This thread belongs to the current page" },
     { name: "folder", description: "This thread belongs to the current page's folder" },
     { name: "workspace", description: "Set the workspace folder" },
@@ -327,17 +328,18 @@
   const FILE_LIMITS = { count: 10, image: 8 * 1024 * 1024, file: 20 * 1024 * 1024, total: 50 * 1024 * 1024 };
   const MENTION_LIMIT = 20;
 
-  /** The @token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix; start/end cover the whole token. */
-  function mentionAt(value, cursor) {
+  /** The @ or # token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix; start/end cover the whole token. */
+  function mentionAt(value, cursor, prefix = "@") {
     const before = value.slice(0, cursor);
-    const m = /(^|[\s])@([^\s@]*)$/.exec(before);
+    const m = (prefix === "#" ? /(^|[\s])#([^\s#]*)$/ : /(^|[\s])@([^\s@]*)$/).exec(before);
     if (!m) return null;
     const start = before.length - 1 - m[2].length;
-    const rest = /^[^\s@]*/.exec(value.slice(cursor))?.[0] || "";
+    const rest = (prefix === "#" ? /^[^\s#]*/ : /^[^\s@]*/).exec(value.slice(cursor))?.[0] || "";
     return { start, end: cursor + rest.length, query: m[2] };
   }
 
   function chipKey(chip) {
+    if (chip.kind === "thread") return `thread:${chip.id}`;
     if (chip.kind === "page") return `page:${chip.id}`;
     if (chip.kind === "folder") return `folder:${chip.id}`;
     if (chip.kind === "file") return `file:${chip.path}`;
@@ -345,6 +347,7 @@
   }
 
   function chipIcon(chip) {
+    if (chip.kind === "thread") return "chat";
     if (chip.kind === "page") return "page";
     if (chip.kind === "folder") return "folder";
     if (chip.kind === "selection") return "quote";
@@ -352,6 +355,7 @@
   }
 
   function chipLabel(chip) {
+    if (chip.kind === "thread") return chip.title || "Thread";
     if (chip.kind === "page") return chip.title || chip.key || "Page";
     if (chip.kind === "folder") return chip.path || "Folder";
     if (chip.kind === "file") return R.basename(chip.path) || chip.path;
@@ -363,6 +367,7 @@
   }
 
   function chipTitle(chip) {
+    if (chip.kind === "thread") return `Read access to this thread: ${chip.title || chip.id}`;
     if (chip.kind === "selection") return chip.text.length > 600 ? `${chip.text.slice(0, 600)}…` : chip.text;
     return chip.path || chip.key || "";
   }
@@ -2782,7 +2787,11 @@
       await this.updateSettings({ scope });
     }
 
-    async applyScopeSlash(name) {
+    async applyLocalSlash(name) {
+      if (name === "clear") {
+        newThread(this, true);
+        return;
+      }
       const tab = activeTab();
       if (name === "here") {
         if (!tab) {
@@ -4635,7 +4644,7 @@
       const items = S.details.get(this.threadId)?.items || [];
       for (const it of items) {
         if (it.kind !== "user" || it.dropped) continue;
-        for (const chip of it.context || []) add(chip);
+        for (const chip of it.context || []) if (chip.kind !== "thread") add(chip);
       }
       return keys;
     }
@@ -5069,7 +5078,8 @@
         return;
       }
       const cur = this.input.selectionStart ?? value.length;
-      const mention = mentionAt(value, cur);
+      const threadMention = mentionAt(value, cur, "#");
+      const mention = threadMention ? { ...threadMention, thread: true } : mentionAt(value, cur);
       if (mention) {
         this.showMentions(mention);
         return;
@@ -5095,13 +5105,13 @@
       if (gen !== this.mentionGen) return;
       if (!/^\/([\w:.-]*)$/.exec(this.input.value)) return;
       const q = typed.toLowerCase();
-      const local = SCOPE_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
+      const local = LOCAL_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
       // The open page's template actions (#152): /<id>, with any text after it as {{input}}.
       const page = pageActions(activeTab(), "slash")
-        .filter((a) => !SCOPE_SLASH.some((c) => c.name === a.id) && (a.id.includes(q) || a.label.toLowerCase().includes(q)))
+        .filter((a) => !LOCAL_SLASH.some((c) => c.name === a.id) && (a.id.includes(q) || a.label.toLowerCase().includes(q)))
         .map((a) => ({ name: a.id, description: a.description ? `${a.label}: ${a.description}` : a.label }));
       const remote = (list || []).filter(
-        (c) => c.name.toLowerCase().includes(q) && !SCOPE_SLASH.some((s) => s.name === c.name.toLowerCase()) && !page.some((a) => a.name === c.name.toLowerCase())
+        (c) => c.name.toLowerCase().includes(q) && !LOCAL_SLASH.some((s) => s.name === c.name.toLowerCase()) && !page.some((a) => a.name === c.name.toLowerCase())
       );
       const hits = [...local, ...page, ...remote].slice(0, 40);
       this.slash.replaceChildren();
@@ -5115,7 +5125,7 @@
             this.input.value = "";
             this.hidePicker();
             this.autosize();
-            void this.applyScopeSlash(c.name);
+            void this.applyLocalSlash(c.name);
             this.focus();
             return;
           }
@@ -5147,6 +5157,24 @@
       if (gen !== this.mentionGen) return;
       const q = mention.query;
       const taken = this.knownMentionKeys();
+      if (mention.thread) {
+        if (this.slash.hidden || !this.slash.hasAttribute("aria-busy")) {
+          this.renderMentionPicker({ threads: [], mention, loading: true });
+        }
+        let threads = [];
+        try {
+          const data = await api("GET", "/threads");
+          const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+          threads = (data.threads || [])
+            .filter((t) => t.id !== this.threadId && !taken.has(`thread:${t.id}`) && words.every((w) => `${t.title} ${t.id}`.toLowerCase().includes(w)))
+            .slice(0, 20)
+            .map((t) => ({ kind: "thread", id: t.id, title: t.title }));
+        } catch { /* The picker shows an empty result if the thread list is unavailable. */ }
+        if (gen !== this.mentionGen) return;
+        this.mentionLoading = false;
+        this.renderMentionPicker({ threads, mention, loading: false });
+        return;
+      }
       const s = this.settings();
       const folders = this.localFolderMentions(q, taken);
       const wantFiles = (s.mode === "code" || s.mode === "plan") && s.cwd;
@@ -5236,14 +5264,15 @@
       return items;
     }
 
-    renderMentionPicker({ pages, folders, files, mention, loading }) {
+    renderMentionPicker({ pages = [], folders = [], files = [], threads = [], mention, loading }) {
       this.slash.classList.toggle("loading", loading);
       this.slash.setAttribute("aria-busy", String(loading));
       this.slash.replaceChildren();
-      const here = this.hereMentions(mention.query, this.knownMentionKeys());
+      const here = mention.thread ? [] : this.hereMentions(mention.query, this.knownMentionKeys());
       const hereKeys = new Set(here.map(chipKey));
       const sections = [
         { title: "Here", items: here },
+        { title: "Threads", items: threads },
         { title: "Pages", items: pages.filter((p) => !hereKeys.has(chipKey(p))) },
         { title: "Folders", items: folders.filter((f) => !hereKeys.has(chipKey(f))) },
         { title: "Files", items: files },
@@ -5257,16 +5286,17 @@
           first = false;
           const row = button("", `ag-slash-item${on ? " on" : ""}`, () => this.pickMention(item, mention));
           row.addEventListener("mousedown", (event) => event.preventDefault());
-          const name = item.kind === "page" ? item.title : item.kind === "folder" ? item.path : item.name || R.basename(item.path);
-          const detail = item.kind === "page" ? item.folder : item.kind === "file" ? R.dirname(item.path) : "";
+          const name = item.kind === "thread" ? item.title || "Thread" : item.kind === "page" ? item.title : item.kind === "folder" ? item.path : item.name || R.basename(item.path);
+          const detail = item.kind === "thread" ? item.id : item.kind === "page" ? item.folder : item.kind === "file" ? R.dirname(item.path) : "";
           row.append(icon(chipIcon(item)), el("span", "ag-slash-title", name));
           if (detail) row.append(el("span", "ag-slash-desc", detail));
-          row.dataset.tooltip = item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
+          row.dataset.tooltip = item.kind === "thread" ? `Give this chat read access to ${item.title || item.id}` : item.kind === "file" ? item.path : item.kind === "page" ? item.key : item.path;
+          if (item.kind === "thread") row.setAttribute("aria-description", row.dataset.tooltip);
           this.slash.append(row);
         }
       }
       if (!this.slash.querySelector(".ag-slash-item")) {
-        this.slash.append(el("div", "ag-slash-empty", loading ? "Searching…" : "No matching pages, folders or files"));
+        this.slash.append(el("div", "ag-slash-empty", loading ? "Searching…" : mention.thread ? "No matching threads" : "No matching pages, folders or files"));
       }
       this.slash.hidden = false;
     }
@@ -5274,7 +5304,9 @@
     pickMention(item, mention) {
       if (this.mentionLoading) return;
       const chip =
-        item.kind === "page"
+        item.kind === "thread"
+          ? { kind: "thread", id: item.id, title: item.title }
+          : item.kind === "page"
           ? { kind: "page", id: item.id, key: item.key, title: item.title }
           : item.kind === "folder"
             ? { kind: "folder", id: item.id, path: item.path }
@@ -5409,12 +5441,12 @@
     async send() {
       if (this.withdrawing || this.sending) return;
       const text = this.input.value.trim();
-      const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
-      if (scopeCmd && !this.attachments.length) {
+      const localCmd = /^\/(clear|here|folder|workspace|global)$/i.exec(text);
+      if (localCmd && (localCmd[1].toLowerCase() === "clear" || !this.attachments.length)) {
         this.input.value = "";
         this.hidePicker();
         this.autosize();
-        await this.applyScopeSlash(scopeCmd[1].toLowerCase());
+        await this.applyLocalSlash(localCmd[1].toLowerCase());
         return;
       }
       const actionCmd = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
@@ -10684,12 +10716,12 @@
     };
   }
 
-  function newThread(fromView) {
+  function newThread(fromView, resetSettings = false) {
     const where = fromView ? (fromView.variant === "full" ? "full" : fromView.variant === "dock" ? "dock" : "side") : shortcutChat();
     const view = fromView || (where === "dock" ? dock.view : where === "full" ? full.view : sidebar.view);
-    const cur = view.settings();
-    const scope = { kind: cur.scope.kind, ref: cur.scope.ref };
-    const settings = inheritSettings(view);
+    const cur = resetSettings ? null : view.settings();
+    const scope = resetSettings ? defaultScope() : { kind: cur.scope.kind, ref: cur.scope.ref };
+    const settings = resetSettings ? {} : inheritSettings(view);
     if (where === "dock") {
       if (scope.kind === "page") setDockPick(scope.ref, null);
       view.startDraft(scope, settings);
