@@ -4,13 +4,6 @@
   "description": "Work board with columns you manage on the page, labels, priorities, due dates, checklists, images, comments, and an agent hand-off flow.",
   "fields": [
     {
-      "key": "title",
-      "label": "Title",
-      "type": "text",
-      "required": true,
-      "default": "Board"
-    },
-    {
       "key": "preset",
       "label": "Starting columns",
       "type": "select",
@@ -21,13 +14,6 @@
         { "value": "dev", "label": "Development: Backlog, Ready, In progress, Review, Done" },
         { "value": "agent", "label": "Agent: Inbox, Ready for agent, Agent working, Needs review, Done" }
       ]
-    },
-    {
-      "key": "agentMode",
-      "label": "Agent hand-off",
-      "type": "checkbox",
-      "help": "Agent inbox and review columns, agent status on cards, and signals an agent can wait on.",
-      "default": true
     }
   ],
   "agentActions": [
@@ -63,7 +49,6 @@
       }
     }
   ],
-  "titleTemplate": "{{title}}",
   "initialState": {
     "columns": [],
     "labels": [],

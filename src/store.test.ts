@@ -1547,22 +1547,23 @@ test("Kanban opens with usable preset state before any browser script runs", () 
         const { tab } = store.openFromTemplate("builtin:kanban", { title: preset, preset, agentMode });
         const cols = tab.state.columns as Array<{ id: string; title: string; role?: string; wip?: number }>;
         assert.deepEqual(cols.map((c) => [c.title, c.role, c.wip]), expected.map(([title, role, wip]) =>
-          [title, agentMode || role === "done" ? role : undefined, wip]));
+          [title, role, wip]));
         assert.equal(new Set(cols.map((c) => c.id)).size, cols.length);
         assert.deepEqual((tab.state.labels as Array<{ name: string }>).map((l) => l.name), ["Bug", "Feature", "Chore"]);
         assert.deepEqual(tab.state.cards, []);
         assert.equal(tab.state.nextNum, 1);
         store.runAction(tab.id, "create", {
           title: "Headless card", labels: ["Bug"],
-          ...(preset === "agent" && agentMode ? { column: "agent" } : {}),
+          ...(preset === "agent" ? { column: "agent" } : {}),
         }, { by: "agent" });
         const [card] = tab.state.cards as Array<{ num: number; col: string }>;
         assert.equal(card.num, 1);
-        assert.equal(card.col, cols[preset === "agent" && agentMode ? 1 : 0].id);
+        assert.equal(card.col, cols[preset === "agent" ? 1 : 0].id);
         assert.equal(tab.state.nextNum, 2);
       }
     }
     const template = store.findTemplate("kanban")!.template;
+    assert.deepEqual(template.fields.map(field => field.key), ["preset"]);
     assert.deepEqual(template.initialState, { columns: [], labels: [], cards: [], nextNum: 1 });
   } finally {
     store.closeDb();

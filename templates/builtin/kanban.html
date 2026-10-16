@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{title}}</title>
+<title>Kanban board</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -44,6 +44,9 @@
   header { padding: 22px 24px 12px; flex: 0 0 auto; }
   .head-row { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 26px; letter-spacing: -0.03em; line-height: 1.2; }
+  #boardTitle { cursor: text; border-radius: 7px; padding: 3px 6px; margin: -3px -6px; outline: none; overflow-wrap: anywhere; min-width: 1ch; }
+  #boardTitle:hover { background: rgba(255, 255, 255, .05); }
+  #boardTitle:focus { box-shadow: 0 0 0 1px var(--accent); }
   .meta { color: var(--muted); font-size: 13px; padding-bottom: 3px; }
   .toolbar { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
   .field {
@@ -1068,7 +1071,7 @@
 <body>
   <header>
     <div class="head-row">
-      <h1>{{title}}</h1>
+      <h1 id="boardTitle" tabindex="0" role="textbox" aria-label="Title"></h1>
       <div class="meta" id="meta"></div>
       <section class="board-usage hidden" id="boardUsage" aria-label="Usage limits"></section>
     </div>
@@ -1085,7 +1088,7 @@
       </select>
       <button class="tool hidden" id="clearFilter" type="button">Clear filter</button>
       <span class="spacer"></span>
-      <button class="tool workers-btn hidden" id="workersBtn" type="button" aria-haspopup="dialog">Workers</button>
+      <button class="tool workers-btn" id="workersBtn" type="button" aria-haspopup="dialog">Workers</button>
       <button class="tool" id="labelsBtn" type="button">Labels</button>
       <button class="tool" id="archiveBtn" type="button">Archive</button>
       <button class="tool icon" id="settingsBtn" type="button" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
@@ -1298,7 +1301,6 @@
 
   // ---------- constants ----------
   var values = (scribe.template && scribe.template.values) || {};
-  var AGENT_MODE = values.agentMode !== false;
   var PRESETS = {
     simple: [["To do"], ["Doing"], ["Done", "done"]],
     dev: [["Backlog"], ["Ready"], ["In progress", null, 3], ["Review"], ["Done", "done"]],
@@ -1357,6 +1359,67 @@
   var menuEl = null;
   var drag = null;
   var hintTimer = 0;
+
+  // ---------- title ----------
+  // The heading is the page's title: click it to rename the page (and its tab).
+  var titleEl = $("boardTitle"), titleEditing = false;
+
+  function showTitle() {
+    if (!titleEditing) titleEl.textContent = scribe.title || "Kanban board";
+  }
+
+  function startTitleEdit() {
+    if (titleEditing) return;
+    titleEditing = true;
+    titleEl.contentEditable = "plaintext-only";
+    if (titleEl.contentEditable !== "plaintext-only") titleEl.contentEditable = "true";
+    titleEl.focus();
+    var range = document.createRange();
+    range.selectNodeContents(titleEl);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function stopTitleEdit(save) {
+    if (!titleEditing) return;
+    titleEditing = false;
+    var next = titleEl.textContent.replace(/\s+/g, " ").trim();
+    titleEl.contentEditable = "false";
+    showTitle();
+    if (!save || !next || next === scribe.title) return;
+    titleEl.textContent = next;
+    scribe.setTitle(next).then(showTitle, showTitle);
+  }
+
+  titleEl.onclick = startTitleEdit;
+  titleEl.onblur = function () { stopTitleEdit(true); };
+  titleEl.onkeydown = function (event) {
+    if (!titleEditing) {
+      if (event.target === titleEl && (event.key === "Enter" || event.key === "F2")) {
+        event.preventDefault();
+        startTitleEdit();
+      }
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      titleEl.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      stopTitleEdit(false);
+      titleEl.blur();
+    }
+  };
+  titleEl.onpaste = function (event) {
+    if (!titleEditing) return;
+    event.preventDefault();
+    var text = (event.clipboardData ? event.clipboardData.getData("text/plain") : "").replace(/\s+/g, " ");
+    document.execCommand("insertText", false, text);
+  };
+  if (scribe.onTitle) scribe.onTitle(showTitle);
+  showTitle();
 
   // ---------- helpers ----------
   function newId(prefix) {
@@ -1529,7 +1592,7 @@
       var preset = PRESETS[values.preset] || PRESETS.dev;
       cols = preset.map(function (p) {
         var col = { id: newId("col"), title: p[0] };
-        if (p[1] && (AGENT_MODE || p[1] === "done")) col.role = p[1];
+        if (p[1]) col.role = p[1];
         if (p[2]) col.wip = p[2];
         return col;
       });
@@ -1609,7 +1672,7 @@
     return cards;
   }
   function afterMove(cardId, fromCol, toCol) {
-    if (!AGENT_MODE || fromCol === toCol) return;
+    if (fromCol === toCol) return;
     var col = column(toCol);
     if (col && col.role === "agent") {
       var moved = card(cardId);
@@ -2104,7 +2167,7 @@
           render();
         });
         head.appendChild(title);
-        if (col.role && ROLE_TAG[col.role] && (AGENT_MODE || col.role === "done")) {
+        if (col.role && ROLE_TAG[col.role]) {
           head.appendChild(col.role === "agent" ? renderInboxTag(col) : el("span", "role " + col.role, ROLE_TAG[col.role]));
         }
       }
@@ -2310,10 +2373,10 @@
       badges.appendChild(bl);
     }
     if (badges.childNodes.length) li.appendChild(badges);
-    var waiting = AGENT_MODE ? waitingHint(c, col) : null;
+    var waiting = waitingHint(c, col);
     if (waiting) li.appendChild(waiting);
 
-    if (AGENT_MODE && c.status && str(c.status.text || c.status.kind).trim()) {
+    if (c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind === "working" ? "working" : "info";
       var st = el("div", "status " + kind);
       if (kind === "working") {
@@ -2327,7 +2390,7 @@
       }
       li.appendChild(st);
     }
-    if (AGENT_MODE && col && col.role === "review") {
+    if (col && col.role === "review") {
       var row = el("div", "review-row");
       var ok = el("button", "approve", "Approve");
       ok.type = "button";
@@ -2489,7 +2552,7 @@
       menuButton(menu, "Rename", function () { editingCol = col.id; render(); });
       menuButton(menu, "Move left", function () { moveColumn(col.id, idx - 1); }, idx <= 0);
       menuButton(menu, "Move right", function () { moveColumn(col.id, idx + 1); }, idx >= cols.length - 1);
-      if (AGENT_MODE && col.role === "agent") {
+      if (col.role === "agent") {
         menuButton(menu, "Workers…", function () { openWorkersPanel(null); });
         var ask = menuButton(menu, "", function () {
           setColumns(columns().map(function (c) {
@@ -2531,7 +2594,6 @@
       menu.appendChild(el("div", "sep"));
       menu.appendChild(el("div", "label", "Role"));
       ROLES.forEach(function (r) {
-        if (!AGENT_MODE && r[0] !== "" && r[0] !== "done") return;
         var b = menuButton(menu, "", function () { setRole(col.id, r[0]); });
         var mark = el("span", "check-mark", (col.role || "") === r[0] ? "✓" : "");
         b.appendChild(mark);
@@ -2989,11 +3051,11 @@
       mTitleInput.classList.add("hidden");
     }
 
-    var feed = AGENT_MODE && c.status && c.status.kind === "working" ? cardSteps(c) : [];
+    var feed = c.status && c.status.kind === "working" ? cardSteps(c) : [];
     renderFeed(c, feed);
     if (feed.length) {
       mStatus.className = "m-status hidden";
-    } else if (AGENT_MODE && c.status && str(c.status.text || c.status.kind).trim()) {
+    } else if (c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind;
       mStatus.className = "m-status" + (kind === "blocked" ? " blocked" : "");
       mStatus.replaceChildren();
@@ -3171,7 +3233,7 @@
     var candidates = liveCards().filter(function (x) { return x.id !== c.id && c.blockedBy.indexOf(x.id) === -1; });
     fillSelect(mLinkAdd, [["", "+ Add a blocker…"]].concat(candidates.map(function (x) { return [x.id, "#" + x.num + " " + plainLinks(x.title).slice(0, 60)]; })), "");
 
-    mReview.classList.toggle("hidden", !(AGENT_MODE && col && col.role === "review" && !c.archived));
+    mReview.classList.toggle("hidden", !(col && col.role === "review" && !c.archived));
     $("mArchive").textContent = c.archived ? "Restore" : "Archive";
 
     var times = ["Created " + ago(c.createdAt)];
@@ -3371,11 +3433,9 @@
       x.comments = x.comments.concat([{ id: cmId, by: "user", at: Date.now(), text: text }]);
       return x;
     });
-    if (AGENT_MODE) {
-      var commented = card(openId);
-      scribe.signal("comment", { card: openId, num: commented ? commented.num : null });
-      if (commented) handOffComment(commented, cmId, text);
-    }
+    var commented = card(openId);
+    scribe.signal("comment", { card: openId, num: commented ? commented.num : null });
+    if (commented) handOffComment(commented, cmId, text);
     return true;
   }
 
@@ -3772,7 +3832,7 @@
     closeMenu();
     menuEl = el("div", "menu card-menu");
     menuButton(menuEl, "Open", function () { openCard(id); });
-    if (AGENT_MODE && isReadyCol(colOf(c))) {
+    if (isReadyCol(colOf(c))) {
       menuButton(menuEl, "Assign…", function () {
         var at = boardEl.querySelector('.card[data-id="' + id + '"]');
         if (at) openAssignPicker(id, at);
@@ -3786,7 +3846,7 @@
         });
       });
     }
-    if (AGENT_MODE && isReadyCol(colOf(c))) {
+    if (isReadyCol(colOf(c))) {
       var assigned = workerIdFor(c.assignee);
       if (assigned && canRunSolo(c, assigned)) {
         var b = menuButton(menuEl, "Run worker", function () { runSolo(id, assigned); });
@@ -4681,7 +4741,7 @@
     var i = workerIds().indexOf(id);
     return WORKER_COLORS[(i < 0 ? 0 : i) % WORKER_COLORS.length];
   }
-  function isReadyCol(col) { return Boolean(AGENT_MODE && col && col.role === "agent"); }
+  function isReadyCol(col) { return Boolean(col && col.role === "agent"); }
   function isPausedCol(col) { return Boolean(col && col.paused); }
   /** The worker's cards in the agent (ready) columns, in board order. Paused inboxes are skipped. */
   function workerCards(id) {
@@ -5137,8 +5197,7 @@
   }
 
   function boardTitle() {
-    var h = document.querySelector("h1");
-    return h ? h.textContent.trim() : "Board";
+    return scribe.title || "Kanban board";
   }
   function clip(text, max) {
     text = str(text).trim();
@@ -5259,7 +5318,7 @@
   }
   /** Move on any running worker whose chat's run has ended, or that waits and has a card to take. */
   function advanceWorkers() {
-    if (!AGENT_MODE || !hasWorkerApi()) return;
+    if (!hasWorkerApi()) return;
     workerIds().forEach(wrapUpSolos);
     workerIds().forEach(function (id) {
       var w = worker(id);
@@ -5678,7 +5737,7 @@
    */
   var adopting = {};
   function adoptUnmerged(t) {
-    if (!AGENT_MODE || !hasWorkerApi() || !t || !t.id || adopting[t.id]) return;
+    if (!hasWorkerApi() || !t || !t.id || adopting[t.id]) return;
     var wt = t.worktree;
     if (!wt || !(Number(wt.ahead) > 0) || wt.dirty || t.status !== "idle" || t.queued > 0 || chatOwned(t.id)) return;
     if (t.run && t.run.phase !== "ended") return;
@@ -5697,7 +5756,7 @@
   /** Once per page load: chats left unmerged while no board window was open, or before this check existed. */
   var adoptSwept = false;
   function sweepUnmerged() {
-    if (adoptSwept || !AGENT_MODE || !hasWorkerApi() || typeof scribe.agent.threads !== "function") return;
+    if (adoptSwept || !hasWorkerApi() || typeof scribe.agent.threads !== "function") return;
     adoptSwept = true;
     scribe.agent.threads().then(function (r) {
       if (r && r.ok && Array.isArray(r.threads)) r.threads.forEach(adoptUnmerged);
@@ -5982,8 +6041,6 @@
     if (!sharedInstructionsBack.classList.contains("hidden")) resizeSharedInstructions();
   });
   function renderWorkersButton() {
-    workersBtn.classList.toggle("hidden", !AGENT_MODE);
-    if (!AGENT_MODE) return;
     workersBtn.replaceChildren();
     var running = workerIds().filter(function (id) { return workerOn(worker(id)); });
     if (running.length) {
@@ -6241,7 +6298,7 @@
       return limits && (!limits.availability || limits.availability === "available")
         && (limits.windows || []).some(function (w) { return Number.isFinite(w.utilization); });
     });
-    section.classList.toggle("hidden", !AGENT_MODE || !ids.length);
+    section.classList.toggle("hidden", !ids.length);
     var nodes = ids.map(function (provider) {
       var limits = workerLimits[provider];
       var name = provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : provider === "cursor" ? "Cursor" : "Pi";
@@ -6733,7 +6790,7 @@
     if (dlg) trapDialogTab(e, dlg);
   });
   document.addEventListener("keydown", function (e) {
-    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+    var typing = document.activeElement && (document.activeElement.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
     if (e.key === "Escape") {
       if (!lightbox.classList.contains("hidden")) { lightbox.classList.add("hidden"); return; }
       if (menuEl) { closeMenu(); return; }
@@ -6761,7 +6818,7 @@
     var target = num ? byNum(num) : null;
     if (target && target.id !== openId) openCard(target.id);
   });
-  if (AGENT_MODE) loadWorkerLimits();
+  loadWorkerLimits();
 })();
 </script>
 </body>

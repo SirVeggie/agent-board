@@ -527,7 +527,7 @@ export const kanbanActions: ActionSet = {
     const preset = Object.hasOwn(presets, str(values.preset)) ? presets[str(values.preset)] : presets.dev;
     state.columns = preset.map(([title, role, wip]) => ({
       id: newId("col"), title,
-      ...(role && (values.agentMode !== false || role === "done") ? { role } : {}),
+      ...(role ? { role } : {}),
       ...(wip ? { wip } : {}),
     }));
     if (!labels(state).length) {

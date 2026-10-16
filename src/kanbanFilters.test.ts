@@ -29,13 +29,37 @@ test("Kanban columns load batches independently and retain them through live upd
             col: i < 55 ? 'todo' : 'other', title: 'Task ' + (i + 1), labels: [], priority: 0,
             ...(i === 0 ? { createdBy: 'Sol', createdThread: 'th_creator', thread: 'th_assignee' } : {}),
             ...(i === 1 ? { createdBy: 'user' } : {}) }))
-        }, local: {},
+        }, local: {}, title: 'Project board', template: { values: { agentMode: false } },
+        onTitle(fn) { this.titleChanged = fn; },
+        setTitle(title) { this.title = title; this.titleChanged(); return Promise.resolve({ ok: true }); },
         set(patch) { Object.assign(this.state, patch); },
         setLocal(patch) { Object.assign(this.local, patch); },
         onChange(fn) { this.changed = fn; },
         agent: { show(id, options) { window.openedCreator = { id, options }; return Promise.resolve({ ok: true }); } }
       };
     </script>${html}`);
+    const title = page.locator('#boardTitle');
+    assert.equal(await title.innerText(), 'Project board');
+    assert.equal(await page.locator('#workersBtn').isVisible(), true);
+    await title.click();
+    await page.keyboard.type('Renamed / board');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => (window as any).scribe.title), 'Renamed / board');
+    await title.focus();
+    await page.keyboard.press('F2');
+    await page.keyboard.type('Discarded');
+    await page.keyboard.press('Escape');
+    assert.equal(await title.innerText(), 'Renamed / board');
+    await title.click();
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Enter');
+    assert.equal(await title.innerText(), 'Renamed / board');
+    await page.evaluate(() => {
+      const scribe = (window as any).scribe;
+      scribe.title = 'Renamed in Library';
+      scribe.titleChanged();
+    });
+    assert.equal(await title.innerText(), 'Renamed in Library');
     const todo = page.locator('.cards[data-col="todo"]');
     const other = page.locator('.cards[data-col="other"]');
     const waitCount = async (col: string, count: number) => {
