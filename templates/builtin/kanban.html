@@ -4355,10 +4355,11 @@
   // [[scribe:key]] (or a bare page id) shows the page's title, [[target|label]] your own text, [[peek:target]] /
   // [[split:target]] pick a mode, and [label](scribe:key) / (peek:…) / (split:…) is the markdown form. A key or id
   // written on its own (scribe:some-key, t_1a2b3c4d) links too. Scribe resolves titles and strikes out missing pages.
+  // A file on disk ([[file:C:\notes\a.png]], [label](file:///C:/notes/a.png)) opens as a temporary page.
   var LINK_MODES = { tab: "tab", peek: "peek", split: "split" };
   var PAGE_LINK_RES = [
     /\[\[\s*(?:(tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
-    /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|(scribe:[^)\s]+))\)/g,
+    /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|((?:scribe|file):[^)\s]+))\)/g,
     /(^|[^\w\/#:-])((?:scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?:#[\w=&%.:-]*\w)?)(?![\w-])/g
   ];
   function pageLinkHtml(target, label, mode) {

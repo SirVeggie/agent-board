@@ -707,6 +707,13 @@ body.dragging-tab iframe {
   align-items: center;
 }
 
+.tab-temp {
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .tab-agent-hidden,
 
 

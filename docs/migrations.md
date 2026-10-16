@@ -9,6 +9,16 @@
 - **How to verify:** `src/agent/workspaceDelete.test.ts`.
 - **When to remove:** Keep. This is the current schema.
 
+## `tabs.temp` column (additive, schema still 3)
+
+- **What changed:** Temporary pages (#655, #403): a `file:` link, or a website opened in a split or as a tab from a peek, opens a page that is not in the Library, can't be pinned, and is dropped (not closed into the Library, not binned) when its tab closes; one shown only in a peek goes when no peek shows it. Keep in Library (tab menu) or a move into a folder makes it a normal page. Stored as `tabs.temp INTEGER NOT NULL DEFAULT 0`.
+- **Why no version bump:** Existing rows read as 0 (a normal page). `ensureTempColumn` checks `PRAGMA table_info(tabs)` before `ALTER TABLE`. On load, a temporary page that is not open is dropped, like the help page. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged; exports only hold Library pages, which temporary pages are not.
+- **Protocol:** additive: a `temp` field on tab meta, `temp` on `POST /api/files/open`, `POST /api/temp-pages/url`, `POST /api/tabs/:id/keep` (board UI only). `PATCH /api/tabs/:id` with `pin: true` on a temporary page is refused. `VERSION` stays `3.0.0`.
+- **Where:** `src/schema.ts`, `src/dbMigrate.ts` (`ensureTempColumn`), `src/types.ts` (`Tab.temp`, `isAppTab`), `src/store.ts` (`openTempUrl`, `keepPage`), `src/http.ts`, `src/search/service.ts`, `src/bridge.ts` (file links), `public/views.js`, `public/app.js`, `public/library.js`, `public/agent-render.js`, `templates/builtin/kanban.html`.
+- **How to verify:** the temporary page tests in `src/filePages.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.file` column (additive, schema still 3)
 
 - **What changed:** File pages (#654): a page can show and save a file on disk. `file` on the tab is `{ path, copy? }` (`copy`: a dropped file whose bytes Scribe keeps in `<data>/files/<page id>/`, since a browser drop gives no path). The board serves `templates/file-page.html` for these pages instead of their stored HTML, which is only a placeholder naming the file. Stored as `tabs.file TEXT` (JSON, nullable).

@@ -233,6 +233,7 @@ Rules:
 - The built-in Todo list, Kanban board and Markdown note link pages in titles, descriptions, and comments with `[[scribe:key]]` (shows the page's title), `[[scribe:key|text]]`, `[[peek:scribe:key]]`, or `[[split:scribe:key]]`, and `[text](scribe:key)` in markdown. A key or page id written on its own links too. Write these in their state, not raw HTML.
 - `scribe.onOpen(fn)` calls `fn({ anchor, args })` each time a link or a search hit opens this page with a `#…` part, also when the page is already open, and once for a request that came before the page listened. `args` holds the `name=value` pairs (`#card=12` gives `{ card: "12" }`; several are joined with `&`), and is empty for a plain `#id`, which Scribe has already scrolled to. A search hit for one of the template's `search.records` comes as `args.record`, holding that record's `anchor` field, so accept it beside your own name. It returns a function that stops listening.
 - In chat replies, link a page as `[[scribe:key]]` or `[label](scribe:key)`.
+- A file on disk links as `file:` plus its path: `<a href="file:///C:/work/out/shot.png">screenshot</a>`, `[[file:C:\work\out\shot.png]]` (shows the file name) or `[label](file:///C:/work/out/shot.png)` in the built-in templates and in chat. It opens as a tab, peek or split like a page: the file's page if the user has one, else a **temporary page** that stays out of the Library and is gone once closed. Use it to point at images, logs or outputs you made, instead of making a page for each.
 - You cannot open a peek or split yourself: `page_show` / `page_open` focus a tab. Links are for the user to follow.
 
 ## Images
@@ -358,6 +359,7 @@ Less common:
 scribe.id                         // this page's tab id (t_…)
 scribe.revision                   // the state revision this page has seen
 scribe.template                   // { id, values, revision, compatible } on a template page, else null
+scribe.file                       // a file page's own file: read(), image(), save(text, opts), saveAs(text, opts); Scribe's file viewer uses it
 scribe.title                      // this page's title (its tab and Library name)
 scribe.setTitle("Trip plan")      // rename the page, e.g. from a heading the user edits in place; resolves with the new title
 scribe.onTitle((title) => …)      // the title changed (setTitle here, or a rename in the tab strip or Library)

@@ -1051,11 +1051,14 @@ window.createLibrary = function createLibrary(host) {
       host.activeId() !== id && { label: "Peek", action: () => host.openIn(id, "peek") },
       host.canSplit(id) && { label: "Open in split", action: () => host.openIn(id, "split") },
       host.canPopOut?.(id) && { label: "Open in new window", action: () => host.popOut(id) },
-      { label: tab.pinned ? "Unpin" : "Pin", action: () => host.setPinned(id, !tab.pinned) },
+      tab.temp
+        ? { label: "Keep in Library", action: () => host.keepPage(id) }
+        : { label: tab.pinned ? "Unpin" : "Pin", action: () => host.setPinned(id, !tab.pinned) },
       "sep",
-      { label: "Rename", action: () => reveal(id, { rename: true }) },
+      // Renaming happens in the Library row, which a temporary page doesn't have.
+      !tab.temp && { label: "Rename", action: () => reveal(id, { rename: true }) },
       { label: "Move to…", action: () => openMovePicker({ kind: "page", id }, point) },
-      fromStrip && { label: "Show in Library", action: () => reveal(id) },
+      fromStrip && !tab.temp && { label: "Show in Library", action: () => reveal(id) },
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
       { label: tab.agentHidden ? "Show to agent" : "Hide from agent", action: () => host.setAgentHidden(id, !tab.agentHidden) },

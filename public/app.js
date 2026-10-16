@@ -219,6 +219,10 @@
   const AGENT_HIDDEN_SVG =
     '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/><path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   const AGENT_HIDDEN_TITLE = "Hidden from the agent";
+  // A temporary page (#655): a clock, since it lasts only while it is open.
+  const TEMP_SVG =
+    '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.4 1.6"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  const TEMP_TITLE = "Temporary: not in the Library, gone once closed";
   const FOLDER_INSTRUCTIONS_SVG =
     '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3 2.5h7.2L13 5.3V13.5H3z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.2 8h5.6M5.2 10.2h3.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
   const UPDATE_SVG =
@@ -355,6 +359,7 @@
     focusWhenOpened,
     closeTab: (id) => closeTab(id),
     setPinned,
+    keepPage,
     setAgentHidden,
     pickPageWorkspace,
     managePermissions: (id) => window.scribePermissions?.manage(id),
@@ -934,9 +939,9 @@
     }
   }
 
-  /** Every Library page: open tabs and closed pages, without the help page. */
+  /** Every Library page: open tabs and closed pages, without the help page and temporary pages. */
   function libraryPages() {
-    return [...state.tabs, ...state.closed].filter((tab) => tab.key !== "scribe:welcome");
+    return [...state.tabs, ...state.closed].filter((tab) => tab.key !== "scribe:welcome" && !tab.temp);
   }
 
   /** Position of the current history entry among the board's own entries; see onHistoryStep. */
@@ -1681,6 +1686,19 @@
       }
     } else if (pin) {
       pin.remove();
+    }
+    let temp = el.querySelector(".tab-temp");
+    if (tab.temp) {
+      if (!temp) {
+        temp = document.createElement("span");
+        temp.className = "tab-temp";
+        temp.setAttribute("aria-label", TEMP_TITLE);
+        temp.dataset.tooltip = TEMP_TITLE;
+        temp.innerHTML = TEMP_SVG;
+        el.insertBefore(temp, el.firstChild);
+      }
+    } else if (temp) {
+      temp.remove();
     }
     let hidden = el.querySelector(".tab-agent-hidden");
     if (tab.agentHidden) {
@@ -3456,7 +3474,7 @@
       return;
     }
     const tab = findAnyTab(id);
-    if (tab?.key === "scribe:welcome" || !permanent) {
+    if (tab?.key === "scribe:welcome" || tab?.temp || !permanent) {
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
       return;
     }
@@ -3610,6 +3628,12 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspace: picked || null }),
     });
+  }
+
+  /** Keep in Library: a temporary page becomes a page like any other (#655). */
+  async function keepPage(id) {
+    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}/keep`, { method: "POST" }).catch(() => null);
+    showNotice(res?.ok ? "Kept in the Library" : "Could not keep the page");
   }
 
   async function setPinned(id, pin) {
@@ -4798,7 +4822,7 @@
 
   function showLocalPaletteRows() {
     updatePaletteChrome({ id: "pages", query: "" });
-    const recentClosed = [...state.closed].sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0)).slice(0, 15);
+    const recentClosed = state.closed.filter((tab) => !tab.temp).sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0)).slice(0, 15);
     paletteHits = [
       ...(window.scribeChat?.pendingAsks?.() || []),
       ...paletteActionRows(""),

@@ -175,6 +175,8 @@
     // [label](scribe:key): a page key is its own link target. board: is the old form, still in older transcripts.
     out = out.replace(/\]\((scribe:[^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
     out = out.replace(/\]\(board:([^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
+    // [label](file:///C:/a.png): a file on disk, opened as a temporary page (#655).
+    out = out.replace(/\]\((file:[^)\s]+)\)/gi, (_m, target) => `](#board:${encodeURIComponent(target)})`);
     return out;
   }
 

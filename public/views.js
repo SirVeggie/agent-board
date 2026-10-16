@@ -339,6 +339,112 @@ window.createViews = function createViews(host) {
     return null;
   }
 
+  /* ---------- temporary pages (#655) ---------- */
+
+  /** The path a file: link names ("file:///C:/a.png", "file:C:\\a.png", "file:/home/a"), or "". */
+  function fileLinkPath(raw) {
+    const text = String(raw || "").trim().replace(/\|auto$/i, "");
+    if (!/^file:/i.test(text)) {
+      return "";
+    }
+    let rest = text.slice(5);
+    if (rest.startsWith("//")) {
+      rest = rest.slice(2);
+      // file://server/share is a network path.
+      if (!rest.startsWith("/")) rest = "//" + rest;
+    }
+    if (/^\/[A-Za-z]:/.test(rest)) {
+      rest = rest.slice(1);
+    }
+    try {
+      rest = decodeURIComponent(rest);
+    } catch {
+      /* not encoded */
+    }
+    return rest;
+  }
+
+  function samePathText(a, b) {
+    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    return norm(a) === norm(b);
+  }
+
+  /** The page that already shows this file, if any. */
+  function filePageOf(file) {
+    return [...host.tabs(), ...host.closed()].find((tab) => tab.file && samePathText(tab.file.path, file)) || null;
+  }
+
+  /** Temporary pages this window just made, so the sweep leaves them until a view shows them. */
+  const freshTemps = new Map();
+  const TEMP_GRACE_MS = 5000;
+
+  /** The page meta once the board has it (it arrives over the socket after the request returns). */
+  async function arrived(id) {
+    for (let i = 0; i < 60 && !host.findAnyTab(id); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return host.findAnyTab(id) || null;
+  }
+
+  async function postTemp(path, body, failure) {
+    const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+    const data = res ? await res.json().catch(() => null) : null;
+    if (!res?.ok || !data?.tab) {
+      host.showNotice(data?.error || failure);
+      return null;
+    }
+    if (data.tab.temp) {
+      freshTemps.set(data.tab.id, Date.now());
+    }
+    return arrived(data.tab.id);
+  }
+
+  /** A file link's page: the one that shows the file, or a new temporary page for it. */
+  function tempFilePage(file) {
+    return postTemp("/api/files/open", { path: file, temp: true, activate: false }, "Could not open the file");
+  }
+
+  /**
+   * A site for a split as a temporary page (#403), so its pane has a tab like any page. Null when the
+   * site refuses to be framed: it then stays a site pane, which says so.
+   */
+  async function sitePage(href) {
+    if (!framingAllowed && !blocked.has(href)) {
+      const res = await fetch(`/api/frame-check?url=${encodeURIComponent(href)}`).catch(() => null);
+      const data = res?.ok ? await res.json().catch(() => null) : null;
+      if (data?.framable === false) {
+        blocked.set(href, data.reason || "");
+      }
+    }
+    if (blocked.has(href)) {
+      return null;
+    }
+    return postTemp("/api/temp-pages/url", { url: href }, "Could not open the site");
+  }
+
+  let sweepTimer = 0;
+  /**
+   * Temporary pages without a tab live only in a peek: once no peek shows one, it goes. Ones with a
+   * tab go when the tab closes (the daemon drops them).
+   */
+  function sweepTemps() {
+    clearTimeout(sweepTimer);
+    sweepTimer = setTimeout(() => {
+      const shown = new Set();
+      for (const peek of peeks.values()) {
+        for (const target of peek.stack) if (target.kind === "page") shown.add(target.id);
+      }
+      const now = Date.now();
+      for (const tab of host.closed()) {
+        if (!tab.temp || shown.has(tab.id) || now - (freshTemps.get(tab.id) || 0) < TEMP_GRACE_MS) {
+          continue;
+        }
+        freshTemps.delete(tab.id);
+        fetch(`/api/tabs/${encodeURIComponent(tab.id)}`, { method: "DELETE" }).catch(() => {});
+      }
+    }, 500);
+  }
+
   /* ---------- state queries ---------- */
 
   function peekKey() {
@@ -352,6 +458,7 @@ window.createViews = function createViews(host) {
   function setPeek(value) {
     if (value) peeks.set(peekKey(), value);
     else peeks.delete(peekKey());
+    sweepTemps();
   }
 
   function peekTarget() {
@@ -858,9 +965,8 @@ window.createViews = function createViews(host) {
     }
     parts.push(
       headTitle(top),
-      top.kind === "url"
-        ? iconButton(ICONS.browser, "Open in browser", () => openBrowser(top.href))
-        : iconButton(ICONS.tab, "Open as tab", () => promote(top)),
+      top.kind === "url" && iconButton(ICONS.browser, "Open in browser", () => openBrowser(top.href)),
+      !(top.kind === "url" && blocked.has(top.href)) && iconButton(ICONS.tab, "Open as tab", () => promote(top)),
       !host.solo && iconButton(ICONS.split, "Show in split", () => peekToSplit()),
       iconButton(ICONS.close, "Close", () => closePeek(), false)
     );
@@ -1291,7 +1397,7 @@ window.createViews = function createViews(host) {
     if (drop.strip) {
       if (source.pane === "peek") {
         const target = peekTarget();
-        if (target?.kind === "page") promote(target);
+        if (target) promote(target);
         return;
       }
       if (source.pane && canCloseDraggedPane(source.pane)) closePane(source.pane);
@@ -1366,8 +1472,8 @@ window.createViews = function createViews(host) {
     focusPeek();
   }
 
-  function peekToSplit() {
-    const top = peekTarget();
+  async function peekToSplit() {
+    let top = peekTarget();
     const active = host.activeId();
     if (!top) {
       return;
@@ -1376,15 +1482,25 @@ window.createViews = function createViews(host) {
       host.showNotice(active ? "The window is too narrow for a split" : "Open a tab first to split beside it");
       return;
     }
+    if (top.kind === "url") {
+      const page = await sitePage(top.href);
+      if (page) {
+        top = { kind: "page", id: page.id };
+      }
+    }
     setPeek(null);
     setSplit(top);
     host.render();
   }
 
-  /** "Open as tab" from a peek. The frame stays in the pool, so the page doesn't reload. */
-  function promote(target) {
+  /** "Open as tab" from a peek. The frame stays in the pool, so the page doesn't reload. A site becomes a temporary page. */
+  async function promote(target) {
     if (target.kind !== "page") {
-      return;
+      const page = await sitePage(target.href);
+      if (!page) {
+        return;
+      }
+      target = { kind: "page", id: page.id };
     }
     setPeek(null);
     navigate(target.id, {});
@@ -1416,6 +1532,15 @@ window.createViews = function createViews(host) {
    * and the browser for URLs.
    */
   async function open(raw, mode, { source = { role: "chrome" }, anchor = "", background = false } = {}) {
+    const file = fileLinkPath(raw);
+    if (file) {
+      // A file link opens the file's page, or a temporary one (#655).
+      const page = await tempFilePage(file);
+      if (!page) {
+        return { ok: false, error: "not_found" };
+      }
+      raw = page.id;
+    }
     const href = externalUrl(raw);
     /** @type {Target | null} */
     let target = null;
@@ -1447,13 +1572,19 @@ window.createViews = function createViews(host) {
     }
 
     const active = host.activeId();
-    const frameId = frameIdOf(target);
     if (mode === "split" && host.solo) {
       mode = "peek";
     }
     if (mode === "split" && (!active || mainTooNarrow())) {
       mode = !active && target.kind === "page" ? "tab" : "peek";
     }
+    if (mode === "split" && target.kind === "url") {
+      const page = await sitePage(target.href);
+      if (page) {
+        target = { kind: "page", id: page.id };
+      }
+    }
+    const frameId = frameIdOf(target);
     if (anchor && target.kind === "page") {
       pendingAnchor = { frameId, anchor };
     }
@@ -1542,6 +1673,13 @@ window.createViews = function createViews(host) {
     for (const raw of Array.isArray(targets) ? targets.slice(0, 500) : []) {
       const key = String(raw || "").trim();
       if (!key) {
+        continue;
+      }
+      const file = fileLinkPath(key);
+      if (file) {
+        // A file link shows its file's name; a missing file says so when it is opened.
+        const page = filePageOf(file);
+        pages[key] = { id: page?.id || null, title: page?.title || file.split(/[\\/]/).filter(Boolean).pop() || file, open: Boolean(page && host.tabs().some((tab) => tab.id === page.id)) };
         continue;
       }
       const page = findPage(splitAnchor(key)[0]);

@@ -688,6 +688,11 @@ export const BOARD_BRIDGE_JS = `
     return url.href;
   }
 
+  /** A file on disk ("file:///C:/a.png"): the board opens it as a temporary page (#655). */
+  function isFileLink(raw) {
+    return /^file:/i.test(raw == null ? "" : String(raw).trim());
+  }
+
   function hasGesture() {
     var activation = navigator.userActivation;
     return !activation || activation.isActive;
@@ -742,7 +747,8 @@ export const BOARD_BRIDGE_JS = `
     var anchor = opts.anchor == null ? "" : String(opts.anchor).replace(/^#/, "");
     var hash = raw.indexOf("#");
     var url = externalUrl(raw);
-    if (!url && hash > 0) {
+    // A file: link (#655) is a path, where # is part of the name.
+    if (!url && hash > 0 && !isFileLink(raw)) {
       anchor = anchor || raw.slice(hash + 1);
       raw = raw.slice(0, hash);
     }
@@ -798,6 +804,10 @@ export const BOARD_BRIDGE_JS = `
     }
     if (el.hasAttribute("download")) {
       return null;
+    }
+    var href = el.getAttribute("href") || "";
+    if (isFileLink(href)) {
+      return { el: el, target: href.trim() };
     }
     var url = externalUrl(el.href);
     return url ? { el: el, target: url } : null;
