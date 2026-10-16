@@ -17,7 +17,7 @@ async function chatPage() {
   await page.goto("http://chat.test/");
   const exposed = agent.replace(/  if \(document\.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
     window.T = {
-      S, onEvent, view: full.view, R,
+      S, onEvent, view: full.view, R, requestRender,
       open(thread, items, turns) {
         S.threads.set(thread.id, thread);
         S.details.set(thread.id, { items, byId: new Map(items.map((it) => [it.id, it])), turns: new Map(turns.map((t) => [t.id, t])) });
@@ -160,6 +160,32 @@ test("a hidden view skips transcript work and draws once when shown", async () =
     });
     // Nothing asked for a whole redraw while hidden, and the second wake had nothing to do.
     assert.deepEqual(result, [false, true, "Hi there", false, 1]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("render requests in one frame draw once, at the widest scope asked for", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    await page.evaluate(([thread, items, turn]) => (window as any).T.open(thread, items, [turn]), [thread, items, turn] as const);
+    const counts = await page.evaluate(async () => {
+      const { view, requestRender, frame } = (window as any).T;
+      const seen = { all: 0, chrome: 0 };
+      view.renderAll = () => { seen.all += 1; };
+      view.renderChrome = () => { seen.chrome += 1; };
+      requestRender("chrome");
+      requestRender("chrome");
+      await frame();
+      const chromeOnly = { ...seen };
+      requestRender("chrome");
+      requestRender();
+      requestRender("chrome");
+      await frame();
+      return [chromeOnly, seen];
+    });
+    assert.deepEqual(counts, [{ all: 0, chrome: 1 }, { all: 1, chrome: 1 }]);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

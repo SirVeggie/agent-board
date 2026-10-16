@@ -279,7 +279,7 @@
       notice(err.message);
     }
     await loadMissing();
-    renderAll();
+    requestRender();
   }
 
   /** Ask where a missing folder went, starting at the folder Scribe found or where it used to be. */
@@ -516,7 +516,7 @@
       if (data?.models?.length) S.config.models[provider] = data.models;
     }
     agentSettings.renderSummarizer();
-    renderAll();
+    requestRender();
   }
 
   async function loadThreads() {
@@ -535,7 +535,7 @@
     // A reconnect may have missed events: refresh the details we show.
     const shown = new Set([...views().map((view) => view.threadId).filter(Boolean), ...pageStepWatch.keys()]);
     for (const id of shown) S.details.delete(id);
-    renderAll();
+    requestRender();
     for (const id of shown) {
       if (!S.threads.has(id)) continue;
       ensureDetail(id).then(() => {
@@ -2242,7 +2242,7 @@
     S.config.models.pi = data?.models || [];
     agentSettings.renderStatus();
     void agentSettings.renderSources();
-    renderAll();
+    requestRender();
   }
 
   /* ---------- agent browser ---------- */
@@ -2932,6 +2932,14 @@
     renderAll() {
       this.renderHeader();
       this.renderTranscript();
+      this.renderHelperDock();
+      this.renderComposerBar();
+      this.renderContext();
+    }
+
+    /** renderAll but the transcript. */
+    renderChrome() {
+      this.renderHeader();
       this.renderHelperDock();
       this.renderComposerBar();
       this.renderContext();
@@ -8157,16 +8165,35 @@
     full.renderList();
   }
 
-  function renderAll() {
+  function renderAll(scope = "all") {
     for (const view of views()) {
       if (view.threadId && !S.threads.has(view.threadId)) {
         view.threadId = null;
       }
-      view.renderAll();
+      if (scope === "all") view.renderAll();
+      else view.renderChrome();
     }
     dock.renderTitle();
     renderLists();
     renderBadge();
+  }
+
+  /** The widest scope asked for since the last frame: "all", or "chrome" (everything but the transcripts). */
+  let renderScope = null;
+
+  /**
+   * Draw the chat views and lists again on the next frame, once however many settings changes, reloads and
+   * reconnects asked for it. "chrome" leaves the transcripts as they are, for changes they do not show.
+   */
+  function requestRender(scope = "all") {
+    const queued = renderScope;
+    renderScope = queued === "all" || scope === "all" ? "all" : "chrome";
+    if (queued) return;
+    requestAnimationFrame(() => {
+      const next = renderScope;
+      renderScope = null;
+      renderAll(next);
+    });
   }
 
   /* ---------- favourite models and cycling ---------- */
@@ -9823,7 +9850,7 @@
             if (data?.models?.length) S.config.models[provider] = data.models;
           }
           notice("Models refreshed");
-          renderAll();
+          requestRender();
         })
       );
       actions.append(
@@ -9864,7 +9891,7 @@
           api("PUT", "/prefs", { cursorHostShell: on })
             .then((next) => {
               S.config.prefs = next;
-              renderAll();
+              requestRender("chrome");
             })
             .catch((err) => {
               S.config.prefs = { ...prefs(), cursorHostShell: !on };
@@ -10068,7 +10095,7 @@
             () => localStorage.getItem(LS.reasoning) === "1",
             () => {
               localStorage.setItem(LS.reasoning, localStorage.getItem(LS.reasoning) === "1" ? "0" : "1");
-              renderAll();
+              requestRender();
             }
           ),
           { id: "ag-reasoning-label" }
@@ -10240,7 +10267,7 @@
                   if (providerAvailable(p.id)) break;
                 }
                 agentSettings.renderStatus();
-                renderAll();
+                requestRender();
               } catch (err) {
                 notice(err.message);
               }
