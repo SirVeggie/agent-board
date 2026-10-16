@@ -13,11 +13,17 @@ const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/
 const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
 const BLOB_PATH = /^\/blob\/[^/]+$/;
+const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify)\.js$/;
 
 export function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (isContentHost(req)) {
     // The page runtime injects this shared, data-free tooltip script.
     if (req.method === "GET" && req.path === "/tooltip.js") {
+      next();
+      return;
+    }
+    // Shared, data-free libraries; the file viewer (file pages) highlights and renders with them.
+    if (req.method === "GET" && VENDOR_PATH.test(req.path)) {
       next();
       return;
     }

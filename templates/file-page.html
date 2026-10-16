@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File</title>
+<!-- File pages (#654): Scribe serves this viewer for every page with a file on its tab. -->
+<script src="/vendor/highlight.js"></script>
+<script src="/vendor/marked.js"></script>
+<script src="/vendor/purify.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1a1a1d;
+    --panel: #202024;
+    --text: #e8e8ea;
+    --muted: #8e8e96;
+    --border: rgba(255, 255, 255, 0.08);
+    --accent: #c9c9d0;
+    --accent-soft: rgba(255, 255, 255, 0.07);
+    --code-bg: #131315;
+    --warn: #e0b45c;
+    --danger: #e07a7a;
+    --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+    --hl-keyword: #c792ea;
+    --hl-string: #c3e88d;
+    --hl-number: #f78c6c;
+    --hl-comment: #7d8796;
+    --hl-title: #82aaff;
+    --hl-type: #ffcb6b;
+    --hl-attr: #89ddff;
+    --hl-meta: #b0a4e3;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 Inter, "Segoe UI", system-ui, sans-serif;
+  }
+  .hidden { display: none !important; }
+
+  /* ---------- bar ---------- */
+  .bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    min-width: 0;
+  }
+  .name { font-weight: 600; white-space: nowrap; }
+  .dirty {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--warn);
+    flex: none;
+  }
+  .path {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .path bdi { direction: ltr; unicode-bidi: isolate; }
+  .tag {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  button {
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    height: 26px;
+    padding: 0 10px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { background: rgba(255, 255, 255, 0.1); }
+  button:disabled { opacity: 0.45; cursor: default; background: rgba(255, 255, 255, 0.06); }
+  button.primary { background: rgba(255, 255, 255, 0.14); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; color: var(--muted); }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.on { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+
+  /* ---------- banner ---------- */
+  .banner {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    background: rgba(224, 180, 92, 0.12);
+    border-bottom: 1px solid rgba(224, 180, 92, 0.3);
+    font-size: 12.5px;
+  }
+  .banner .grow { flex: 1; }
+
+  /* ---------- main ---------- */
+  main { flex: 1 1 auto; position: relative; min-height: 0; }
+  .pane { position: absolute; inset: 0; }
+
+  /* editor: a textarea over a highlighted copy, with line numbers beside it */
+  .editor { display: flex; background: var(--code-bg); }
+  .gutter {
+    flex: none;
+    overflow: hidden;
+    padding: 10px 10px 40vh 12px;
+    color: #55555d;
+    text-align: right;
+    font: 13px/20px var(--mono);
+    white-space: pre;
+    user-select: none;
+    border-right: 1px solid var(--border);
+    min-width: 44px;
+  }
+  .code { position: relative; flex: 1 1 auto; min-width: 0; }
+  .code pre, .code textarea {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 10px 14px 40vh;
+    border: 0;
+    font: 13px/20px var(--mono);
+    tab-size: 4;
+    white-space: pre;
+    overflow-wrap: normal;
+    letter-spacing: 0;
+  }
+  .code pre {
+    overflow: hidden;
+    pointer-events: none;
+    color: var(--text);
+  }
+  .code pre code { font: inherit; display: block; }
+  .code textarea {
+    width: 100%;
+    height: 100%;
+    resize: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    caret-color: var(--text);
+    overflow: auto;
+  }
+  .code.highlighted textarea { color: transparent; -webkit-text-fill-color: transparent; }
+  .code textarea::selection { background: rgba(130, 170, 255, 0.3); -webkit-text-fill-color: transparent; }
+  .code:not(.highlighted) textarea::selection { -webkit-text-fill-color: var(--text); }
+
+  .hljs-keyword, .hljs-selector-tag, .hljs-doctag { color: var(--hl-keyword); }
+  .hljs-string, .hljs-regexp, .hljs-template-tag, .hljs-selector-attr { color: var(--hl-string); }
+  .hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--hl-number); }
+  .hljs-comment, .hljs-quote { color: var(--hl-comment); font-style: italic; }
+  .hljs-title, .hljs-section, .hljs-name, .hljs-selector-id { color: var(--hl-title); }
+  .hljs-type, .hljs-built_in, .hljs-title.class_, .hljs-selector-class { color: var(--hl-type); }
+  .hljs-attr, .hljs-attribute, .hljs-property, .hljs-variable, .hljs-template-variable, .hljs-selector-pseudo { color: var(--hl-attr); }
+  .hljs-meta, .hljs-tag, .hljs-subst { color: var(--hl-meta); }
+  .hljs-addition { color: #9ad48b; }
+  .hljs-deletion { color: var(--danger); }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-strong { font-weight: 600; }
+
+  /* markdown, rendered: each block edits in place */
+  .md { overflow: auto; }
+  .md-doc {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 28px 40px 40vh;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  .blk { border-radius: 6px; margin: 0 -10px; padding: 0 10px; cursor: text; }
+  .blk:hover { background: rgba(255, 255, 255, 0.025); }
+  .blk > :first-child { margin-top: 0.4em; }
+  .blk > :last-child { margin-bottom: 0.4em; }
+  .blk-edit {
+    display: block;
+    width: calc(100% + 20px);
+    margin: 4px -10px;
+    padding: 8px 10px;
+    resize: none;
+    overflow: hidden;
+    border: 0;
+    border-radius: 6px;
+    outline: none;
+    background: var(--code-bg);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+    color: var(--text);
+    font: 13px/20px var(--mono);
+    tab-size: 4;
+  }
+  .md-end { min-height: 30vh; cursor: text; }
+  .md-empty { color: var(--muted); padding: 6px 0; }
+  .md-doc h1, .md-doc h2, .md-doc h3, .md-doc h4 { line-height: 1.25; font-weight: 650; }
+  .md-doc h1 { font-size: 1.8rem; letter-spacing: -0.02em; }
+  .md-doc h2 { font-size: 1.35rem; }
+  .md-doc h3 { font-size: 1.1rem; }
+  .md-doc a { color: #82aaff; }
+  .md-doc code { font: 0.88em var(--mono); background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 5px; }
+  .md-doc pre { background: var(--code-bg); border: 1px solid var(--border); padding: 12px 14px; border-radius: 10px; overflow: auto; }
+  .md-doc pre code { background: none; padding: 0; font-size: 13px; }
+  .md-doc blockquote { margin: 0.6em 0; padding: 0.1em 0.9em; border-left: 3px solid var(--accent); color: var(--muted); }
+  .md-doc table { border-collapse: collapse; margin: 0.6em 0; }
+  .md-doc th, .md-doc td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  .md-doc th { background: rgba(255, 255, 255, 0.04); }
+  .md-doc img { max-width: 100%; }
+  .md-doc hr { border: 0; border-top: 1px solid var(--border); }
+
+  /* html, rendered */
+  .htmlview { background: #fff; }
+  .htmlview iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+
+  /* image */
+  .imgview {
+    overflow: hidden;
+    cursor: grab;
+    background-color: #151517;
+    background-image: linear-gradient(45deg, #1d1d20 25%, transparent 25%), linear-gradient(-45deg, #1d1d20 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1d1d20 75%), linear-gradient(-45deg, transparent 75%, #1d1d20 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  }
+  .imgview.panning { cursor: grabbing; }
+  .imgview img {
+    position: absolute;
+    left: 0; top: 0;
+    transform-origin: 0 0;
+    user-select: none;
+    -webkit-user-drag: none;
+    image-rendering: auto;
+  }
+  .imgview.pixelated img { image-rendering: pixelated; }
+  .zoom-label { min-width: 48px; text-align: center; color: var(--muted); font-size: 12px; }
+
+  /* messages */
+  .message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-align: center;
+    padding: 24px;
+  }
+  .message h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .message p { margin: 0; color: var(--muted); max-width: 560px; overflow-wrap: anywhere; }
+
+  /* status */
+  .status {
+    flex: none;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    height: 24px;
+    padding: 0 14px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .status .grow { flex: 1; }
+  .status .err { color: var(--danger); overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+  <header class="bar">
+    <span class="name" id="name">File</span>
+    <span class="dirty hidden" id="dirty" role="img" aria-label="Unsaved changes" data-tooltip="Unsaved changes"></span>
+    <span class="tag hidden" id="copyTag" data-tooltip="A dropped file is a copy kept in Scribe. Save as writes it to a folder on disk.">Copy</span>
+    <span class="path" id="path"></span>
+    <div class="actions">
+      <div class="seg hidden" id="modeSeg" role="group" aria-label="View">
+        <button type="button" data-mode="render">Preview</button>
+        <button type="button" data-mode="source">Source</button>
+      </div>
+      <div class="actions hidden" id="zoomBar">
+        <button type="button" id="zoomOut" aria-label="Zoom out">−</button>
+        <span class="zoom-label" id="zoomLabel">100%</span>
+        <button type="button" id="zoomIn" aria-label="Zoom in">+</button>
+        <button type="button" id="zoomFit">Fit</button>
+        <button type="button" id="zoomOne">1:1</button>
+      </div>
+      <button type="button" class="hidden" id="prettify">Prettify</button>
+      <button type="button" class="hidden" id="save">Save</button>
+      <button type="button" class="hidden" id="saveAs">Save as</button>
+    </div>
+  </header>
+  <div class="banner hidden" id="banner">
+    <span class="grow" id="bannerText"></span>
+    <button type="button" id="bannerReload">Reload</button>
+    <button type="button" id="bannerOverwrite">Overwrite</button>
+  </div>
+  <main id="main">
+    <div class="pane message" id="loading"><p>Opening…</p></div>
+    <div class="pane editor hidden" id="editorPane">
+      <div class="gutter" id="gutter" aria-hidden="true">1</div>
+      <div class="code" id="code">
+        <pre aria-hidden="true"><code id="hl"></code></pre>
+        <textarea id="ta" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="File text" wrap="off"></textarea>
+      </div>
+    </div>
+    <div class="pane md hidden" id="mdPane"><div class="md-doc" id="mdDoc"></div></div>
+    <div class="pane htmlview hidden" id="htmlPane"></div>
+    <div class="pane imgview hidden" id="imgPane"><img id="img" alt=""></div>
+    <div class="pane message hidden" id="messagePane"><h2 id="msgTitle"></h2><p id="msgText"></p><p id="msgPath"></p></div>
+  </main>
+  <footer class="status" id="status">
+    <span id="stPos"></span>
+    <span class="err" id="stErr"></span>
+    <span class="grow"></span>
+    <span id="stLang"></span>
+    <span id="stEnc"></span>
+    <span id="stEol"></span>
+    <span id="stSize"></span>
+  </footer>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var ta = $("ta"), hl = $("hl"), code = $("code"), gutter = $("gutter");
+  var mdDoc = $("mdDoc"), mdPane = $("mdPane");
+
+  // Highlighting a big file on each key press gets slow; past this the editor shows plain text.
+  var HIGHLIGHT_MAX = 200 * 1024;
+  // Unsaved text survives a reload in this viewer's local state, up to its size limit.
+  var DRAFT_MAX = 48 * 1024;
+  var LANG_LABEL = { text: "Plain text", markdown: "Markdown", json: "JSON", html: "HTML", image: "Image" };
+
+  var file = null;       // the last read: { path, name, kind, lang, size, mtime, copy, eol, bom }
+  var saved = "";        // the text on disk
+  var mode = "source";   // markdown / html: render or source
+  var busy = false;
+
+  if (!window.scribe || !scribe.file) {
+    showMessage("Reload this tab", "This page needs a newer Scribe to open its file.", "");
+    return;
+  }
+
+  // ---------- small helpers ----------
+  function show(id) {
+    ["loading", "editorPane", "mdPane", "htmlPane", "imgPane", "messagePane"].forEach(function (pane) {
+      $(pane).classList.toggle("hidden", pane !== id);
+    });
+  }
+  function showMessage(title, text, path) {
+    $("msgTitle").textContent = title;
+    $("msgText").textContent = text;
+    $("msgPath").textContent = path || "";
+    show("messagePane");
+  }
+  function setError(text) { $("stErr").textContent = text || ""; }
+  function formatBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
+  function textKind() { return file && file.kind !== "image" && file.kind !== "unsupported"; }
+  function current() { return ta.value; }
+  function isDirty() { return textKind() && current() !== saved; }
+
+  // ---------- header ----------
+  function showHeader() {
+    $("name").textContent = file.name;
+    var path = $("path");
+    path.replaceChildren();
+    if (!file.copy) {
+      var bdi = document.createElement("bdi");
+      bdi.textContent = file.path;
+      path.append(bdi);
+      path.dataset.tooltip = file.path;
+    }
+    $("copyTag").classList.toggle("hidden", !file.copy);
+    var editable = textKind();
+    $("save").classList.toggle("hidden", !editable);
+    $("saveAs").classList.toggle("hidden", !editable);
+    $("prettify").classList.toggle("hidden", file.kind !== "json");
+    $("modeSeg").classList.toggle("hidden", file.kind !== "markdown" && file.kind !== "html");
+    $("zoomBar").classList.toggle("hidden", file.kind !== "image");
+    $("stLang").textContent = file.kind === "code" ? langLabel() : LANG_LABEL[file.kind] || "";
+    $("stEnc").textContent = editable ? (file.bom ? "UTF-8 BOM" : "UTF-8") : "";
+    $("stEol").textContent = editable ? (file.eol === "\r\n" ? "CRLF" : "LF") : "";
+    $("stSize").textContent = formatBytes(file.size);
+    markDirty();
+  }
+  function langLabel() {
+    var lang = window.hljs && file.lang && hljs.getLanguage(file.lang);
+    return (lang && lang.name) || file.lang || "Code";
+  }
+  function markDirty() {
+    var dirty = isDirty();
+    $("dirty").classList.toggle("hidden", !dirty);
+    $("save").classList.toggle("primary", dirty);
+    $("save").disabled = !dirty;
+  }
+
+  // ---------- load ----------
+  function load(keepCaret) {
+    return scribe.file.read().then(function (res) {
+      if (!res || !res.ok) {
+        var err = (res && res.error) || "error";
+        if (/not found/.test(err)) showMessage("File not found", "It was moved, renamed, or deleted.", res && res.path);
+        else showMessage("Could not open the file", err, res && res.path);
+        return;
+      }
+      file = res.file;
+      showHeader();
+      if (file.kind === "unsupported") {
+        showMessage("Scribe can't show " + file.name, file.reason || "", file.copy ? "" : file.path);
+        return;
+      }
+      if (file.kind === "image") {
+        openImage();
+        return;
+      }
+      openText(file.text, keepCaret);
+    });
+  }
+
+  function openText(text, keepCaret) {
+    saved = text;
+    var sel = keepCaret ? [ta.selectionStart, ta.selectionEnd, ta.scrollTop, ta.scrollLeft] : null;
+    var draft = scribe.local.draft;
+    // A draft from before a reload, for this same version of the file.
+    if (!keepCaret && draft && draft.mtime === file.mtime && typeof draft.text === "string" && draft.text !== text) {
+      text = draft.text;
+    }
+    ta.value = text;
+    if (sel) {
+      ta.setSelectionRange(Math.min(sel[0], text.length), Math.min(sel[1], text.length));
+      ta.scrollTop = sel[2];
+      ta.scrollLeft = sel[3];
+    }
+    code.classList.toggle("highlighted", false);
+    refresh(true);
+    var stored = scribe.local.mode;
+    mode = file.kind === "markdown" || file.kind === "html" ? (stored === "source" || stored === "render" ? stored : "render") : "source";
+    applyMode();
+    markDirty();
+  }
+
+  // ---------- modes ----------
+  function applyMode() {
+    var segButtons = $("modeSeg").querySelectorAll("button");
+    segButtons.forEach(function (b) { b.classList.toggle("on", b.dataset.mode === mode); });
+    if (mode === "render" && file.kind === "markdown") {
+      renderMarkdown();
+      show("mdPane");
+    } else if (mode === "render" && file.kind === "html") {
+      renderHtml();
+      show("htmlPane");
+    } else {
+      show("editorPane");
+      syncScroll();
+      focusEditor();
+    }
+  }
+  $("modeSeg").addEventListener("click", function (event) {
+    var b = event.target.closest("button[data-mode]");
+    if (!b || b.dataset.mode === mode) return;
+    commitBlock();
+    mode = b.dataset.mode;
+    scribe.setLocal({ mode: mode });
+    applyMode();
+  });
+
+  // ---------- editor ----------
+  var hlTimer = null;
+  var lastLines = 0;
+  function highlightable() {
+    return (file.kind === "code" || file.kind === "json" || file.kind === "html" || file.kind === "markdown") &&
+      window.hljs && file.lang && hljs.getLanguage(file.lang) && ta.value.length <= HIGHLIGHT_MAX;
+  }
+  function refresh(now) {
+    var text = ta.value;
+    var lines = 1;
+    for (var i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) lines++;
+    if (lines !== lastLines) {
+      lastLines = lines;
+      var nums = new Array(lines);
+      for (var n = 0; n < lines; n++) nums[n] = n + 1;
+      gutter.textContent = nums.join("\n") + "\n";
+    }
+    clearTimeout(hlTimer);
+    if (!highlightable()) {
+      code.classList.remove("highlighted");
+      hl.textContent = "";
+      return;
+    }
+    var run = function () {
+      // A trailing newline needs a character after it, or the copy is one line short.
+      hl.innerHTML = hljs.highlight(ta.value + "\n ", { language: file.lang, ignoreIllegals: true }).value;
+      code.classList.add("highlighted");
+      syncScroll();
+    };
+    if (now) run();
+    else hlTimer = setTimeout(run, ta.value.length > 50000 ? 120 : 16);
+  }
+  function syncScroll() {
+    hl.parentNode.scrollTop = ta.scrollTop;
+    hl.parentNode.scrollLeft = ta.scrollLeft;
+    gutter.scrollTop = ta.scrollTop;
+  }
+  ta.addEventListener("scroll", syncScroll);
+  var draftTimer = null;
+  ta.addEventListener("input", function () {
+    refresh(false);
+    markDirty();
+    setError("");
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraft, 400);
+  });
+  function saveDraft() {
+    if (!file) return;
+    var text = current();
+    if (text === saved || text.length > DRAFT_MAX) {
+      if (scribe.local.draft) scribe.setLocal({ draft: null });
+      return;
+    }
+    scribe.setLocal({ draft: { mtime: file.mtime, text: text } });
+  }
+  function updatePos() {
+    if (!textKind() || mode !== "source") {
+      $("stPos").textContent = "";
+      return;
+    }
+    var before = ta.value.slice(0, ta.selectionStart);
+    var line = before.split("\n").length;
+    var col = ta.selectionStart - before.lastIndexOf("\n");
+    var len = Math.abs(ta.selectionEnd - ta.selectionStart);
+    $("stPos").textContent = "Ln " + line + ", Col " + col + (len ? " (" + len + " selected)" : "");
+  }
+  document.addEventListener("selectionchange", updatePos);
+  ta.addEventListener("keyup", updatePos);
+
+  /** Type text where the selection is, as one undoable edit. */
+  function insert(text) {
+    if (!document.execCommand("insertText", false, text)) {
+      ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
+      ta.dispatchEvent(new Event("input"));
+    }
+  }
+  function lineStart(text, pos) { return text.lastIndexOf("\n", pos - 1) + 1; }
+
+  ta.addEventListener("keydown", function (event) {
+    if (event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.preventDefault();
+      var text = ta.value, s = ta.selectionStart, e = ta.selectionEnd;
+      var multi = text.slice(s, e).indexOf("\n") !== -1;
+      if (!multi && !event.shiftKey) {
+        insert(indentUnit());
+        return;
+      }
+      // Indent or outdent the selected lines.
+      var from = lineStart(text, s);
+      var to = e > s && text[e - 1] === "\n" ? e - 1 : e;
+      var block = text.slice(from, to);
+      var unit = indentUnit();
+      var next = event.shiftKey
+        ? block.replace(/^(\t| {1,4})/gm, function (m) { return unit === "\t" ? m.replace(/^\t/, "") : m.slice(Math.min(m.length, unit.length)); })
+        : block.replace(/^/gm, unit);
+      ta.setSelectionRange(from, to);
+      insert(next);
+      ta.setSelectionRange(from, from + next.length);
+      return;
+    }
+    if (event.key === "Enter" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      // Keep the line's indent.
+      var t = ta.value, start = lineStart(t, ta.selectionStart);
+      var indent = /^[\t ]*/.exec(t.slice(start, ta.selectionStart))[0];
+      if (indent) {
+        event.preventDefault();
+        insert("\n" + indent);
+      }
+    }
+  });
+  function indentUnit() {
+    var m = /^( +|\t)\S/m.exec(saved);
+    if (m && m[1] === "\t") return "\t";
+    return "  ".repeat(m && m[1].length >= 4 && m[1].length % 4 === 0 ? 2 : 1);
+  }
+
+  function focusEditor() {
+    if (!textKind() || mode !== "source") return;
+    if (document.activeElement !== ta) ta.focus({ preventScroll: true });
+  }
+  // The editor keeps focus: clicks on the bar or empty space go back to it.
+  document.addEventListener("mousedown", function (event) {
+    if (event.target.closest("button") && mode === "source" && textKind()) event.preventDefault();
+  });
+  window.addEventListener("focus", function () { setTimeout(focusEditor, 0); checkDisk(); });
+  ta.addEventListener("blur", function () {
+    setTimeout(function () {
+      if (document.hasFocus() && !document.activeElement.closest(".blk-edit") && document.activeElement !== ta && document.activeElement === document.body) focusEditor();
+    }, 0);
+  });
+
+  // ---------- markdown rendered: blocks edit in place ----------
+  var blocks = [];    // { start, end } offsets of each rendered block in the text
+  var editing = null; // { el, start, end, ta }
+
+  function sanitize(html) {
+    return window.DOMPurify ? DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed"], FORBID_ATTR: ["style"] }) : "";
+  }
+  function renderMarkdown() {
+    editing = null;
+    var text = ta.value;
+    mdDoc.replaceChildren();
+    blocks = [];
+    if (!window.marked) {
+      mdDoc.textContent = text;
+      return;
+    }
+    var tokens = marked.lexer(text, { gfm: true });
+    var pos = 0;
+    tokens.forEach(function (tok) {
+      var at = text.indexOf(tok.raw, pos);
+      if (at === -1) at = pos;
+      var end = at + tok.raw.length;
+      pos = end;
+      if (tok.type === "space") return;
+      var one = [tok];
+      one.links = tokens.links;
+      var el = document.createElement("div");
+      el.className = "blk";
+      el.innerHTML = sanitize(marked.parser(one, { gfm: true }));
+      el.querySelectorAll("pre code").forEach(highlightBlock);
+      // A block's own trailing newlines stay outside its editor.
+      var raw = tok.raw.replace(/\n+$/, "");
+      el.dataset.start = String(at);
+      el.dataset.end = String(at + raw.length);
+      blocks.push(el);
+      mdDoc.append(el);
+    });
+    var tail = document.createElement("div");
+    tail.className = "md-end";
+    if (!blocks.length) {
+      var empty = document.createElement("div");
+      empty.className = "md-empty";
+      empty.textContent = "Empty. Click to write.";
+      tail.append(empty);
+    }
+    mdDoc.append(tail);
+  }
+  function highlightBlock(el) {
+    var lang = (/language-([\w+-]+)/.exec(el.className) || [])[1];
+    if (!window.hljs) return;
+    try {
+      el.innerHTML = lang && hljs.getLanguage(lang)
+        ? hljs.highlight(el.textContent, { language: lang, ignoreIllegals: true }).value
+        : hljs.highlightAuto(el.textContent).value;
+    } catch (err) { /* plain */ }
+  }
+  function editBlock(el, start, end, caretAtEnd) {
+    commitBlock();
+    // A click that landed as the last block's edit was re-rendering: the same block, rendered again.
+    if (el && !el.isConnected) el = mdDoc.querySelector('.blk[data-start="' + start + '"]');
+    var text = ta.value;
+    var area = document.createElement("textarea");
+    area.className = "blk-edit";
+    area.spellcheck = false;
+    area.value = text.slice(start, end);
+    editing = { el: el, start: start, end: end, ta: area, before: area.value };
+    if (el) el.replaceWith(area);
+    else mdDoc.lastElementChild.before(area);
+    autosize(area);
+    area.focus();
+    var at = caretAtEnd ? area.value.length : 0;
+    area.setSelectionRange(at, at);
+    area.addEventListener("input", function () {
+      autosize(area);
+      // The block's text goes into the whole file as it is typed, so Save always has it.
+      var t = ta.value;
+      var delta = area.value.length - (editing.end - editing.start);
+      ta.value = t.slice(0, editing.start) + area.value + t.slice(editing.end);
+      editing.end = editing.start + area.value.length;
+      // Blocks after this one move with it, so a click on one edits the right text.
+      blocks.forEach(function (blk) {
+        if (blk !== editing.el && Number(blk.dataset.start) > editing.start) {
+          blk.dataset.start = String(Number(blk.dataset.start) + delta);
+          blk.dataset.end = String(Number(blk.dataset.end) + delta);
+        }
+      });
+      refresh(false);
+      markDirty();
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(saveDraft, 400);
+    });
+    area.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        commitBlock();
+        renderMarkdown();
+      }
+      if (event.key === "Tab" && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        if (!event.shiftKey) document.execCommand("insertText", false, "  ");
+      }
+    });
+    area.addEventListener("blur", function () {
+      setTimeout(function () {
+        if (editing && editing.ta === area && document.activeElement !== area && document.hasFocus()) {
+          commitBlock();
+          renderMarkdown();
+        }
+      }, 0);
+    });
+  }
+  function commitBlock() {
+    if (!editing) return;
+    editing = null;
+  }
+  function autosize(area) {
+    area.style.height = "auto";
+    area.style.height = area.scrollHeight + 2 + "px";
+  }
+  mdDoc.addEventListener("click", function (event) {
+    var link = event.target.closest("a[href]");
+    if (link) {
+      event.preventDefault();
+      var href = link.getAttribute("href");
+      if (/^https?:/i.test(href)) scribe.open(href);
+      return;
+    }
+    if (event.target.closest(".blk-edit")) return;
+    var el = event.target.closest(".blk");
+    if (el) {
+      editBlock(el, Number(el.dataset.start), Number(el.dataset.end), false);
+      return;
+    }
+    if (event.target.closest(".md-end")) {
+      // New text at the end, after a blank line.
+      var text = ta.value;
+      var pad = !text ? "" : /\n\n$/.test(text) ? "" : /\n$/.test(text) ? "\n" : "\n\n";
+      if (pad) {
+        ta.value = text + pad;
+        markDirty();
+      }
+      editBlock(null, ta.value.length, ta.value.length, true);
+    }
+  });
+
+  // ---------- html rendered ----------
+  function renderHtml() {
+    var pane = $("htmlPane");
+    pane.replaceChildren();
+    var frame = document.createElement("iframe");
+    // No allow-same-origin: the file's scripts run in an origin of their own, away from Scribe's.
+    frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
+    frame.setAttribute("title", file.name);
+    frame.srcdoc = ta.value;
+    pane.append(frame);
+  }
+
+  // ---------- json ----------
+  $("prettify").addEventListener("click", function () {
+    var text = ta.value;
+    var value;
+    try {
+      value = JSON.parse(text);
+    } catch (err) {
+      setError("Not valid JSON: " + err.message);
+      return;
+    }
+    var unit = indentUnit();
+    var pretty = JSON.stringify(value, null, unit === "\t" ? "\t" : unit.length || 2) + (/\n$/.test(text) ? "\n" : "");
+    if (pretty === text) return;
+    ta.focus();
+    ta.select();
+    insert(pretty);
+    ta.setSelectionRange(0, 0);
+    ta.scrollTop = 0;
+  });
+
+  // ---------- save ----------
+  function afterSave(res) {
+    file = Object.assign({}, file, res.file);
+    saved = current();
+    scribe.setLocal({ draft: null });
+    showHeader();
+    setError("");
+    hideBanner();
+  }
+  function save(force) {
+    if (!textKind() || busy) return;
+    if (!isDirty() && !force) return;
+    busy = true;
+    var text = current();
+    scribe.file.save(text, { mtime: file.mtime, eol: file.eol, bom: file.bom, force: force === true }).then(function (res) {
+      busy = false;
+      if (res && res.ok) {
+        if (current() === text) afterSave(res);
+        else {
+          file = Object.assign({}, file, res.file);
+          saved = text;
+          markDirty();
+        }
+        return;
+      }
+      if (res && res.conflict) {
+        showBanner("The file changed on disk since it was opened.", true);
+        return;
+      }
+      setError("Not saved: " + ((res && res.error) || "error"));
+    }, function () { busy = false; });
+  }
+  function saveAs() {
+    if (!textKind() || busy) return;
+    busy = true;
+    var text = current();
+    scribe.file.saveAs(text, { eol: file.eol, bom: file.bom }).then(function (res) {
+      busy = false;
+      if (res && res.ok) {
+        file = Object.assign({}, file, res.file, { copy: false });
+        saved = text;
+        scribe.setLocal({ draft: null });
+        showHeader();
+        // A new name can mean a new kind (notes.txt saved as notes.md).
+        lastLines = 0;
+        refresh(true);
+        if (file.kind !== "markdown" && file.kind !== "html") mode = "source";
+        applyMode();
+      } else if (res && res.error && res.error !== "cancelled") {
+        setError("Not saved: " + res.error);
+      }
+      focusEditor();
+    }, function () { busy = false; });
+  }
+  $("save").addEventListener("click", function () { save(false); });
+  $("saveAs").addEventListener("click", saveAs);
+
+  // Registered before Scribe's own page keys, so Ctrl+S saves the file instead of downloading the page.
+  window.addEventListener("keydown", function (event) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "s") return;
+    if (!textKind()) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.shiftKey) saveAs();
+    else save(false);
+  }, true);
+
+  // ---------- changes on disk ----------
+  function showBanner(text, conflict) {
+    $("bannerText").textContent = text;
+    $("bannerOverwrite").classList.toggle("hidden", !conflict);
+    $("banner").classList.remove("hidden");
+  }
+  function hideBanner() { $("banner").classList.add("hidden"); }
+  $("bannerReload").addEventListener("click", function () {
+    hideBanner();
+    scribe.setLocal({ draft: null });
+    load(true);
+  });
+  $("bannerOverwrite").addEventListener("click", function () {
+    hideBanner();
+    save(true);
+  });
+  var checking = false;
+  function checkDisk() {
+    if (!file || checking || busy) return;
+    checking = true;
+    scribe.file.read().then(function (res) {
+      checking = false;
+      if (!res || !res.ok || !res.file || res.file.mtime === file.mtime) return;
+      if (file.kind === "image") {
+        file = res.file;
+        openImage();
+        return;
+      }
+      if (!textKind()) return;
+      if (isDirty()) {
+        showBanner("The file changed on disk. Reload it, or keep your changes and overwrite it when you save.", true);
+        return;
+      }
+      file = res.file;
+      showHeader();
+      openText(res.file.text, true);
+    }, function () { checking = false; });
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") checkDisk();
+  });
+
+  // ---------- image ----------
+  var img = $("img"), imgPane = $("imgPane");
+  var view = { scale: 1, x: 0, y: 0, fit: true };
+  var imgUrl = "";
+  function openImage() {
+    show("imgPane");
+    scribe.file.image().then(function (res) {
+      if (!res || !res.ok) {
+        showMessage("Could not open the image", (res && res.error) || "", file.path);
+        return;
+      }
+      if (imgUrl) URL.revokeObjectURL(imgUrl);
+      imgUrl = URL.createObjectURL(new Blob([res.buffer], { type: res.type || "image/png" }));
+      img.onload = function () {
+        $("stPos").textContent = img.naturalWidth + " × " + img.naturalHeight;
+        if (view.fit) fit();
+        else applyView();
+      };
+      img.onerror = function () { showMessage("Scribe can't show " + file.name, "The image could not be decoded.", file.path); };
+      img.src = imgUrl;
+    });
+  }
+  function fitScale() {
+    var w = imgPane.clientWidth - 40, h = imgPane.clientHeight - 40;
+    if (!img.naturalWidth || !img.naturalHeight) return 1;
+    return Math.min(1, w / img.naturalWidth, h / img.naturalHeight);
+  }
+  function center(scale) {
+    view.scale = scale;
+    view.x = (imgPane.clientWidth - img.naturalWidth * scale) / 2;
+    view.y = (imgPane.clientHeight - img.naturalHeight * scale) / 2;
+    applyView();
+  }
+  function fit() { view.fit = true; center(fitScale()); }
+  function applyView() {
+    img.style.transform = "translate(" + view.x + "px," + view.y + "px) scale(" + view.scale + ")";
+    $("zoomLabel").textContent = Math.round(view.scale * 100) + "%";
+    imgPane.classList.toggle("pixelated", view.scale >= 3);
+  }
+  function zoomAt(factor, cx, cy) {
+    var next = Math.min(64, Math.max(0.02, view.scale * factor));
+    var k = next / view.scale;
+    view.x = cx - (cx - view.x) * k;
+    view.y = cy - (cy - view.y) * k;
+    view.scale = next;
+    view.fit = false;
+    applyView();
+  }
+  imgPane.addEventListener("wheel", function (event) {
+    event.preventDefault();
+    var box = imgPane.getBoundingClientRect();
+    zoomAt(Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)), event.clientX - box.left, event.clientY - box.top);
+  }, { passive: false });
+  var pan = null;
+  imgPane.addEventListener("pointerdown", function (event) {
+    if (event.button !== 0) return;
+    pan = { x: event.clientX - view.x, y: event.clientY - view.y };
+    imgPane.setPointerCapture(event.pointerId);
+    imgPane.classList.add("panning");
+  });
+  imgPane.addEventListener("pointermove", function (event) {
+    if (!pan) return;
+    view.x = event.clientX - pan.x;
+    view.y = event.clientY - pan.y;
+    view.fit = false;
+    applyView();
+  });
+  function endPan() { pan = null; imgPane.classList.remove("panning"); }
+  imgPane.addEventListener("pointerup", endPan);
+  imgPane.addEventListener("pointercancel", endPan);
+  imgPane.addEventListener("dblclick", function (event) {
+    var box = imgPane.getBoundingClientRect();
+    if (view.fit || view.scale !== 1) {
+      view.fit = false;
+      zoomAt(1 / view.scale, event.clientX - box.left, event.clientY - box.top);
+    } else fit();
+  });
+  function zoomCenter(factor) { zoomAt(factor, imgPane.clientWidth / 2, imgPane.clientHeight / 2); }
+  $("zoomIn").addEventListener("click", function () { zoomCenter(1.25); });
+  $("zoomOut").addEventListener("click", function () { zoomCenter(0.8); });
+  $("zoomFit").addEventListener("click", fit);
+  $("zoomOne").addEventListener("click", function () { view.fit = false; center(1); });
+  window.addEventListener("keydown", function (event) {
+    if (!file || file.kind !== "image" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "+" || event.key === "=") zoomCenter(1.25);
+    else if (event.key === "-") zoomCenter(0.8);
+    else if (event.key === "0") fit();
+    else if (event.key === "1") { view.fit = false; center(1); }
+  });
+  window.addEventListener("resize", function () {
+    if (file && file.kind === "image" && view.fit) fit();
+  });
+
+  load(false);
+})();
+</script>
+</body>
+</html>
