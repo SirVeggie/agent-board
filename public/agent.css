@@ -1487,8 +1487,8 @@ html[data-theme="cream"] .ag-md {
 }
 
 .ag-helper-call > .ag-tool-head {
-  width: calc(100% + 16px);
-  margin: -3px -8px;
+  width: calc(100% + 10px);
+  margin: -3px -5px;
   flex-wrap: wrap;
   align-items: center;
   padding: 3px 8px;
