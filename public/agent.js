@@ -2768,12 +2768,13 @@
     }
 
     openHelper(id) {
+      if (this.variant === "dock") dock.setExpanded(true);
       if (!this.helperView) {
         this.helperView = new ChatView("helper");
         this.helperView.owner = this;
       }
-      for (const node of [this.header, this.scroll, this.queueDock, this.composer]) node.inert = true;
-      this.root.append(this.helperView.root);
+      for (const node of this.helperBackground || [this.header, this.scroll, this.queueDock, this.composer]) node.inert = true;
+      (this.helperHost || this.root).append(this.helperView.root);
       this.helperView.setThread(id);
       this.helperView.focus();
     }
@@ -2783,7 +2784,7 @@
       this.helperView.parkComposer();
       this.helperView.root.remove();
       this.helperView.threadId = null;
-      for (const node of [this.header, this.scroll, this.queueDock, this.composer]) node.inert = false;
+      for (const node of this.helperBackground || [this.header, this.scroll, this.queueDock, this.composer]) node.inert = false;
       this.focus();
     }
 
@@ -7122,6 +7123,8 @@
       const bar = el("div", "dock-bar");
       bar.append(right);
       panel.append(head, input, bar);
+      view.helperHost = panel;
+      view.helperBackground = [head, input, bar];
       const handle = button("", "dock-handle", () => this.setShown(true), "Agent (Ctrl+K)", false);
       this.handleClock = el("span", "ag-clock dock-handle-clock");
       this.handleText = el("span", "dock-handle-text");
@@ -7175,6 +7178,7 @@
       } else this.view.input.blur();
     },
     setExpanded(expanded) {
+      if (!expanded) this.view.closeHelper();
       S.dockExpanded = expanded;
       if (expanded) {
         this.clearFeedLines();

@@ -169,6 +169,33 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     assert.equal(await page.locator(".ag-helper-approval").count(), 0);
     await page.getByRole("button", { name: "Show helper brief and report", exact: true }).click();
     assert.match(await page.locator(".ag-helper-call .ag-tool-body").textContent() || "", /Audit complete/);
+    // The floating layout reparents the parent controls: helpers must live in its
+    // interactive panel, not the pointer-transparent outer dock.
+    await page.evaluate(() => {
+      const { dock, S } = (window as any).helperTest;
+      document.querySelector("main")!.parentElement!.classList.add("workspace");
+      Object.assign(document.querySelector("main")!.style, { position: "relative", width: "860px" });
+      dock.mount();
+      S.dockShown = true;
+      dock.view.setThread("parent");
+      dock.setExpanded(true);
+      dock.view.input.value = "Floating parent draft";
+    });
+    const floating = page.locator(".agent-dock");
+    await floating.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
+    const helper = floating.locator(".ag-view-helper");
+    assert.equal(await helper.evaluate(node => getComputedStyle(node).pointerEvents), "auto");
+    const helperBox = await helper.boundingBox();
+    assert.ok(helperBox && helperBox.height >= 500 && helperBox.y >= 0);
+    assert.equal(await floating.locator(".dock-head").evaluate(node => (node as HTMLElement).inert), true);
+    await helper.locator('textarea:not([aria-hidden])').fill("Floating helper draft");
+    await helper.getByRole("button", { name: "Close helper and return to parent chat" }).click();
+    assert.equal(await floating.locator('.dock-input textarea:not([aria-hidden])').inputValue(), "Floating parent draft");
+    await floating.getByRole("button", { name: "Open helper: Audit the files", exact: true }).click();
+    assert.equal(await helper.locator('textarea:not([aria-hidden])').inputValue(), "Floating helper draft");
+    await page.evaluate(() => (window as any).helperTest.dock.setExpanded(false));
+    assert.equal(await helper.count(), 0);
+    assert.equal(await floating.locator(".dock-input").evaluate(node => (node as HTMLElement).inert), false);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
