@@ -34,7 +34,7 @@ test("updates keep hovered rows and focused editors connected", async () => {
       const image = row.querySelector("img");
       const column = row.closest(".column");
       const button = column!.querySelector(".col-menu-btn");
-      w.scribe.state.cards[1].comments = [{ id: "comment", by: "Sol", text: "Update", at: Date.now() }];
+      w.scribe.state.cards[1] = { ...w.scribe.state.cards[1], comments: [{ id: "comment", by: "Sol", text: "Update", at: Date.now() }] };
       w.scribe.changed();
       return [row === document.querySelector('.card[data-id="a"]'), image === row.querySelector("img"),
         column === row.closest(".column"), button === column!.querySelector(".col-menu-btn"),
@@ -70,7 +70,7 @@ test("updates keep hovered rows and focused editors connected", async () => {
       editor.setSelectionRange(3, 7);
       for (let i = 0; i < 5; i++) {
         w.scribe.state.settings.workerLog = [{ text: "Worker update " + i }];
-        w.scribe.state.cards[1].status = { kind: "working", text: "Working " + i };
+        w.scribe.state.cards[1] = { ...w.scribe.state.cards[1], status: { kind: "working", text: "Working " + i } };
         w.scribe.changed();
       }
       return [document.activeElement === editor, editor.value, editor.selectionStart, editor.selectionEnd];
@@ -135,7 +135,7 @@ test("queued Kanban paints stop after the board is detached", async () => {
         </script>${source("../templates/builtin/kanban.html")}`);
         assert.deepEqual(await page.evaluate(trigger => {
           const w = window as any;
-          w.scribe.state.cards[0].title = 'Updated';
+          w.scribe.state.cards[0] = { ...w.scribe.state.cards[0], title: 'Updated' };
           w.scribe.changed();
           const queued = w.paintQueue.size();
           w.paintQueue.flush(trigger);

@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { test } from "node:test";
+import { chromium } from "playwright-core";
+import { launchChromium } from "./chromium.js";
+import { BOARD_BRIDGE_JS } from "./bridge.js";
+
+const card = (id: string, num: number, title: string) => ({
+  id, num, col: "todo", title, description: "", labels: [], priority: 0, checklist: [], comments: [], images: [], blockedBy: [],
+  createdAt: 1, movedAt: 1,
+});
+const BOOT = {
+  id: "board",
+  stateRevision: 1,
+  state: {
+    columns: [{ id: "todo", title: "Todo" }, { id: "done", title: "Done", role: "done" }],
+    labels: [],
+    settings: {},
+    cards: [card("a", 1, "One"), card("b", 2, "Two"), card("c", 3, "Three")],
+    nextNum: 4,
+  },
+};
+
+test("a remote change repaints only the cards it touched, in place", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Kanban keyed cards test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const kanban = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    const frameHtml = kanban.replace("<head>", `<head><script>window.__SCRIBE_BOOT__=${JSON.stringify(BOOT)};</script><script>${BOARD_BRIDGE_JS}</script>`);
+    await page.route("http://kanban.test/**", (route) => {
+      const url = route.request().url();
+      if (url.includes("/api/tabs/")) return route.fulfill({ json: {} });
+      return route.fulfill({ contentType: "text/html", body: url.endsWith("/frame") ? frameHtml : '<iframe src="/frame" style="width:1100px;height:700px"></iframe>' });
+    });
+    await page.goto("http://kanban.test/");
+    const frame = page.frames()[1];
+    await frame.locator('.card[data-id="c"]').waitFor();
+
+    const watched = await frame.evaluate(() => {
+      const w = window as any;
+      w.before = { a: document.querySelector('.card[data-id="a"]'), b: document.querySelector('.card[data-id="b"]'), c: document.querySelector('.card[data-id="c"]') };
+      w.records = { a: 0, b: 0, c: 0 };
+      for (const id of ["a", "b", "c"]) {
+        new MutationObserver((list) => { w.records[id] += list.length; }).observe(w.before[id], { subtree: true, childList: true, attributes: true, characterData: true });
+      }
+      return true;
+    });
+    assert.equal(watched, true);
+    await page.evaluate(() => {
+      document.querySelector("iframe")!.contentWindow!.postMessage({
+        type: "scribe-state", id: "board", stateRevision: 2, fromRevision: 1,
+        ops: [{ op: "merge", path: "cards/b", value: { title: "Two, renamed" } }],
+      }, "*");
+    });
+    await frame.locator('.card[data-id="b"] .card-title', { hasText: "Two, renamed" }).waitFor();
+    const after = await frame.evaluate(() => {
+      const w = window as any;
+      return {
+        same: ["a", "b", "c"].map((id) => document.querySelector('.card[data-id="' + id + '"]') === w.before[id]),
+        records: w.records,
+      };
+    });
+    assert.deepEqual(after.same, [true, true, true]);
+    assert.equal(after.records.a, 0);
+    assert.equal(after.records.c, 0);
+    assert.ok(after.records.b > 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});

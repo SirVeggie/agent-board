@@ -19,18 +19,24 @@ const STUB = `<script>
         { id: 'c2', num: 2, col: 'todo', title: 'Labelled card', description: '', labels: ['lb1'], priority: 2 }
       ]
     }, local: {},
-    set(patch) { Object.assign(this.state, patch); },
+    // Like the bridge: writes replace what they change, and listeners with { local: true } hear them.
+    set(patch) { Object.assign(this.state, patch); this.wrote(); },
     setLocal(patch) { Object.assign(this.local, patch); },
-    onChange(fn) { this.changed = fn; },
+    onChange(fn, opts) { this.changed = fn; this.hearsLocal = Boolean(opts && opts.local); },
+    wrote() { if (this.hearsLocal) queueMicrotask(() => this.changed(this.state, { source: 'local', ops: null })); },
     update(ops) {
       for (const op of ops) {
         const m = /^cards\\/id=([^/]+)\\/suggest$/.exec(op.path);
-        const card = m && this.state.cards.find(c => c.id === m[1]);
-        if (!card) throw new Error('unexpected op ' + JSON.stringify(op));
+        const at = m ? this.state.cards.findIndex(c => c.id === m[1]) : -1;
+        if (at < 0) throw new Error('unexpected op ' + JSON.stringify(op));
+        const card = { ...this.state.cards[at] };
         if (op.op === 'set') card.suggest = op.value;
         else if (op.op === 'remove') delete card.suggest;
         else throw new Error('unexpected op ' + op.op);
+        this.state.cards = this.state.cards.slice();
+        this.state.cards[at] = card;
       }
+      this.wrote();
     },
     agent: { show() { return Promise.resolve({ ok: true }); } },
     permissions: {
@@ -94,7 +100,7 @@ test("label settings persist descriptions and exclude never-suggest labels, incl
     await page.keyboard.press("Escape");
     await page.evaluate(() => {
       const s = (window as any).scribe;
-      s.state.cards[0].title = "Crash on save";
+      s.state.cards[0] = { ...s.state.cards[0], title: "Crash on save" };
       s.changed();
     });
     await waitCalls(page, 1);
@@ -110,7 +116,7 @@ test("label settings persist descriptions and exclude never-suggest labels, incl
 
     await page.evaluate(() => {
       const s = (window as any).scribe;
-      s.state.cards[0].description = "More detail";
+      s.state.cards[0] = { ...s.state.cards[0], description: "More detail" };
       s.changed();
     });
     await waitCalls(page, 2);
@@ -170,7 +176,7 @@ test("a new card gets label and priority suggestions the user accepts or dismiss
     // A later edit asks only about what the card lacks and the user has not dismissed.
     await page.evaluate((id) => {
       const scribe = (window as any).scribe;
-      scribe.state.cards.find((c: any) => c.id === id).description = "It also loses the text";
+      scribe.state.cards = scribe.state.cards.map((c: any) => c.id === id ? { ...c, description: "It also loses the text" } : c);
       scribe.changed();
     }, id);
     await waitCalls(page, 2);
@@ -204,7 +210,7 @@ test("a card an agent adds is asked about too, and an answer for text that has c
     // The title changes while the classifier is still answering.
     await page.evaluate(() => {
       const scribe = (window as any).scribe;
-      scribe.state.cards.find((c: any) => c.id === "c9").title = "Fix the login crash";
+      scribe.state.cards = scribe.state.cards.map((c: any) => c.id === "c9" ? { ...c, title: "Fix the login crash" } : c);
       scribe.changed();
     });
     await page.evaluate(() => (window as any).answer(["Feature"], "low"));
@@ -224,7 +230,7 @@ test("a card an agent adds is asked about too, and an answer for text that has c
     // A failed answer leaves the card as it is.
     await page.evaluate(() => {
       const scribe = (window as any).scribe;
-      scribe.state.cards.find((c: any) => c.id === "c1").title = "Old card, renamed";
+      scribe.state.cards = scribe.state.cards.map((c: any) => c.id === "c1" ? { ...c, title: "Old card, renamed" } : c);
       scribe.changed();
     });
     await waitCalls(page, 3);
@@ -244,7 +250,7 @@ test("the board setting asks for the classifier permission and stops the questio
   try {
     const rename = (title: string) => page.evaluate((title) => {
       const scribe = (window as any).scribe;
-      scribe.state.cards.find((c: any) => c.id === "c1").title = title;
+      scribe.state.cards = scribe.state.cards.map((c: any) => c.id === "c1" ? { ...c, title: title } : c);
       scribe.changed();
     }, title);
     const setting = () => page.evaluate(() => (window as any).scribe.state.settings.suggest);

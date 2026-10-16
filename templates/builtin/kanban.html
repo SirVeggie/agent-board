@@ -1589,6 +1589,10 @@
     return out;
   }
 
+  // Card objects already in shape for these columns. Writes keep untouched cards' identity, so a
+  // change only checks the cards it touched instead of copying and comparing every card.
+  var shaped = new WeakSet(), shapedFor = "";
+
   /** Seed columns from the preset on first use and repair cards; writes only when something changed. */
   function ensureShape() {
     var patch = {};
@@ -1610,14 +1614,26 @@
     var colIds = cols.map(function (c) { return c.id; });
     var doneIds = cols.filter(function (c) { return c.role === "done"; }).map(function (c) { return c.id; });
     var numbers = {};
+    var shapeKey = JSON.stringify([colIds, doneIds]);
+    if (shapeKey !== shapedFor) { shaped = new WeakSet(); shapedFor = shapeKey; }
+    var cardsChanged = false;
     var fixed = raw.filter(function (c) { return c && typeof c === "object"; }).map(function (c) {
-      if (!c.id) c = Object.assign({}, c, { id: newId("c") });
-      return normalizeCard(c, colIds, colIds[0], numbers, doneIds);
+      if (shaped.has(c) && !numbers[c.num]) {
+        numbers[c.num] = true;
+        return c;
+      }
+      var out = normalizeCard(c.id ? c : Object.assign({}, c, { id: newId("c") }), colIds, colIds[0], numbers, doneIds);
+      if (out.num && JSON.stringify(out) === JSON.stringify(c)) {
+        shaped.add(c);
+        return c;
+      }
+      cardsChanged = true;
+      return out;
     });
     var next = Math.max(1, Math.floor(Number(scribe.state.nextNum) || 1));
     fixed.forEach(function (c) { if (c.num >= next) next = c.num + 1; });
     fixed.forEach(function (c) { if (!c.num) { c.num = next; next += 1; } });
-    if (JSON.stringify(fixed) !== JSON.stringify(raw)) patch.cards = fixed;
+    if (cardsChanged || fixed.length !== raw.length) patch.cards = fixed;
     ["view", "draftDesc", "lastEvent"].forEach(function (key) {
       if (key in scribe.state) patch[key] = undefined;
     });
@@ -2079,21 +2095,13 @@
     if (paintTimer !== null) clearTimeout(paintTimer);
     paintFrame = paintTimer = null;
   }
-  function renderBookkeeping() {
-    refreshWorkerThreads();
-    sweepUnmerged();
-  }
   function render() {
-    suggestScan();
     cancelPaint();
     if (drag) return;
-    renderBookkeeping();
     renderDom();
   }
   function renderLater() {
-    suggestScan();
     if (drag) return;
-    renderBookkeeping();
     if (paintTimer !== null) return;
     var paint = function () {
       cancelPaint();
@@ -2132,6 +2140,7 @@
     columnLimits.forEach(function (_, id) { if (!column(id)) columnLimits.delete(id); });
     var labelMap = renderCache.labels;
     labels().forEach(function (l) { labelMap[l.id] = l; });
+    var look = boardLook();
     var scrollLeft = boardEl.scrollLeft;
     var listScroll = {};
     boardEl.querySelectorAll(".cards").forEach(function (list) { listScroll[list.dataset.col] = list.scrollTop; });
@@ -2206,7 +2215,7 @@
       var loaded = Math.min(visible.length, columnLimits.get(col.id) || CARD_BATCH);
       columnLimits.set(col.id, Math.max(CARD_BATCH, loaded));
       visible.slice(0, loaded).forEach(function (c) {
-        cardNodes.push(renderCard(c, col, labelMap));
+        cardNodes.push(cardNode(c, col, labelMap, look));
       });
       // Append in place: scrolling and dragging must keep their existing nodes and positions.
       ul._loadMore = function () {
@@ -2214,7 +2223,7 @@
             ul.scrollHeight - ul.scrollTop - ul.clientHeight > 240) return false;
         var end = Math.min(visible.length, loaded + CARD_BATCH);
         var fragment = document.createDocumentFragment();
-        visible.slice(loaded, end).forEach(function (c) { fragment.appendChild(renderCard(c, col, labelMap)); });
+        visible.slice(loaded, end).forEach(function (c) { fragment.appendChild(cardNode(c, col, labelMap, look)); });
         ul.appendChild(fragment);
         loaded = end;
         columnLimits.set(col.id, loaded);
@@ -2272,6 +2281,7 @@
     });
     if (!settings().hideAddColumn) boardNodes.push(addCol);
     window.scribeSyncChildren(boardEl, boardNodes);
+    cardViews.forEach(function (v, id) { if (!v.el.isConnected) cardViews.delete(id); });
     boardEl.scrollLeft = scrollLeft;
     boardEl.querySelectorAll(".cards").forEach(function (list) {
       list.scrollTop = !viewChanged && listScroll[list.dataset.col] || 0;
@@ -2283,7 +2293,41 @@
     }
   }
 
-  function renderCard(c, col, labelMap) {
+  /**
+   * Card id -> { el, card, sig, cls } of its element on the board. State writes copy only what
+   * they change, so a card whose object and signature are the same as last time is left alone,
+   * and a changed one is patched in place: it keeps its hover, its loaded cover and its step line.
+   */
+  var cardViews = new Map();
+  var lookCache = { labels: null, n: 0 };
+  /** What every card's look reads besides its own fields: labels, worker names and colors, board settings, the day. */
+  function boardLook() {
+    if (scribe.state.labels !== lookCache.labels) lookCache = { labels: scribe.state.labels, n: lookCache.n + 1 };
+    var who = workerIds().map(function (id) { return workerName(worker(id)) + "=" + workerColor(id); }).join(",");
+    return [lookCache.n, who, Boolean(settings().showDoneDate), Boolean(settings().suggest), todayStr()].join("|");
+  }
+  function cardNode(c, col, labelMap, look) {
+    var waiting = waitingInfo(c, col);
+    var blockers = openBlockers(c).map(function (b) { return b.num; }).join(",");
+    var sig = [look, col ? col.id + ":" + str(col.role) : "", blockers, JSON.stringify(waiting)].join("|");
+    var view = cardViews.get(c.id);
+    if (view && view.card === c && view.sig === sig && view.el.className === view.cls) return view.el;
+    var fresh = renderCard(c, col, labelMap, waiting);
+    if (view) {
+      // Patch: the element and its listeners stay (they read only the card's id); its content syncs.
+      view.el.className = fresh.className;
+      window.scribeSyncChildren(view.el, Array.from(fresh.childNodes));
+    } else {
+      view = { el: fresh };
+      cardViews.set(c.id, view);
+    }
+    view.card = c;
+    view.sig = sig;
+    view.cls = view.el.className;
+    return view.el;
+  }
+
+  function renderCard(c, col, labelMap, waiting) {
     var li = el("li", "card p" + c.priority);
     li.dataset.id = c.id;
     var done = col && col.role === "done";
@@ -2378,8 +2422,8 @@
       badges.appendChild(bl);
     }
     if (badges.childNodes.length) li.appendChild(badges);
-    var waiting = waitingHint(c, col);
-    if (waiting) li.appendChild(waiting);
+    var waitingRow = waitingHint(waiting === undefined ? waitingInfo(c, col) : waiting);
+    if (waitingRow) li.appendChild(waitingRow);
 
     if (c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind === "working" ? "working" : "info";
@@ -2884,6 +2928,8 @@
         var nextEl = neighbour(slot, 1);
         ghost.remove();
         slot.remove();
+        cardEl.classList.remove("src");
+        cardEl.style.display = "";
         drag = null;
         if (!cancelled && list && list.dataset.col) dropCard(id, list.dataset.col, nextEl ? nextEl.dataset.id : list._nextUnloaded());
         else render();
@@ -2981,6 +3027,7 @@
         });
         ghost.remove();
         slot.remove();
+        colEl.style.display = "";
         drag = null;
         if (cancelled) return render();
         var byId = {};
@@ -5646,35 +5693,36 @@
     b.style.setProperty("--who", workerColor(id));
     return b;
   }
-  /** What a ready card assigned to a worker is waiting on, or null. */
-  function waitingHint(c, col) {
+  /**
+   * What a ready card assigned to a worker is waiting on, as [before, workerId, after] around the
+   * worker's name (workerId null: no name), or null. Plain data, so it can go in a card's signature.
+   */
+  function waitingInfo(c, col) {
     if (!isReadyCol(col) || (c.claim && !c.claim.stale) || (c.status && str(c.status.text).trim())) return null;
     if (isPausedCol(col)) {
-      return workerIdFor(c.assignee) ? el("div", "waiting", "Inbox paused") : null;
+      return workerIdFor(c.assignee) ? ["Inbox paused", null, ""] : null;
     }
     var id = workerIdFor(c.assignee);
     if (!id) return null;
     var w = worker(id);
+    if (!workerOn(w)) return ["⏸ ", id, " is stopped"];
+    if (w.threadId && w.run && w.run.card === c.num) return ["Starting for ", id, ""];
+    if (!cardTakeable(c)) return null;
+    if (nextCard(id) === c && !workerRunning(w) && !w.threadId) {
+      return atLimit(id) ? ["Next for ", id, ", waiting for a free slot"] : ["Starting for ", id, ""];
+    }
+    return ["Queued for ", id, ""];
+  }
+  function waitingHint(info) {
+    if (!info) return null;
     var row = el("div", "waiting");
-    var name = el("span", "who-name", workerName(w));
-    name.style.setProperty("--who", workerColor(id));
-    if (!workerOn(w)) {
-      row.appendChild(document.createTextNode("⏸ "));
-      row.appendChild(name);
-      row.appendChild(document.createTextNode(" is stopped"));
-    } else if (w.threadId && w.run && w.run.card === c.num) {
-      row.appendChild(document.createTextNode("Starting for "));
-      row.appendChild(name);
-    } else if (!cardTakeable(c)) {
-      return null;
-    } else if (nextCard(id) === c && !workerRunning(w) && !w.threadId) {
-      row.appendChild(document.createTextNode(atLimit(id) ? "Next for " : "Starting for "));
-      row.appendChild(name);
-      if (atLimit(id)) row.appendChild(document.createTextNode(", waiting for a free slot"));
-    } else {
-      row.appendChild(document.createTextNode("Queued for "));
+    if (info[0]) row.appendChild(document.createTextNode(info[0]));
+    if (info[1]) {
+      var name = el("span", "who-name", workerName(worker(info[1])));
+      name.style.setProperty("--who", workerColor(info[1]));
       row.appendChild(name);
     }
+    if (info[2]) row.appendChild(document.createTextNode(info[2]));
     return row;
   }
 
@@ -6542,13 +6590,29 @@
     }
   });
 
-  scribe.onChange(function () {
+  /**
+   * The board's bookkeeping, apart from painting: label and priority suggestions for new or edited
+   * cards, the status of workers' threads, and chats left unmerged. It follows every state change,
+   * the board's own writes included, whether or not anything is painted.
+   */
+  function bookkeeping() {
+    suggestScan();
+    refreshWorkerThreads();
+    sweepUnmerged();
+  }
+  scribe.onChange(function (state, info) {
+    if (info && info.source === "local") {
+      bookkeeping();
+      return;
+    }
     ensureShape();
+    bookkeeping();
     // Viewer-local filter changes still paint immediately, including ones restored by the host.
     if (JSON.stringify(view()) !== renderedView) render();
     else renderLater();
-  });
+  }, { local: true });
   ensureShape();
+  bookkeeping();
   render();
   // A link to one card (scribe:board-key#card=12, or a search hit): open its dialog.
   if (scribe.onOpen) scribe.onOpen(function (request) {

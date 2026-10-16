@@ -92,7 +92,7 @@ test("Kanban columns load batches independently and retain them through live upd
     const scroll = await todo.evaluate(node => node.scrollTop);
     await page.evaluate(() => {
       const scribe = (window as any).scribe;
-      scribe.state.cards[54].title = 'Updated last task';
+      scribe.state.cards[54] = { ...scribe.state.cards[54], title: 'Updated last task' };
       scribe.changed();
     });
     await todo.getByText('Updated last task', { exact: true }).waitFor();
@@ -306,7 +306,7 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
         observer.observe(document.querySelector(".select-list")!, { childList: true, subtree: true });
         for (let i = 0; i < 5; i++) {
           scribe.state.settings.workerLog = [{ text: "Worker update " + i }];
-          scribe.state.cards[1].status = { kind: "working", text: "Working " + i };
+          scribe.state.cards[1] = { ...scribe.state.cards[1], status: { kind: "working", text: "Working " + i } };
           scribe.changed();
         }
         const removed = observer.takeRecords().flatMap(record => [...record.removedNodes]);
