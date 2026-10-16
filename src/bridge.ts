@@ -1248,6 +1248,7 @@ export const BOARD_BRIDGE_JS = `
       }
     });
     if (opts.web === "on" || opts.web === "limited" || opts.web === "off") out.web = opts.web;
+    if (Number.isInteger(opts.cardContext) && opts.cardContext > 0) out.cardContext = opts.cardContext;
     if (opts.run === true) out.run = {};
     else if (opts.run && typeof opts.run === "object") out.run = agentRun(opts.run);
     if (opts.modelParams && typeof opts.modelParams === "object" && !Array.isArray(opts.modelParams)) {
@@ -1269,6 +1270,7 @@ export const BOARD_BRIDGE_JS = `
      * worktree, web: "on" | "limited" | "off" (or a boolean), helpers: true (the agent may start
      * helper agents without asking the user each time) }. run: true or { tag, data, merge,
      * resumePrompt } hands the thread to Scribe to see through (see watch).
+     * cardContext: a card number attaches this page's full card and images to the first message.
      */
     start: function (prompt, opts) {
       var message = agentSettings(opts || {});

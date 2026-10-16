@@ -11079,7 +11079,7 @@
           if (watched) S.threads.set(created.id, watched);
         }
         pageSentAt.set(created.id, Date.now());
-        const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page" });
+        const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page", ...(data.cardContext != null ? { cardContext: data.cardContext } : {}) });
         showPageThread(created.id, data.show, { reveal: activated });
         return { ok: true, threadId: created.id, queued: Boolean(sent.queued) };
       }

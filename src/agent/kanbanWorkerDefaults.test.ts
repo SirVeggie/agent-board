@@ -2,9 +2,76 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
+import { cardContext } from "./cardContext.js";
+import { kanbanActions } from "../actions/kanban.js";
+import { MAX_FILES_PER_MESSAGE } from "./attachments.js";
 
 const board = fs.readFileSync(new URL("../../templates/builtin/kanban.html", import.meta.url), "utf8");
 const chat = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
+
+test("Ask card context includes full text, old comments, resolved fields and image bytes without changing the board", () => {
+  const assetId = "pa_aaaaaaaaaaaaaaaaaaaaaaaa";
+  const state = {
+    columns: [{ id: "in", title: "Inbox" }], labels: [{ id: "bug", name: "Bug" }],
+    cards: [{ id: "c", num: 1, col: "in", title: "Question", description: "details".repeat(5000),
+      priority: 3, due: "2026-10-20", labels: ["bug"], assignee: "Person",
+      checklist: [{ text: "Check it", done: true }],
+      comments: Array.from({ length: 20 }, (_, i) => ({ by: "user", text: `Comment ${i}: ` + "text".repeat(1000) })),
+      images: [{ id: "im_1", name: "shot.png", data: `/blob/${assetId}` }] }],
+  };
+  const before = JSON.stringify(state);
+  const pages: Parameters<typeof cardContext>[0] = {
+    runAction(board, action, args, caller) {
+      assert.equal(board, "board");
+      const result = kanbanActions.actions[action].run(state, args as Record<string, unknown>, { caller, now: 1, values: {} });
+      assert.deepEqual(result.ops, []);
+      return { result: result.result, stateRevision: 1, tab: {} as any };
+    },
+    readTabPageAsset(board, id) {
+      assert.equal(board, "board"); assert.equal(id, assetId);
+      return { meta: { id, tabId: board, name: "shot.png", mimeType: "image/png", bytes: 5, createdAt: 1 }, data: Buffer.from("image") };
+    },
+  };
+  const scope = { kind: "page" as const, ref: "board" };
+  const result = cardContext(pages, scope, 1);
+  const snapshot = JSON.parse(result.text.slice(result.text.indexOf("\n") + 1));
+  assert.equal(snapshot.description, state.cards[0].description);
+  assert.deepEqual(snapshot.comments, state.cards[0].comments);
+  assert.equal(snapshot.priority, 3);
+  assert.equal(snapshot.due, "2026-10-20");
+  assert.deepEqual(snapshot.labels, ["Bug"]);
+  assert.deepEqual(snapshot.checklist, state.cards[0].checklist);
+  assert.equal(snapshot.column, "Inbox");
+  assert.deepEqual(result.images, [{ name: "shot.png (im_1)", mimeType: "image/png", data: Buffer.from("image").toString("base64") }]);
+  assert.equal(JSON.stringify(state), before);
+  assert.throws(() => cardContext(pages, { kind: "global", ref: null }, 1), /page thread/);
+  assert.throws(() => cardContext(pages, scope, "1"), /card number/);
+  const full = cardContext(pages, scope, 1, Array.from({ length: MAX_FILES_PER_MESSAGE }, () => ({ data: "" })));
+  assert.deepEqual(full.images, []);
+  assert.match(full.text, /shot.png.*message attachment limit/);
+  const missing = cardContext({ ...pages, readTabPageAsset() { throw new Error("asset not found"); } }, scope, 1);
+  assert.deepEqual(missing.images, []);
+  assert.match(missing.text, /shot.png.*asset not found/);
+});
+
+test("page launch forwards card context through the bridge into the first message", async () => {
+  const bridge = fs.readFileSync(new URL("../bridge.ts", import.meta.url), "utf8");
+  const calls: any[] = [];
+  const context = vm.createContext({
+    S: { threads: new Map(), details: new Map() }, PAGE_PROMPT_MAX: 20000,
+    pageThreadSettings: () => ({}), pageMayWrite: async () => ({ ok: true }),
+    pageSentAt: new Map(), showPageThread: () => {},
+    api: async (method: string, url: string, body: any) => {
+      calls.push({ url, body });
+      return url === "/threads" ? { thread: { id: "new" } } : {};
+    },
+  });
+  vm.runInContext(fn(bridge, "agentSettings"), context);
+  vm.runInContext(chat.match(/^  async function pageRequest\([^]*?^  }/m)![0], context);
+  await vm.runInContext("pageRequest({ id: 'board' }, { ...agentSettings({ cardContext: 42 }), op: 'start', prompt: 'Question' })", context);
+  assert.equal(calls[1].url, "/threads/new/messages");
+  assert.equal(calls[1].body.cardContext, 42);
+});
 
 test("page usage snapshots and board preserve Codex reports past reset", () => {
   const now = Date.now();
@@ -135,6 +202,7 @@ test("Ask uses the default worker and only updates the question comment, includi
     assert.equal(opts.provider, "codex");
     assert.equal(opts.cwd, "C:/project");
     assert.equal(opts.worktree, false);
+    assert.equal(opts.cardContext, 645);
     assert.equal(opts.run.merge, false);
     assert.equal(w.worktree, true);
     assert.equal(opts.run.data.ask, true);

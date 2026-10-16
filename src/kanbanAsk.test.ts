@@ -103,6 +103,7 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
       assert.equal(launch.opts.cwd, "C:/project");
       assert.equal(launch.opts.worktree, false);
       assert.equal(launch.opts.run.merge, false);
+      assert.equal(launch.opts.cardContext, 1);
     }
     assert.equal(await page.evaluate(() => (window as any).scribe.state.settings.workers.sol.worktree), true);
     assert.match(launches[1].prompt, /A direct question/);

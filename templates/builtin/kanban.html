@@ -3607,16 +3607,15 @@
   function askPrompt(w, c, text) {
     var lines = [
       "You are answering a question about #" + c.num + " on the Kanban board " + boardTitle() + " (Scribe page id " + scribe.id + ").",
-      "Use page_action on that board to read the card and comment with your answer. This is a one-off question or quick investigation, not a request to implement the issue.",
+      "The full card snapshot and its images accompany this message; no initial get is needed. Use page_action on that board to comment with your answer. This is a one-off question or quick investigation, not a request to implement the issue.",
       "The card has NOT been claimed or assigned to you. Do not claim, finish, release, move, reassign, or change its status unless the user's comment explicitly asks you to. Do not take other cards.",
       "Short answers can be comments. For investigation or design, create a report page in the background and post a short comment linking it with a peek link ([[peek:scribe:page-key]]), instead of a long comment. Only use page keys you created or found.",
       "Shared and worker instructions (apply them within the question's scope):",
       workerInstructions(w),
-      "", cardBrief(c), "", "The user's question:", text,
+      "", "Card: #" + c.num + " " + c.title, "", "The user's question:", text,
       "", "Answer the question, then end your turn."
     ];
     var prompt = lines.join("\n");
-    if (prompt.length > 19000) prompt = prompt.replace(cardBrief(c), function () { return "Card #" + c.num + ": get it first for the details."; });
     return prompt;
   }
   var askingComments = {};
@@ -3637,6 +3636,7 @@
       var opts = workerOpts(w, c);
       opts.title = ("Ask · #" + c.num + " " + c.title).slice(0, 120);
       opts.worktree = false;
+      opts.cardContext = c.num;
       opts.run = { tag: "ask:" + id, data: { worker: id, card: c.num, ask: true }, merge: false, resumePrompt: "Continue answering the user's question about #" + c.num + ". Do not claim, move, reassign or finish the card unless explicitly requested. Post your answer on the card, using a linked peek report page for longer investigations." };
       return scribe.agent.start(askPrompt(w, c, text), opts);
     }).then(function (r) {

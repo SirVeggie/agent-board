@@ -21,6 +21,7 @@ import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, di
 import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
 import { checkSdkUpdates } from "./sdkUpdates.js";
+import { cardContext } from "./cardContext.js";
 
 type AiPassage = { id: string; digest: string; kind: string; anchor: string | null; headingId: string | null; label: string };
 
@@ -465,8 +466,16 @@ export function agentRouter(host: AgentHost): express.Router {
       }
       if (total > MAX_MESSAGE_BYTES) throw new Error(`A message's files must add up to under ${MAX_MESSAGE_BYTES / 1024 / 1024} MB`);
       const context = Array.isArray(body.context) ? (body.context.filter(isPlainRecord) as ContextChip[]) : [];
+      let text = String(body.text ?? "");
+      if (body.cardContext != null) {
+        const thread = host.getThread(req.params.id);
+        if (!thread) throw new Error("Thread not found");
+        const snapshot = cardContext(store, thread.scope, body.cardContext, [...images, ...files]);
+        text += "\n\n" + snapshot.text;
+        images.push(...snapshot.images);
+      }
       // The board sends from: "page" for messages a page's own code sent through board.agent.
-      return host.send(req.params.id, { text: String(body.text ?? ""), images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}) });
+      return host.send(req.params.id, { text, images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}) });
     })
   );
 
