@@ -1476,7 +1476,17 @@ html[data-theme="cream"] .ag-md {
   color: var(--ag-warn);
 }
 
-/* An agent_run call: the helper's model after its name, and room between brief and report. */
+/* Later actions use the timeline's standard single-line, expandable tool row. */
+.ag-helper-action > .ag-tool-head {
+  background: var(--ag-sunken);
+  box-shadow: inset 2px 0 var(--border);
+}
+
+.ag-helper-action .ag-tool-verb {
+  color: var(--text);
+}
+
+/* A helper launch: the model after its name, and room between brief and report. */
 .ag-helper-call {
   margin: 8px 0;
   padding: 10px 12px;

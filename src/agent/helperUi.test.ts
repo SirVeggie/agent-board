@@ -173,6 +173,36 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     await page.getByRole("button", { name: "Hide summary", exact: true }).click();
     assert.equal(await page.getByRole("button", { name: "Show summary", exact: true }).getAttribute("aria-expanded"), "false");
     assert.equal(await page.locator(".ag-helper-call .ag-tool-body").isVisible(), false);
+    // Waiting, sending more work, and stopping all refer back to the launch card.
+    await page.evaluate(() => {
+      const { S, view } = (window as any).helperTest;
+      const detail = S.details.get("parent");
+      for (const [index, input] of [{ thread: "helper" }, { thread: "helper", task: "Check the tests too" }, { thread: "helper", stop: true }].entries()) {
+        const item = { ...detail.items[0], id: `action-${index}`, seq: index + 2, input, output: JSON.stringify({ thread: "helper", status: "done", reply: "Action report" }) };
+        detail.items.push(item);
+        detail.byId.set(item.id, item);
+      }
+      view.renderTranscript();
+    });
+    assert.equal(await parent.locator(".ag-helper-call").count(), 1);
+    assert.deepEqual(await parent.locator(".ag-helper-action .ag-tool-verb").allTextContents(), ["Wait for helper", "Follow up helper", "Stop helper"]);
+    assert.equal(await parent.locator(".ag-helper-action .ag-task-line, .ag-helper-action .ag-task-badge").count(), 0);
+    const followUp = parent.locator('.ag-helper-action[data-item-id="action-1"]');
+    await followUp.locator(".ag-tool-head").click();
+    assert.match(await followUp.locator(".ag-tool-body").textContent() || "", /Check the tests too/);
+    assert.match(await followUp.locator(".ag-tool-body").textContent() || "", /Action report/);
+    await page.evaluate(() => {
+      const { S, onEvent } = (window as any).helperTest;
+      onEvent({ type: "agent_thread", thread: { ...S.threads.get("helper"), status: "running" } });
+    });
+    assert.equal(await parent.locator(".ag-helper-call .ag-task-badge").textContent(), "working");
+    assert.equal(await parent.locator(".ag-helper-action.s-done").count(), 3);
+    await page.evaluate(() => {
+      const { S, onEvent } = (window as any).helperTest;
+      onEvent({ type: "agent_thread", thread: { ...S.threads.get("helper"), status: "idle" } });
+    });
+    assert.equal(await parent.locator(".ag-helper-call").count(), 1);
+    assert.equal(await parent.locator(".ag-helper-action").count(), 3);
     // The floating layout reparents the parent controls: helpers must live in its
     // interactive panel, not the pointer-transparent outer dock.
     await page.evaluate(() => {

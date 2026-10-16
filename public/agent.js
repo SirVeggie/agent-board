@@ -3971,12 +3971,16 @@
 
     renderTool(it, byParent) {
       const helper = helperCall(it);
-      if (helper) return this.renderHelperCall(it, helper);
+      if (helper && !helper.existing) return this.renderHelperCall(it, helper);
       const key = `t:${it.id}`;
       const task = it.task;
       const open = this.expanded.has(key);
       const node = el("div", `ag-tool k-${it.tool} s-${it.status}${task ? ` has-task ts-${task.status}` : ""}${open ? " open" : ""}`);
       node.dataset.itemId = it.id;
+      if (helper) {
+        node.classList.add("ag-helper-action");
+        if (helper.id) node.dataset.helper = helper.id;
+      }
       const head = button("", "ag-tool-head", () => {
         this.toggle(key, node);
         if (node.classList.contains("open")) fillLazy(node);
@@ -3984,12 +3988,15 @@
       // A task outlives its tool call: a background agent is still working after the call returned.
       const busy = task ? task.status === "running" : it.status === "running" || it.status === "pending";
       const failed = task ? task.status === "error" : it.status === "error";
-      const status = busy ? el("span", "ag-spin") : failed ? icon("cross", "ag-ico ag-st-err") : icon(it.tool, "ag-ico");
+      const status = busy ? el("span", "ag-spin") : failed ? icon("cross", "ag-ico ag-st-err") : icon(helper ? "task" : it.tool, "ag-ico");
       head.append(status);
       const label = el("span", "ag-tool-label");
       const page = pageTool(it);
       const fileSummary = fileToolSummary(it);
-      if (page) {
+      if (helper) {
+        const action = helper.input.stop === true ? "Stop helper" : typeof helper.input.task === "string" && helper.input.task.trim() ? "Follow up helper" : "Wait for helper";
+        label.append(el("span", "ag-tool-verb", action), el("span", "ag-tool-title", helper.thread ? helperName(helper.thread) : helper.id));
+      } else if (page) {
         label.append(...this.pageToolLabel(page));
       } else if (fileSummary) {
         const title = el("span", "ag-tool-title", fileSummary);
@@ -4075,7 +4082,7 @@
     }
 
     /**
-     * An agent_run call as a task row: the helper and its model in the head, under it what the helper
+     * A helper launch as a task row: the helper and its model in the head, under it what the helper
      * is doing now (or how it ended) with a way into its thread, and the brief and report in the body.
      */
     renderHelperCall(it, call) {
@@ -4178,11 +4185,11 @@
         ensureDetail(helper.id).then((detail) => { if (detail) this.onHelper(S.threads.get(helper.id) || helper); });
       }
       const detail = S.details.get(this.threadId);
-      for (const node of this.transcript.querySelectorAll(".ag-helper-call")) {
+      for (const node of this.transcript.querySelectorAll(".ag-helper-call, .ag-helper-action")) {
         if (node.dataset.helper && node.dataset.helper !== helper.id) continue;
         const it = detail?.byId.get(node.dataset.itemId);
         const call = it && helperCall(it);
-        if (call && call.id === helper.id) node.replaceWith(this.renderHelperCall(it, call));
+        if (call && call.id === helper.id) node.replaceWith(this.renderTool(it, new Map()));
       }
       this.renderHelperDock();
     }
@@ -6196,12 +6203,13 @@
   function helperCall(it) {
     if (it.kind !== "tool" || !(/agent_run$/.test(it.name || "") || /agent_run$/.test(it.title || ""))) return null;
     const input = isRecord(it.input) ? it.input : {};
+    const existing = typeof input.thread === "string" && Boolean(input.thread.trim());
     let result = parseToolJson(it.output);
     const id = [it.helper, input.thread, result?.thread].find((v) => typeof v === "string" && v.trim()) || "";
     const thread = id ? S.threads.get(id) || null : null;
     const live = thread ? thread.status !== "idle" : it.status === "running" || it.status === "pending";
     // A background launch returns a receipt; the finished helper supplies the report.
-    if (result?.status === "running" && thread?.status === "idle") {
+    if (!existing && result?.status === "running" && thread?.status === "idle") {
       const detail = S.details.get(id);
       const turn = detail && [...detail.turns.values()].at(-1);
       result = {
@@ -6212,7 +6220,7 @@
       };
     }
     const ended = it.status === "error" || result?.status === "error" ? "error" : result?.status && result.status !== "done" ? "stopped" : "done";
-    return { id, input, result, thread, live, state: live ? (thread?.status === "waiting" ? "waiting" : "running") : ended };
+    return { id, input, result, thread, live, existing, state: live ? (thread?.status === "waiting" ? "waiting" : "running") : ended };
   }
 
   /** The JSON object a page tool returned; its text may carry a guide or note after it. */
