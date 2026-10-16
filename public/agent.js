@@ -4124,11 +4124,16 @@
       if (tokens) line.append(el("span", "ag-task-usage", `${tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : tokens} tokens`));
       if (h) {
         const actions = el("span", "ag-task-actions");
-        actions.append(button(icon("chevron"), "ag-icon-btn small ag-chev", (event) => {
+        const summaryLabel = el("span", null, this.expanded.has(key) ? "Hide summary" : "Show summary");
+        const summary = button("", "ag-btn small ghost ag-helper-summary", (event) => {
           event.stopPropagation();
           this.toggle(key, node);
-        }, "Show helper brief and report"));
-        actions.lastChild.setAttribute("aria-label", "Show helper brief and report");
+          summaryLabel.textContent = this.expanded.has(key) ? "Hide summary" : "Show summary";
+          summary.setAttribute("aria-expanded", String(this.expanded.has(key)));
+        });
+        summary.append(icon("chevron", "ag-ico ag-chev"), summaryLabel);
+        summary.setAttribute("aria-expanded", String(this.expanded.has(key)));
+        actions.append(summary);
         if (call.live && h.status !== "idle") {
           actions.append(
             button(icon("stop"), "ag-send stop ag-helper-stop", (event) => {

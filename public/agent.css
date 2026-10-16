@@ -1508,6 +1508,10 @@ html[data-theme="cream"] .ag-md {
   margin: 8px 0 0;
 }
 
+.ag-helper-call.open .ag-helper-summary .ag-chev {
+  transform: rotate(90deg);
+}
+
 .ag-helper-call .ag-helper-stop {
   width: 28px;
   height: 28px;

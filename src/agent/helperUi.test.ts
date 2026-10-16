@@ -167,8 +167,12 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     });
     assert.equal(await page.locator(".ag-helper-call .ag-task-badge").textContent(), "done");
     assert.equal(await page.locator(".ag-helper-approval").count(), 0);
-    await page.getByRole("button", { name: "Show helper brief and report", exact: true }).click();
+    await page.getByRole("button", { name: "Show summary", exact: true }).click();
     assert.match(await page.locator(".ag-helper-call .ag-tool-body").textContent() || "", /Audit complete/);
+    assert.equal(await page.getByRole("button", { name: "Hide summary", exact: true }).getAttribute("aria-expanded"), "true");
+    await page.getByRole("button", { name: "Hide summary", exact: true }).click();
+    assert.equal(await page.getByRole("button", { name: "Show summary", exact: true }).getAttribute("aria-expanded"), "false");
+    assert.equal(await page.locator(".ag-helper-call .ag-tool-body").isVisible(), false);
     // The floating layout reparents the parent controls: helpers must live in its
     // interactive panel, not the pointer-transparent outer dock.
     await page.evaluate(() => {
