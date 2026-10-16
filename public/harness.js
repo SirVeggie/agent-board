@@ -242,7 +242,7 @@
       const u = cost;
       if (!u.pricedTurns) return "Unknown";
       const origin = u.costPartial || u.unpricedTurns ? "Partial " : u.estimatedCostUsd === u.costUsd && u.reportedCostUsd === undefined ? "Estimated " : u.reportedCostUsd === u.costUsd && u.estimatedCostUsd === undefined ? "Provider-reported " : "Recorded ";
-      return origin + costText(u.costUsd);
+      return origin + costText(u.costUsd) + (u.unpricedTurns ? ` · ${count(u.unpricedTurns)} unpriced ${u.unpricedTurns === 1 ? "turn" : "turns"}` : "");
     }
     if (cost > 0 && cost < 0.0001) return "<$0.0001";
     return typeof cost === "number" ? `$${cost.toFixed(cost < 0.01 ? 4 : cost < 0.1 ? 3 : 2)}` : "–";
@@ -372,7 +372,8 @@
         parts.push(`${PROVIDER_LABEL[provider]} ${tokens(value)}`);
       }
       const hit = make("rect", { x: index * slot, y: 0, width: slot, height: H, class: "hx-hit" });
-      hit.dataset.tooltip = `${day.day} · ${tokens(total(day))} in ${day.turns} ${day.turns === 1 ? "turn" : "turns"}\n${parts.join(" · ")}`;
+      hit.dataset.tooltip = `${day.day} · ${tokens(total(day))} in ${day.turns} ${day.turns === 1 ? "turn" : "turns"}\n${parts.join(" · ")}\nCost: ${costText(day)}`;
+      hit.setAttribute("aria-description", hit.dataset.tooltip);
       group.append(hit);
       svg.append(group);
       if (index === 0 || index === shown.length - 1 || (shown.length > 8 && index === shown.length >> 1)) {

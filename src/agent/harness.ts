@@ -253,7 +253,8 @@ export function promptTokens(provider: ProviderId, usage: Usage | undefined): nu
   return provider === "claude" || provider === "pi" ? input + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) : input;
 }
 
-export type TokenTotals = { turns: number; prompt: number; cached: number; output: number; reasoning: number; costUsd: number; estimatedCostUsd?: number; reportedCostUsd?: number; pricedTurns?: number; unpricedTurns?: number; costPartial?: boolean };
+type CostTotals = { costUsd: number; estimatedCostUsd?: number; reportedCostUsd?: number; pricedTurns?: number; unpricedTurns?: number; costPartial?: boolean };
+export type TokenTotals = CostTotals & { turns: number; prompt: number; cached: number; output: number; reasoning: number };
 export type ToolRow = { name: string; kind: string; calls: number; errors: number; outputTokens: number; ms: number };
 
 export type HarnessStats = {
@@ -264,7 +265,7 @@ export type HarnessStats = {
   outcomes: { done: number; error: number; cancelled: number };
   providers: Array<TokenTotals & { provider: ProviderId; threads: number; toolCalls: number; toolErrors: number; errors: number }>;
   models: Array<TokenTotals & { provider: ProviderId; model: string; toolCalls: number }>;
-  days: Array<{ day: string; prompt: Partial<Record<ProviderId, number>>; output: Partial<Record<ProviderId, number>>; turns: number }>;
+  days: Array<CostTotals & { day: string; prompt: Partial<Record<ProviderId, number>>; output: Partial<Record<ProviderId, number>>; turns: number }>;
   toolKinds: ToolRow[];
   tools: Array<ToolRow & { provider: ProviderId }>;
   mcp: Array<{ server: string; tool: string; calls: number; errors: number; outputTokens: number; providers: ProviderId[] }>;
@@ -276,18 +277,23 @@ export type HarnessStats = {
 
 const emptyTotals = (): TokenTotals => ({ turns: 0, prompt: 0, cached: 0, output: 0, reasoning: 0, costUsd: 0 });
 
-function addUsage(into: TokenTotals, provider: ProviderId, usage: Usage | undefined): void {
-  into.turns += 1;
+function addCost(into: CostTotals, usage: Usage | undefined): void {
   if (usage?.costUsd === undefined) into.unpricedTurns = (into.unpricedTurns ?? 0) + 1;
   else into.pricedTurns = (into.pricedTurns ?? 0) + 1;
   if (usage?.costPartial) into.costPartial = true;
+  if (!usage) return;
+  into.costUsd += usage.costUsd ?? 0;
+  for (const key of ["estimatedCostUsd", "reportedCostUsd"] as const) if (usage[key] !== undefined) into[key] = (into[key] ?? 0) + usage[key];
+}
+
+function addUsage(into: TokenTotals, provider: ProviderId, usage: Usage | undefined): void {
+  into.turns += 1;
+  addCost(into, usage);
   if (!usage) return;
   into.prompt += promptTokens(provider, usage);
   into.cached += usage.cacheReadTokens ?? 0;
   into.output += usage.outputTokens ?? 0;
   into.reasoning += usage.reasoningTokens ?? 0;
-  into.costUsd += usage.costUsd ?? 0;
-  for (const key of ["estimatedCostUsd", "reportedCostUsd"] as const) if (usage[key] !== undefined) into[key] = (into[key] ?? 0) + usage[key];
 }
 
 function dayKey(at: number): string {
@@ -388,8 +394,9 @@ export function harnessStats(
       if (turn.status === "done" || turn.status === "error" || turn.status === "cancelled") outcomes[turn.status] += 1;
       if (turn.status === "error") row.errors += 1;
       const prompt = promptTokens(provider, turn.usage);
-      const day = bump(days, dayKey(turn.startedAt), (): HarnessStats["days"][number] => ({ day: dayKey(turn.startedAt), prompt: {}, output: {}, turns: 0 }));
+      const day = bump(days, dayKey(turn.startedAt), (): HarnessStats["days"][number] => ({ day: dayKey(turn.startedAt), prompt: {}, output: {}, turns: 0, costUsd: 0 }));
       day.turns += 1;
+      addCost(day, turn.usage);
       day.prompt[provider] = (day.prompt[provider] ?? 0) + prompt;
       day.output[provider] = (day.output[provider] ?? 0) + (turn.usage?.outputTokens ?? 0);
       if (turn.seq === 1 && turn.status === "done" && prompt > 0 && !toolTurns.has(turn.id) && !source.forked) {

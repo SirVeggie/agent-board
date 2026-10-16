@@ -301,7 +301,7 @@ test("Harness distinguishes free estimates, provider costs, legacy amounts and i
     turn("d", "a", { usage: {} }),
     turn("e", "a", { usage: { costUsd: 0.5, estimatedCostUsd: 0.5, costPartial: true } }),
   ], () => []);
-  for (const row of [stats.totals, stats.providers[0], stats.models[0], stats.heavy[0]]) {
+  for (const row of [stats.totals, stats.providers[0], stats.models[0], stats.heavy[0], stats.days[0]]) {
     assert.equal(row.costUsd, 3.5);
     assert.equal(row.estimatedCostUsd, 0.5);
     assert.equal(row.reportedCostUsd, 2);
@@ -309,4 +309,76 @@ test("Harness distinguishes free estimates, provider costs, legacy amounts and i
     assert.equal(row.unpricedTurns, 1);
     assert.equal(row.costPartial, true);
   }
+});
+
+test("daily cost coverage counts main and helper turns once and respects the time filter", () => {
+  const first = new Date(2026, 0, 1, 12).getTime();
+  const second = new Date(2026, 0, 2, 12).getTime();
+  const third = new Date(2026, 0, 3, 12).getTime();
+  const threads = [thread("main"), thread("helper", { provider: "codex", helperOf: "main" })];
+  const turns: Record<string, Turn[]> = {
+    main: [
+      turn("unknown", "main", { startedAt: first, usage: { inputTokens: 20 } }),
+      turn("free", "main", { startedAt: second, usage: { costUsd: 0, estimatedCostUsd: 0 } }),
+      turn("paid", "main", { startedAt: third, usage: { costUsd: 2, reportedCostUsd: 2 } }),
+      turn("reverted", "main", { startedAt: third, reverted: true, usage: { costUsd: 100 } }),
+    ],
+    helper: [
+      turn("missing", "helper", { startedAt: first }),
+      turn("unpriced", "helper", { startedAt: third, usage: { inputTokens: 30 } }),
+    ],
+  };
+  const stats = harnessStats(threads, id => turns[id], () => []);
+  assert.deepEqual(stats.days.map(day => [day.day, day.costUsd, day.pricedTurns ?? 0, day.unpricedTurns ?? 0]), [
+    ["2026-01-01", 0, 0, 2],
+    ["2026-01-02", 0, 1, 0],
+    ["2026-01-03", 2, 1, 1],
+  ]);
+  assert.equal(stats.days[1].estimatedCostUsd, 0);
+  assert.equal(stats.days[2].reportedCostUsd, 2);
+  assert.equal(stats.days.reduce((sum, day) => sum + day.turns, 0), stats.totals.turns);
+  assert.equal(stats.days.reduce((sum, day) => sum + day.costUsd, 0), stats.totals.costUsd);
+  // The filter can split a day; exclude the priced turn but retain its unpriced helper.
+  turns.helper[1].startedAt += 1000;
+  const filtered = harnessStats(threads, id => turns[id], () => [], third + 500);
+  assert.equal(filtered.days.length, 1);
+  assert.equal(filtered.days[0].turns, 1);
+  assert.equal(filtered.days[0].pricedTurns, undefined);
+  assert.equal(filtered.days[0].unpricedTurns, 1);
+  assert.equal(filtered.totals.unpricedTurns, 1);
+});
+
+test("Harness day tooltips show unknown, free, mixed and incomplete cost coverage", async (t) => {
+  let browser;
+  try { browser = await launchChromium({ headless: true, args: [], purpose: "Harness daily cost test" }); }
+  catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const usages = [undefined, { costUsd: 0, estimatedCostUsd: 0 }, { costUsd: 2, reportedCostUsd: 2 }, { costUsd: 0.5, estimatedCostUsd: 0.5, costPartial: true }];
+    const turns = usages.map((usage, i) => turn(String(i), "a", { startedAt: new Date(2026, 0, i + 1, 12).getTime(), usage }));
+    turns.push(turn("unpriced", "a", { startedAt: turns[2].startedAt, usage: {} }));
+    const stats = harnessStats([thread("a")], () => turns, () => []);
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    await page.route("http://cost.test/**", async route => {
+      const endpoint = new URL(route.request().url()).pathname;
+      const data = endpoint.endsWith("/stats") ? stats : endpoint.endsWith("/context") ? { thread: route.request().postDataJSON() } : {};
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto("http://cost.test/");
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("overview"));
+    const hits = page.locator(".hx-hit");
+    await hits.first().waitFor({ state: "attached" });
+    const descriptions = await hits.evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-description")));
+    assert.match(descriptions[0]!, /Cost: Unknown$/);
+    assert.match(descriptions[1]!, /Cost: Estimated \$0\.0000$/);
+    assert.match(descriptions[2]!, /Cost: Partial \$2\.00 · 1 unpriced turn$/);
+    assert.match(descriptions[3]!, /Cost: Partial \$0\.50$/);
+    assert.deepEqual(await hits.evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.tooltip)), descriptions);
+    // The shared cost formatter also exposes the missing count in the other summaries.
+    assert.ok((await page.locator(".hx-body").innerText()).includes("Partial $2.50 · 2 unpriced turns"));
+  } finally { await browser.close(); }
 });
