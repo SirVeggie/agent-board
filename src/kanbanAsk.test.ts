@@ -44,7 +44,7 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
     </script>`;
     await page.setContent(stub + html);
     await page.locator('.card[data-id="c1"] .card-title').click();
-    assert.equal(await page.locator("#commentAsk").isVisible(), false);
+    assert.equal(await page.locator("#commentAsk").count(), 0);
     await page.locator("#commentBox").fill("Without a default");
     await page.locator("#commentPost").click();
     assert.equal(await page.locator(".comment-follow").count(), 0);
@@ -58,14 +58,15 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
     assert.equal(await select.textContent(), "Sol");
     await page.keyboard.press("Escape");
     await page.locator('.card[data-id="c1"] .card-title').click();
-    assert.equal(await page.locator("#commentAsk").isVisible(), true);
+    assert.equal(await page.locator("#commentAsk").count(), 0);
     await page.locator("#commentBox").fill("Why does this happen?");
     await page.locator("#commentPost").click();
     assert.equal(await page.locator(".comment-follow").getByRole("button", { name: "Continue", exact: true }).count(), 0);
     await page.locator(".comment-follow").getByRole("button", { name: "Ask", exact: true }).click();
     await page.waitForFunction(() => (window as any).scribe.state.cards[0].comments.at(-1).followUp === "asked");
     await page.locator("#commentBox").fill("A direct question");
-    await page.locator("#commentAsk").click();
+    await page.locator("#commentPost").click();
+    await page.locator(".comment-follow").last().getByRole("button", { name: "Ask", exact: true }).click();
     await page.waitForFunction(() => (window as any).launches.length === 2);
     const result = await page.evaluate(() => ({ card: (window as any).scribe.state.cards[0], launches: (window as any).launches }));
     assert.equal(result.card.assignee, "Person");

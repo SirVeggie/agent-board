@@ -1130,7 +1130,7 @@
           <div class="comments" id="comments"></div>
           <div class="inline-add" style="flex-direction:column">
             <textarea class="field comment-box" id="commentBox" placeholder="Write a comment. Ctrl+Enter posts."></textarea>
-            <div><button class="primary" id="commentPost" type="button">Comment</button> <button id="commentAsk" type="button" class="hidden">Ask</button></div>
+            <div><button class="primary" id="commentPost" type="button">Comment</button></div>
           </div>
         </div>
         <div class="side">
@@ -3146,7 +3146,6 @@
 
     // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
     if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
-    $("commentAsk").classList.toggle("hidden", !defaultAskWorker());
     var commentsSig = JSON.stringify([c.id, c.title, c.thread, workerIdFor(c.assignee), defaultAskWorker(), imagesSig, c.comments.map(function (cm) {
       return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp];
     })]);
@@ -3520,11 +3519,9 @@
     });
   });
 
-  function postComment(ask) {
-    ask = ask === true;
+  function postComment() {
     var text = commentBox.value.trim();
     if (!text || !openId) return false;
-    if (ask && !defaultAskWorker()) return false;
     commentBox.value = "";
     var cmId = newId("cm");
     updateCard(openId, function (x) {
@@ -3533,10 +3530,7 @@
     });
     var commented = card(openId);
     scribe.signal("comment", { card: openId, num: commented ? commented.num : null });
-    if (commented) {
-      if (ask) askComment(commented.id, cmId, text);
-      else handOffComment(commented, cmId, text);
-    }
+    if (commented) handOffComment(commented, cmId, text);
     return true;
   }
 
@@ -3678,7 +3672,6 @@
     return row;
   }
   $("commentPost").addEventListener("click", postComment);
-  $("commentAsk").addEventListener("click", function () { postComment(true); });
   commentBox.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); postComment(); }
   });
