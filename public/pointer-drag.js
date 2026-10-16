@@ -6,6 +6,18 @@
   let current = null;
   let suppress = false;
   let clickTimer = 0;
+  // Cancellation can precede release by seconds. Keep its click suppressed until release,
+  // but a fresh press starts a new gesture even if the old pointer never came back.
+  window.addEventListener("pointerdown", () => { suppress = false; clearTimeout(clickTimer); }, true);
+  window.addEventListener("pointerup", () => {
+    if (suppress) clickTimer = setTimeout(() => { suppress = false; }, 0);
+  }, true);
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !current) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    current.cancel();
+  }, true);
   document.addEventListener("click", (event) => {
     if (!suppress || event.detail === 0) return;
     suppress = false;
@@ -87,7 +99,6 @@
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("blur", blur);
-      window.removeEventListener("keydown", key, true);
       window.removeEventListener("scroll", api.invalidate, true);
       window.removeEventListener("resize", api.invalidate);
       target.removeEventListener("lostpointercapture", cancel);
@@ -107,7 +118,7 @@
       if (active) {
         suppress = true;
         clearTimeout(clickTimer);
-        clickTimer = setTimeout(() => { suppress = false; }, 0);
+        if (!cancelled) clickTimer = setTimeout(() => { suppress = false; }, 0);
       }
       if (cancelled) options.onCancel?.(next, api);
       else options.onDrop?.(next, active, api);
@@ -115,17 +126,10 @@
     function up(next) { stop(next, false); }
     function cancel(next) { stop(next, true); }
     function blur() { stop(last, true); }
-    function key(next) {
-      if (next.key !== "Escape") return;
-      next.preventDefault();
-      next.stopImmediatePropagation();
-      stop(last, true);
-    }
     window.addEventListener("pointermove", move, { passive: false });
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
     window.addEventListener("blur", blur);
-    window.addEventListener("keydown", key, true);
     window.addEventListener("scroll", api.invalidate, true);
     window.addEventListener("resize", api.invalidate);
     target.addEventListener("lostpointercapture", cancel);

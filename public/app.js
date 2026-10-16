@@ -318,8 +318,6 @@
    *   scrollDir: number
    * }} */
   let drag = null;
-  let dragSuppressClick = false;
-  let dragScrollTimer = 0;
   let toggleHoverTimer = 0;
   let noticeTimer = 0;
   /** @type {null | { label: string, run: () => void }} */
@@ -1750,11 +1748,6 @@
     });
     el.appendChild(close);
     el.addEventListener("click", (event) => {
-      if (dragSuppressClick) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       const current = lookupTab(el);
       if (!current) {
         return;
@@ -1802,6 +1795,7 @@
     const nodes = [...tabsEl.children];
     const first = new Map(nodes.map((node) => [node, node.getBoundingClientRect()]));
     mutate();
+    const lastBoxes = new Map(nodes.map(node => [node, node.getBoundingClientRect()]));
     for (const node of nodes) {
       if (node.classList.contains("dragging") || node === drag?.placeholder) {
         continue;
@@ -1810,7 +1804,7 @@
       if (!prev || !node.isConnected) {
         continue;
       }
-      const last = node.getBoundingClientRect();
+      const last = lastBoxes.get(node);
       const dx = prev.left - last.left;
       if (Math.abs(dx) < 1) {
         continue;
@@ -1908,9 +1902,13 @@
       placeholder: null,
       scrollDir: 0,
     };
-    window.addEventListener("pointermove", onTabPointerMove);
-    window.addEventListener("pointerup", onTabPointerUp);
-    window.addEventListener("pointercancel", onTabPointerUp);
+    drag.controller = window.scribeDrag({ event, target: tabsWrap,
+      onStart: beginTabDrag,
+      onMove: move => { onTabPointerMove(move); return Boolean(drag?.scrollDir); },
+      onDrop: onTabPointerUp,
+      onCancel: () => abortDrag(),
+      measure: api => { if (drag) { drag.strip = api.rect(tabsWrap); drag.toggle = api.rect(libraryToggle); } },
+    });
   }
 
   function startPaneDrag(event, pane, head) {
@@ -1920,29 +1918,25 @@
       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
       moved: false, originOrder: state.tabs.map((tab) => tab.id), scrollDir: 0,
     };
-    window.addEventListener("pointermove", onTabPointerMove);
-    window.addEventListener("pointerup", onTabPointerUp);
-    window.addEventListener("pointercancel", onTabPointerUp);
+    drag.controller = window.scribeDrag({ event, target: tabsWrap,
+      onStart: beginTabDrag,
+      onMove: move => { onTabPointerMove(move); return Boolean(drag?.scrollDir); },
+      onDrop: onTabPointerUp,
+      onCancel: () => abortDrag(),
+      measure: api => { if (drag) { drag.strip = api.rect(tabsWrap); drag.toggle = api.rect(libraryToggle); } },
+    });
   }
 
   function onTabPointerMove(event) {
     if (!drag || event.pointerId !== drag.pointerId) {
       return;
     }
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    if (!drag.moved) {
-      if (Math.hypot(dx, dy) < 6) {
-        return;
-      }
-      beginTabDrag(event);
-    }
     if (!drag?.moved) {
       return;
     }
     event.preventDefault();
     positionDraggedTab(event.clientX, event.clientY);
-    const strip = tabsWrap.getBoundingClientRect();
+    const strip = drag.strip;
     // Tabs can drift below the strip while reordering; pane headers keep their explicit close target.
     const overStrip = event.clientX >= strip.left && event.clientX <= strip.right && event.clientY >= strip.top && event.clientY <= strip.bottom + (drag.pane ? 0 : 28);
     drag.pageDrop = views.updatePageDrag(event.clientX, overStrip ? Number.NaN : event.clientY);
@@ -1967,7 +1961,7 @@
 
   /** Hovering the Library button mid-drag opens the Library so the tab can be filed. */
   function trackToggleHover(x, y) {
-    const box = libraryToggle.getBoundingClientRect();
+    const box = drag.toggle;
     const over = x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
     if (!over) {
       clearTimeout(toggleHoverTimer);
@@ -1984,6 +1978,7 @@
       if (drag?.moved) {
         setSidebarTab("library");
         setSideOpen(true);
+        drag.controller.invalidate();
       }
     }, TOGGLE_HOVER_OPEN_MS);
   }
@@ -2017,25 +2012,18 @@
     el.style.zIndex = "30";
     el.style.pointerEvents = "none";
     el.style.margin = "0";
-    try {
-      el.setPointerCapture(event.pointerId);
-    } catch {
-      /* capture is best-effort */
-    }
     tabsEl.classList.add("reordering");
     document.body.classList.add("dragging-tab");
     hoverCard.suspend();
     views.beginPageDrag(drag.pane ? { pane: drag.pane } : { id: drag.id });
-    positionDraggedTab(event.clientX, event.clientY);
-    if (!drag.pane) moveDropSlot();
   }
 
   function positionDraggedTab(clientX, clientY) {
     if (!drag?.el) {
       return;
     }
-    drag.el.style.left = clientX - drag.offsetX + "px";
-    drag.el.style.top = clientY - drag.offsetY + "px";
+    drag.x = clientX; drag.y = clientY;
+    drag.el.style.transform = `translate(${clientX - drag.startX}px, ${clientY - drag.startY}px)`;
   }
 
   function groupLocalIndex(id) {
@@ -2054,11 +2042,7 @@
 
   /** Layout box, ignoring FLIP translate so hit-testing stays stable while siblings animate. */
   function layoutBox(el) {
-    const rect = el.getBoundingClientRect();
-    const transform = getComputedStyle(el).transform;
-    const left = !transform || transform === "none" ? rect.left : rect.left - new DOMMatrix(transform).m41;
-    const width = el.offsetWidth;
-    return { left, right: left + width };
+    return window.scribeDrag.layout(el);
   }
 
   function groupOthers() {
@@ -2073,34 +2057,6 @@
       }
     }
     return others;
-  }
-
-  /**
-   * Adjacent hole index. Right: midpoint from gap left to next tab right.
-   * Left: midpoint from prev tab left to gap right. Compare the lifted tab's center.
-   */
-  function nextGapTarget(ghostMid) {
-    const from = groupLocalIndex(drag.id);
-    if (from < 0 || !drag.placeholder) {
-      return from;
-    }
-    const others = groupOthers();
-    const gap = layoutBox(drag.placeholder);
-    const next = others[from];
-    const prev = others[from - 1];
-    if (next) {
-      const mid = (gap.left + layoutBox(next).right) / 2;
-      if (ghostMid > mid) {
-        return from + 1;
-      }
-    }
-    if (prev) {
-      const mid = (layoutBox(prev).left + gap.right) / 2;
-      if (ghostMid < mid) {
-        return from - 1;
-      }
-    }
-    return from;
   }
 
   function absIndexForGroupTarget(target) {
@@ -2146,55 +2102,37 @@
     if (!drag?.placeholder || !drag.el) {
       return;
     }
-    const ghost = drag.el.getBoundingClientRect();
-    const ghostMid = ghost.left + ghost.width / 2;
-    if (nextGapTarget(ghostMid) === groupLocalIndex(drag.id)) {
-      return;
-    }
+    const ghostMid = drag.x - drag.offsetX + drag.width / 2;
+    const others = groupOthers();
+    // Read the stable positions once, choose the final index, then move the slot once.
+    const target = others.filter(node => {
+      const box = drag.controller.layout(node);
+      return ghostMid > box.left + box.width / 2;
+    }).length;
+    const from = groupLocalIndex(drag.id);
+    if (target === from || from < 0) return;
     flipStrip(() => {
-      for (let n = 0; n < 12; n += 1) {
-        const from = groupLocalIndex(drag.id);
-        const target = nextGapTarget(ghostMid);
-        if (from === -1 || target === from) {
-          break;
-        }
-        const fromAbs = state.tabs.findIndex((tab) => tab.id === drag.id);
-        const moving = state.tabs.splice(fromAbs, 1)[0];
-        state.tabs.splice(absIndexForGroupTarget(target), 0, moving);
-        syncPlaceholder();
-      }
+      const fromAbs = state.tabs.findIndex(tab => tab.id === drag.id);
+      const moving = state.tabs.splice(fromAbs, 1)[0];
+      state.tabs.splice(absIndexForGroupTarget(target), 0, moving);
+      syncPlaceholder();
     });
+    drag.controller.invalidate();
   }
 
   function updateDragScroll(clientX) {
     if (!drag) {
       return;
     }
-    const rect = tabsEl.getBoundingClientRect();
+    const rect = drag.controller.rect(tabsEl);
     const edge = 36;
     let dir = 0;
-    if (clientX < rect.left + edge) {
-      dir = -1;
-    } else if (clientX > rect.right - edge) {
-      dir = 1;
-    }
-    drag.scrollDir = dir;
-    if (dir && !dragScrollTimer) {
-      dragScrollTimer = window.setInterval(() => {
-        if (!drag?.moved || !drag.scrollDir) {
-          clearInterval(dragScrollTimer);
-          dragScrollTimer = 0;
-          return;
-        }
-        tabsEl.scrollLeft += drag.scrollDir * 14;
-        updateTabFade();
-        moveDropSlot();
-      }, 16);
-    }
-    if (!dir && dragScrollTimer) {
-      clearInterval(dragScrollTimer);
-      dragScrollTimer = 0;
-    }
+    if (clientX < rect.left + edge) dir = -1;
+    else if (clientX > rect.right - edge) dir = 1;
+    const before = tabsEl.scrollLeft;
+    if (dir) tabsEl.scrollLeft += dir * 14;
+    drag.scrollDir = tabsEl.scrollLeft !== before ? dir : 0;
+    if (drag.scrollDir) { drag.controller.invalidate(); updateTabFade(); }
   }
 
   function neighborBeforeId() {
@@ -2226,32 +2164,19 @@
   }
 
   function stopDragVisual() {
+    drag?.controller?.dispose();
     views.endPageDrag();
     tabsWrap.classList.remove("pane-close-drop");
-    if (dragScrollTimer) {
-      clearInterval(dragScrollTimer);
-      dragScrollTimer = 0;
-    }
     clearTimeout(toggleHoverTimer);
     toggleHoverTimer = 0;
     libraryToggle.classList.remove("drag-hover");
     hoverCard.resume();
-    window.removeEventListener("pointermove", onTabPointerMove);
-    window.removeEventListener("pointerup", onTabPointerUp);
-    window.removeEventListener("pointercancel", onTabPointerUp);
     tabsEl.classList.remove("reordering");
     document.body.classList.remove("dragging-tab");
     if (!drag) {
       return;
     }
     const el = drag.el;
-    try {
-      if (el.hasPointerCapture(drag.pointerId)) {
-        el.releasePointerCapture(drag.pointerId);
-      }
-    } catch {
-      /* already released */
-    }
     el.classList.remove("dragging", "to-library");
     el.style.position = "";
     el.style.left = "";
@@ -2299,16 +2224,12 @@
       abortDrag();
       return;
     }
-    if (drag.moved) onTabPointerMove(event);
     const moved = drag.moved;
     const id = drag.id;
     const origin = drag.originOrder;
     const before = moved && !drag.pane ? neighborBeforeId() : null;
     const changed = moved && state.tabs.map((tab) => tab.id).join("\0") !== origin.join("\0");
     if (!moved) {
-      window.removeEventListener("pointermove", onTabPointerMove);
-      window.removeEventListener("pointerup", onTabPointerUp);
-      window.removeEventListener("pointercancel", onTabPointerUp);
       drag = null;
       return;
     }
@@ -2322,10 +2243,6 @@
     library.stripDragCancel();
     stopDragVisual();
     drag = null;
-    dragSuppressClick = true;
-    window.setTimeout(() => {
-      dragSuppressClick = false;
-    }, 0);
     if (filed || pageDrop || source.pane || outside) {
       restoreTabOrder(origin);
     }
@@ -2454,7 +2371,7 @@
    * Returns where it would open, or null when the pointer is not over the strip.
    */
   function stripSlot(x, y, page) {
-    const box = tabsWrap.getBoundingClientRect();
+    const box = window.scribeDrag.rect(tabsWrap);
     if (x < box.left || x > box.right || y < box.top - 10 || y > box.bottom + 10) {
       clearStripSlot();
       return null;
@@ -2495,6 +2412,7 @@
           tabsEl.appendChild(slot);
         }
       });
+      window.scribeDrag.invalidate();
     }
     tabsWrap.classList.add("strip-drop-over");
     return { before: before ? before.id : null };
@@ -2505,6 +2423,7 @@
     const slot = stripSlotEl;
     if (slot?.isConnected) {
       flipStrip(() => slot.remove());
+      window.scribeDrag.invalidate();
     }
   }
 
@@ -5542,19 +5461,6 @@
     true
   );
 
-  document.addEventListener(
-    "click",
-    (event) => {
-      if (!dragSuppressClick) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      dragSuppressClick = false;
-    },
-    true
-  );
-
   window.addEventListener("keydown", onBoardShortcut, true);
   // Keep the empty palette's pending questions current while it is open.
   window.addEventListener("scribe:agent-status", () => {
@@ -5829,44 +5735,18 @@
     if (event.button !== 0) {
       return;
     }
-    event.preventDefault();
     const startX = event.clientX;
     const startWidth = sidePane.getBoundingClientRect().width;
-    sideResizer.setPointerCapture(event.pointerId);
-    document.body.classList.add("resizing-side");
-
-    let x = startX;
-    let frame = 0;
-    // The width is a root variable, so each change restyles the page: one per frame, saved on release.
-    function apply() {
-      frame = 0;
-      const dir = document.documentElement.dataset.librarySide === "left" ? 1 : -1;
-      return applySideWidth(startWidth + dir * (x - startX));
-    }
-    function onMove(move) {
-      if (move.pointerId !== event.pointerId) {
-        return;
-      }
-      x = move.clientX;
-      frame ||= requestAnimationFrame(apply);
-    }
-    function onUp(up) {
-      if (up.pointerId !== event.pointerId) {
-        return;
-      }
-      cancelAnimationFrame(frame);
-      localStorage.setItem(SIDE_WIDTH_KEY, String(apply()));
-      sideResizer.removeEventListener("pointermove", onMove);
-      sideResizer.removeEventListener("pointerup", onUp);
-      sideResizer.removeEventListener("pointercancel", onUp);
-      if (sideResizer.hasPointerCapture(event.pointerId)) {
-        sideResizer.releasePointerCapture(event.pointerId);
-      }
-      document.body.classList.remove("resizing-side");
-    }
-    sideResizer.addEventListener("pointermove", onMove);
-    sideResizer.addEventListener("pointerup", onUp);
-    sideResizer.addEventListener("pointercancel", onUp);
+    const dir = document.documentElement.dataset.librarySide === "left" ? 1 : -1;
+    window.scribeDrag({ event, target: sideResizer, threshold: 0,
+      onStart: () => document.body.classList.add("resizing-side"),
+      onMove: move => { applySideWidth(startWidth + dir * (move.clientX - startX)); },
+      onDrop: up => {
+        document.body.classList.remove("resizing-side");
+        localStorage.setItem(SIDE_WIDTH_KEY, String(applySideWidth(startWidth + dir * (up.clientX - startX))));
+      },
+      onCancel: () => { document.body.classList.remove("resizing-side"); applySideWidth(startWidth); },
+    });
   });
 
   window.addEventListener("popstate", onHistoryStep);

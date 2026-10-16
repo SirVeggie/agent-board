@@ -6920,43 +6920,14 @@
       const resizer = pane.querySelector(".agent-resizer");
       applyWidth(Number(localStorage.getItem(LS.width)) || 420);
       resizer.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        resizer.setPointerCapture(event.pointerId);
-        document.body.classList.add("resizing-side");
-        const startX = event.clientX;
-        const startW = pane.getBoundingClientRect().width;
-        let latestX = event.clientX;
-        let frame = 0;
-        let active = true;
-        const apply = (clientX) => {
-          const dir = document.documentElement.dataset.agentSide === "left" ? 1 : -1;
-          applyWidth(startW + dir * (clientX - startX));
-        };
-        const move = (e) => {
-          latestX = e.clientX;
-          if (frame) return;
-          frame = requestAnimationFrame(() => {
-            frame = 0;
-            apply(latestX);
-          });
-        };
-        const up = () => {
-          if (!active) return;
-          active = false;
-          if (frame) cancelAnimationFrame(frame);
-          frame = 0;
-          apply(latestX);
-          document.body.classList.remove("resizing-side");
-          resizer.removeEventListener("pointermove", move);
-          resizer.removeEventListener("pointerup", up);
-          resizer.removeEventListener("pointercancel", up);
-          resizer.removeEventListener("lostpointercapture", up);
-          localStorage.setItem(LS.width, String(Math.round(pane.getBoundingClientRect().width)));
-        };
-        resizer.addEventListener("pointermove", move);
-        resizer.addEventListener("pointerup", up);
-        resizer.addEventListener("pointercancel", up);
-        resizer.addEventListener("lostpointercapture", up);
+        const startX = event.clientX, startW = pane.getBoundingClientRect().width;
+        const dir = document.documentElement.dataset.agentSide === "left" ? 1 : -1;
+        window.scribeDrag({ event, target: resizer, threshold: 0,
+          onStart: () => document.body.classList.add("resizing-side"),
+          onMove: move => { applyWidth(startW + dir * (move.clientX - startX)); },
+          onDrop: () => { document.body.classList.remove("resizing-side"); localStorage.setItem(LS.width, String(Math.round(pane.getBoundingClientRect().width))); },
+          onCancel: () => { document.body.classList.remove("resizing-side"); applyWidth(startW); },
+        });
       });
       this.apply();
     },
@@ -7048,40 +7019,13 @@
       const saved = Number(localStorage.getItem(LS.fullSide));
       if (saved) setWidth(saved);
       resizer.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        resizer.setPointerCapture(event.pointerId);
-        document.body.classList.add("resizing-side");
-        const startX = event.clientX;
-        const startW = side.getBoundingClientRect().width;
-        let latestX = event.clientX;
-        let frame = 0;
-        let active = true;
-        const apply = (clientX) => setWidth(startW + (clientX - startX));
-        const move = (e) => {
-          latestX = e.clientX;
-          if (frame) return;
-          frame = requestAnimationFrame(() => {
-            frame = 0;
-            apply(latestX);
-          });
-        };
-        const up = () => {
-          if (!active) return;
-          active = false;
-          if (frame) cancelAnimationFrame(frame);
-          frame = 0;
-          apply(latestX);
-          document.body.classList.remove("resizing-side");
-          resizer.removeEventListener("pointermove", move);
-          resizer.removeEventListener("pointerup", up);
-          resizer.removeEventListener("pointercancel", up);
-          resizer.removeEventListener("lostpointercapture", up);
-          localStorage.setItem(LS.fullSide, String(Math.round(side.getBoundingClientRect().width)));
-        };
-        resizer.addEventListener("pointermove", move);
-        resizer.addEventListener("pointerup", up);
-        resizer.addEventListener("pointercancel", up);
-        resizer.addEventListener("lostpointercapture", up);
+        const startX = event.clientX, startW = side.getBoundingClientRect().width;
+        window.scribeDrag({ event, target: resizer, threshold: 0,
+          onStart: () => document.body.classList.add("resizing-side"),
+          onMove: move => { setWidth(startW + move.clientX - startX); },
+          onDrop: () => { document.body.classList.remove("resizing-side"); localStorage.setItem(LS.fullSide, String(Math.round(side.getBoundingClientRect().width))); },
+          onCancel: () => { document.body.classList.remove("resizing-side"); setWidth(startW); },
+        });
       });
       resizer.addEventListener("dblclick", () => {
         root.style.removeProperty("--ag-full-side");

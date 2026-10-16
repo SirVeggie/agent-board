@@ -60,7 +60,6 @@ window.createLibrary = function createLibrary(host) {
   let press = null;
   /** @type {any} */
   let drag = null;
-  let suppressClick = false;
   let cleanupReq = 0;
   let cleanupTimer = 0;
 
@@ -183,7 +182,8 @@ window.createLibrary = function createLibrary(host) {
     return false;
   }
 
-  function render() {
+  function render(force = false) {
+    if (drag && !force) { renderDeferred = true; return; }
     if (renaming) {
       renderDeferred = true;
       return;
@@ -207,6 +207,7 @@ window.createLibrary = function createLibrary(host) {
       none.textContent = "Pages you show appear here";
     }
     window.scribeSyncChildren(list, [rows, lineEl]);
+    invalidateLibrary();
     if (drag?.target) {
       paintTarget(drag.target);
     }
@@ -1340,12 +1341,11 @@ window.createLibrary = function createLibrary(host) {
       /** Folders the drag expanded; re-collapsed unless the drop lands inside them. */
       autoOpened: new Set(),
       recollapse: new Map(),
-      scrollRaf: 0,
     };
   }
 
   function onPointerDown(event) {
-    if (event.button !== 0 || renaming || drag) {
+    if (event.button !== 0 || renaming || drag || press) {
       return;
     }
     const row = event.target.closest(".lib-row");
@@ -1359,27 +1359,30 @@ window.createLibrary = function createLibrary(host) {
       startX: event.clientX,
       startY: event.clientY,
     };
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
+    press.controller = window.scribeDrag({ event, target: list,
+      threshold: DRAG_THRESHOLD,
+      onStart: beginDrag,
+      measure: api => {
+        if (!drag) return;
+        drag.box = api.rect(list);
+        drag.rows = visibleRows().map(row => ({ row, rect: api.rect(row), top: row.offsetTop, bottom: row.offsetTop + row.offsetHeight }));
+      },
+      onMove: onPointerMove,
+      onDrop: onPointerUp,
+      onCancel: () => { press = null; cancelDrag(); },
+    });
   }
 
   function onPointerMove(event) {
     if (!press || event.pointerId !== press.pointerId) {
       return;
     }
-    if (!drag) {
-      if (Math.hypot(event.clientX - press.startX, event.clientY - press.startY) < DRAG_THRESHOLD) {
-        return;
-      }
-      beginDrag(event);
-    }
     event.preventDefault();
     drag.x = event.clientX;
     drag.y = event.clientY;
     placeGhost();
     refreshTarget();
-    ensureAutoScroll();
+    return autoScroll();
   }
 
   function beginDrag(event) {
@@ -1433,31 +1436,42 @@ window.createLibrary = function createLibrary(host) {
     setTarget(target);
   }
 
+  function measureLibrary() {
+    if (!drag) return;
+    const box = window.scribeDrag.rect(list);
+    if (drag.rows && drag.box === box) return;
+    drag.box = box;
+    drag.rows = visibleRows().map(row => ({ row, rect: window.scribeDrag.rect(row), top: row.offsetTop, bottom: row.offsetTop + row.offsetHeight }));
+  }
+  function invalidateLibrary() {
+    if (drag) drag.rows = null;
+    window.scribeDrag.invalidate();
+  }
+  list.addEventListener("scroll", invalidateLibrary, { passive: true });
+
   function libraryTarget(x, y) {
     if (!host.paneOpen() || (query && hits)) {
       return null;
     }
-    const box = list.getBoundingClientRect();
+    measureLibrary();
+    const box = drag.box;
     if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
       return null;
     }
-    const rows = visibleRows();
-    const row = rows.find((el) => {
-      const r = el.getBoundingClientRect();
-      return y >= r.top && y < r.bottom;
-    });
+    const hit = drag.rows.find(entry => y >= entry.rect.top && y < entry.rect.bottom);
+    const row = hit?.row;
     if (!row) {
       return drag.kind === "page"
         ? { folderId: null, index: pagesOf(null).filter((p) => p.id !== drag.id).length, into: ROOT }
         : { folderId: null, index: foldersOf(null).filter((f) => f.id !== drag.id).length, into: ROOT };
     }
-    const r = row.getBoundingClientRect();
+    const r = hit.rect;
     const frac = (y - r.top) / r.height;
     const kind = row.dataset.kind;
     const id = row.dataset.id;
     const depth = Number(row.dataset.depth) || 0;
-    const top = row.offsetTop;
-    const bottom = row.offsetTop + row.offsetHeight;
+    const top = hit.top;
+    const bottom = hit.bottom;
 
     if (drag.kind === "page") {
       if (kind === "folder") {
@@ -1527,8 +1541,7 @@ window.createLibrary = function createLibrary(host) {
     lineEl.style.width = `calc(100% - ${left + 10}px)`;
     lineEl.classList.add("on");
     if (fresh) {
-      void lineEl.offsetWidth;
-      lineEl.style.transition = "";
+      requestAnimationFrame(() => { lineEl.style.transition = ""; });
     }
   }
 
@@ -1545,8 +1558,7 @@ window.createLibrary = function createLibrary(host) {
           drag.expandFor = null;
           collapsed.delete(into);
           drag.autoOpened.add(into);
-          render();
-          refreshTarget();
+          render(true);
         }, EXPAND_DELAY);
       }
     } else if (drag.expandFor) {
@@ -1568,75 +1580,37 @@ window.createLibrary = function createLibrary(host) {
             drag.recollapse.delete(id);
             drag.autoOpened.delete(id);
             collapsed.add(id);
-            render();
-            refreshTarget();
+            render(true);
           }, RECOLLAPSE_DELAY)
         );
       }
     }
   }
 
-  function ensureAutoScroll() {
-    if (!drag || drag.scrollRaf) {
-      return;
-    }
-    const step = () => {
-      if (!drag) {
-        return;
-      }
-      drag.scrollRaf = 0;
-      const box = list.getBoundingClientRect();
-      if (drag.x < box.left || drag.x > box.right || !host.paneOpen()) {
-        return;
-      }
-      let dy = 0;
-      if (drag.y < box.top + SCROLL_EDGE && drag.y > box.top - SCROLL_EDGE) {
-        dy = -Math.ceil(((box.top + SCROLL_EDGE - drag.y) / SCROLL_EDGE) * 12);
-      } else if (drag.y > box.bottom - SCROLL_EDGE && drag.y < box.bottom + SCROLL_EDGE) {
-        dy = Math.ceil(((drag.y - (box.bottom - SCROLL_EDGE)) / SCROLL_EDGE) * 12);
-      }
-      if (!dy) {
-        return;
-      }
-      const before = list.scrollTop;
-      list.scrollTop += dy;
-      if (list.scrollTop !== before) {
-        refreshTarget();
-        drag.scrollRaf = requestAnimationFrame(step);
-      }
-    };
-    drag.scrollRaf = requestAnimationFrame(step);
+  function autoScroll() {
+    if (!drag) return false;
+    measureLibrary();
+    const box = drag.box;
+    if (drag.x < box.left || drag.x > box.right || !host.paneOpen()) return false;
+    let dy = 0;
+    if (drag.y < box.top + SCROLL_EDGE && drag.y > box.top - SCROLL_EDGE) dy = -Math.ceil(((box.top + SCROLL_EDGE - drag.y) / SCROLL_EDGE) * 12);
+    else if (drag.y > box.bottom - SCROLL_EDGE && drag.y < box.bottom + SCROLL_EDGE) dy = Math.ceil(((drag.y - (box.bottom - SCROLL_EDGE)) / SCROLL_EDGE) * 12);
+    const before = list.scrollTop;
+    list.scrollTop += dy;
+    if (list.scrollTop === before) return false;
+    invalidateLibrary();
+    return true;
   }
 
   function onPointerUp(event) {
     if (!press || event.pointerId !== press.pointerId) {
       return;
     }
-    detachPointer();
     press = null;
     if (!drag) {
       return;
     }
-    suppressClick = true;
-    window.setTimeout(() => {
-      suppressClick = false;
-    }, 0);
     dropDrag();
-  }
-
-  function onPointerCancel(event) {
-    if (!press || event.pointerId !== press.pointerId) {
-      return;
-    }
-    detachPointer();
-    press = null;
-    cancelDrag();
-  }
-
-  function detachPointer() {
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", onPointerUp);
-    window.removeEventListener("pointercancel", onPointerCancel);
   }
 
   /** Clears timers and markers; returns the finished drag. */
@@ -1649,7 +1623,6 @@ window.createLibrary = function createLibrary(host) {
     for (const timer of done.recollapse.values()) {
       clearTimeout(timer);
     }
-    cancelAnimationFrame(done.scrollRaf);
     const keep = keepChainOf === undefined ? new Set() : chainOf(keepChainOf);
     for (const id of done.autoOpened) {
       if (!keep.has(id)) {
@@ -1684,6 +1657,7 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const done = endDrag(target.where === "lib" ? keptFolder(target) : undefined);
+    if (renderDeferred) render();
     if (target.where === "strip") {
       host.clearStripSlot();
       fadeGhost(done.ghost);
@@ -1705,6 +1679,8 @@ window.createLibrary = function createLibrary(host) {
     if (!drag) {
       return false;
     }
+    press?.controller?.dispose();
+    press = null;
     const done = endDrag();
     if (!done.fromStrip) {
       host.clearStripSlot();
@@ -1755,7 +1731,7 @@ window.createLibrary = function createLibrary(host) {
     drag.y = y;
     const lib = libraryTarget(x, y);
     setTarget(lib ? { where: "lib", ...lib } : null);
-    ensureAutoScroll();
+    autoScroll();
     return Boolean(lib);
   }
 
@@ -1784,12 +1760,6 @@ window.createLibrary = function createLibrary(host) {
   list.addEventListener(
     "click",
     (event) => {
-      if (suppressClick) {
-        event.preventDefault();
-        event.stopPropagation();
-        suppressClick = false;
-        return;
-      }
       const row = event.target.closest(".lib-row");
       if (!row || renaming) {
         return;

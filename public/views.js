@@ -1216,7 +1216,11 @@ window.createViews = function createViews(host) {
   /* ---------- pointer drops from the strip and pane headers ---------- */
 
   function beginPageDrag(source) {
-    pageDrag = source;
+    const surface = getComputedStyle(mainEl);
+    pageDrag = { ...source, surface: {
+      borderTopLeftRadius: surface.borderTopLeftRadius, borderTopRightRadius: surface.borderTopRightRadius,
+      borderBottomLeftRadius: surface.borderBottomLeftRadius, borderBottomRightRadius: surface.borderBottomRightRadius,
+    } };
     dropOverlay.hidden = false;
     dropPreview.hidden = true;
     document.body.classList.add("dragging-pane");
@@ -1265,7 +1269,7 @@ window.createViews = function createViews(host) {
 
   function pageDropAt(x, y) {
     if (!pageDrag || !host.activeId() || !Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const box = mainEl.getBoundingClientRect();
+    const box = window.scribeDrag.rect(mainEl);
     if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
     const dx = x - box.left, dy = y - box.top;
     const split = activeSplit();
@@ -1348,7 +1352,7 @@ window.createViews = function createViews(host) {
     const edgeOn = (value) => Math.abs(value) < 1e-6;
     // Keep the rim inside the rounded page surface. Outer corners follow its curvature;
     // newly created corners at the split seam get their own smaller radius.
-    const surface = getComputedStyle(mainEl);
+    const surface = pageDrag.surface;
     const radius = (corner, outer) => outer ? Math.max(0, parseFloat(surface[corner]) - 6) + "px" : "10px";
     Object.assign(dropPreview.style, {
       left: `calc(${left * 100}% + 6px)`, top: `calc(${top * 100}% + 6px)`,
@@ -1937,50 +1941,26 @@ window.createViews = function createViews(host) {
       }
       event.preventDefault();
       stopSplitAnimation();
-      node.setPointerCapture(event.pointerId);
       const col = split.dir === "col";
-      document.body.classList.add("resizing-split");
-      document.body.classList.toggle("resizing-col", col);
-      node.classList.add("resizing");
-      const rect = mainEl.getBoundingClientRect();
-      let raf = 0;
-      let latest = 0;
+      const original = shownSizes(split);
       resizing = { pointerId: event.pointerId };
       divider.ratioEl.textContent = sizesLabel(split, at);
-      function onMove(move) {
-        if (move.pointerId !== event.pointerId) {
-          return;
-        }
-        latest = col ? (move.clientY - rect.top) / rect.height : (move.clientX - rect.left) / rect.width;
-        if (!raf) {
-          raf = requestAnimationFrame(() => {
-            raf = 0;
-            applyBorder(at, latest, true);
-          });
-        }
-      }
-      function onUp(up) {
-        if (up.pointerId !== event.pointerId) {
-          return;
-        }
-        node.removeEventListener("pointermove", onMove);
-        node.removeEventListener("pointerup", onUp);
-        node.removeEventListener("pointercancel", onUp);
-        if (node.hasPointerCapture(event.pointerId)) {
-          node.releasePointerCapture(event.pointerId);
-        }
-        cancelAnimationFrame(raf);
-        if (latest) {
-          applyBorder(at, latest, true);
-        }
-        document.body.classList.remove("resizing-split");
+      const cleanup = () => {
+        document.body.classList.remove("resizing-split", "resizing-col");
         node.classList.remove("resizing");
         resizing = null;
-        commitSizes();
-      }
-      node.addEventListener("pointermove", onMove);
-      node.addEventListener("pointerup", onUp);
-      node.addEventListener("pointercancel", onUp);
+      };
+      window.scribeDrag({ event, target: node, threshold: 0,
+        onStart: () => {
+          document.body.classList.add("resizing-split");
+          document.body.classList.toggle("resizing-col", col);
+          node.classList.add("resizing");
+        },
+        measure: api => api.rect(mainEl),
+        onMove: (move, rect) => { applyBorder(at, col ? (move.clientY - rect.top) / rect.height : (move.clientX - rect.left) / rect.width, true); },
+        onDrop: () => { cleanup(); commitSizes(); },
+        onCancel: () => { split.sizes = original; applyStops(split); cleanup(); },
+      });
     });
     // Back to even panes.
     node.addEventListener("dblclick", () => {

@@ -689,10 +689,6 @@ body.dragging-tab {
   user-select: none;
 }
 
-body.dragging-tab iframe {
-  pointer-events: none;
-}
-
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -981,10 +977,6 @@ body.resizing-side {
   user-select: none;
 }
 
-body.resizing-side iframe {
-  pointer-events: none;
-}
-
 body.resizing-side .side-pane {
   transition: none;
 }
@@ -1244,10 +1236,6 @@ button.trash-restore:hover {
 body.dragging-lib {
   user-select: none;
   cursor: grabbing;
-}
-
-body.dragging-lib iframe {
-  pointer-events: none;
 }
 
 .lib-drag-source {
@@ -3550,7 +3538,7 @@ html[data-theme="cream"] .peek-card {
   box-shadow: var(--shadow);
 }
 body.dragging-pane { cursor: grabbing; user-select: none; }
-body.dragging-pane iframe { pointer-events: none; }
+
 .tabs-wrap.pane-close-drop::after {
   content: "";
   position: absolute;
@@ -3885,10 +3873,6 @@ body.resizing-split {
 
 body.resizing-split.resizing-col {
   cursor: row-resize;
-}
-
-body.resizing-split iframe {
-  pointer-events: none;
 }
 
 .button-track.text-track button {

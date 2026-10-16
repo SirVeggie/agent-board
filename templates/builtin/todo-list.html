@@ -676,8 +676,6 @@
   var titleEls = [];
   var countEls = [];
   var drag = null;
-  var didDrag = false;
-  var dragScrollTimer = 0;
   var editingDesc = false;
   var editingTitle = false;
   var editingCol = -1;
@@ -901,7 +899,6 @@
     li.appendChild(label);
     li.appendChild(actions);
     li.onclick = function (event) {
-      if (didDrag) return;
       if (event.target.closest && event.target.closest(".check, .actions, button, input, a")) return;
       openModal(item.id);
     };
@@ -976,19 +973,16 @@
       scrollX: 0,
       scrollY: 0
     };
-    window.addEventListener("pointermove", onItemPointerMove);
-    window.addEventListener("pointerup", onItemPointerUp);
-    window.addEventListener("pointercancel", onItemPointerUp);
+    drag.controller = window.scribeDrag({ event: event, target: el.parentNode,
+      onStart: beginItemDrag,
+      onMove: function (move) { onItemPointerMove(move); return Boolean(drag && (drag.scrollX || drag.scrollY)); },
+      onDrop: onItemPointerUp,
+      onCancel: abortDrag,
+    });
   }
 
   function onItemPointerMove(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    var dx = event.clientX - drag.startX;
-    var dy = event.clientY - drag.startY;
-    if (!drag.moved) {
-      if (Math.hypot(dx, dy) < 6) return;
-      beginItemDrag(event);
-    }
     if (!drag || !drag.moved) return;
     event.preventDefault();
     positionDraggedItem(event.clientX, event.clientY);
@@ -1001,7 +995,6 @@
     var el = drag.el;
     var rect = el.getBoundingClientRect();
     drag.moved = true;
-    didDrag = true;
     // From where the press started, so the item doesn't trail the pointer by the drag threshold.
     drag.offsetX = drag.startX - rect.left;
     drag.offsetY = drag.startY - rect.top;
@@ -1020,27 +1013,20 @@
     el.style.zIndex = "30";
     el.style.pointerEvents = "none";
     el.style.margin = "0";
-    try { el.setPointerCapture(event.pointerId); } catch (err) {}
+
     for (var i = 0; i < listEls.length; i++) listEls[i].classList.add("reordering");
     document.body.classList.add("dragging-item");
-    positionDraggedItem(event.clientX, event.clientY);
-    moveDropSlot();
   }
 
   function positionDraggedItem(clientX, clientY) {
     if (!drag || !drag.el) return;
-    drag.el.style.left = clientX - drag.offsetX + "px";
-    drag.el.style.top = clientY - drag.offsetY + "px";
+    drag.x = clientX; drag.y = clientY;
+    drag.el.style.transform = "translate(" + (clientX - drag.startX) + "px, " + (clientY - drag.startY) + "px)";
   }
 
   function layoutMid(el) {
-    var rect = el.getBoundingClientRect();
-    var transform = getComputedStyle(el).transform;
-    var top = rect.top;
-    if (transform && transform !== "none") {
-      top = rect.top - new DOMMatrix(transform).m42;
-    }
-    return top + el.offsetHeight / 2;
+    var rect = window.scribeDrag.layout(el);
+    return rect.top + rect.height / 2;
   }
 
   function othersIn(list) {
@@ -1055,7 +1041,7 @@
     var best = 0;
     var bestDist = Infinity;
     for (var i = 0; i < columnEls.length; i++) {
-      var rect = columnEls[i].getBoundingClientRect();
+      var rect = window.scribeDrag.rect(columnEls[i]);
       var dist = clientX < rect.left ? rect.left - clientX : clientX > rect.right ? clientX - rect.right : 0;
       if (dist < bestDist) {
         bestDist = dist;
@@ -1091,20 +1077,19 @@
     return token;
   }
 
-  function flipLists(mutate) {
-    var nodes = [];
-    for (var l = 0; l < listEls.length; l++) nodes = nodes.concat([].slice.call(listEls[l].children));
+  function flipLists(nodes, mutate) {
     var first = new Map();
     for (var i = 0; i < nodes.length; i++) {
       first.set(nodes[i], nodes[i].getBoundingClientRect());
     }
     mutate();
+    var lastBoxes = new Map(nodes.map(function (node) { return [node, node.getBoundingClientRect()]; }));
     for (var n = 0; n < nodes.length; n++) {
       var node = nodes[n];
       if (node === drag.placeholder) continue;
       var prev = first.get(node);
       if (!prev || !node.isConnected) continue;
-      var last = node.getBoundingClientRect();
+      var last = lastBoxes.get(node);
       var dx = prev.left - last.left;
       var dy = prev.top - last.top;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
@@ -1126,45 +1111,24 @@
     }
   }
 
-  function layoutTop(el) {
-    return layoutMid(el) - el.offsetHeight / 2;
-  }
-
-  /**
-   * Like the tab strip: within a column the slot passes a neighbour once the lifted item's
-   * center crosses the midpoint between the slot and that neighbour, so there's no overshoot.
-   * Entering another column places the slot by the item's center.
-   */
+  /** Choose a destination from cached item centers before moving the slot. */
   function moveDropSlot() {
     if (!drag || !drag.placeholder || !drag.el) return;
-    var ghost = drag.el.getBoundingClientRect();
+    var ghost = { left: drag.x - drag.offsetX, top: drag.y - drag.offsetY, width: parseFloat(drag.el.style.width), height: parseFloat(drag.el.style.height) };
     var col = columnAt(ghost.left + ghost.width / 2);
     var list = listEls[col];
     var mid = ghost.top + ghost.height / 2;
     var placeholder = drag.placeholder;
-    if (placeholder.parentNode !== list) {
-      var others = othersIn(list);
-      var target = slotIndex(others, mid);
-      flipLists(function () {
-        if (others[target]) list.insertBefore(placeholder, others[target]);
-        else list.appendChild(placeholder);
-        drag.col = col;
-      });
-      return;
-    }
-    for (var guard = 0; guard < 60; guard++) {
-      var top = layoutTop(placeholder);
-      var bottom = top + placeholder.offsetHeight;
-      var next = placeholder.nextElementSibling;
-      var prev = placeholder.previousElementSibling;
-      if (next && mid > (top + layoutTop(next) + next.offsetHeight) / 2) {
-        flipLists(function () { list.insertBefore(placeholder, next.nextElementSibling); });
-      } else if (prev && mid < (layoutTop(prev) + bottom) / 2) {
-        flipLists(function () { list.insertBefore(placeholder, prev); });
-      } else {
-        break;
-      }
-    }
+    var others = othersIn(list);
+    var target = slotIndex(others, mid);
+    var before = others[target] || null;
+    if (placeholder.parentNode === list && placeholder.nextElementSibling === before) return;
+    var affected = others.concat(othersIn(placeholder.parentNode)).filter(function (node) {
+      var box = window.scribeDrag.layout(node);
+      return box.bottom >= 0 && box.top <= window.innerHeight;
+    });
+    flipLists(Array.from(new Set(affected)), function () { list.insertBefore(placeholder, before); drag.col = col; });
+    window.scribeDrag.invalidate();
   }
 
   function updateDragScroll(clientX, clientY) {
@@ -1175,45 +1139,23 @@
     if (clientY < edge) dirY = -1;
     else if (clientY > window.innerHeight - edge) dirY = 1;
     if (columnsEl.scrollWidth > columnsEl.clientWidth) {
-      var rect = columnsEl.getBoundingClientRect();
+      var rect = window.scribeDrag.rect(columnsEl);
       if (clientX < rect.left + edge) dirX = -1;
       else if (clientX > rect.right - edge) dirX = 1;
     }
-    drag.scrollX = dirX;
-    drag.scrollY = dirY;
-    if ((dirX || dirY) && !dragScrollTimer) {
-      dragScrollTimer = window.setInterval(function () {
-        if (!drag || !drag.moved || !(drag.scrollX || drag.scrollY)) {
-          clearInterval(dragScrollTimer);
-          dragScrollTimer = 0;
-          return;
-        }
-        if (drag.scrollY) window.scrollBy(0, drag.scrollY * 14);
-        if (drag.scrollX) columnsEl.scrollLeft += drag.scrollX * 14;
-        moveDropSlot();
-      }, 16);
-    }
-    if (!dirX && !dirY && dragScrollTimer) {
-      clearInterval(dragScrollTimer);
-      dragScrollTimer = 0;
-    }
+    var beforeY = window.scrollY, beforeX = columnsEl.scrollLeft;
+    if (dirY) window.scrollBy(0, dirY * 14);
+    if (dirX) columnsEl.scrollLeft += dirX * 14;
+    drag.scrollX = columnsEl.scrollLeft !== beforeX ? dirX : 0;
+    drag.scrollY = window.scrollY !== beforeY ? dirY : 0;
   }
 
   function stopDragVisual() {
-    if (dragScrollTimer) {
-      clearInterval(dragScrollTimer);
-      dragScrollTimer = 0;
-    }
-    window.removeEventListener("pointermove", onItemPointerMove);
-    window.removeEventListener("pointerup", onItemPointerUp);
-    window.removeEventListener("pointercancel", onItemPointerUp);
+    if (drag) drag.controller.dispose();
     for (var i = 0; i < listEls.length; i++) listEls[i].classList.remove("reordering");
     document.body.classList.remove("dragging-item");
     if (!drag) return;
     var el = drag.el;
-    try {
-      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
-    } catch (err) {}
     el.classList.remove("dragging");
     el.style.position = "";
     el.style.left = "";
@@ -1237,7 +1179,6 @@
     var moved = drag.moved;
     stopDragVisual();
     drag = null;
-    didDrag = false;
     if (moved) render();
   }
 
@@ -1270,9 +1211,6 @@
   function onItemPointerUp(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
     if (!drag.moved) {
-      window.removeEventListener("pointermove", onItemPointerMove);
-      window.removeEventListener("pointerup", onItemPointerUp);
-      window.removeEventListener("pointercancel", onItemPointerUp);
       drag = null;
       return;
     }
@@ -1283,7 +1221,6 @@
     var col = drag.col;
     stopDragVisual();
     drag = null;
-    window.setTimeout(function () { didDrag = false; }, 0);
     var before = items();
     var result = dropResult(id, col, next && next.getAttribute("data-id"), prev && prev.getAttribute("data-id"));
     var key = function (list) {

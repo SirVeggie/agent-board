@@ -289,6 +289,7 @@ window.createSpaces = function createSpaces(host) {
   }
 
   function render() {
+    if (drag?.moved) return;
     grid.replaceChildren();
     data.spaces.forEach((space, index) => grid.append(card(space, index)));
     const add = el("button", "space-card space-new");
@@ -374,10 +375,6 @@ window.createSpaces = function createSpaces(host) {
 
     item.addEventListener("pointerdown", (event) => startDrag(event, item, space));
     item.addEventListener("click", () => {
-      if (item.dataset.dragged) {
-        delete item.dataset.dragged;
-        return;
-      }
       void switchTo(space.id);
     });
     item.addEventListener("mouseenter", () => {
@@ -513,30 +510,34 @@ window.createSpaces = function createSpaces(host) {
   /* ---------- drag to reorder ---------- */
 
   function startDrag(event, item, space) {
-    if (event.button !== 0 || renaming || busy) {
+    if (event.button !== 0 || renaming || busy || drag) {
       return;
     }
     drag = { id: space.id, item, startX: event.clientX, startY: event.clientY, pointerId: event.pointerId, moved: false };
-    item.addEventListener("pointermove", onDragMove);
-    item.addEventListener("pointerup", onDragUp);
-    item.addEventListener("pointercancel", onDragCancel);
+    drag.controller = window.scribeDrag({ event, target: grid,
+      measure: () => {
+        if (!drag?.moved) return;
+        const saved = drag.item.style.transform;
+        drag.item.style.transform = "";
+        drag.slots = [...grid.querySelectorAll(".space-card[data-id]")].map(card => card.getBoundingClientRect());
+        drag.item.style.transform = saved;
+      },
+      onMove: onDragMove,
+      onDrop: onDragUp,
+      onCancel: onDragCancel,
+    });
   }
 
   function onDragMove(event) {
     if (!drag || event.pointerId !== drag.pointerId) {
       return;
     }
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
     if (!drag.moved) {
-      if (Math.hypot(dx, dy) < 6) {
-        return;
-      }
       drag.moved = true;
       const rect = drag.item.getBoundingClientRect();
       drag.grabX = drag.startX - rect.left;
       drag.grabY = drag.startY - rect.top;
-      drag.item.setPointerCapture(event.pointerId);
+      drag.slots = [...grid.querySelectorAll(".space-card[data-id]")].map(card => card.getBoundingClientRect());
       drag.item.classList.add("dragging");
       grid.classList.add("reordering");
       closeMenu();
@@ -547,14 +548,13 @@ window.createSpaces = function createSpaces(host) {
       if (other === drag.item) {
         return false;
       }
-      const rect = other.getBoundingClientRect();
+      const rect = drag.slots[cards.indexOf(other)];
       return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
     });
     if (over) {
       grid.insertBefore(drag.item, cards.indexOf(over) < cards.indexOf(drag.item) ? over : over.nextSibling);
     }
-    drag.item.style.transform = "";
-    const natural = drag.item.getBoundingClientRect();
+    const natural = drag.slots[[...grid.querySelectorAll(".space-card[data-id]")].indexOf(drag.item)];
     drag.item.style.transform = `translate(${event.clientX - drag.grabX - natural.left}px, ${event.clientY - drag.grabY - natural.top}px)`;
   }
 
@@ -574,14 +574,11 @@ window.createSpaces = function createSpaces(host) {
       return;
     }
     const { item, id, moved } = drag;
-    item.removeEventListener("pointermove", onDragMove);
-    item.removeEventListener("pointerup", onDragUp);
-    item.removeEventListener("pointercancel", onDragCancel);
+    drag.controller?.dispose();
     drag = null;
     if (!moved) {
       return;
     }
-    item.dataset.dragged = "1";
     item.classList.remove("dragging");
     item.style.transform = "";
     grid.classList.remove("reordering");

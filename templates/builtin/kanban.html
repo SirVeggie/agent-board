@@ -2730,8 +2730,7 @@
   }
 
   // ---------- dragging ----------
-  // Like the tab strip: the slot moves past a neighbour once the lifted item's center crosses
-  // the midpoint between the slot and that neighbour, so there is no need to overshoot.
+  // Choose one destination from cached layout boxes, then move the slot once per frame.
   var EDGE = 56;
   var SLIDE = "transform 160ms cubic-bezier(0.4, 0, 0.2, 1)";
 
@@ -2824,7 +2823,7 @@
     var lists = boardEl.querySelectorAll(".cards");
     var best = null, bestDist = Infinity;
     for (var i = 0; i < lists.length; i++) {
-      var r = lists[i].parentNode.getBoundingClientRect();
+      var r = window.scribeDrag.rect(lists[i].parentNode);
       var dist = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
       if (dist < bestDist) { bestDist = dist; best = lists[i]; }
     }
@@ -2832,80 +2831,46 @@
   }
 
   function placeCardSlot(slot, list, gy) {
-    if (slot.parentNode !== list) {
-      var from = slot.parentNode;
-      var cards = visibleCards(list);
-      var before = null;
-      for (var i = 0; i < cards.length; i++) {
-        var b = layoutBox(cards[i]);
-        if (gy < (b.top + b.bottom) / 2) { before = cards[i]; break; }
-      }
-      slide(cards.concat(from ? visibleCards(from) : []), function () { list.insertBefore(slot, before); });
-      return;
+    var cards = visibleCards(list);
+    var before = null;
+    for (var i = 0; i < cards.length; i++) {
+      var box = window.scribeDrag.layout(cards[i]);
+      if (gy < (box.top + box.bottom) / 2) { before = cards[i]; break; }
     }
-    for (var guard = 0; guard < 60; guard++) {
-      var box = layoutBox(slot);
-      var next = neighbour(slot, 1);
-      var prev = neighbour(slot, -1);
-      if (next && gy > (box.top + layoutBox(next).bottom) / 2) {
-        slide([next], function () { list.insertBefore(slot, next.nextSibling); });
-      } else if (prev && gy < (layoutBox(prev).top + box.bottom) / 2) {
-        slide([prev], function () { list.insertBefore(slot, prev); });
-      } else {
-        break;
-      }
-    }
+    if (slot.parentNode === list && slot.nextElementSibling === before) return;
+    // Animate only visible neighbours; a long column should not measure every unloaded/offscreen card twice.
+    var affected = cards.concat(slot.parentNode ? visibleCards(slot.parentNode) : []).filter(function (node) {
+      return !offscreen(window.scribeDrag.layout(node));
+    });
+    affected = Array.from(new Set(affected));
+    slide(affected, function () { list.insertBefore(slot, before); });
+    window.scribeDrag.invalidate();
   }
 
-  /** Shared pointer plumbing: a 6px threshold, then begin/frame each animation frame until release. */
+  /** Adapt the template's begin/frame/end callbacks to the bridge's shared controller. */
   function trackDrag(e, handlers) {
-    var start = { x: e.clientX, y: e.clientY };
-    var last = { x: e.clientX, y: e.clientY };
-    var active = false;
-    var raf = 0;
-    function frame() {
-      raf = 0;
-      if (!active) return;
-      handlers.frame(last.x, last.y);
-      raf = requestAnimationFrame(frame);
-    }
-    function move(ev) {
-      last = { x: ev.clientX, y: ev.clientY };
-      if (!active) {
-        if (Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) < 6) return;
-        active = true;
+    return window.scribeDrag({ event: e, target: boardEl,
+      onStart: function (_, api) {
         closeMenu();
         document.body.classList.add("dragging");
-        handlers.begin(start);
-        if (!raf) raf = requestAnimationFrame(frame);
-      }
-      ev.preventDefault();
-    }
-    function stop(ev, cancelled) {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
-      if (!active) {
-        if (!cancelled && handlers.click) handlers.click();
-        return;
-      }
-      document.body.classList.remove("dragging");
-      // A quick flick can end before the next frame placed the slot.
-      if (!cancelled) handlers.frame(last.x, last.y);
-      handlers.end(cancelled);
-    }
-    function up(ev) { stop(ev, false); }
-    function cancel(ev) { stop(ev, true); }
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
+        handlers.begin(api.start);
+      },
+      onMove: function (ev) { return handlers.frame(ev.clientX, ev.clientY) === true; },
+      onDrop: function (_, active) {
+        document.body.classList.remove("dragging");
+        if (active) handlers.end(false);
+        else if (handlers.click) handlers.click();
+      },
+      onCancel: function () {
+        document.body.classList.remove("dragging");
+        if (drag) handlers.end(true);
+      },
+    });
   }
 
   function startCardDrag(e, id, cardEl) {
     if (e.button !== 0 || isInteractive(e.target)) return;
-    var ghost, slot, offX, offY, rect, lastX, lastY, idle = false;
+    var ghost, slot, offX, offY, rect, idle = false;
     trackDrag(e, {
       click: function () { openCard(id); },
       begin: function (start) {
@@ -2926,24 +2891,21 @@
         drag = { kind: "card" };
       },
       frame: function (x, y) {
-        // Nothing moved and nothing is auto-scrolling: the slot is already where it belongs.
-        if (idle && x === lastX && y === lastY) return;
-        lastX = x;
-        lastY = y;
         // Moved with a transform (no layout), and its center worked out rather than measured,
         // so a frame doesn't lay the board out just to follow the pointer.
         var gx = x - offX, gy = y - offY;
         ghost.style.transform = "translate(" + (gx - rect.left) + "px, " + (gy - rect.top) + "px) rotate(1.5deg) scale(1.02)";
-        var b = boardEl.getBoundingClientRect();
+        var b = window.scribeDrag.rect(boardEl);
         var sx = edgeSpeed(x, b.left, b.right);
-        if (sx) boardEl.scrollLeft += sx;
+        if (sx) { var oldLeft = boardEl.scrollLeft; boardEl.scrollLeft += sx; sx = boardEl.scrollLeft !== oldLeft ? sx : 0; }
         idle = !sx;
         var list = listAt(gx + rect.width / 2);
         if (!list) return;
-        var lr = list.getBoundingClientRect();
+        var lr = window.scribeDrag.rect(list);
         var sy = edgeSpeed(y, lr.top, lr.bottom);
-        if (sy) { list.scrollTop += sy; list._loadMore(); idle = false; }
+        if (sy) { var oldTop = list.scrollTop; list.scrollTop += sy; list._loadMore(); if (oldTop !== list.scrollTop) idle = false; }
         placeCardSlot(slot, list, gy + rect.height / 2);
+        return !idle;
       },
       end: function (cancelled) {
         var list = slot.parentNode;
@@ -2999,11 +2961,6 @@
   function startColumnDrag(e, colId, colEl) {
     if (e.button !== 0 || isInteractive(e.target) || editingCol) return;
     var ghost, slot, offX, offY, rect;
-    function sibling(dir) {
-      var n = dir > 0 ? slot.nextElementSibling : slot.previousElementSibling;
-      while (n && n === colEl) n = dir > 0 ? n.nextElementSibling : n.previousElementSibling;
-      return n && n.classList.contains("column") ? n : null;
-    }
     trackDrag(e, {
       begin: function (start) {
         rect = colEl.getBoundingClientRect();
@@ -3024,22 +2981,20 @@
       },
       frame: function (x, y) {
         ghost.style.transform = "translate(" + (x - offX - rect.left) + "px, " + (y - offY - rect.top) + "px) rotate(1deg)";
-        var b = boardEl.getBoundingClientRect();
+        var b = window.scribeDrag.rect(boardEl);
         var sx = edgeSpeed(x, b.left, b.right);
-        if (sx) boardEl.scrollLeft += sx;
+        if (sx) { var oldLeft = boardEl.scrollLeft; boardEl.scrollLeft += sx; sx = boardEl.scrollLeft !== oldLeft ? sx : 0; }
         var gx = x - offX + rect.width / 2;
-        for (var guard = 0; guard < 30; guard++) {
-          var box = layoutBox(slot);
-          var next = sibling(1);
-          var prev = sibling(-1);
-          if (next && gx > (box.left + layoutBox(next).right) / 2) {
-            slide([next], function () { boardEl.insertBefore(slot, next.nextSibling); });
-          } else if (prev && gx < (layoutBox(prev).left + box.right) / 2) {
-            slide([prev], function () { boardEl.insertBefore(slot, prev); });
-          } else {
-            break;
-          }
+        var siblings = Array.prototype.filter.call(boardEl.children, function (node) { return node !== colEl && node.classList.contains("column"); });
+        var before = siblings.find(function (node) {
+          var box = window.scribeDrag.layout(node);
+          return gx < (box.left + box.right) / 2;
+        }) || boardEl.querySelector(".add-column");
+        if (slot.nextElementSibling !== before) {
+          slide(siblings, function () { boardEl.insertBefore(slot, before); });
+          window.scribeDrag.invalidate();
         }
+        return Boolean(sx);
       },
       end: function (cancelled) {
         var order = [];
