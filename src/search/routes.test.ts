@@ -50,7 +50,7 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
     }
     fs.writeFileSync(path.join(folder, "pack.json"), JSON.stringify({ api: 1, version: "test", platform: process.platform, arch: process.arch, model: SEARCH_MODEL, dtype: "q8", files }));
     store.load();
-    const board = store.openFromTemplate("builtin:kanban", { title: "Board" }).tab;
+    const board = store.openFromTemplate("builtin:kanban", {}).tab;
     store.writeState(board.id, { ops: [{ op: "set", path: "cards", value: [{ num: 12, title: "Deep card", description: "Searchable card description for the route fixture" }] }] });
     const shot = store.savePageAsset(board.id, { name: "shot.png", mimeType: "image/png", data: Buffer.from([1, 2, 3]) }).asset;
     store.writeState(board.id, { ops: [{ op: "set", path: "cards/num=12/images", value: [{ id: "im_a", name: "shot.png", data: `/blob/${shot.id}` }] }] });
@@ -99,7 +99,7 @@ test("semantic HTTP validates queries, returns anchors without scores and filter
     ml.update({ features: { "search-rerank": false }, send: { toolResults: true } });
     // Image rows carry the image's URL and the card it sits on, for a text query and for an image as the query.
     assert.equal(status.images, 1);
-    const wanted = [{ id: board.id, key: board.key, title: "Board", folder: null, kind: "image", anchor: shot.id, headingId: null, label: "#12 Deep card", snippet: "shot.png", image: `/blob/${shot.id}`, owner: { kind: "record", anchor: "12", headingId: null } }];
+    const wanted = [{ id: board.id, key: board.key, title: "Kanban board", folder: null, kind: "image", anchor: shot.id, headingId: null, label: "#12 Deep card", snippet: "shot.png", image: `/blob/${shot.id}`, owner: { kind: "record", anchor: "12", headingId: null } }];
     assert.deepEqual((await (await fetch(`${url}/semantic?q=hello&scope=images`)).json()).hits, wanted);
     const similar = await fetch(`${url}/semantic/image`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: Uint8Array.of(9, 9) });
     assert.deepEqual((await similar.json()).hits, wanted);
