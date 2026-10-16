@@ -519,27 +519,13 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "library_search",
-    "Page or search the Library: every page in Scribe, open or closed. Each row includes id, key, title, folder, open, dates, and a snippet when searching. Omit query to list in Library order (the user's folders and manual order; default 20 per page, max 50). Pass query to search: 1–3 distinctive words work best (jira, not my jira issues page). Filler words like my/page/tab are ignored; every remaining word must match. Searches title, key, visible page text, and JSON state; title matches rank first. Pass folder to limit to one folder and its subfolders. If remaining > 0, pass offset to get the next page. Do not dump the whole Library into context. Pass mode: \"semantic\" with a query to search by meaning instead (needs the user's semantic search to be on): describe what you are looking for in a phrase or sentence. It returns hits, best first: the passages (kanban cards, list items, page sections) that fit, each with its page (id, key, title, folder), kind (record, section, or page), label, and snippet. A record's anchor is its id in the page: on a kanban board the card number, for page_action get. A section's headingId is its heading's element id, when it has one. Use it to find a card on any board, or when the words to search for are not known.",
+    "List or search the Library: every page in Scribe, open or closed (id, key, title, folder, open, dates; a snippet when searching). Omit query to list in the user's Library order. A query of 1–3 distinctive words works best (jira, not my jira issues page): filler words are ignored and every other word must match title, key, page text or JSON state. If remaining > 0, page on with offset; don't dump the whole Library. mode \"semantic\" searches by meaning (needs the user's semantic search on): describe what you want and get the best passages (kanban cards, list items, page sections) with their page; a card's anchor is its number for page_action get. Use it to find a card on any board or when you don't know the words.",
     {
-      mode: z
-        .enum(["words", "semantic"])
-        .optional()
-        .describe("words (default): every word must match. semantic: rank cards, items, and sections by meaning; needs query, ignores offset, limit at most 30 (default 10)."),
-      query: z
-        .string()
-        .optional()
-        .describe(
-          "Keywords to search pages. Prefer distinctive title words (jira). Every remaining word must match. Searches title, key, page text, and JSON state. Omit to list in Library order."
-        ),
-      folder: z
-        .string()
-        .optional()
-        .describe("Folder path like \"CLIMS/Releases\" to limit results to that folder and its subfolders."),
-      offset: z.number().optional().describe("Skip this many matching pages. Default 0."),
-      limit: z
-        .number()
-        .optional()
-        .describe("Page size. Default 20, maximum 50."),
+      mode: z.enum(["words", "semantic"]).optional().describe("words (default) or semantic (needs query; no offset; limit up to 30, default 10)."),
+      query: z.string().optional().describe("Search words or, for semantic, a phrase. Omit to list."),
+      folder: z.string().optional().describe("Limit to a folder and its subfolders, e.g. \"CLIMS/Releases\"."),
+      offset: z.number().optional().describe("Skip this many matching pages."),
+      limit: z.number().optional().describe("Page size. Default 20, maximum 50."),
     },
     { readOnlyHint: true },
     async ({ mode, query, folder, offset, limit }) => {
@@ -692,36 +678,15 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_read",
-    `Read a page's title and HTML so you can revise it. Identify the tab by id or key. Works on open and closed pages without opening them. The HTML comes back as a second, unescaped text block, so copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB is not returned whole: you get its size, line count and an outline of headings, sections and script/style blocks with line numbers. Then read a line window with offset/limit (numbered like a file read; leave the line-number prefix out of oldStrings), find text with page_grep, and change it with page_patch edits. Pass full: true only when you really need the whole page. With file tools (Code mode), you can instead pass toFile: true: the HTML is written to a temp file and only its path and revision are returned. Edit that file, then check it in with page_patch htmlPath + expectedRevision. The checkout is scratch, not a workspace file. In Pages mode there are no file tools, so do not check out.`,
+    `Read a page's title and HTML (open or closed, without opening it). The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers; then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks the page out to a temp file to edit and check in with page_patch htmlPath; not in Pages mode, which has no file tools.`,
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
-      offset: z
-        .number()
-        .int()
-        .optional()
-        .describe("First line to return, 1-based. Use the line numbers from the outline or page_grep."),
-      limit: z
-        .number()
-        .int()
-        .optional()
-        .describe(`Number of lines to return from offset. Default ${DEFAULT_READ_LINES} when offset is set.`),
-      numbered: z
-        .boolean()
-        .optional()
-        .describe(
-          "Prefix each line with its number and a tab, like a file read. Default true for a line window, false for the whole page. The prefix is not part of the HTML."
-        ),
-      full: z
-        .boolean()
-        .optional()
-        .describe(`Return the whole HTML even when the page is over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB.`),
-      toFile: z
-        .boolean()
-        .optional()
-        .describe(
-          "Check the page out to a temp file instead of returning the HTML (needs file tools to edit it). Returns path and revision for page_patch htmlPath + expectedRevision. Overwrites any earlier checkout of the same key."
-        ),
+      offset: z.number().int().optional().describe("First line, 1-based, as the outline or page_grep numbers it."),
+      limit: z.number().int().optional().describe(`Lines from offset. Default ${DEFAULT_READ_LINES}.`),
+      numbered: z.boolean().optional().describe("Prefix lines with their number and a tab. Default true for a window, false for the whole page."),
+      full: z.boolean().optional().describe("Return the whole HTML even when it is large; rarely needed."),
+      toFile: z.boolean().optional().describe("Write the HTML to a temp file instead; returns path and revision for page_patch htmlPath + expectedRevision."),
     },
     { readOnlyHint: true },
     async ({ id, key, offset, limit, numbered, full, toFile }) => {
@@ -880,44 +845,17 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_screenshot",
-    "Capture a screenshot of a page so you can visually inspect a UI design for the current project. Do not use this to polish investigation, analysis, or other throwaway information pages — those are shown once for the user to read. Returns an image of the page at a canonical viewport (1280x800 unless you pass width/height). Pass selector to capture one element, or fullPage for a tall page. Pass local to seed scribe.local for this capture only (view switchers, open panels), fromViewer to start from the user's last local, or click a selector after load. Embed-template pages are captured at the embedded URL. Identify the tab by id or key (open or closed). Show or update the page with page_show first; pass background: true on page_show so the capture does not steal focus.",
+    "Screenshot a page (open or closed) to check a UI design for the current project; never to polish investigation or other information pages. Captures a 1280x800 viewport unless you pass a size, selector or fullPage. Embed-template pages are captured at the embedded URL. Show the page first with page_show background: true so the capture does not take focus.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
-      selector: z
-        .string()
-        .optional()
-        .describe("CSS selector for one element. Captures the first match. Errors if missing or not visible."),
-      fullPage: z
-        .boolean()
-        .optional()
-        .describe("Capture the full scrolling page, capped at 6000px tall. Ignored when selector is set. Defaults to the viewport."),
-      width: z
-        .number()
-        .optional()
-        .describe("Viewport width in CSS pixels. Default 1280. Clamped 320–1600."),
-      height: z
-        .number()
-        .optional()
-        .describe("Viewport height in CSS pixels. Default 800. Clamped 320–1600."),
-      local: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
-          "Seeded into scribe.local for this capture only, so you can screenshot a view switcher or open panel without editing the page. Not saved as a viewer. Overlay on fromViewer when both are set. Ignored (refused) on embed-template pages."
-        ),
-      fromViewer: z
-        .boolean()
-        .optional()
-        .describe(
-          "If true, start from the most recently written viewer local for this page (what the user last had in the desktop app or a browser). Combine with local to overlay fields. Does not use the live window's scroll, hover, or size."
-        ),
-      click: z
-        .string()
-        .optional()
-        .describe(
-          "CSS selector to click after load, before capture. First match, must be visible. Scribe capture boots ignore shared state writes, actions, and signals; local view changes still work. Prefer local when the view lives in scribe.local."
-        ),
+      selector: z.string().optional().describe("Capture the first visible match of this CSS selector."),
+      fullPage: z.boolean().optional().describe("The whole scrolling page, up to 6000px tall."),
+      width: z.number().optional().describe("Viewport width, 320–1600. Default 1280."),
+      height: z.number().optional().describe("Viewport height, 320–1600. Default 800."),
+      local: z.record(z.string(), z.unknown()).optional().describe("scribe.local for this capture only (a view switcher, an open panel); laid over fromViewer. Not on embed pages."),
+      fromViewer: z.boolean().optional().describe("Start from the user's last saved scribe.local for this page (not their scroll or window size)."),
+      click: z.string().optional().describe("CSS selector to click after load, before capture. State writes, actions and signals are ignored; prefer local for views kept in scribe.local."),
     },
     { readOnlyHint: true },
     async ({ id, key, selector, fullPage, width, height, local, fromViewer, click }) => {
@@ -1023,32 +961,17 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_wait",
-    "Block until the page logs an event (scribe.signal(name, data) or data-scribe-signal in the page; Scribe itself logs some too, like claim_lost), then return the matching events, oldest first, and a cursor. Events carry a small data payload (e.g. { card: \"c_12\" }), not the page's state: read what you need with page_state path or a page action. Pass the returned cursor as after on the next wait so no event is missed or seen twice; without after, only events from now on count. Optional where matches fields on event data (e.g. { column: \"grok issues\" }). Use this instead of polling page_state. Default timeout is 2 hours. If timedOut is true, tell the user you are still waiting and call page_wait again with the same after. If closed is true, the user closed the tab (the page is still in the Library) — reopen it with page_open or stop. If deleted is true, the page was deleted; stop. missed: true means older events dropped out of the log (it keeps the last 500): scan the page's state instead.",
+    "Block until the page logs an event (scribe.signal or data-scribe-signal; Scribe logs some too, like claim_lost) and return the matching events, oldest first, with a cursor. Event data is small (e.g. { card: \"c_12\" }); read the rest with page_state or a page action. Pass the cursor as after next time so nothing is missed or seen twice. Use it instead of polling page_state. In the result, timedOut: tell the user and wait again with the same after; closed: the user closed the tab (page_open it or stop); deleted: stop; missed: older events dropped out of the log, so scan the state.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
-      events: z
-        .string()
-        .optional()
-        .describe(
-          "Event names to wait for, comma-separated (approved,rejected). Must match scribe.signal(\"name\") or data-scribe-signal=\"name\" in the page. Omit to wake on any event."
-        ),
-      after: z
-        .number()
-        .optional()
-        .describe(
-          "Cursor from the previous page_wait (or eventCursor from page_state). Events at or below it are skipped. Omit to wait only for new events."
-        ),
-      timeoutMs: z
-        .number()
-        .optional()
-        .describe("How long to wait, in milliseconds. Defaults to 7200000 (2 hours). There is no maximum; the user can interrupt you at any time."),
+      events: z.string().optional().describe("Comma-separated event names (approved,rejected). Omit for any event."),
+      after: z.number().optional().describe("Cursor from the last page_wait (or page_state's eventCursor). Omit to wait for new events only."),
+      timeoutMs: z.number().optional().describe("Default 7200000 (2 hours); no maximum."),
       where: z
         .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
         .optional()
-        .describe(
-          `Match fields on each event's data (compared as text), e.g. { column: "grok issues" } so card_ready for another agent column does not wake you. Omit to accept any payload.`
-        ),
+        .describe(`Match fields on event data (as text), e.g. { column: "grok issues" }.`),
     },
     { readOnlyHint: true },
     async ({ id, key, events, after, timeoutMs, where }, extra) => {
@@ -1831,16 +1754,16 @@ function registerHelperTools(server: McpServer): void {
 
   server.tool(
     "agent_run",
-    "Hand a task to a helper agent on another provider or model. By default a task starts in the background and returns its thread immediately, so the main chat and other helpers can keep working. Call again with thread and no task to wait for the final report; collect every report before ending your turn. Set background false to wait during launch. Use this ONLY when the user, or this chat's instructions, told you to hand work to another model, and then only with the model and for the kind of work they named: never on your own to save effort, go faster or get a second opinion. It spends the user's quota with that provider, and the user may be asked to allow it. The helper works in this chat's workspace with the same or a lower mode (set mode to ask for read-only work), inheriting approval and web settings, in a chat thread of its own the user can open. It sees none of this conversation, so task must stand on its own: the goal, the files and folders involved, what done looks like, how to check it, and what to leave alone. Launching returns the helper's thread id and running status. Waiting returns its final reply, changed files and final status. Check the work yourself (read the diff, run the tests) before you build on it or report it as done. Pass thread to send a follow-up to a helper you started earlier in this chat, which keeps its context; thread with no task waits for a helper that is still working (after a Scribe restart cut your call off) and returns its report. Background launches run helpers side by side in the same folder, even when tool calls are sequential: only do that for tasks that touch different files.",
+    "Hand a task to a helper agent on another provider or model, in a chat thread of its own in this workspace. Use it ONLY when the user, or this chat's instructions, told you to, with the model and for the work they named; never on your own to save effort, go faster or get a second opinion: it spends the user's quota. The helper sees none of this conversation, so the task must stand on its own (goal, files, what done looks like, how to check, what to leave alone). A task launches in the background and returns the helper's thread; call again with that thread and no task to wait for its report (final reply, changed files), and collect every report before ending your turn. Helpers share the folder, so run several at once only on different files. Check their work before building on it.",
     {
-      task: z.string().optional().describe("The brief: everything the helper needs to do the task without seeing this conversation. Required unless thread is given to wait for that helper's report."),
-      provider: z.string().optional().describe("claude, cursor, codex or pi (Native: the user's own model sources, such as a locally hosted model). Required for a new helper."),
-      model: z.string().optional().describe("Model id or name from agent_models. Default: the provider's last used model."),
-      effort: z.string().optional().describe("Reasoning effort, one of the model's efforts in agent_models. Default: the model's last used one."),
-      mode: z.enum(["code", "plan", "ask", "board"]).optional().describe("Default: the parent's mode. Can only reduce access: Code may choose Plan or read-only Ask; Plan may choose Ask. Ask and Pages (board) must keep their mode. Applies only to a new helper."),
-      thread: z.string().optional().describe("Thread id an earlier agent_run returned, to send that helper a follow-up instead of starting a new one. provider, model, effort and mode are then ignored; the helper keeps its original mode."),
-      background: z.boolean().optional().describe("Default true for a task: launch it and return its thread immediately, so other helpers and the main chat can keep working. Pass thread with no task to wait for the report. Set false to wait during launch."),
-      stop: z.boolean().optional().describe("Pass true with thread and no task to stop that helper when it is no longer needed, for example after the user changes direction. Other helpers keep working."),
+      task: z.string().optional().describe("The self-contained brief. Omit with thread to wait for that helper's report."),
+      provider: z.string().optional().describe("claude, cursor, codex or pi (Native: the user's own model sources). Required for a new helper."),
+      model: z.string().optional().describe("Model from agent_models. Default: the provider's last used."),
+      effort: z.string().optional().describe("One of the model's efforts in agent_models. Default: its last used."),
+      mode: z.enum(["code", "plan", "ask", "board"]).optional().describe("New helper only; default the parent's. Can only reduce access: Code may pick Plan or Ask, Plan may pick Ask; Ask and Pages (board) keep theirs."),
+      thread: z.string().optional().describe("A helper's thread from an earlier agent_run: send it a follow-up (it keeps context and mode; provider, model, effort, mode ignored), or with no task wait for its report."),
+      background: z.boolean().optional().describe("Default true. false waits for the report during launch."),
+      stop: z.boolean().optional().describe("With thread and no task: stop that helper."),
     },
     async ({ task, provider, model, effort, mode, thread, background, stop }, extra) => {
       const progressToken = extra._meta?.progressToken;
@@ -1870,20 +1793,15 @@ function registerHelperTools(server: McpServer): void {
 }
 
 const targetShape = {
-  ref: z.string().optional().describe("Element ref from the latest snapshot, e.g. e12 (the [ref=e12] in the snapshot). Preferred."),
-  selector: z.string().optional().describe("CSS or Playwright selector, when there is no ref. The first match is used."),
-  text: z.string().optional().describe("Visible text of the element, when there is no ref. The first match is used."),
+  ref: z.string().optional().describe("Element ref from the latest snapshot, e.g. e12. Preferred."),
+  selector: z.string().optional().describe("CSS or Playwright selector (first match)."),
+  text: z.string().optional().describe("Visible text (first match)."),
 };
 const frameShape = {
-  frame: z
-    .string()
-    .optional()
-    .describe(
-      "Look inside a frame instead of the top page: a Scribe page key or id (the frame showing it in the Scribe shell, e.g. scribe:sprint-notes) or a CSS selector of an iframe. Scopes selector, text, and the snapshot to that frame."
-    ),
+  frame: z.string().optional().describe("Work inside a frame: a Scribe page key or id (its frame in the Scribe shell), or an iframe's CSS selector."),
 };
 const tabShape = {
-  tab: z.string().optional().describe("Browser tab id from browser_open or browser_tabs, e.g. b1. Defaults to the current tab."),
+  tab: z.string().optional().describe("Tab id from browser_open or browser_tabs. Default: the current tab."),
 };
 
 async function browserCall(op: string, body: Record<string, unknown>): Promise<ToolResult> {
@@ -1932,23 +1850,17 @@ function registerBrowserTools(server: McpServer): void {
 
   server.tool(
     "browser_act",
-    "Act on the page in your browser: click, dblclick, hover, fill (replace an input's value), type (key by key), press (keys like Enter, Escape, Control+A), select (option values or labels), check, uncheck, scroll (into view, or by dx/dy pixels), drag (onto another element), back, forward, reload. Target an element by ref from the latest snapshot (preferred), selector, or text. Returns the new snapshot and any console errors the action caused.",
+    "Act on the page in your browser, on an element by ref from the latest snapshot (preferred), selector or text. fill replaces an input's value, type sends keys one by one, select takes option values or labels, scroll goes into view or by dx/dy, drag drops onto to. Returns the new snapshot and console errors the action caused.",
     {
       action: z.enum(BROWSER_ACTIONS).describe("What to do."),
       ...targetShape,
-      value: z
-        .union([z.string(), z.array(z.string())])
-        .optional()
-        .describe("Text for fill and type, or option value(s) for select."),
-      keys: z.string().optional().describe("Keys for press, e.g. Enter, Tab, Control+Enter. Without a target they go to the focused element."),
-      to: z.object(targetShape).optional().describe("Drop target for drag."),
-      steps: z
-        .number()
-        .optional()
-        .describe("Pointer moves while dragging. Default 10 so pointer-event UIs see travel; 1 jumps in one shot."),
+      value: z.union([z.string(), z.array(z.string())]).optional().describe("Text for fill and type, or option(s) for select."),
+      keys: z.string().optional().describe("For press, e.g. Enter, Control+A; to the focused element without a target."),
+      to: z.object({ ref: z.string().optional(), selector: z.string().optional(), text: z.string().optional() }).optional().describe("Drop target for drag."),
+      steps: z.number().optional().describe("Pointer moves while dragging (default 10; 1 jumps)."),
       dx: z.number().optional().describe("Horizontal scroll in pixels."),
-      dy: z.number().optional().describe("Vertical scroll in pixels (default 600 when scrolling without a target)."),
-      snapshot: z.boolean().optional().describe("Include the snapshot after the action. Default true."),
+      dy: z.number().optional().describe("Vertical scroll in pixels (default 600 without a target)."),
+      snapshot: z.boolean().optional().describe("Return the snapshot after the action. Default true."),
       ...frameShape,
       ...tabShape,
     },
