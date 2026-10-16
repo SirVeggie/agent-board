@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
@@ -120,6 +120,7 @@ type TabRow = {
   reply_to: string | null;
   workspace: string | null;
   file: string | null;
+  temp: number;
 };
 
 type LegacyPersisted = {
@@ -172,12 +173,12 @@ INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
   revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
-  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to, workspace, file
+  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to, workspace, file, temp
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -206,7 +207,8 @@ ON CONFLICT(id) DO UPDATE SET
   provenance = excluded.provenance,
   reply_to = excluded.reply_to,
   workspace = excluded.workspace,
-  file = excluded.file
+  file = excluded.file,
+  temp = excluded.temp
 `;
 
 const INSERT_FOLDER_SQL = `
@@ -300,6 +302,7 @@ export class BoardDb {
       ensureReplyToColumn(db);
       ensureWorkspaceColumn(db);
       ensureFileColumn(db);
+      ensureTempColumn(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -646,6 +649,7 @@ export class BoardDb {
       ensureReplyToColumn(db);
       ensureWorkspaceColumn(db);
       ensureFileColumn(db);
+      ensureTempColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -738,6 +742,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.replyTo ? JSON.stringify(tab.replyTo) : null,
     tab.workspace ?? null,
     tab.file ? JSON.stringify(tab.file) : null,
+    tab.temp ? 1 : 0,
   ];
 }
 
@@ -819,6 +824,9 @@ function rowToStored(row: TabRow): StoredTab {
   };
   if (row.agent_hidden) {
     tab.agentHidden = true;
+  }
+  if (row.temp) {
+    tab.temp = true;
   }
   if (row.folder_id) {
     tab.folderId = row.folder_id;

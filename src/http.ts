@@ -1363,6 +1363,28 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  /** A website as a temporary embed page (#403, #655), for a site link opened in a split. */
+  app.post("/api/temp-pages/url", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+      const { tab, created } = store.openTempUrl(url, { activate: req.body?.activate === true });
+      res.status(created ? 201 : 200).json({ tab: toMeta(tab), created });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  /** Keep in Library: a temporary page becomes a page like any other (#655). */
+  app.post("/api/tabs/:id/keep", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      res.json({ tab: toMeta(store.keepPage(req.params.id)) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
   app.post("/api/tabs/:id/agent-hidden", (req, res) => {
     if (viewerOf(req) === "agent") {
       res.status(403).json({ error: "Only the board UI can change whether the agent sees a tab" });
@@ -1678,6 +1700,7 @@ export async function startHttp(): Promise<http.Server> {
         path: resolved,
         folderId: parseFolderRef(req.body?.folderId),
         activate: req.body?.activate !== false,
+        temp: req.body?.temp === true,
       });
       res.status(created ? 201 : 200).json({ tab: toMeta(tab), created });
     } catch (err) {

@@ -275,3 +275,60 @@ test("upsert refuses to overwrite a file page", () => {
   assert.equal(store.get(tab.id)?.title, "locked.md");
   store.closeDb();
 });
+
+test("a temporary file page stays out of the Library and goes when its tab closes (#655)", () => {
+  const store = loaded();
+  const file = write(path.join(work, "shot.png"), Buffer.from([1, 2, 3]));
+  const { tab } = store.openFilePage({ path: file, temp: true, activate: false });
+  assert.equal(tab.temp, true);
+  assert.equal(store.listClosedTabs().length, 0);
+  assert.equal(store.closedCount(), 0);
+  assert.equal(store.searchLibrary("").total, 0);
+  store.openPage(tab.id);
+  assert.throws(() => store.update(tab.id, { pin: true }), /can't be pinned/);
+  store.closeTab(tab.id);
+  assert.equal(store.get(tab.id), undefined);
+  assert.equal(store.listTrash().length, 0);
+  assert.throws(() => store.restoreLast(), /nothing to restore/);
+  store.closeDb();
+});
+
+test("Keep in Library and opening the file for real make a temporary page permanent (#655)", () => {
+  const store = loaded();
+  const a = store.openFilePage({ path: write(path.join(work, "a.txt"), "a"), temp: true }).tab;
+  store.keepPage(a.id);
+  assert.equal(a.temp, undefined);
+  store.closeTab(a.id);
+  assert.ok(store.get(a.id));
+  const b = store.openFilePage({ path: write(path.join(work, "b.txt"), "b"), temp: true, activate: false }).tab;
+  const again = store.openFilePage({ path: b.file!.path });
+  assert.equal(again.tab.id, b.id);
+  assert.equal(b.temp, undefined);
+  const c = store.openFilePage({ path: write(path.join(work, "c.txt"), "c"), temp: true }).tab;
+  store.movePage(c.id, null, 0);
+  assert.equal(c.temp, undefined);
+  store.closeDb();
+});
+
+test("temporary pages survive a reload while open, and closed ones are dropped (#655)", () => {
+  const store = loaded();
+  const open = store.openFilePage({ path: write(path.join(work, "open.txt"), "o"), temp: true }).tab;
+  const peeked = store.openFilePage({ path: write(path.join(work, "peek.txt"), "p"), temp: true, activate: false }).tab;
+  store.persist();
+  store.closeDb();
+  const reloaded = loaded();
+  assert.equal(reloaded.get(open.id)?.temp, true);
+  assert.equal(reloaded.get(peeked.id), undefined);
+  reloaded.closeDb();
+});
+
+test("openTempUrl makes one temporary embed page per site (#403)", () => {
+  const store = loaded();
+  const first = store.openTempUrl("https://example.com/a");
+  assert.equal(first.created, true);
+  assert.equal(first.tab.temp, true);
+  assert.equal(first.tab.title, "example.com");
+  assert.equal(store.openTempUrl("https://example.com/a").tab.id, first.tab.id);
+  assert.throws(() => store.openTempUrl("javascript:alert(1)"));
+  store.closeDb();
+});

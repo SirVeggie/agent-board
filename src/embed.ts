@@ -37,6 +37,12 @@ export function safeEmbedUrl(raw: string): string | undefined {
   return url.href;
 }
 
+/** A page that shows `href` (a safeEmbedUrl) as its tab's iframe. */
+export function embedPageHtml(href: string, title: string): string {
+  const attr = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="scribe-embed" content="${attr(href)}"><title>${attr(title)}</title></head><body></body></html>`;
+}
+
 function parseAttrs(tag: string): Map<string, string> {
   const attrs = new Map<string, string>();
   for (const match of tag.matchAll(ATTR)) {

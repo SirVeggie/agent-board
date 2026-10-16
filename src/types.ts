@@ -223,6 +223,12 @@ export type Tab = {
    * not its state, so the page's own code cannot point it at another file.
    */
   file?: FileBinding;
+  /**
+   * A temporary page (#655): opened from a file or website link to have a look. It is not in the
+   * Library, can't be pinned, and is gone once its tab (or the peek showing it) closes. Keep in
+   * Library (or a move into a folder) makes it a page like any other.
+   */
+  temp?: boolean;
 };
 
 /**
@@ -323,8 +329,9 @@ export function pageKey(value: string): string {
   return slug ? `${PAGE_KEY_PREFIX}${slug}` : "";
 }
 
-export function isAppTab(tab: { key: string }): boolean {
-  return tab.key === WELCOME_KEY;
+/** A page outside the Library that goes when its tab closes: the help page, or a temporary page. */
+export function isAppTab(tab: { key: string; temp?: boolean }): boolean {
+  return tab.key === WELCOME_KEY || tab.temp === true;
 }
 
 /** Who is asking: the board UI (and tab pages), or an agent through the MCP. */
@@ -414,6 +421,8 @@ export type UpsertInput = {
   expectedRevision?: number;
   /** A blank page (the writing thread's own) that a new, focused page fills instead of making another tab. */
   into?: string;
+  /** A new page is temporary (Tab.temp). Ignored for existing keys. */
+  temp?: boolean;
 };
 
 export type StateWriteInput = {
@@ -476,6 +485,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
     ...(tab.workspace ? { workspace: tab.workspace } : {}),
     ...(tab.file ? { file: tab.file } : {}),
+    ...(tab.temp ? { temp: true } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(isBlankPage(tab) ? { blank: true } : {}),
     ...(tab.templateId

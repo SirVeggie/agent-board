@@ -239,3 +239,15 @@ export function ensureFileColumn(db: DatabaseSync): void {
   }
   db.exec("ALTER TABLE tabs ADD COLUMN file TEXT");
 }
+
+/**
+ * Boards created before temporary pages (#655) have no tabs.temp.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureTempColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "temp")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN temp INTEGER NOT NULL DEFAULT 0");
+}

@@ -27,7 +27,8 @@ CREATE TABLE tabs (
   provenance TEXT,
   reply_to TEXT,
   workspace TEXT,
-  file TEXT
+  file TEXT,
+  temp INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_tabs_status_closed ON tabs(status, closed_at DESC);
 CREATE INDEX idx_tabs_status_deleted ON tabs(status, deleted_at DESC);

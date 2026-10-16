@@ -115,6 +115,7 @@ import {
   type TemplateUpsertInput,
 } from "./templates.js";
 import { wrapHtml } from "./wrapHtml.js";
+import { embedPageHtml, embedUrlFromHtml, safeEmbedUrl } from "./embed.js";
 import { removeCopies, safeFileName, samePath, scanFolder, storeCopy, filePlaceholderHtml, type FolderEntry } from "./filePages.js";
 
 type Located = { tab: Tab; where: "open" | "closed" };
@@ -299,7 +300,7 @@ export class BoardStore extends EventEmitter {
   closedCount(viewer: Viewer = "user"): number {
     let count = 0;
     for (const tab of this.closed.values()) {
-      if (visibleTo(tab, viewer)) {
+      if (visibleTo(tab, viewer) && !isAppTab(tab)) {
         count += 1;
       }
     }
@@ -313,7 +314,7 @@ export class BoardStore extends EventEmitter {
   }
 
   listClosedTabs(viewer: Viewer = "user"): Tab[] {
-    return [...this.closed.values()].filter((tab) => visibleTo(tab, viewer)).sort(byClosedDesc);
+    return [...this.closed.values()].filter((tab) => visibleTo(tab, viewer) && !isAppTab(tab)).sort(byClosedDesc);
   }
 
   listFolders(): Folder[] {
@@ -1373,7 +1374,7 @@ export class BoardStore extends EventEmitter {
       tab.revision += 1;
       seedState(tab, input.state);
       if (input.pin !== undefined) {
-        tab.pinned = input.pin;
+        tab.pinned = input.pin && !tab.temp;
       }
       noteAgentWrite(tab, input.actor);
       this.markDirty(tab.id);
@@ -1398,7 +1399,7 @@ export class BoardStore extends EventEmitter {
         this.setPinned(tab, input.pin);
         pinIndex = this.order.indexOf(tab.id);
       } else if (input.pin !== undefined) {
-        tab.pinned = input.pin;
+        tab.pinned = input.pin && !tab.temp;
       }
       if (input.activate !== false) {
         this.activeId = tab.id;
@@ -1428,7 +1429,8 @@ export class BoardStore extends EventEmitter {
       key: uniqueKey(this, input.key, title, id),
       title,
       html,
-      pinned: Boolean(input.pin),
+      pinned: Boolean(input.pin) && !input.temp,
+      ...(input.temp ? { temp: true } : {}),
       createdAt: now,
       updatedAt: now,
       ...(folderId ? { folderId } : {}),
@@ -1598,6 +1600,9 @@ export class BoardStore extends EventEmitter {
       if (bytes > MAX_HTML_BYTES) {
         throw new Error(`html is too large (${bytes} bytes, max ${MAX_HTML_BYTES})`);
       }
+    }
+    if (patch.pin === true && tab.temp) {
+      throw new Error(`${tab.key} is a temporary page and can't be pinned; keep it in the Library first`);
     }
     if (patch.pin !== undefined && found.where === "open" && tab.pinned !== patch.pin) {
       this.setPinned(tab, patch.pin);
@@ -2151,7 +2156,7 @@ export class BoardStore extends EventEmitter {
     let newestClosed: Tab | undefined;
     const parked = this.parkedTabs();
     for (const tab of this.closed.values()) {
-      if (parked.has(tab.id)) {
+      if (parked.has(tab.id) || isAppTab(tab)) {
         continue;
       }
       if (!newestClosed || (tab.closedAt ?? 0) > (newestClosed.closedAt ?? 0)) {
@@ -2519,7 +2524,13 @@ export class BoardStore extends EventEmitter {
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
-    if (isAppTab(located.tab)) {
+    if (located.tab.temp) {
+      // Dragging a temporary page into the Library keeps it there.
+      if (folderId) {
+        this.requireFolder(folderId);
+      }
+      delete located.tab.temp;
+    } else if (isAppTab(located.tab)) {
       throw new Error("the help page is not part of the Library");
     }
     if (folderId) {
@@ -2556,11 +2567,14 @@ export class BoardStore extends EventEmitter {
    * bytes: a dropped file with no path; Scribe keeps a copy in its data folder. folderId puts a new
    * page in a Library folder; activate opens it in a tab (else it lands in the Library only).
    */
-  openFilePage(input: { path?: string; name?: string; bytes?: Buffer; folderId?: string | null; activate?: boolean }): { tab: Tab; created: boolean } {
+  openFilePage(input: { path?: string; name?: string; bytes?: Buffer; folderId?: string | null; activate?: boolean; temp?: boolean }): { tab: Tab; created: boolean } {
     const activate = input.activate !== false;
     if (input.path) {
       const existing = this.findFilePage(input.path);
       if (existing) {
+        if (existing.temp && !input.temp) {
+          this.keepPage(existing.id);
+        }
         if (activate) {
           this.openPage(existing.id);
         }
@@ -2573,7 +2587,7 @@ export class BoardStore extends EventEmitter {
     if (input.folderId) {
       this.requireFolder(input.folderId);
     }
-    const { tab } = this.upsert({ title: name, html: filePlaceholderHtml(name, input.path ?? name), activate });
+    const { tab } = this.upsert({ title: name, html: filePlaceholderHtml(name, input.path ?? name), activate, temp: input.temp === true && !input.folderId });
     try {
       tab.file = input.path ? { path: path.resolve(input.path) } : { path: storeCopy(tab.id, name, input.bytes!), copy: true };
     } catch (err) {
@@ -2588,6 +2602,48 @@ export class BoardStore extends EventEmitter {
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     return { tab, created: true };
+  }
+
+  /**
+   * A website as a temporary page (#403, #655): an embed page for the URL, so a site in a split
+   * has a tab like any page. Reuses a temporary page that already shows it.
+   */
+  openTempUrl(url: string, opts: { activate?: boolean } = {}): { tab: Tab; created: boolean } {
+    const href = safeEmbedUrl(url);
+    if (!href) {
+      throw new Error("an http(s) URL outside Scribe is required");
+    }
+    const activate = opts.activate === true;
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      if (tab.temp && embedUrlFromHtml(tab.html) === href) {
+        if (activate) {
+          this.openPage(tab.id);
+        }
+        return { tab, created: false };
+      }
+    }
+    let title = href;
+    try {
+      title = new URL(href).host || href;
+    } catch {
+      /* the URL parsed above */
+    }
+    const { tab } = this.upsert({ title, html: embedPageHtml(href, title), activate, temp: true });
+    return { tab, created: true };
+  }
+
+  /** Keep in Library: a temporary page becomes a page like any other (#655). */
+  keepPage(idOrKey: string): Tab {
+    const tab = this.requireAny(idOrKey);
+    if (!tab.temp) {
+      return tab;
+    }
+    delete tab.temp;
+    tab.libPos = this.pagePosAt(tab.folderId ?? null, 0, tab.id);
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
   }
 
   /**
@@ -3075,7 +3131,7 @@ export class BoardStore extends EventEmitter {
   }
 
   private setPinned(tab: Tab, pinned: boolean): void {
-    tab.pinned = pinned;
+    tab.pinned = pinned && !tab.temp;
     this.rebuildOrder();
   }
 

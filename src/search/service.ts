@@ -33,8 +33,8 @@ function imageAssets(tab: Tab): ImageAsset[] {
 }
 
 export const searchIndex = new SearchIndex(dataDir, {
-  pages: () => [...store.listOpenTabs(), ...store.listClosedTabs()],
-  get: id => store.get(id),
+  pages: () => [...store.listOpenTabs(), ...store.listClosedTabs()].filter(tab => !tab.temp),
+  get: id => { const tab = store.get(id); return tab?.temp ? undefined : tab; },
   folder: tab => store.folderPath(tab.folderId),
   declaration: tab => store.searchDeclaration(tab),
   assets: imageAssets,
@@ -47,7 +47,8 @@ export function refreshSearchIndex(): void {
   if (replacingPack) { searchIndex.pause(); return; }
   if (!attached) {
     attached = true;
-    store.on("tab_upserted", (tab: { id: string }) => searchIndex.schedule(tab.id));
+    // A temporary page (#655) is not in the Library; Keep in Library upserts it again.
+    store.on("tab_upserted", (tab: { id: string; temp?: boolean }) => { if (!tab.temp) searchIndex.schedule(tab.id); });
     store.on("tab_state", (tab: { id: string }) => searchIndex.schedule(tab.id));
     store.on("tab_deleted", (id: string) => searchIndex.remove(id));
     store.on("page_assets_removed", (id: string) => searchIndex.schedule(id));
