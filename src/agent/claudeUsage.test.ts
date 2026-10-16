@@ -99,6 +99,26 @@ test("a passed reset retains the observed Claude percentage and marks it expired
   assert.equal(applyExpiredWindows(limits, 2000).windows[0].expired, true);
 });
 
+test("Claude response measurements deduplicate blocks, omit child messages and reset on adoption", async () => {
+  const provider = new ClaudeProvider();
+  const session = provider.createSession({ id: "measure", nativeId: "synthetic-measure" } as Thread, {} as SessionContext) as any;
+  const reported: Usage[] = [];
+  session.sink = { usage: (u: Usage) => reported.push(u) };
+  const message = (id: string, input = 100) => ({ id, model: "claude", usage: { input_tokens: input, cache_read_input_tokens: 900, cache_creation_input_tokens: 50 }, content: [] });
+  try {
+    session.onAssistant({ message: message("first"), parent_tool_use_id: null });
+    session.onAssistant({ message: message("first"), parent_tool_use_id: null });
+    session.onAssistant({ message: message("child"), parent_tool_use_id: "tool" });
+    session.onAssistant({ message: { ...message("synthetic"), model: "<synthetic>" }, parent_tool_use_id: null });
+    session.onAssistant({ message: message("second", 200), parent_tool_use_id: null });
+    assert.deepEqual(reported, [{ modelCalls: 1, firstPromptTokens: 1050 }, { modelCalls: 2 }]);
+    session.adopt = async () => ({ status: "done" });
+    await session.run({ text: "", instructions: "", images: [], documents: [] }, session.sink, { adopt: "steer" });
+    session.onAssistant({ message: message("third", 300), parent_tool_use_id: null });
+    assert.deepEqual(reported.at(-1), { modelCalls: 1, firstPromptTokens: 1250 });
+  } finally { session.sink = null; session.dispose(); provider.dispose(); }
+});
+
 test("provider result routing isolates live quotas, ignores child results and invalidates closed queries", () => {
   const provider = new ClaudeProvider();
   const snapshots = new Map<string, PlanLimits>();

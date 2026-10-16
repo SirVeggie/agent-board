@@ -178,6 +178,22 @@ const turn = (id: string, threadId: string, over: Partial<Turn> = {}): Turn => (
 const tool = (id: string, threadId: string, turnId: string, over: Record<string, unknown> = {}): Item =>
   ({ id, threadId, turnId, seq: 1, createdAt: 1000, kind: "tool", toolId: id, name: "Bash", tool: "execute", title: "Bash", status: "done", startedAt: 1000, endedAt: 1500, ...over }) as Item;
 
+test("first-prompt samples use measured input through tool loops and keep unknown call counts separate", () => {
+  const threads = [{ id: "a", provider: "claude", model: "opus", title: "A" }] as Thread[];
+  const turns = [
+    turn("measured", "a", { usage: { inputTokens: 600, firstPromptTokens: 100, modelCalls: 3 } }),
+    turn("legacy", "a", { usage: { inputTokens: 200 } }),
+    turn("multi", "a", { usage: { inputTokens: 900, modelCalls: 2 } }),
+    turn("reverted", "a", { reverted: true, usage: { firstPromptTokens: 9999, modelCalls: 50 } }),
+  ];
+  const stats = harnessStats(threads, () => turns, () => [tool("t", "a", "measured")]);
+  assert.deepEqual(stats.baselines, [{ provider: "claude", mode: "code", samples: 2, min: 100, median: 200 }]);
+  assert.equal(stats.providers[0].modelCalls, 5);
+  assert.equal(stats.providers[0].modelCallTurns, 2);
+  assert.equal(stats.providers[0].turns, 3);
+  assert.equal(harnessStats([{ ...threads[0], fork: {} } as Thread], () => turns, () => []).baselines.length, 0);
+});
+
 test("promptTokens adds cached input only where the provider reports it apart", () => {
   const usage = { inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 50 };
   assert.equal(promptTokens("claude", usage), 1050);

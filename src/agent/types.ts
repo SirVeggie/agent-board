@@ -233,6 +233,10 @@ export type FileChange = {
 };
 
 export type Usage = {
+  /** Observed main-thread model responses in this turn; excludes hidden retries and SDK subagents. Missing when unavailable. */
+  modelCalls?: number;
+  /** First main-thread response's prompt, including cached input exactly once. */
+  firstPromptTokens?: number;
   billingSource?: ClaudeBillingSource;
   costRecords?: import("./pricing.js").CostRecord[];
   estimatedCostUsd?: number;

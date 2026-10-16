@@ -278,13 +278,15 @@
     daily.append(dayChart(stats.days));
     out.push(daily);
 
-    const providers = card("By provider");
+    const providers = card("By provider", "Model responses count observed main-thread replies, excluding hidden retries and provider subagents. The average covers only turns with response counts.");
     providers.append(
       table(
         [
           { label: "Provider", get: (r) => providerChip(r.provider) },
           { label: "Threads", num: true, get: (r) => count(r.threads) },
           { label: "Turns", num: true, get: (r) => count(r.turns) },
+          { label: "Responses a turn", num: true, get: (r) => r.modelCallTurns ? (r.modelCalls / r.modelCallTurns).toFixed(1) : "–" },
+          { label: "Turns counted", num: true, get: (r) => `${count(r.modelCallTurns || 0)} / ${count(r.turns)}` },
           { label: "Sent", num: true, get: (r) => tokens(r.prompt) },
           { label: "Cached", num: true, get: (r) => pct(r.cached, r.prompt) },
           { label: "Sent a turn", num: true, get: (r) => tokens(r.prompt / Math.max(1, r.turns)) },
@@ -319,7 +321,7 @@
 
     const base = card(
       "What a session starts with, measured",
-      "The tokens sent by first turns that made no tool call: one model call, so nearly all of it is what the session was given before your message (system prompt, tool schemas, instructions, skills). Session context shows Scribe's share."
+      "The first model response's input, including cached tokens and your message. Older turns without response measurements contribute their total input only when they made no tool call. Forks are excluded."
     );
     base.append(
       stats.baselines.length
@@ -333,7 +335,7 @@
             ],
             stats.baselines
           )
-        : empty("No first turn without a tool call in this range yet.")
+        : empty("No first-prompt samples in this range yet.")
     );
     out.push(base);
     return out;
@@ -459,7 +461,7 @@
         ["Scribe's instructions", `≈ ${tokens(ctx.instructions.tokens)}`, `${ctx.instructions.sections.length} parts${ctx.memories ? ` · ${ctx.memories} memories` : ""}`],
         ["Scribe's tools", tools.error ? "?" : `≈ ${tokens(tools.tokens)}`, tools.error ? "Could not list them" : `${tools.tools.length} tool schemas`],
         ["Instruction files", `≈ ${tokens(files)}`, ctx.own.files.length ? `${ctx.own.files.length} found, read by the provider` : "None found"],
-        ["Measured first call", base ? tokens(base.median) : "–", base ? `Scribe's part is about ${pct(scribe, base.median)} of it` : "No first turn without tools in range"],
+        ["Measured first call", base ? tokens(base.median) : "–", base ? `Scribe's part is about ${pct(scribe, base.median)} of it` : "No first-prompt samples in range"],
       ])
     );
     if (base) {

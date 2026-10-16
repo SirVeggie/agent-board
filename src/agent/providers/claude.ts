@@ -674,6 +674,7 @@ class ClaudeSession implements ProviderSession {
   private turnTools = new Set<string>();
   /** Tokens in the context after the latest main-thread model call. */
   private contextTokens = 0;
+  private modelCalls = new Set<string>();
   /** Live tasks (subagents, background commands) by task id, to the tool call that started them. */
   private tasks = new Map<string, string>();
   /** Background tasks still working; while there are any, the idle timer leaves the process alone. */
@@ -1068,6 +1069,7 @@ class ClaudeSession implements ProviderSession {
     this.cancelled = false;
     this.sink = sink;
     this.turnTools.clear();
+    this.modelCalls.clear();
     if (opts?.adopt) return this.adopt(opts.adopt);
     this.carry = null;
     this.buffer = [];
@@ -1484,7 +1486,7 @@ class ClaudeSession implements ProviderSession {
     }
   }
 
-  private onAssistant(msg: { message: { content?: unknown[]; usage?: unknown; model?: unknown }; parent_tool_use_id: string | null }): void {
+  private onAssistant(msg: { message: { id?: string; content?: unknown[]; usage?: unknown; model?: unknown }; parent_tool_use_id: string | null }): void {
     const sink = this.sink!;
     const parent = msg.parent_tool_use_id ?? undefined;
     // Claude Code writes a slash command's answer itself: one whole message, with no stream before it.
@@ -1500,6 +1502,12 @@ class ClaudeSession implements ProviderSession {
       const n = (key: string) => (typeof u[key] === "number" ? (u[key] as number) : 0);
       const tokens = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens") + n("output_tokens");
       if (tokens) this.contextTokens = tokens;
+      // The SDK may deliver several content blocks with the same response id.
+      if (msg.message.id && !this.modelCalls.has(msg.message.id)) {
+        this.modelCalls.add(msg.message.id);
+        const prompt = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        sink.usage({ modelCalls: this.modelCalls.size, ...(this.modelCalls.size === 1 ? { firstPromptTokens: prompt } : {}) });
+      }
     }
     for (const block of msg.message.content ?? []) {
       if (!isPlainRecord(block)) continue;

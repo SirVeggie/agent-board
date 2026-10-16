@@ -1078,6 +1078,8 @@ class PiSession implements ProviderSession {
           cost.missing.push("Failed request returned no billable usage");
         }
         this.usage = {
+          modelCalls: (prev.modelCalls ?? 0) + 1,
+          firstPromptTokens: prev.firstPromptTokens ?? u.input + u.cacheRead + u.cacheWrite,
           inputTokens: (prev.inputTokens ?? 0) + u.input,
           outputTokens: (prev.outputTokens ?? 0) + u.output,
           cacheReadTokens: (prev.cacheReadTokens ?? 0) + u.cacheRead,

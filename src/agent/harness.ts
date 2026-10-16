@@ -262,7 +262,7 @@ export function promptTokens(provider: ProviderId, usage: Usage | undefined): nu
 }
 
 type CostTotals = { costUsd: number; estimatedCostUsd?: number; reportedCostUsd?: number; pricedTurns?: number; unpricedTurns?: number; costPartial?: boolean };
-export type TokenTotals = CostTotals & { turns: number; prompt: number; cached: number; output: number; reasoning: number };
+export type TokenTotals = CostTotals & { turns: number; prompt: number; cached: number; output: number; reasoning: number; modelCalls?: number; modelCallTurns?: number };
 export type ToolRow = { name: string; kind: string; calls: number; errors: number; outputTokens: number; ms: number };
 
 export type HarnessStats = {
@@ -278,7 +278,7 @@ export type HarnessStats = {
   tools: Array<ToolRow & { provider: ProviderId }>;
   mcp: Array<{ server: string; tool: string; calls: number; errors: number; outputTokens: number; providers: ProviderId[] }>;
   skills: Array<{ name: string; calls: number }>;
-  /** First turns that made no tool call: one model call, so their prompt is close to what a session starts with. */
+  /** First response prompts, falling back to old first turns without tools when response counts are unknown. */
   baselines: Array<{ provider: ProviderId; mode: ThreadMode; samples: number; min: number; median: number }>;
   heavy: Array<TokenTotals & { id: string; title: string; provider: ProviderId; model: string; toolCalls: number }>;
 };
@@ -298,6 +298,10 @@ function addUsage(into: TokenTotals, provider: ProviderId, usage: Usage | undefi
   into.turns += 1;
   addCost(into, usage);
   if (!usage) return;
+  if (usage.modelCalls !== undefined) {
+    into.modelCalls = (into.modelCalls ?? 0) + usage.modelCalls;
+    into.modelCallTurns = (into.modelCallTurns ?? 0) + 1;
+  }
   into.prompt += promptTokens(provider, usage);
   into.cached += usage.cacheReadTokens ?? 0;
   into.output += usage.outputTokens ?? 0;
@@ -407,8 +411,10 @@ export function harnessStats(
       addCost(day, turn.usage);
       day.prompt[provider] = (day.prompt[provider] ?? 0) + prompt;
       day.output[provider] = (day.output[provider] ?? 0) + (turn.usage?.outputTokens ?? 0);
-      if (turn.seq === 1 && turn.status === "done" && prompt > 0 && !toolTurns.has(turn.id) && !source.forked) {
-        bump(baselines, `${provider}\n${turn.mode}`, () => ({ provider, mode: turn.mode, values: [] as number[] })).values.push(prompt);
+      const firstPrompt = turn.usage?.firstPromptTokens ??
+        (!toolTurns.has(turn.id) && (turn.usage?.modelCalls === undefined || turn.usage.modelCalls === 1) ? prompt : 0);
+      if (turn.seq === 1 && turn.status === "done" && firstPrompt > 0 && !source.forked) {
+        bump(baselines, `${provider}\n${turn.mode}`, () => ({ provider, mode: turn.mode, values: [] as number[] })).values.push(firstPrompt);
       }
     }
     if (thread.title !== undefined) {

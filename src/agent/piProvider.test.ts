@@ -154,6 +154,8 @@ test("Native turn freezes rate snapshots, deduplicates messages and retains zero
   assert.equal((await run.run(input, sink)).status, "done");
   assert.equal(latest.costUsd, 0.00004);
   assert.equal(latest.inputTokens, 20);
+  assert.equal(latest.modelCalls, 2);
+  assert.equal(latest.firstPromptTokens, 10);
   assert.equal(latest.costRecords?.length, 2);
   assert.equal(latest.costRecords?.[0].timing?.basis, "assistant-message");
   assert.equal(latest.costRecords?.[0].timing?.attempts, "unavailable");
@@ -166,6 +168,8 @@ test("Native turn freezes rate snapshots, deduplicates messages and retains zero
   assert.equal(latest.estimatedCostUsd, 0);
   assert.equal(saved.costUsd, 0.00004);
   assert.equal(latest.costRecords?.length, 1);
+  assert.equal(latest.modelCalls, 1);
+  assert.equal(latest.firstPromptTokens, 10);
 });
 
 test("splitPiModel splits at the first slash; model ids keep theirs", () => {
