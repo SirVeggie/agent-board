@@ -6,6 +6,115 @@ import vm from "node:vm";
 const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const between = (start: string, end: string) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 
+const slashAt = vm.runInNewContext(`${between("  function slashAt(", "  function chipKey(")}\nslashAt`);
+
+test("slash commands require start or whitespace and follow the caret without matching paths", () => {
+  for (const text of ["/here", "draft /here", "draft\n/here", "draft\t/here"]) {
+    const at = slashAt(text, text.length);
+    assert.equal(at.query, "here");
+    assert.equal(text.slice(at.start, at.end), "/here");
+  }
+  const text = "draft /workspace next";
+  const at = slashAt(text, 9);
+  assert.equal(at.query, "wo");
+  assert.equal(text.slice(at.start, at.end), "/workspace");
+  for (const text of ["draft/here", "https://here", " /usr/bin", " /here,", "draft /here "]) {
+    assert.equal(slashAt(text, text.length), null, text);
+  }
+  assert.equal(slashAt(" /usr/bin", 5), null);
+});
+
+function slashView(text: string, cursor = text.length, commands: any[] = []) {
+  const rows: any[] = [];
+  const view = vm.runInNewContext(`${between("  function slashAt(", "  function chipKey(")}\nnew (class {${between("    async updatePicker()", "    showMentions(")}})()`, {
+    S: { commands: new Map([["test", commands]]) },
+    LOCAL_SLASH: [{ name: "here" }, { name: "clear" }],
+    activeTab: () => null, pageActions: () => [{ id: "summarise", label: "Summarise" }],
+    mentionAt: () => null,
+    button: (_label: string, _className: string, click: () => void) => ({ click, append() {} }),
+    el: () => ({}),
+  });
+  view.input = { value: text, selectionStart: cursor, selectionEnd: cursor,
+    setSelectionRange(start: number, end: number) { this.selectionStart = start; this.selectionEnd = end; } };
+  view.settings = () => ({ provider: "test" });
+  view.slash = { hidden: true, replaceChildren() { rows.length = 0; }, append(row: any) { rows.push(row); } };
+  view.mentionGen = 0;
+  view.hidePicker = () => { view.mentionGen++; view.slash.hidden = true; };
+  view.autosize = view.focus = () => {};
+  return { view, rows };
+}
+
+test("picking an inline local command removes only its token and preserves the caret", async () => {
+  const { view, rows } = slashView("draft /here next", 11);
+  let applied = "";
+  view.applyLocalSlash = async (name: string) => { applied = name; };
+  await view.updatePicker();
+  await rows[0].click();
+  assert.equal(applied, "here");
+  assert.equal(view.input.value, "draft  next");
+  assert.equal(view.input.selectionStart, 6);
+});
+
+test("inline /clear carries draft text, files and mentions into the new thread", async () => {
+  const { view, rows } = slashView("draft /clear");
+  const attachments = [{ name: "notes.txt" }];
+  const mentions = [{ kind: "page", id: "page" }];
+  view.composerContent = () => ({ text: view.input.value, attachments, mentions });
+  view.emptyComposer = () => { view.input.value = ""; };
+  view.applyLocalSlash = async (name: string) => { assert.equal(name, "clear"); assert.equal(view.input.value, ""); };
+  view.fillComposer = (content: any) => {
+    assert.equal(content.attachments, attachments);
+    assert.equal(content.mentions, mentions);
+    view.input.value = content.text;
+  };
+  await view.updatePicker();
+  await rows[0].click();
+  assert.equal(view.input.value, "draft ");
+});
+
+test("provider and page commands keep the draft as command input", async () => {
+  for (const name of ["compact", "summarise"]) {
+    const { view, rows } = slashView(`before /${name} after`, 8 + name.length, [{ name: "compact" }]);
+    await view.updatePicker();
+    await rows[0].click();
+    assert.equal(view.input.value, `/${name} before  after`);
+  }
+});
+
+test("a selection or escaped picker leaves literal commands untouched", async () => {
+  const { view, rows } = slashView("draft /here");
+  view.input.selectionEnd--;
+  await view.updatePicker();
+  assert.equal(rows.length, 0);
+  view.input.selectionEnd++;
+  await view.updatePicker();
+  const keys = vm.runInNewContext(`({${between("    onKey(event)", "    async updatePicker()")}})`);
+  view.slash.querySelectorAll = () => [];
+  keys.onKey.call(view, { key: "Escape", preventDefault() {}, stopPropagation() {} });
+  assert.equal(view.slash.hidden, true);
+  assert.equal(view.input.value, "draft /here");
+});
+
+test("a delayed command response cannot reopen a dismissed picker or use an old caret", async () => {
+  for (const dismiss of [true, false]) {
+    const { view, rows } = slashView("draft /here");
+    let resolve!: (value: any) => void;
+    const response = new Promise((done) => { resolve = done; });
+    // Use the real method with a deferred provider request.
+    view.showSlash = vm.runInNewContext(`({${between("    async showSlash(", "    showMentions(")}}).showSlash`, {
+      slashAt, S: { commands: new Map() }, api: () => response,
+    });
+    view.threadId = "thread";
+    const pending = view.updatePicker();
+    if (dismiss) view.hidePicker();
+    else view.input.setSelectionRange(0, 0);
+    resolve({ commands: [] });
+    await pending;
+    assert.equal(rows.length, 0);
+    assert.equal(view.slash.hidden, true);
+  }
+});
+
 test("/clear opens a page-default draft in each chat layout without inheriting thread settings", async () => {
   for (const variant of ["side", "dock", "full"]) {
     for (const tab of [{ id: "current-page" }, null]) {

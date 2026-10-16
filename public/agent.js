@@ -338,6 +338,16 @@
     return { start, end: cursor + rest.length, query: m[2] };
   }
 
+  /** A slash token at the caret, bounded by whitespace so paths stay ordinary text. */
+  function slashAt(value, cursor) {
+    const match = /(^|\s)\/([\w:.-]*)$/.exec(value.slice(0, cursor));
+    if (!match) return null;
+    const rest = /^[\w:.-]*/.exec(value.slice(cursor))[0];
+    const end = cursor + rest.length;
+    if (end < value.length && !/\s/.test(value[end])) return null;
+    return { start: cursor - match[2].length - 1, end, query: match[2] };
+  }
+
   function chipKey(chip) {
     if (chip.kind === "thread") return `thread:${chip.id}`;
     if (chip.kind === "page") return `page:${chip.id}`;
@@ -5071,13 +5081,13 @@
 
     async updatePicker() {
       const value = this.input.value;
-      const slash = /^\/([\w:.-]*)$/.exec(value);
+      const cur = this.input.selectionStart ?? value.length;
+      const slash = this.input.selectionEnd === cur ? slashAt(value, cur) : null;
       if (slash) {
         this.hidePicker();
-        await this.showSlash(slash[1]);
+        await this.showSlash(slash.query);
         return;
       }
-      const cur = this.input.selectionStart ?? value.length;
       const threadMention = mentionAt(value, cur, "#");
       const mention = threadMention ? { ...threadMention, thread: true } : mentionAt(value, cur);
       if (mention) {
@@ -5103,7 +5113,8 @@
         }
       }
       if (gen !== this.mentionGen) return;
-      if (!/^\/([\w:.-]*)$/.exec(this.input.value)) return;
+      const token = slashAt(this.input.value, this.input.selectionStart ?? this.input.value.length);
+      if (!token || token.query !== typed || this.input.selectionEnd !== this.input.selectionStart) return;
       const q = typed.toLowerCase();
       const local = LOCAL_SLASH.filter((c) => c.name.includes(q)).map((c) => ({ ...c, local: true }));
       // The open page's template actions (#152): /<id>, with any text after it as {{input}}.
@@ -5120,16 +5131,32 @@
         return;
       }
       hits.forEach((c, i) => {
-        const row = button("", `ag-slash-item${i === 0 ? " on" : ""}`, () => {
+        const row = button("", `ag-slash-item${i === 0 ? " on" : ""}`, async () => {
+          const value = this.input.value;
+          const current = slashAt(value, this.input.selectionStart ?? value.length);
+          if (!current || current.start !== token.start || current.end !== token.end || current.query !== typed) return;
+          const remaining = value.slice(0, current.start) + value.slice(current.end);
           if (c.local) {
-            this.input.value = "";
+            this.input.value = remaining;
+            this.input.setSelectionRange(current.start, current.start);
             this.hidePicker();
             this.autosize();
-            void this.applyLocalSlash(c.name);
+            if (c.name === "clear") {
+              // Move the unsent content to the new thread instead of parking it on the old one.
+              const content = this.composerContent();
+              this.emptyComposer();
+              await this.applyLocalSlash(c.name);
+              if (content) this.fillComposer(content);
+              this.input.setSelectionRange(current.start, current.start);
+            } else {
+              void this.applyLocalSlash(c.name);
+            }
             this.focus();
             return;
           }
-          this.input.value = `/${c.name} `;
+          // Provider and page commands are interpreted at the start when the message is sent.
+          this.input.value = `/${c.name} ${remaining.trim()}`;
+          this.input.setSelectionRange(this.input.value.length, this.input.value.length);
           this.hidePicker();
           this.autosize();
           this.focus();
