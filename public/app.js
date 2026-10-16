@@ -1537,12 +1537,23 @@
     installingSearchPack = true;
     searchInstallPack.disabled = true;
     searchSwitch.disabled = true;
-    searchPackStatus.textContent = "Installing search pack…";
+    searchPackStatus.textContent = "Uploading search pack… 0%";
     let error;
     try {
-      const response = await fetch("/api/search/install", { method: "POST", headers: { "Content-Type": "application/zip" }, body: file });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Cannot install search pack");
+      // XHR, not fetch: fetch reports no upload progress, and a pack is hundreds of MB.
+      const result = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/search/install");
+        xhr.setRequestHeader("Content-Type", "application/zip");
+        xhr.responseType = "json";
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) searchPackStatus.textContent = `Uploading search pack… ${Math.floor(e.loaded / e.total * 100)}%`;
+        };
+        xhr.upload.onload = () => { searchPackStatus.textContent = "Checking and installing search pack…"; };
+        xhr.onload = () => xhr.status < 400 && xhr.response ? resolve(xhr.response) : reject(new Error(xhr.response?.error || "Cannot install search pack"));
+        xhr.onerror = () => reject(new Error("Cannot install search pack"));
+        xhr.send(file);
+      });
       installingSearchPack = false;
       renderSearchSettings(result);
     } catch (err) { error = err.message; }
