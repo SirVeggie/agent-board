@@ -47,7 +47,7 @@ export const BOARD_BRIDGE_JS = `
   // base: the daemon's state at revision. current: base plus the writes it hasn't confirmed yet.
   var base = boot.state && typeof boot.state === "object" ? boot.state : {};
   var revision = typeof boot.stateRevision === "number" ? boot.stateRevision : 0;
-  var current = engine.clone(base);
+  var current = engine.apply(base, []).state;
   var pending = [];          // ops not sent yet
   var inFlight = null;       // { writeId, ops } sent, not confirmed
   var pendingSince = 0;
@@ -82,14 +82,42 @@ export const BOARD_BRIDGE_JS = `
     return el.value === (value == null ? "" : String(value));
   }
 
-  function notify() {
-    for (var i = 0; i < listeners.length; i += 1) {
+  /**
+   * Tell onChange listeners what changed: { source: "remote" | "resync" | "local", ops }. ops is
+   * the change as state ops, or null when it isn't known (a reload, or edits the daemon dropped):
+   * then anything may have changed. Only listeners that asked for local writes hear those.
+   */
+  function notify(info) {
+    var list = listeners.slice();
+    for (var i = 0; i < list.length; i += 1) {
+      if (info.source === "local" && !list[i].local) {
+        continue;
+      }
       try {
-        listeners[i](current);
+        list[i].fn(current, info);
       } catch (err) {
         console.error("[scribe] onChange handler failed", err);
       }
     }
+  }
+
+  // This page's own writes, told to local listeners once the code that made them has finished.
+  var localOps = null;
+
+  function noteLocal(ops) {
+    if (!listeners.some(function (item) { return item.local; })) {
+      return;
+    }
+    if (localOps) {
+      for (var i = 0; i < ops.length; i += 1) localOps.push(ops[i]);
+      return;
+    }
+    localOps = ops.slice();
+    queueMicrotask(function () {
+      var batch = localOps;
+      localOps = null;
+      notify({ source: "local", ops: batch });
+    });
   }
 
   function sourceOf(binding) {
@@ -123,7 +151,10 @@ export const BOARD_BRIDGE_JS = `
     setTimeout(applyBindings, 0);
   }
 
-  /** Rebuild current from base and the unconfirmed writes. Ops that no longer apply are dropped. */
+  /**
+   * Rebuild current from base and the unconfirmed writes. Ops that no longer apply are dropped.
+   * Returns whether any were, since the page can't tell that from the incoming ops.
+   */
   function rebase() {
     var mine = (inFlight ? inFlight.ops : []).concat(pending);
     var result = engine.apply(base, mine, { lenient: true });
@@ -131,6 +162,7 @@ export const BOARD_BRIDGE_JS = `
     if (result.skipped.length) {
       warn("dropped edits that no longer apply after another change", result.skipped);
     }
+    return result.skipped.length > 0;
   }
 
   function schedule() {
@@ -258,7 +290,7 @@ export const BOARD_BRIDGE_JS = `
       warn("Scribe skipped edits that no longer apply", skipped);
       rebase();
       applyBindings();
-      notify();
+      notify({ source: "resync", ops: null });
     }
     afterWrite();
   }
@@ -282,6 +314,7 @@ export const BOARD_BRIDGE_JS = `
     for (var i = 0; i < list.length; i += 1) {
       pending.push(list[i]);
     }
+    noteLocal(list);
     schedule();
   }
 
@@ -365,11 +398,13 @@ export const BOARD_BRIDGE_JS = `
     if (own) {
       inFlight = null;
     }
-    rebase();
     if (news) {
+      // Edits of ours that the daemon or the rebase dropped aren't in message.ops.
+      var dropped = rebase() || own;
       applyBindings();
-      notify();
+      notify(dropped ? { source: "resync", ops: null } : { source: "remote", ops: message.ops });
     }
+    // Otherwise current is already base plus the pending writes, and its items keep their identity.
     if (own) {
       afterWrite();
     }
@@ -392,7 +427,7 @@ export const BOARD_BRIDGE_JS = `
         heldDeltas = [];
         rebase();
         applyBindings();
-        notify();
+        notify({ source: "resync", ops: null });
         for (var i = 0; i < held.length; i += 1) {
           applyDelta(held[i]);
         }
@@ -1580,11 +1615,16 @@ export const BOARD_BRIDGE_JS = `
     },
     reportIncompatible: reportIncompatible,
     onOpen: onOpen,
-    onChange: function (fn) {
-      listeners.push(fn);
+    /**
+     * fn(state, { source, ops }) when the state changes. Remote and resync changes by default;
+     * { local: true } also hears this page's own writes, batched once the writing code finishes.
+     */
+    onChange: function (fn, opts) {
+      var entry = { fn: fn, local: Boolean(opts && opts.local) };
+      listeners.push(entry);
       return function () {
         listeners = listeners.filter(function (item) {
-          return item !== fn;
+          return item !== entry;
         });
       };
     }

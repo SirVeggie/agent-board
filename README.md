@@ -154,7 +154,7 @@ Every page owns a JSON state object that lives in the daemon, not in the browser
 scribe.state                  // shared state, readable synchronously on load
 scribe.set({ todos })         // replace top-level keys; arrays of items with ids go out as item changes
 scribe.update(ops)            // change one item directly: [{ op: "merge", path: "todos/t_1", value: { done: true } }]
-scribe.onChange(render)       // an agent or another viewer changed something
+scribe.onChange(render)       // an agent or another viewer changed something; render(state, { source, ops })
 scribe.onOpen(({ anchor, args }) => …)  // a link (key#card=12) or search hit asked for a place in this page
 scribe.bind(el, "notes")      // two-way bind an input, textarea, or checkbox
 scribe.local / scribe.setLocal({ filter })   // this viewer's own state: filters, open panels, drafts

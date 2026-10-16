@@ -337,6 +337,7 @@ scribe.state                      // shared state, available synchronously
 scribe.set({ todos })             // replace top-level keys; arrays of items with ids are sent as item changes
 scribe.update([{ op: "merge", path: "todos/t_1", value: { done: true } }])   // change one item directly with ops
 scribe.onChange(render)           // someone else changed the state; not fired for your own writes
+scribe.onChange((state, { source, ops }) => …, { local: true })   // also your own writes; see below
 scribe.onOpen(({ anchor, args }) => showItem(args.item || args.record))   // a link or search hit asked for a place in this page
 scribe.bind(el, "notes")          // two-way bind an input, textarea, or checkbox to a shared key
 scribe.local                      // this viewer's own state: filters, open panels, drafts
@@ -380,7 +381,7 @@ Rules that keep pages well behaved:
 
 - Give every item in an array a stable `id` (`{ id: "t_1", ... }`). Arrays of items with ids merge with other writers item by item; arrays without ids are replaced whole.
 - Bind every text field with `scribe.bind` rather than wiring inputs by hand. It protects in-flight typing: a remote change to a field the user is inside does not touch their caret.
-- In `onChange`, re-render only the parts that changed. Do not rebuild a container that holds a bound field.
+- In `onChange`, re-render only the parts that changed. Do not rebuild a container that holds a bound field. The second argument says what changed: `source` is `"remote"` (an agent or another window), `"resync"` (a reload, or edits of yours Scribe dropped), or `"local"` (your own writes, only for a listener added with `{ local: true }`, once per burst of writes after your code finishes), and `ops` lists the change as state ops (`cards/c_1/...`), or is `null` when anything may have changed. Writes copy only the path they change, so an item nobody touched is the same object as before: `item === lastRendered` means it needs no repaint.
 - Keep what belongs to one viewer — in-progress typing, filters, which item is open — in `scribe.local`, not in shared state. Agents never see it.
 - State is JSON only, up to 4 MB per page. Images, files, and other binary data go in page assets (below), never base64 in state.
 
