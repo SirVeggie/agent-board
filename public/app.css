@@ -2363,7 +2363,9 @@ button.settings-close svg {
   transform: rotate(225deg);
 }
 
-.select-menu {
+.tab-menu.select-menu {
+  /* Select lists are portaled to body, including those opened from agent modals. */
+  z-index: var(--z-popover);
   max-height: 260px;
   overflow-y: auto;
 }
