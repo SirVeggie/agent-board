@@ -664,7 +664,7 @@
     if (msg.type === "spaces") {
       spaces.apply(msg.spaces);
       views.prune();
-      render();
+      invalidate();
       return;
     }
     if (msg.type === "page_permission") {
@@ -674,8 +674,7 @@
     }
     if (msg.type === "folders") {
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
-      renderChrome();
-      library.render();
+      invalidate("chrome", "library");
       return;
     }
     if (msg.type === "trash") {
@@ -707,7 +706,7 @@
         if (drag && drag.id === msg.tab.id) {
           abortDrag(false);
         }
-        render();
+        invalidate();
         library.refreshSearch();
         return;
       }
@@ -754,11 +753,9 @@
         if (el) {
           syncTabEl(el, msg.tab);
         }
-        renderChrome();
-        renderFrames();
-        library.render();
+        invalidate("chrome", "frames", "library");
       } else {
-        render();
+        invalidate();
       }
       if (focusedHere) {
         reportViewer();
@@ -785,7 +782,7 @@
         syncHash();
       }
       library.refreshSearch();
-      render();
+      invalidate();
       reportViewer();
       return;
     }
@@ -817,8 +814,7 @@
       // A page an agent keeps writing to sends these many times a second: draw only the first.
       if (closed && !views.isShown(msg.id) && !unreadLibrary.has(msg.id)) {
         unreadLibrary.add(msg.id);
-        renderChrome();
-        library.render();
+        invalidate("chrome", "library");
       }
       const entry = frames.get(msg.id);
       if (entry?.el.contentWindow) {
@@ -837,7 +833,7 @@
       }
       if (tab && !views.isShown(msg.id) && !popout.has(msg.id) && !unread.has(msg.id)) {
         unread.add(msg.id);
-        render();
+        invalidate("tabs");
       }
       return;
     }
@@ -849,8 +845,7 @@
         state.templates[idx] = msg.template;
       }
       state.templates.sort((a, b) => String(a.title).localeCompare(String(b.title)));
-      renderChrome();
-      renderTemplates();
+      invalidate("chrome", "templates");
       return;
     }
     if (msg.type === "template_deleted") {
@@ -858,13 +853,12 @@
       if (templateModal.dataset.templateId === msg.id) {
         closeTemplateModal();
       }
-      renderChrome();
-      renderTemplates();
+      invalidate("chrome", "templates");
       return;
     }
     if (msg.type === "builtin_templates") {
       state.builtinTemplates = Array.isArray(msg.templates) ? msg.templates : [];
-      renderTemplates();
+      invalidate("templates");
     }
   }
 
@@ -2545,6 +2539,9 @@
     syncSidebarTab();
     if (state.sidebarTab === "library") {
       library.refreshSearch();
+      library.render();
+    } else {
+      renderTemplates();
     }
   }
 
@@ -2558,24 +2555,31 @@
     syncSidebarTab();
     if (state.sidebarTab === "library") {
       library.refreshSearch();
+      library.render();
     }
     renderTemplates();
   }
 
   function renderTemplates() {
     const rows = state.templates;
+    const builtins = state.builtinTemplates;
     templateCountEl.textContent = String(rows.length);
-    window.scribeSyncChildren(templateList, rows.map((template) => templateRow(template, false)));
-    templateNone.hidden = rows.length > 0;
+    builtinCountEl.textContent = String(builtins.length);
+    // The rows are drawn while the Templates tab shows, and only when they changed.
+    const shown = state.sideOpen && state.sidebarTab === "templates" && !state.trashOpen;
+    const sig = shown ? JSON.stringify([rows, builtins, state.builtinOpen]) : templatesDrawn;
+    if (sig !== templatesDrawn) {
+      templatesDrawn = sig;
+      window.scribeSyncChildren(templateList, rows.map((template) => templateRow(template, false)));
+      templateNone.hidden = rows.length > 0;
+      builtinGroup.hidden = builtins.length === 0;
+      builtinGroup.classList.toggle("open", state.builtinOpen);
+      builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
+      window.scribeSyncChildren(builtinList, builtins.map((template) => templateRow(template, true)));
+    }
     if (freshTemplateId) {
       flashTemplateRow(freshTemplateId);
     }
-    const builtins = state.builtinTemplates;
-    builtinGroup.hidden = builtins.length === 0;
-    builtinGroup.classList.toggle("open", state.builtinOpen);
-    builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
-    builtinCountEl.textContent = String(builtins.length);
-    window.scribeSyncChildren(builtinList, builtins.map((template) => templateRow(template, true)));
     const active = activeTab();
     if (isBlank(active)) {
       newPageView.render(active);
@@ -2688,6 +2692,8 @@
 
   /** A template row that should flash once it exists (the upsert event and the fetch response race). */
   let freshTemplateId = null;
+  /** What the template rows were last drawn from. */
+  let templatesDrawn = "";
 
   function flashTemplateRow(id, scroll = false) {
     const row = templateList.querySelector(`[data-id="${CSS.escape(id)}"]`);
@@ -3287,15 +3293,56 @@
     }
   }
 
-  function render() {
-    settlePopouts();
-    dropLeftDraft();
-    renderFrames();
-    renderChrome();
-    renderTabs();
-    library.render();
-    renderTemplates();
+  /**
+   * The shell draws in regions. Server events `invalidate` what they changed and one flush per
+   * animation frame draws it, so a burst of events is one draw. `render()` invalidates everything and
+   * draws now, for user actions that read the DOM right after.
+   */
+  const REGIONS = ["frames", "chrome", "tabs", "library", "templates"];
+  const dirtyRegions = new Set();
+  let flushRaf = 0;
+  let flushTimer = 0;
+  let flushing = false;
+
+  function invalidate(...regions) {
+    for (const region of regions.length ? regions : REGIONS) {
+      dirtyRegions.add(region);
+    }
+    if (!flushRaf) {
+      flushRaf = requestAnimationFrame(flush);
+      // A hidden window gets no frames, and its pages still have to load (screenshots, agents).
+      flushTimer = setTimeout(flush, 200);
+    }
+  }
+
+  function flush() {
+    cancelAnimationFrame(flushRaf);
+    clearTimeout(flushTimer);
+    flushRaf = 0;
+    flushTimer = 0;
+    if (flushing || !dirtyRegions.size) {
+      return;
+    }
+    const regions = new Set(dirtyRegions);
+    dirtyRegions.clear();
+    flushing = true;
+    try {
+      settlePopouts();
+      dropLeftDraft();
+      if (regions.has("frames")) renderFrames();
+      if (regions.has("chrome")) renderChrome();
+      if (regions.has("tabs")) renderTabs();
+      if (regions.has("library")) library.render();
+      if (regions.has("templates")) renderTemplates();
+    } finally {
+      flushing = false;
+    }
     dispatchEvent(new CustomEvent("scribe:render"));
+  }
+
+  function render() {
+    invalidate();
+    flush();
   }
 
   function matchesPendingFocus(tab) {
@@ -5630,7 +5677,7 @@
     }
   });
 
-  window.addEventListener("scribe:threads-ready", () => library.render());
+  window.addEventListener("scribe:threads-ready", () => invalidate("library"));
 
   popout.bindDocking({ views, findAnyTab, isDragging: () => Boolean(drag) });
 

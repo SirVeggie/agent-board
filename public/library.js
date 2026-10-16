@@ -191,6 +191,10 @@ window.createLibrary = function createLibrary(host) {
     renderDeferred = false;
     model = buildModel();
     countEl.textContent = String(model.pages.length);
+    // A hidden Library keeps its model current; the rows are drawn when it is shown (setPaneOpen, tab switch).
+    if (!host.paneOpen()) {
+      return;
+    }
     const focused = rowKey(document.activeElement);
     // Rows that did not change stay in the page: a rebuilt row loses its hover and blinks (#407).
     const rows = document.createDocumentFragment();
