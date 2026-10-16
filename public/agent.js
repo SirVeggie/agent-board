@@ -3559,7 +3559,11 @@
         return stub;
       }
       const node = build();
-      if (node) this.itemNodes.set(it.id, { sig, node });
+      if (node) {
+        // scribeKeep requires a keyed node; some renderers (notices, todos) do not set one themselves.
+        node.dataset.itemId = it.id;
+        this.itemNodes.set(it.id, { sig, node });
+      }
       return node;
     }
 

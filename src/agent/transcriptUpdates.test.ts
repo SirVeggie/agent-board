@@ -46,6 +46,34 @@ const items = [
   { id: "p", threadId: "t", turnId: "u1", seq: 4, kind: "approval", requestId: "p", title: "Run rm", status: "pending", options: [{ id: "allow", kind: "allow_once", label: "Allow" }, { id: "deny", kind: "reject_once", label: "Deny" }] },
 ];
 
+test("notices keep their text and recovery controls through repeated turn updates", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    const notices = [
+      { id: "limit", level: "error", text: "Usage limit reached. Try again later." },
+      { id: "info", level: "info", text: "Connected again." },
+      { id: "warn", level: "warn", text: "Connection interrupted." },
+      { id: "folder", level: "error", text: "Not a folder: C:/missing" },
+    ].map((notice, i) => ({ ...notice, kind: "notice", threadId: "t", turnId: "u1", seq: 5 + i }));
+    await page.evaluate(([thread, items, turn]) => (window as any).T.open(thread, items, [turn]), [thread, [...items, ...notices], turn] as const);
+    const before = await page.locator(".ag-notice").allTextContents();
+    assert.deepEqual(before, notices.map((notice) => notice.text + (notice.id === "folder" ? " Choose folder" : "")));
+    await page.evaluate(async () => {
+      const { onEvent, frame } = (window as any).T;
+      for (let i = 0; i < 3; i++) {
+        onEvent({ type: "agent_item", item: { id: "answer", threadId: "t", turnId: "u1", seq: 9, kind: "text", text: `Update ${i}` } });
+        await frame();
+      }
+    });
+    assert.deepEqual(await page.locator(".ag-notice").allTextContents(), before);
+    assert.equal(await page.locator(".ag-notice button").count(), 1);
+    assert.equal(await page.locator("[data-sync-keep]").count(), 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a turn's unchanged steps stay in the page, typed notes survive, and collapsed bodies build on open", async () => {
   const { browser, page, errors } = await chatPage();
   try {
