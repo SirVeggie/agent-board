@@ -9,6 +9,16 @@
 - **How to verify:** `src/agent/workspaceDelete.test.ts`.
 - **When to remove:** Keep. This is the current schema.
 
+## `tabs.file` column (additive, schema still 3)
+
+- **What changed:** File pages (#654): a page can show and save a file on disk. `file` on the tab is `{ path, copy? }` (`copy`: a dropped file whose bytes Scribe keeps in `<data>/files/<page id>/`, since a browser drop gives no path). The board serves `templates/file-page.html` for these pages instead of their stored HTML, which is only a placeholder naming the file. Stored as `tabs.file TEXT` (JSON, nullable).
+- **Why no version bump:** Existing rows are unchanged (null: not a file page). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureFileColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged on purpose: the path is on this PC. An exported file page carries only its placeholder HTML. `EXPORT_VERSION` stays `1`.
+- **Protocol:** additive routes `GET /api/files/list`, `POST /api/files/open`, `POST /api/files/open-folder`, `POST /api/files/upload`, `GET` / `PUT /api/tabs/:id/file`, `GET /api/tabs/:id/file/raw`, `POST /api/tabs/:id/file/save-as` (board UI only: refused for agents, not open to the content origin); the content origin may now load `/vendor/highlight.js`, `/vendor/marked.js` and `/vendor/purify.js`; a `file` field on tab meta; the bridge call `scribe.file` and the shell message `scribe-file`. `VERSION` stays `3.0.0`.
+- **Where:** `src/schema.ts`, `src/dbMigrate.ts` (`ensureFileColumn`), `src/types.ts` (`FileBinding`), `src/filePages.ts`, `src/store.ts` (`openFilePage`, `setFilePath`, `openDiskFolder`), `src/http.ts`, `src/contentOrigin.ts`, `src/bridge.ts`, `templates/file-page.html`, `public/app.js` (`onPageFile`, `dropFiles`), `public/library.js`, `public/agent.js` (`pickWorkspace` file modes).
+- **How to verify:** `src/filePages.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.workspace` column (additive, schema still 3)
 
 - **What changed:** A page has a workspace folder (#611): `workspace` on the tab, the disk folder new chat threads on the page start in. A page an agent creates takes the creating thread's folder (its worktree's home folder, else its cwd); the page menu **Set workspace…** changes or clears it. This replaces the old default (the folder of the page thread with the latest reply). The thread list's Here filter also shows the page's workspace threads and the thread that created the page. Stored as `tabs.workspace TEXT` (nullable).

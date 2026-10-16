@@ -26,7 +26,11 @@ test("content origin serves the injected tooltip script while rejecting other sh
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type")!, /javascript/);
     assert.equal(await response.text(), fs.readFileSync(path.join(publicDir, "tooltip.js"), "utf8"));
-    for (const url of ["/app.js", "/app.css", "/vendor/marked.js", "/api/tabs", "/api/agent/threads", "/api/appearance", "/api/appearance/bootstrap.js", "/tooltip.js/extra", "/Tooltip.js"]) {
+    // The file viewer's shared libraries pass the gate (#654); other vendor files do not.
+    for (const url of ["/vendor/highlight.js", "/vendor/marked.js", "/vendor/purify.js"]) {
+      assert.equal((await fetch(base + url)).status, 200, url);
+    }
+    for (const url of ["/app.js", "/app.css", "/vendor/other.js", "/vendor/marked.js/x", "/api/tabs", "/api/tabs/t_1/file", "/api/agent/threads", "/api/appearance", "/api/appearance/bootstrap.js", "/tooltip.js/extra", "/Tooltip.js"]) {
       assert.equal((await fetch(base + url)).status, 403, url);
     }
     for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {

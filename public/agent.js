@@ -1790,7 +1790,7 @@
       const row = el("div", "ag-ws-row");
       const input = el("input", "ag-input");
       input.type = "text";
-      input.placeholder = "C:\\path\\to\\project";
+      input.placeholder = files ? "C:\\path\\to\\file.txt" : "C:\\path\\to\\project";
       input.value = initial || prefs().recentWorkspaces[0] || "";
       const use = button(opts.action || "Use folder", "ag-btn primary", () => finish(input.value.trim() || null));
       row.append(input, use);
