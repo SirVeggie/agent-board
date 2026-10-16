@@ -173,8 +173,42 @@ export function createStateOps() {
     return Math.min(op.at, list.length);
   }
 
-  /** Apply one op in place. Throws before changing anything when the op cannot apply. */
-  function applyOne(root: { state: Json }, op: Op): void {
+  /** A shallow copy of a container, made writable for this apply. */
+  function copyOf(value: unknown): unknown {
+    return Array.isArray(value) ? value.slice() : { ...(value as Json) };
+  }
+
+  /**
+   * The container at `parts`, writable: every container on the way from the root is copied once
+   * per apply (`owned` holds the copies), so everything off the path keeps its identity and the
+   * caller's state is never touched. Call it only once the op is known to apply.
+   */
+  function writable(root: { state: Json }, parts: string[], owned: WeakSet<object>): unknown {
+    let node: unknown = root.state;
+    if (!owned.has(node as object)) {
+      node = copyOf(node);
+      owned.add(node as object);
+      root.state = node as Json;
+    }
+    for (const segment of parts) {
+      const holder = node as Record<string | number, unknown>;
+      const key: string | number = Array.isArray(node) ? findIndex(node, segment) : segment;
+      let next = holder[key];
+      if (typeof next === "object" && next !== null && !owned.has(next)) {
+        next = copyOf(next);
+        owned.add(next as object);
+        holder[key] = next;
+      }
+      node = next;
+    }
+    return node;
+  }
+
+  /**
+   * Apply one op. Everything that can fail is checked before the first write, and writes go to
+   * copies of the containers on the op's path, so a failing op leaves the state as it was.
+   */
+  function applyOne(root: { state: Json }, op: Op, owned: WeakSet<object>): void {
     if (!isObject(op)) {
       throw new Error("an op must be an object");
     }
@@ -196,10 +230,12 @@ export function createStateOps() {
         throw new Error("the empty path only takes set with an object value");
       }
       root.state = clone(op.value);
+      owned.add(root.state);
       return;
     }
     const last = parts[parts.length - 1];
-    const parentPath = joinPath(parts.slice(0, -1));
+    const parentParts = parts.slice(0, -1);
+    const parentPath = joinPath(parentParts);
     const parent = parentPath ? getAt(root.state, parentPath) : root.state;
     const where = parentPath || "state";
     switch (op.op) {
@@ -208,15 +244,18 @@ export function createStateOps() {
           throw new Error("set needs a value");
         }
         if (Array.isArray(parent)) {
-          const index = findIndex(parent, last);
-          if (index === -1) {
+          if (findIndex(parent, last) === -1) {
             throw new Error(`no item matches "${last}" in ${where}`);
           }
-          parent[index] = clone(op.value);
-        } else if (isObject(parent)) {
-          parent[last] = clone(op.value);
-        } else {
+        } else if (!isObject(parent)) {
           throw new Error(`${where} is not an object or array`);
+        }
+        const value = clone(op.value);
+        const target = writable(root, parentParts, owned);
+        if (Array.isArray(target)) {
+          target[findIndex(target, last)] = value;
+        } else {
+          (target as Json)[last] = value;
         }
         return;
       }
@@ -224,32 +263,34 @@ export function createStateOps() {
         if (!isObject(op.value)) {
           throw new Error("merge needs an object value");
         }
-        const target = child(parent, last, parentPath);
-        if (!isObject(target)) {
+        if (!isObject(child(parent, last, parentPath))) {
           throw new Error(`${op.path} is not an object`);
         }
-        for (const [key, value] of Object.entries(op.value)) {
+        // Copy the values first, so one that can't be copied fails the op before any write.
+        const entries = Object.entries(op.value).map(([key, value]) => [key, value === null ? null : clone(value)] as const);
+        const target = writable(root, parts, owned) as Json;
+        for (const [key, value] of entries) {
           // null removes a key, so a merge can clear a field (e.g. a card's status).
           if (value === null) {
             delete target[key];
           } else {
-            target[key] = clone(value);
+            target[key] = value;
           }
         }
         return;
       }
       case "remove": {
         if (Array.isArray(parent)) {
-          const index = findIndex(parent, last);
-          if (index === -1) {
+          if (findIndex(parent, last) === -1) {
             throw new Error(`no item matches "${last}" in ${where}`);
           }
-          parent.splice(index, 1);
+          const target = writable(root, parentParts, owned) as unknown[];
+          target.splice(findIndex(target, last), 1);
         } else if (isObject(parent)) {
           if (!Object.prototype.hasOwnProperty.call(parent, last)) {
             throw new Error(`no key "${last}" in ${where}`);
           }
-          delete parent[last];
+          delete (writable(root, parentParts, owned) as Json)[last];
         } else {
           throw new Error(`${where} is not an object or array`);
         }
@@ -270,10 +311,16 @@ export function createStateOps() {
           throw new Error(`${op.path} already has an item with id "${String(value.id)}"`);
         }
         const index = positionIndex(list, op);
-        if (!exists) {
-          (parent as Json)[last] = list;
+        const copy = clone(value);
+        let target: unknown[];
+        if (exists) {
+          target = writable(root, parts, owned) as unknown[];
+        } else {
+          target = [];
+          owned.add(target);
+          (writable(root, parentParts, owned) as Json)[last] = target;
         }
-        list.splice(index, 0, clone(value));
+        target.splice(index, 0, copy);
         return;
       }
       case "move": {
@@ -284,15 +331,13 @@ export function createStateOps() {
         if (from === -1) {
           throw new Error(`no item matches "${last}" in ${where}`);
         }
-        const [item] = parent.splice(from, 1);
-        let index: number;
-        try {
-          index = positionIndex(parent, op);
-        } catch (err) {
-          parent.splice(from, 0, item);
-          throw err;
-        }
-        parent.splice(index, 0, item);
+        // Work out where it lands on a scratch list, then move it in the writable one.
+        const rest = parent.slice();
+        const [item] = rest.splice(from, 1);
+        const index = positionIndex(rest, op);
+        const target = writable(root, parentParts, owned) as unknown[];
+        target.splice(from, 1);
+        target.splice(index, 0, item);
         return;
       }
       default:
@@ -301,41 +346,38 @@ export function createStateOps() {
   }
 
   /**
-   * Apply ops in order to a copy of state. Strict (the default): all or nothing, and the first
-   * failing op throws naming its index. Lenient: failing ops are skipped and reported, the rest
-   * apply. Pages write leniently so a concurrent change to one item never drops their other edits.
+   * Apply ops in order. The result is a new state that shares every part the ops did not touch
+   * with `state`, which is left as it was, so a page can tell what changed by identity.
+   * Strict (the default): all or nothing, and the first failing op throws naming its index.
+   * Lenient: failing ops are skipped and reported, the rest apply. Pages write leniently so a
+   * concurrent change to one item never drops their other edits.
    */
   function apply(state: Json, ops: unknown[], options?: { lenient?: boolean }): ApplyResult {
     if (!Array.isArray(ops)) {
       throw new Error("ops must be an array");
     }
     const lenient = Boolean(options && options.lenient);
-    const root = { state: clone(state) };
+    const root = { state };
+    const owned = new WeakSet<object>();
     const applied: StateOp[] = [];
     const skipped: SkippedOp[] = [];
     ops.forEach((raw, index) => {
       const op = raw as Op;
-      if (lenient) {
-        // Each op gets a scratch copy, so a failure halfway through one can't leave a partial edit.
-        const scratch = { state: clone(root.state) };
-        try {
-          applyOne(scratch, op);
-          root.state = scratch.state;
-          applied.push(op as StateOp);
-        } catch (err) {
-          skipped.push({ index, op, error: (err as Error).message });
-        }
-        return;
-      }
       try {
-        applyOne(root, op);
+        applyOne(root, op, owned);
         applied.push(op as StateOp);
       } catch (err) {
+        if (lenient) {
+          skipped.push({ index, op, error: (err as Error).message });
+          return;
+        }
         const label = isObject(op) ? `${String(op.op)} ${String(op.path)}` : "op";
         throw new Error(`ops[${index}] (${label}): ${(err as Error).message}`);
       }
     });
-    return { state: root.state, applied, skipped };
+    // Always a new root, so a caller writing into the result never reaches the state it passed.
+    const result = owned.has(root.state) ? root.state : (copyOf(root.state) as Json);
+    return { state: result, applied, skipped };
   }
 
   /** An array whose items are all objects with distinct ids, so items can be addressed by id. */

@@ -109,6 +109,44 @@ test("lenient apply skips failing ops and keeps the rest", () => {
   assert.equal((getAt(result.state, "cards/c1") as { title: string }).title, "kept");
 });
 
+test("apply copies only the changed path and leaves the input as it was", () => {
+  const before = board();
+  const snapshot = JSON.stringify(before);
+  const result = applyOps(before, [
+    { op: "merge", path: "cards/c2", value: { title: "changed", status: null } },
+    { op: "insert", path: "cards/c2/comments", value: { id: "m1", text: "hi" } },
+  ]);
+  assert.equal(JSON.stringify(before), snapshot);
+  const [c1, c2, c3] = result.state.cards as Record<string, unknown>[];
+  assert.notEqual(result.state, before);
+  assert.notEqual(result.state.cards, before.cards);
+  assert.equal(c1, before.cards[0]);
+  assert.equal(c3, before.cards[2]);
+  assert.notEqual(c2, before.cards[1]);
+  assert.equal(c2.title, "changed");
+  assert.equal("status" in c2, false);
+  assert.deepEqual(c2.comments, [{ id: "m1", text: "hi" }]);
+  // No ops still gives a new root, so writing into it can't reach the input.
+  const same = applyOps(before, []);
+  assert.notEqual(same.state, before);
+  assert.equal(same.state.cards, before.cards);
+});
+
+test("a lenient op that fails after earlier ops in the same apply leaves no partial edit", () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  const before = board();
+  const result = applyOps(before, [
+    { op: "merge", path: "cards/c1", value: { title: "first" } },
+    { op: "merge", path: "cards/c1", value: { title: "second", bad: cyclic } },
+    { op: "move", path: "cards/c1", at: -1 },
+  ], { lenient: true });
+  assert.deepEqual(result.skipped.map((s) => s.index), [1, 2]);
+  assert.equal((getAt(result.state, "cards/c1") as { title: string }).title, "first");
+  assert.deepEqual((result.state.cards as { id: string }[]).map((c) => c.id), ["c1", "c2", "c3"]);
+  assert.equal(before.cards[0].title, "One");
+});
+
 test("paths escape slashes, and the empty path sets the whole state", () => {
   const next = applyStateOps({ "a/b": { x: 1 } }, [{ op: "merge", path: "a~1b", value: { y: 2 } }]);
   assert.deepEqual(next, { "a/b": { x: 1, y: 2 } });
