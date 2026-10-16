@@ -200,6 +200,28 @@ test("an ordinary result changes nothing, and the next turn starts clean", async
   assert.deepEqual(gate, { allowed: true });
 });
 
+test("a built-in result past what the transcript keeps is scanned whole", async () => {
+  classifier();
+  asked.length = 0;
+  const long = `${PLAIN.repeat(400)}\n${ATTACK}\n${PLAIN.repeat(10)}`;
+  assert.ok(long.indexOf(ATTACK) > 30_000);
+  next = async (sink) => {
+    sink.toolStart({ toolId: "r1", name: "Read", tool: "read", title: "Read long.md", status: "running" });
+    sink.toolUpdate("r1", { output: long });
+    sink.toolUpdate("r1", { status: "done" });
+    await sleep(40);
+    return { status: "done" };
+  };
+  const id = thread("claude", "full");
+  host.send(id, { text: "Summarise long.md" });
+  await idle(id);
+  const [read] = tools(id);
+  // The transcript keeps only the head, the scan read the rest.
+  assert.ok(!read.output?.includes(ATTACK));
+  assert.deepEqual(read.flags?.map((flag) => flag.id), ["injection:scan"]);
+  assert.ok(asked.some((call) => String(call.state.content).includes(ATTACK)));
+});
+
 test("a Scribe tool's result is scanned while it is held: the note comes back with it, nothing is steered", async () => {
   classifier();
   asked.length = 0;

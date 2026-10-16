@@ -126,6 +126,8 @@ const HOOK_GRACE_MS = 400;
 /** At most this often, a running thread is sent again because its live step changed. */
 const ACTIVITY_MS = 1000;
 const MAX_TOOL_OUTPUT = 20_000;
+/** How much of a tool's output the tool_result hooks read; past it they get its head and tail. */
+const MAX_HOOK_OUTPUT = 200_000;
 const MAX_TOOL_DIFF = 200_000;
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
 /** How long an "Allow once" from web_request waits for the call it allowed. */
@@ -409,6 +411,8 @@ type RunState = {
     earlyItem: string | null;
     /** Why the turn is suspect (Chunk.suspect), once something it read looked like a prompt injection. */
     suspect: string | null;
+    /** A long tool output as the provider gave it (head and tail past MAX_HOOK_OUTPUT), where the transcript item keeps only its head. */
+    outputs?: Map<string, string>;
   };
   /** Stops the summary a fork's first turn waits for. */
   abort?: AbortController;
@@ -3606,7 +3610,12 @@ export class AgentHost {
             for (const file of patch.paths) void host.rememberBefore(run, thread(), file);
           }
         }
-        if (patch.output !== undefined) item.output = patch.output.length > MAX_TOOL_OUTPUT ? `${patch.output.slice(0, MAX_TOOL_OUTPUT)}\n…` : patch.output;
+        if (patch.output !== undefined) {
+          item.output = patch.output.length > MAX_TOOL_OUTPUT ? `${patch.output.slice(0, MAX_TOOL_OUTPUT)}\n…` : patch.output;
+          // The hooks read more than is stored, so an injection late in a long result is seen too.
+          if (patch.output.length > MAX_TOOL_OUTPUT) (run.hooks.outputs ??= new Map()).set(toolId, clipChunk(patch.output, MAX_HOOK_OUTPUT));
+          else run.hooks.outputs?.delete(toolId);
+        }
         if (patch.exitCode !== undefined) item.exitCode = patch.exitCode;
         const finished = patch.status === "done" || patch.status === "error";
         if (patch.status) item.status = patch.status;
@@ -3885,9 +3894,11 @@ export class AgentHost {
 
   private hookToolResult(run: RunState, item: Item): void {
     if (item.kind !== "tool") return;
+    const output = run.hooks.outputs?.get(item.toolId) ?? item.output;
+    run.hooks.outputs?.delete(item.toolId);
     this.observe(item.threadId, run, "tool_result", () => ({
-      text: item.output ? clipChunk(item.output) : "",
-      ...(item.output ? { full: item.output } : {}),
+      text: output ? clipChunk(output) : "",
+      ...(output ? { full: output } : {}),
       itemId: item.id,
       tool: { toolId: item.toolId, name: item.name, kind: item.tool, title: item.title, ...(item.paths ? { paths: item.paths } : {}) },
     }));
