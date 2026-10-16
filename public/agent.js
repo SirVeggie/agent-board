@@ -7035,7 +7035,7 @@
         drop.remove();
         for (const [k, v] of this.feedLines) if (v === drop) this.feedLines.delete(k);
       }
-      this.feed.classList.remove("deep");
+      this.feed.classList.toggle("deep", this.feed.childElementCount >= 4);
     },
     settleFeed() {
       clearTimeout(this._settle);
@@ -7047,6 +7047,7 @@
           const leaving = node._fade = window.scribeMotion.reveal(node, false, { translate: "none", token: "fade", fill: "both" });
           leaving.finished.then(() => {
             node.remove();
+            this.feed.classList.toggle("deep", this.feed.childElementCount >= 4);
             for (const [k, v] of this.feedLines) if (v === node) this.feedLines.delete(k);
             leaving.cancel();
           }).catch(() => {});
