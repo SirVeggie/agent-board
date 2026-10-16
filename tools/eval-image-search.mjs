@@ -87,7 +87,7 @@ try {
   console.log(`${images.length} images, ${owners.size} owning cards, items or sections\n`);
 
   const rankOf = (hits, owner) => hits.findIndex(hit => hit.tab_id === owner.tab && hit.owner === owner.owner) + 1;
-  // Weight of the image in the score: 1 is the image alone, 0.5 the blend Scribe uses, 0 the owner's text alone.
+  // Weight of the image in the score: 1 is the image alone, 0.3 the blend Scribe uses, 0 the owner's text alone.
   const weights = [1, 0.7, 0.5, 0.3, 0];
   const compare = async (title, cases) => {
     const ranks = weights.map(() => []);
@@ -97,12 +97,12 @@ try {
       for (const [i, weight] of weights.entries()) { const rank = rankOf(await index.queryImages(query, all, 100000, false, weight), owner); ranks[i].push(rank); row.push(String(rank).padStart(2)); }
       if (verbose) console.log(`  ${row.join(" ")}  ${short(query, 70)}`);
     }
-    for (const [i, weight] of weights.entries()) console.log(`  weight ${weight.toFixed(1)}${weight === 1 ? " (image only)" : weight === 0.5 ? " (blended)" : weight === 0 ? " (owner's text only)" : ""}: top 1 ${count(ranks[i], 1)}, top 3 ${count(ranks[i], 3)} of ${cases.length}, MRR ${(ranks[i].reduce((sum, r) => sum + (r ? 1 / r : 0), 0) / Math.max(1, cases.length)).toFixed(3)}`);
+    for (const [i, weight] of weights.entries()) console.log(`  weight ${weight.toFixed(1)}${weight === 1 ? " (image only)" : weight === 0.3 ? " (blended)" : weight === 0 ? " (owner's text only)" : ""}: top 1 ${count(ranks[i], 1)}, top 3 ${count(ranks[i], 3)} of ${cases.length}, MRR ${(ranks[i].reduce((sum, r) => sum + (r ? 1 / r : 0), 0) / Math.max(1, cases.length)).toFixed(3)}`);
     return ranks;
   };
   // 1) The owner's title as the query, as in the prototype. The owner's chunk holds its title, so any text weight wins this one.
   const titled = await compare("Owner's title as the query", [...owners.values()].map(owner => ({ query: owner.label.replace(/^#\d+\s+/, ""), owner })));
-  const only = titled[0], blended = titled[2];
+  const only = titled[0], blended = titled[3];
 
   // 2) Queries reworded to avoid the card's words, written after seeing the titles: a sanity check, not a benchmark.
   const queries = JSON.parse(fs.readFileSync(new URL("./semantic-search-proto/image-queries.json", import.meta.url), "utf8"));
@@ -118,7 +118,7 @@ try {
   console.log("\nPlain descriptions (top 3, image only | blended):");
   for (const text of ["a kanban board with columns", "a context menu", "a chat conversation panel", "error message dialog", "settings form with toggles", "a terminal with code"]) {
     const show = hits => hits.slice(0, 3).map(hit => `${hit.score.toFixed(3)} ${short(hit.label, 30)}`).join(" · ");
-    console.log(`  ${text}\n    image:   ${show(await index.queryImages(text, all, 3, false, 1))}\n    blended: ${show(await index.queryImages(text, all, 3, false, 0.5))}`);
+    console.log(`  ${text}\n    image:   ${show(await index.queryImages(text, all, 3, false, 1))}\n    blended: ${show(await index.queryImages(text, all, 3, false))}`);
     const kept = await index.queryImages(text, all, 8, true);
     if (verbose) console.log(`    rows the palette would keep: ${kept.length}`);
   }
@@ -143,7 +143,7 @@ try {
   margins.sort((a, b) => a - b); kept.sort((a, b) => a - b);
   console.log(`\nImage as the query (80% crop, 70% scale, JPEG): original first for ${count(found, 1)}, top 3 for ${count(found, 3)} of ${found.length}`);
   if (margins.length) console.log(`  lead over the best other image: median ${margins[margins.length >> 1].toFixed(3)}, smallest ${margins[0].toFixed(3)}; rows kept by the cut-off: median ${kept[kept.length >> 1]}, most ${kept.at(-1)}`);
-  console.log(JSON.stringify({ images: images.length, owners: owners.size, titleImageOnly: { top1: count(only, 1), top3: count(only, 3) }, titleBlended: { top1: count(blended, 1), top3: count(blended, 3) }, reworded: reworded && { of: cases.length, imageOnlyTop3: count(reworded[0], 3), blendedTop3: count(reworded[2], 3), textOnlyTop3: count(reworded[4], 3) }, imageQuery: { top1: count(found, 1), of: found.length }, medianImageMs: imageMs[imageMs.length >> 1] }));
+  console.log(JSON.stringify({ images: images.length, owners: owners.size, titleImageOnly: { top1: count(only, 1), top3: count(only, 3) }, titleBlended: { top1: count(blended, 1), top3: count(blended, 3) }, reworded: reworded && { of: cases.length, imageOnlyTop3: count(reworded[0], 3), blendedTop3: count(reworded[3], 3), textOnlyTop3: count(reworded[4], 3) }, imageQuery: { top1: count(found, 1), of: found.length }, medianImageMs: imageMs[imageMs.length >> 1] }));
 } finally {
   embedder.dispose(); await index.close();
   fs.rmSync(scratch, { recursive: true, force: true });

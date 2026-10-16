@@ -43,7 +43,7 @@ export function rankVectors(rows: IndexedChunk[], vectors: Float32Array, query: 
 
 /**
  * Image rows. An image scores `weight × image + (1 − weight) × owner's text chunk` (the page's vector when the
- * owner has none). Text queries use 0.5: the words around a screenshot say more than its pixels. An image
+ * owner has none). Text queries use 0.3: the words around a screenshot say more than its pixels. An image
  * query uses 1 and compares pictures only. Blended scores sit close together, so their cut-off is narrower.
  */
 export function rankImages(rows: IndexedChunk[], vectors: Float32Array, query: Float32Array, weight: number, visible: (id: string) => boolean, limit = 8, cutoff = true): ImageHit[] {
@@ -270,8 +270,8 @@ export class SearchIndex {
     const vec = await this.queryVector(q);
     return rankVectors(this.rows, this.vectors, vec, scope, visible, limit, cutoff);
   }
-  /** Images for a text query (half image, half their owner's text) or like the given image's bytes (image only). */
-  async queryImages(q: string | Uint8Array, visible: (id: string) => boolean, limit = 8, cutoff = true, weight = typeof q === "string" ? 0.5 : 1): Promise<ImageHit[]> {
+  /** Images for a text query (30% image, 70% their owner's text) or like the given image's bytes (image only). */
+  async queryImages(q: string | Uint8Array, visible: (id: string) => boolean, limit = 8, cutoff = true, weight = typeof q === "string" ? 0.3 : 1): Promise<ImageHit[]> {
     const vec = await this.queryVector(q);
     return rankImages(this.rows, this.vectors, vec, weight, visible, limit, cutoff);
   }
