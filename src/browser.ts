@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, CDPSession, Frame, Locator, Page } from "playwright-core";
 import { BROWSER_ACTIONS, type BrowserAction } from "./browserActions.js";
 import { launchChromium } from "./chromium.js";
+import { PORT } from "./config.js";
 import { embedUrlFromHtml } from "./embed.js";
 import { log } from "./log.js";
 import { pngOrJpeg, screenshotUrl, shotOptions } from "./screenshot.js";
@@ -130,6 +131,28 @@ export function allowedBrowserUrl(raw: string): boolean {
     host === "::1" ||
     /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
   );
+}
+
+/**
+ * Board routes that open files from disk as pages, or list folders (#655). The board UI calls them
+ * for the user; the agent browser sends no agent header, so without this an agent could drive the
+ * board UI (or fetch from it) to open and read any file. Agents may link files (file: links), and
+ * read a file page once the user has opened it, like any page.
+ */
+const FILE_OPEN_ROUTES = /^\/api\/(files\/(open|open-folder|upload|list)|temp-pages\/)/;
+
+/** A request from the agent browser to this board's file-opening routes. Other loopback servers are left alone. */
+export function blockedBoardRequest(raw: string, port: number = PORT): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (!allowedBrowserUrl(raw) || url.protocol === "about:" || url.protocol === "data:") {
+    return false;
+  }
+  return Number(url.port || (url.protocol === "https:" ? 443 : 80)) === port && FILE_OPEN_ROUTES.test(url.pathname);
 }
 
 /** A URL the agent passed, or a Scribe page key or id, as the URL to load. */
@@ -625,10 +648,11 @@ async function createSession(threadId: string): Promise<Session> {
   const context = await opened.newContext({ viewport: DEFAULT_VIEWPORT });
   context.setDefaultTimeout(ACTION_TIMEOUT_MS);
   context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-  // Top-level navigations stay on loopback, including links and redirects the page follows.
+  // Top-level navigations stay on loopback, including links and redirects the page follows. No request
+  // may reach the board's file-opening routes (blockedBoardRequest).
   await context.route("**/*", (route) => {
     const request = route.request();
-    if (request.isNavigationRequest() && !request.frame().parentFrame() && !allowedBrowserUrl(request.url())) {
+    if (blockedBoardRequest(request.url()) || (request.isNavigationRequest() && !request.frame().parentFrame() && !allowedBrowserUrl(request.url()))) {
       void route.abort("blockedbyclient");
       return;
     }

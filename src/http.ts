@@ -1683,6 +1683,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** Files and folders in a folder, for Open file / Open folder / Save as. No path: the drives (Windows) or /. */
   app.get("/api/files/list", (req, res) => {
+    if (refuseAgent(req, res)) return;
     const raw = typeof req.query.path === "string" ? req.query.path.trim() : "";
     if (!raw && process.platform === "win32") {
       const drives = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((d) => `${d}:\\`).filter((d) => fs.existsSync(d));

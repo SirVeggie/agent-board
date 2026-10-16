@@ -14,6 +14,7 @@ const framed = store.upsert({ key: "framed", title: "Framed", html: "<p>framed</
 
 const {
   allowedBrowserUrl,
+  blockedBoardRequest,
   browserAct,
   browserConsole,
   browserEval,
@@ -367,3 +368,24 @@ async function until(check: () => boolean, ms = 5000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+test("blockedBoardRequest keeps the agent browser off the board's file-opening routes (#655)", () => {
+  for (const url of [
+    "http://127.0.0.1:4747/api/files/open",
+    "http://localhost:4747/api/files/open-folder",
+    "http://127.0.0.1:4747/api/files/upload?name=x",
+    "http://127.0.0.1:4747/api/files/list?path=C%3A%5C",
+    "http://127.0.0.1:4747/api/temp-pages/url",
+  ]) {
+    assert.equal(blockedBoardRequest(url, 4747), true, url);
+  }
+  for (const url of [
+    "http://127.0.0.1:4747/",
+    "http://127.0.0.1:4747/api/tabs",
+    "http://localhost:5173/api/files/open",
+    "https://example.com:4747/api/files/open",
+    "about:blank",
+  ]) {
+    assert.equal(blockedBoardRequest(url, 4747), false, url);
+  }
+});
