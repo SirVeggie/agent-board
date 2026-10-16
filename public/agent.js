@@ -2975,6 +2975,7 @@
     renderHeader() {
       if (this.variant === "dock") return;
       const t = this.thread();
+      const helper = this.variant === "helper" || !!t?.helperOf;
       const s = this.settings();
       this.header.replaceChildren();
       const top = el("div", "ag-thead-top");
@@ -2984,20 +2985,22 @@
         );
       }
       const title = el("div", "ag-title", t ? t.title : "New thread");
-      title.dataset.tooltip = t ? "Double-click to rename" : "";
-      if (t) title.addEventListener("dblclick", () => this.rename(title));
+      title.dataset.tooltip = t && !helper ? "Double-click to rename" : "";
+      if (t && !helper) title.addEventListener("dblclick", () => this.rename(title));
       top.append(title);
       const acts = el("div", "ag-thead-actions");
-      if (s.cwd && s.mode !== "board") {
+      if (!helper && s.cwd && s.mode !== "board") {
         const onBranch = openWorktree(t);
         acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, ...(onBranch ? {} : { cwd: s.cwd }) }), onBranch ? `Changes on ${onBranch.branch}` : "Git working tree changes"));
       }
       if (t && S.browsers.has(t.id)) acts.append(button(icon("browser"), "ag-icon-btn", () => openBrowser(t.id), "Agent browser: watch it, click and type into it"));
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
-      const settingsButton = button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings (Ctrl+Shift+,)");
-      settingsButton.setAttribute("aria-description", "Agent settings (Ctrl+Shift+,)");
-      acts.append(settingsButton);
-      acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread (Ctrl+Shift+K)"));
+      if (!helper) {
+        const settingsButton = button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings (Ctrl+Shift+,)");
+        settingsButton.setAttribute("aria-description", "Agent settings (Ctrl+Shift+,)");
+        acts.append(settingsButton);
+        acts.append(button(icon("plus"), "ag-icon-btn", () => newThread(this), "New thread (Ctrl+Shift+K)"));
+      }
       if (!SOLO && window.scribePopout?.supported && (this.variant === "side" || this.variant === "full")) {
         acts.append(button(icon("popout"), "ag-icon-btn", () => popOutChat(), "Open as a window"));
       }
@@ -3290,11 +3293,14 @@
     threadMenu(anchor) {
       const t = this.thread();
       if (!t) return;
+      const helper = this.variant === "helper" || !!t.helperOf;
       openMenu(anchor, [
-        { label: "Rename", run: () => { const ti = this.header.querySelector(".ag-title"); if (ti) this.rename(ti); } },
-        { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
+        ...(!helper ? [
+          { label: "Rename", run: () => { const ti = this.header.querySelector(".ag-title"); if (ti) this.rename(ti); } },
+          { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
+        ] : []),
         { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
-        ...(t.stats.turns ? [{ label: "Fork thread", detail: "Continue in a new thread", run: () => forkThread(t, (id) => this.openThread(id)) }] : []),
+        ...(!helper && t.stats.turns ? [{ label: "Fork thread", detail: "Continue in a new thread", run: () => forkThread(t, (id) => this.openThread(id)) }] : []),
         { label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) },
         ...(openWorktree(t) ? [{ label: "Worktree…", detail: openWorktree(t).branch, icon: "git", run: () => this.worktreeMenu(anchor) }] : []),
         // Only worth a row once there are hooks to turn off; a thread that has them off can always turn them back on.
