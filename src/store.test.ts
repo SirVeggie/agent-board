@@ -2154,3 +2154,21 @@ test("a page's reply target is set by agents, persists, and sends a reply event 
   assert.deepEqual(last.get(form.id)?.replyTo, { page: notes.id });
   last.closeDb();
 });
+
+test("a template change marks its pages' upsert notices, so a page on screen can hold the reload", () => {
+  const store = loaded();
+  const { template } = store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc</p>" });
+  const { tab } = store.openFromTemplate(template.key, {});
+  /** @type {Array<[string, { structural: boolean, template?: boolean }]>} */
+  const notices = [];
+  store.on("tab_upserted", (meta, _index, notice) => notices.push([meta.id, notice]));
+  store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc 2</p>" });
+  const refreshed = notices.find(([id]) => id === tab.id);
+  assert.equal(refreshed?.[1].structural, true);
+  assert.equal(refreshed?.[1].template, true);
+
+  notices.length = 0;
+  store.update(tab.id, { title: "Renamed", viewer: "user" });
+  assert.equal(notices.find(([id]) => id === tab.id)?.[1].template, undefined);
+  store.closeDb();
+});

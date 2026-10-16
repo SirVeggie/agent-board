@@ -1731,7 +1731,7 @@ export async function startHttp(): Promise<http.Server> {
       // Re-scope before the client sees the new tab, so the dock can keep this chat.
       agentHost?.followToPage(threadId, tab.id);
     }
-    broadcast({ type: "tab_upserted", tab, index, structural: notice?.structural !== false });
+    broadcast({ type: "tab_upserted", tab, index, structural: notice?.structural !== false, ...(notice?.template ? { template: true } : {}) });
     if (notice?.activate && notice.structural) {
       requestAgentFocus(tab.id, threadId);
     }

@@ -250,7 +250,7 @@
     draftFrom: null,
   };
 
-  /** @type {Map<string, { el: HTMLIFrameElement, revision: number }>} */
+  /** held: a template change waits while the page is on screen (see holdFrame). @type {Map<string, { el: HTMLIFrameElement, revision: number, held?: boolean }>} */
   const frames = new Map();
   /** @type {Set<string>} */
   const unread = new Set();
@@ -410,6 +410,7 @@
     frame: (id) => frames.get(id) || null,
     frameIds: () => [...frames.keys()],
     ensureFrame,
+    releaseFrame,
     discardFrame,
     selectTab: (id) => selectTab(id, { fromUser: true }),
     openPage,
@@ -702,6 +703,7 @@
         state.draftFrom = null;
       }
       if (isClosedMeta(msg.tab)) {
+        if (msg.template) holdFrame(msg.tab.id);
         upsertClosed(msg.tab, msg.structural);
         if (drag && drag.id === msg.tab.id) {
           abortDrag(false);
@@ -735,6 +737,7 @@
         unread.add(msg.tab.id);
       }
       if (structural) {
+        if (msg.template) holdFrame(msg.tab.id);
         refreshFrame(msg.tab);
         library.refreshSearch();
       } else {
@@ -2988,7 +2991,7 @@
       if (entry.el.title !== tab.title) {
         entry.el.title = tab.title;
       }
-      if (entry.revision !== tab.revision) {
+      if (entry.revision !== tab.revision && !entry.held) {
         loadFrame(entry.el, tab);
         entry.revision = tab.revision;
       }
@@ -3005,11 +3008,38 @@
     if (!entry) {
       return;
     }
-    entry.revision = tab.revision;
+    if (!entry.held) {
+      entry.revision = tab.revision;
+    }
     if (entry.el.title !== tab.title) {
       entry.el.title = tab.title;
       // The page isn't reloaded for a rename, so tell it (scribe.onTitle).
       entry.el.contentWindow?.postMessage({ type: "scribe-title", id: tab.id, title: tab.title }, "*");
+    }
+  }
+
+  /**
+   * A template change (a built-in reloaded after a merge, an agent's template_upsert) would reload
+   * every page made from it. One on screen keeps running instead, so an open dialog or text being
+   * typed survives; it loads the new HTML once it is hidden (releaseFrame).
+   */
+  function holdFrame(id) {
+    const entry = frames.get(id);
+    if (entry && views.isShown(id)) {
+      entry.held = true;
+    }
+  }
+
+  /** A held frame left the screen: load the revision it skipped. */
+  function releaseFrame(id) {
+    const entry = frames.get(id);
+    if (!entry?.held) {
+      return;
+    }
+    entry.held = false;
+    const tab = findAnyTab(id);
+    if (tab) {
+      refreshFrame(tab);
     }
   }
 
@@ -3018,7 +3048,7 @@
     if (!entry) {
       return;
     }
-    if (entry.revision !== tab.revision) {
+    if (entry.revision !== tab.revision && !entry.held) {
       loadFrame(entry.el, tab);
       entry.revision = tab.revision;
     }

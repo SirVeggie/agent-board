@@ -753,6 +753,7 @@ window.createViews = function createViews(host) {
       const role = roles.get(id) || "";
       const pane = role === "peek" ? "" : panes.get(id) || "";
       entry.el.classList.toggle("inactive", !role);
+      if (!role) host.releaseFrame?.(id);
       if (entry.el.dataset.role !== role) {
         entry.el.dataset.role = role;
       }
