@@ -50,9 +50,12 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
     assert.equal(await page.locator(".comment-follow").count(), 0);
     await page.locator("#mClose").click();
     await page.locator("#workersBtn").click();
-    const select = page.locator('select[aria-label="Default model"]');
-    assert.deepEqual(await select.locator("option").allTextContents(), ["None", "Sol"]);
-    await select.selectOption("sol", { force: true });
+    const select = page.getByRole("button", { name: "Default model", exact: true });
+    assert.equal(await select.textContent(), "None");
+    await select.click();
+    assert.deepEqual(await page.getByRole("option").allTextContents(), ["✓None", "Sol"]);
+    await page.getByRole("option", { name: "Sol", exact: true }).click();
+    assert.equal(await select.textContent(), "Sol");
     await page.keyboard.press("Escape");
     await page.locator('.card[data-id="c1"] .card-title').click();
     assert.equal(await page.locator("#commentAsk").isVisible(), true);

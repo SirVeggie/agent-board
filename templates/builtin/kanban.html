@@ -6042,13 +6042,14 @@
     sharedSummary.appendChild(sharedEdit);
     workersPop.appendChild(sharedSummary);
     var ids = workerIds();
-    var defaultRow = el("label", "wp-shared");
+    var defaultRow = el("div", "wp-shared");
     defaultRow.appendChild(el("span", null, "Default model"));
     var defaultSelect = el("select", "field");
     defaultSelect.setAttribute("aria-label", "Default model");
     fillSelect(defaultSelect, [["", "None"]].concat(ids.map(function (id) { return [id, workerName(worker(id)) || "Unnamed"]; })), str(settings().defaultWorker));
     defaultSelect.addEventListener("change", function () { saveSetting("defaultWorker", defaultSelect.value); });
     defaultRow.appendChild(defaultSelect);
+    enhanceSelect(defaultSelect);
     workersPop.appendChild(defaultRow);
     if (!ids.length) workersPop.appendChild(el("p", "worker-note", "No workers yet. Add one, give it instructions, then assign cards to it and start it."));
     if (panelOpen && !worker(panelOpen)) { panelOpen = null; panelEditor = null; }
