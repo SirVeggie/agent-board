@@ -1396,18 +1396,18 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/tabs/:id/folder-instructions", (req, res) => {
+  app.put("/api/folders/:fid/instructions", (req, res) => {
     if (viewerOf(req) === "agent") {
       res.status(403).json({ error: "Only the board UI can change folder instructions" });
       return;
     }
-    if (typeof req.body?.on !== "boolean") {
-      res.status(400).json({ error: "on must be true or false" });
+    if (typeof req.body?.description !== "string" || typeof req.body?.instructions !== "string") {
+      res.status(400).json({ error: "description and instructions must be text" });
       return;
     }
     try {
-      const tab = store.setFolderInstructions(req.params.id, req.body.on);
-      res.json({ tab: toMeta(tab) });
+      const folder = store.setFolderInstructions(req.params.fid, req.body.description, req.body.instructions);
+      res.json({ folder });
     } catch (err) {
       sendStoreError(res, err);
     }

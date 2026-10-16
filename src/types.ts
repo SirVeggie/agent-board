@@ -160,6 +160,8 @@ export type TemplateBinding = {
 
 export type Folder = {
   id: string;
+  description?: string;
+  instructions?: string;
   /** null is the Library root. */
   parentId: string | null;
   name: string;
@@ -204,8 +206,6 @@ export type Tab = {
   templateIncompatibleReason?: string;
   /** Only the board UI can set this. Agent requests treat the tab as nonexistent. */
   agentHidden?: boolean;
-  /** This page is the standing agent instructions for its Library folder. */
-  folderInstructions?: boolean;
   /** Which in-app agent created the page and last changed it. Omitted until an agent writes. */
   provenance?: PageProvenance;
   /**
@@ -313,20 +313,14 @@ export function isAppTab(tab: { key: string }): boolean {
   return tab.key === WELCOME_KEY;
 }
 
-/** A page titled "Instructions" is that folder's agent instructions unless another page is flagged. */
-export function isFolderInstructionTitle(title: string): boolean {
-  return title.trim().toLowerCase() === "instructions";
-}
-
 /** Who is asking: the board UI (and tab pages), or an agent through the MCP. */
 export type Viewer = "user" | "agent";
 
-/** A Library page used as standing agent instructions for a folder. */
-export type FolderInstructionPage = {
+/** Standing agent context configured on a Library folder. */
+export type FolderInstruction = {
   /** Library path, or null for the root. */
   folder: string | null;
-  key: string;
-  title: string;
+  description?: string;
   text: string;
 };
 
@@ -464,7 +458,6 @@ export function toMeta(tab: Tab): TabMeta {
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
     assets: tab.assets,
     ...(tab.agentHidden ? { agentHidden: true } : {}),
-    ...(tab.folderInstructions ? { folderInstructions: true } : {}),
     ...(tab.provenance ? { provenance: tab.provenance } : {}),
     ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
     ...(tab.workspace ? { workspace: tab.workspace } : {}),

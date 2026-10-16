@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS folders (
   id TEXT PRIMARY KEY,
   parent_id TEXT,
   name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  instructions TEXT NOT NULL DEFAULT '',
   pos REAL NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

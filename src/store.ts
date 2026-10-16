@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
-import { buildExport, type BoardExportFile, type ImportPageInput } from "./boardExport.js";
+import { buildExport, type BoardExportFile, type BoardExportFolder, type ImportPageInput } from "./boardExport.js";
 import { BUILTIN_ID_PREFIX, isBuiltinId, loadBuiltinTemplates } from "./builtinTemplates.js";
-import { htmlToText, searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
+import { searchLibrary as rankLibrary, LIBRARY_PAGE_DEFAULT, type LibrarySearchResult } from "./librarySearch.js";
 import { searchPages as rankPages, PAGE_SEARCH_DEFAULT, type PageSearchResult } from "./pageSearch.js";
 import {
   ASSET_SWEEP_INTERVAL_MS,
@@ -55,7 +55,6 @@ import {
   WELCOME_KEY,
   isAppTab,
   isBlankPage,
-  isFolderInstructionTitle,
   NEW_PAGE_TITLE,
   isPlainObject,
   isTemplateBound,
@@ -67,7 +66,7 @@ import {
   type BoardState,
   type DeletedBatch,
   type Folder,
-  type FolderInstructionPage,
+  type FolderInstruction,
   type ImportDestination,
   type RestorePlacement,
   type EventInput,
@@ -351,13 +350,13 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Every folder as a path, depth-first in Library order, with its own page count (not subfolders'). */
-  folderTree(viewer: Viewer = "user"): Array<{ id: string; path: string; pages: number }> {
-    const out: Array<{ id: string; path: string; pages: number }> = [];
+  folderTree(viewer: Viewer = "user"): Array<{ id: string; path: string; pages: number; description?: string }> {
+    const out: Array<{ id: string; path: string; pages: number; description?: string }> = [];
     const walk = (parentId: string | null, prefix: string) => {
       for (const folder of this.foldersIn(parentId)) {
         const path = prefix ? `${prefix}/${folder.name}` : folder.name;
         const pages = this.pagesIn(folder.id).filter((tab) => visibleTo(tab, viewer)).length;
-        out.push({ id: folder.id, path, pages });
+        out.push({ id: folder.id, path, pages, ...(folder.description ? { description: folder.description } : {}) });
         walk(folder.id, path);
       }
     };
@@ -434,41 +433,32 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
-  setFolderInstructions(idOrKey: string, on: boolean): Tab {
-    const tab = this.requireAny(idOrKey);
-    if (isAppTab(tab)) {
-      throw new Error("the help page cannot be folder instructions");
-    }
-    if (Boolean(tab.folderInstructions) === on) {
-      return tab;
-    }
-    if (on) {
-      tab.folderInstructions = true;
-      this.clearSiblingFolderInstructions(tab);
-    } else {
-      delete tab.folderInstructions;
-    }
-    this.markDirty(tab.id);
+  setFolderInstructions(id: string, description: string, instructions: string): Folder {
+    const folder = this.folders.get(id);
+    if (!folder) throw new Error("folder not found");
+    folder.description = description.trim();
+    folder.instructions = instructions.trim();
+    folder.updatedAt = this.stamp();
+    this.foldersDirty = true;
     this.persistSoon();
-    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
-    return tab;
+    this.emitFolders();
+    return folder;
   }
 
   /**
-   * Instruction pages for a Library folder and its parents (root first, nearest last).
-   * A flagged page in a folder wins over a page titled "Instructions". Empty pages are skipped.
+   * Settings for a Library folder and its parents, outermost first.
    */
-  folderInstructionsFor(folderId: string | null): FolderInstructionPage[] {
-    const out: FolderInstructionPage[] = [];
+  folderInstructionsFor(folderId: string | null): FolderInstruction[] {
+    const out: FolderInstruction[] = [];
     for (const id of this.folderAncestors(folderId)) {
-      const page = this.instructionPageIn(id);
-      if (!page) continue;
-      const text = this.instructionText(page);
-      if (!text) continue;
+      const folder = id ? this.folders.get(id) : undefined;
+      if (!folder || (!folder.description && !folder.instructions)) continue;
+      const raw = folder.instructions ?? "";
+      const text = raw.length > MAX_FOLDER_INSTRUCTION_CHARS
+        ? `${raw.slice(0, MAX_FOLDER_INSTRUCTION_CHARS)}\n… (truncated)` : raw;
       out.push({
         folder: this.folderPath(id),
-        key: page.key,
-        title: page.title,
+        description: folder.description,
         text,
       });
     }
@@ -1185,10 +1175,16 @@ export class BoardStore extends EventEmitter {
           .map((id) => this.templates.get(id))
           .filter((template): template is Template => Boolean(template))
       : [...this.templates.values()];
-    if (!tabs.length && !templates.length) {
+    const folders = scope.id ? [] : this.listFolders().filter((folder) =>
+      !scope.folderId || this.folderInside(folder.id, scope.folderId)).map((folder) => ({
+        path: this.folderPath(folder.id)!,
+        ...(folder.description ? { description: folder.description } : {}),
+        ...(folder.instructions ? { instructions: folder.instructions } : {}),
+      }));
+    if (!tabs.length && !templates.length && !folders.length) {
       throw new Error("nothing to export");
     }
-    return buildExport(
+    const file = buildExport(
       tabs.map((tab) => ({
         tab,
         assets: readPreparedAssets(tab.id, tab.assets ?? []),
@@ -1197,11 +1193,13 @@ export class BoardStore extends EventEmitter {
       })),
       templates
     );
+    if (folders.length) file.folders = folders;
+    return file;
   }
 
   /** Templates are matched by content, so importing the same file twice links to the templates created the first time. */
   importBoard(
-    input: { templates: Template[]; pages: ImportPageInput[] },
+    input: { templates: Template[]; pages: ImportPageInput[]; folders?: BoardExportFolder[] },
     destination: ImportDestination
   ): {
     tabs: Tab[];
@@ -1214,7 +1212,7 @@ export class BoardStore extends EventEmitter {
     // Exports from Agent Board carry pages and templates written for its page API.
     const pages = input.pages.map((page) => ({ ...page, html: upgradeLegacyHtml(page.html) }));
     const templates = input.templates.map((template) => ({ ...template, html: upgradeLegacyHtml(template.html) }));
-    if (!pages.length && !templates.length) {
+    if (!pages.length && !templates.length && !input.folders?.length) {
       throw new Error("nothing to import");
     }
     const plan = this.planTemplateImport(templates);
@@ -1239,6 +1237,15 @@ export class BoardStore extends EventEmitter {
       this.markTemplateDirty(template.id);
     }
     const foldersBefore = this.folders.size;
+    for (const settings of input.folders ?? []) {
+      const id = this.ensureFolderPath(settings.path);
+      if (id) {
+        const folder = this.folders.get(id)!;
+        if (settings.description !== undefined) folder.description = settings.description.trim();
+        if (settings.instructions !== undefined) folder.instructions = settings.instructions.trim();
+        this.foldersDirty = true;
+      }
+    }
     this.placeImported(drafts, pages);
     const opened: Tab[] = [];
     const closed: Tab[] = [];
@@ -1265,7 +1272,7 @@ export class BoardStore extends EventEmitter {
     } else {
       this.persistSoon();
     }
-    if (this.folders.size !== foldersBefore) {
+    if (this.folders.size !== foldersBefore || input.folders?.length) {
       this.emitFolders();
     }
     for (const tab of closed) {
@@ -2520,9 +2527,6 @@ export class BoardStore extends EventEmitter {
     } else {
       delete tab.folderId;
     }
-    if (tab.folderInstructions) {
-      this.clearSiblingFolderInstructions(tab);
-    }
     this.markDirty(tab.id);
     this.persistSoon();
     if (opts.close && located.where === "open") {
@@ -2899,7 +2903,6 @@ export class BoardStore extends EventEmitter {
       events: [],
       assets,
       ...(page.agentHidden ? { agentHidden: true } : {}),
-      ...(page.folderInstructions ? { folderInstructions: true } : {}),
       ...(page.provenance ? { provenance: page.provenance } : {}),
     };
     seedState(tab, pageState);
@@ -3229,37 +3232,6 @@ export class BoardStore extends EventEmitter {
     chain.push(null);
     chain.reverse();
     return chain;
-  }
-
-  private instructionPageIn(folderId: string | null): Tab | undefined {
-    const pages = this.pagesIn(folderId);
-    return pages.find((tab) => tab.folderInstructions) ?? pages.find((tab) => isFolderInstructionTitle(tab.title));
-  }
-
-  private instructionText(tab: Tab): string {
-    const template = tab.templateId ? this.templates.get(tab.templateId) : undefined;
-    const builtin = template?.source?.builtin ?? (template && isBuiltinId(template.id) ? template.key : undefined);
-    const raw =
-      builtin === "markdown-note"
-        ? typeof tab.state.text === "string"
-          ? tab.state.text.trim()
-          : ""
-        : htmlToText(tab.html);
-    if (!raw) {
-      return "";
-    }
-    return raw.length > MAX_FOLDER_INSTRUCTION_CHARS
-      ? `${raw.slice(0, MAX_FOLDER_INSTRUCTION_CHARS)}\n… (truncated)`
-      : raw;
-  }
-
-  private clearSiblingFolderInstructions(tab: Tab): void {
-    for (const other of this.pagesIn(tab.folderId ?? null, tab.id)) {
-      if (!other.folderInstructions) continue;
-      delete other.folderInstructions;
-      this.markDirty(other.id);
-      this.emit("tab_upserted", toMeta(other), undefined, { activate: false, structural: false });
-    }
   }
 
   private foldersIn(parentId: string | null, exceptId?: string): Folder[] {

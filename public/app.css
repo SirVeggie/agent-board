@@ -708,12 +708,7 @@ body.dragging-tab iframe {
 }
 
 .tab-agent-hidden,
-.tab-folder-instructions {
-  color: var(--muted);
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-}
+
 
 button.tab-close {
   appearance: none;
@@ -1365,6 +1360,39 @@ body.dragging-lib iframe {
 
 .confirm::backdrop {
   background: rgba(10, 11, 12, 0.6);
+}
+
+.folder-instructions {
+  width: min(620px, calc(100vw - 32px));
+  max-width: 620px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.folder-instructions h2 {
+  margin: 0;
+  padding: 20px 20px 16px;
+  font-size: 17px;
+}
+
+.folder-instructions-field {
+  display: grid;
+  gap: 8px;
+  padding: 0 20px 16px;
+}
+
+.folder-instructions textarea {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 60vh;
+  resize: none;
+  overflow-y: auto;
+}
+
+.lib-instructions-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 
 .confirm p {
@@ -2287,7 +2315,8 @@ button.settings-close svg {
   margin: 0 0 12px;
 }
 
-.template-field label {
+.template-field label,
+.folder-instructions-field label {
   display: block;
   margin-bottom: 5px;
   font-size: 12px;
@@ -2296,6 +2325,7 @@ button.settings-close svg {
 
 .template-field input,
 .template-field textarea,
+.folder-instructions textarea,
 .template-field select {
   width: 100%;
   border: 0;
@@ -2389,14 +2419,16 @@ button.settings-close svg {
   margin: 0;
 }
 
-.template-field textarea {
-  min-height: 72px;
+.template-field textarea,
+.folder-instructions textarea {
   padding: 8px 10px;
-  resize: vertical;
 }
+
+.template-field textarea { min-height: 72px; resize: vertical; }
 
 .template-field input:focus,
 .template-field textarea:focus,
+.folder-instructions textarea:focus,
 .template-field select:focus {
   outline: none;
   box-shadow: 0 0 0 1px var(--accent-ring);

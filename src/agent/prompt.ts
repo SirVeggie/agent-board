@@ -3,7 +3,7 @@ import { customInstructions } from "./customModes.js";
 import os from "node:os";
 import path from "node:path";
 import { BOARD_MCP } from "./providers/cursor.js";
-import type { FolderInstructionPage } from "../types.js";
+import type { FolderInstruction } from "../types.js";
 import { memoryBlock, type Memory } from "./memory.js";
 import { noPages, type ContextChip, type Thread } from "./types.js";
 
@@ -11,7 +11,7 @@ import { noPages, type ContextChip, type Thread } from "./types.js";
 export type ScopeInfo = {
   page?: { id: string; key: string; title: string; folder: string | null; blank?: boolean } | null;
   folder?: { id: string; path: string } | null;
-  folderInstructions?: FolderInstructionPage[];
+  folderInstructions?: FolderInstruction[];
   /** A SearXNG instance is set in Agent settings: Pi threads (and Cursor ones without full web) have web_search. */
   webSearch?: boolean;
   /** Servers in the user's own Claude Code config that this Claude thread does not get (Scribe's MCP list replaces that config). */
@@ -167,12 +167,13 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   if (scope.folderInstructions?.length) {
     lines.push(
       "",
-      "Folder instructions (Library pages for this folder and its parents). Follow them as standing instructions for this thread. The user can edit those pages; changes apply on the next turn."
+      "Folder instructions (for this Library folder and its parents). Follow them as standing instructions for this thread. The user can edit them in the folder menu; changes apply on the next turn."
     );
     for (const page of scope.folderInstructions) {
       const folder = page.folder ?? "Library root";
       const body = page.text.replaceAll("</folder_instructions>", "</ folder_instructions>");
-      lines.push("", `<folder_instructions folder="${folder}" page="${page.key}">`, body, "</folder_instructions>");
+      const description = page.description?.replaceAll("</folder_instructions>", "</ folder_instructions>");
+      lines.push("", `<folder_instructions folder="${folder}">`, ...(description ? [`Description: ${description}`] : []), body, "</folder_instructions>");
     }
   }
   if (scope.memories) {

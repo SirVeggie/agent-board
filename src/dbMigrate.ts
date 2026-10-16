@@ -179,6 +179,12 @@ export function ensurePagePermissionSchema(db: DatabaseSync): void {
  * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
  */
 export function ensureFolderInstructionsColumn(db: DatabaseSync): void {
+  const folderColumns = db.prepare("PRAGMA table_info(folders)").all() as Array<{ name: string }>;
+  for (const name of ["description", "instructions"]) {
+    if (!folderColumns.some((column) => column.name === name)) {
+      db.exec(`ALTER TABLE folders ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
+    }
+  }
   const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
   if (columns.some((column) => column.name === "folder_instructions")) {
     return;

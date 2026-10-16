@@ -273,12 +273,9 @@ window.createLibrary = function createLibrary(host) {
 
     const icon = document.createElement("span");
     icon.className = "fileicon";
-    const instruction = page.folderInstructions || (page.title || "").trim().toLowerCase() === "instructions";
-    icon.innerHTML = page.agentHidden ? host.icons.agentHidden : instruction ? host.icons.folderInstructions : host.icons.file;
+    icon.innerHTML = page.agentHidden ? host.icons.agentHidden : host.icons.file;
     if (page.agentHidden) {
       icon.dataset.tooltip = host.icons.agentHiddenTitle;
-    } else if (instruction) {
-      icon.dataset.tooltip = host.icons.folderInstructionsTitle;
     }
     el.appendChild(icon);
 
@@ -371,6 +368,14 @@ window.createLibrary = function createLibrary(host) {
       dot.className = "lib-unread-dot";
       dot.setAttribute("aria-label", "Has unread pages");
       el.appendChild(dot);
+    }
+    if (folder.description || folder.instructions) {
+      const instructions = document.createElement("span");
+      instructions.className = "lib-instructions-icon";
+      instructions.innerHTML = host.icons.folderInstructions;
+      instructions.setAttribute("aria-label", "Custom agent instructions");
+      instructions.dataset.tooltip = "Custom agent instructions";
+      el.appendChild(instructions);
     }
     const count = document.createElement("span");
     count.className = "lib-count";
@@ -1009,10 +1014,6 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
       { label: tab.agentHidden ? "Show to agent" : "Hide from agent", action: () => host.setAgentHidden(id, !tab.agentHidden) },
-      {
-        label: tab.folderInstructions ? "Stop using as folder instructions" : "Use as folder instructions",
-        action: () => host.setFolderInstructions(id, !tab.folderInstructions),
-      },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: tab.workspace ? "Change workspace…" : "Set workspace…", action: () => host.pickPageWorkspace(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
@@ -1027,6 +1028,72 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Delete", danger: true, action: () => deletePage(id) },
     ]);
+  }
+
+  function editFolderInstructions(folder) {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm folder-instructions";
+    dialog.setAttribute("aria-labelledby", "folder-instructions-title");
+    const form = document.createElement("form");
+    const title = document.createElement("h2");
+    title.id = "folder-instructions-title";
+    title.textContent = `${folder.name} instructions`;
+    form.appendChild(title);
+    const fields = [];
+    for (const [key, label, rows] of [["description", "Description", 1], ["instructions", "Instructions", 5]]) {
+      const wrap = document.createElement("div");
+      wrap.className = "folder-instructions-field";
+      const caption = document.createElement("label");
+      caption.htmlFor = `folder-instructions-${key}`;
+      caption.textContent = label;
+      const input = document.createElement("textarea");
+      input.id = caption.htmlFor;
+      input.rows = rows;
+      input.value = folder[key] || "";
+      const resize = () => {
+        input.style.height = "auto";
+        input.style.height = `${input.scrollHeight + 2}px`;
+      };
+      input.addEventListener("input", resize);
+      fields.push({ key, input, resize });
+      wrap.append(caption, input);
+      form.appendChild(wrap);
+    }
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => dialog.close());
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "primary";
+    save.textContent = "Save";
+    actions.append(cancel, save);
+    form.appendChild(actions);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      const values = Object.fromEntries(fields.map(({ key, input }) => [key, input.value]));
+      const res = await send("PUT", `/api/folders/${encodeURIComponent(folder.id)}/instructions`, values);
+      save.disabled = false;
+      if (!res.ok) {
+        host.showNotice("Could not save folder instructions");
+        return;
+      }
+      dialog.close();
+    });
+    dialog.appendChild(form);
+    document.body.appendChild(dialog);
+    const resize = () => fields.forEach((field) => field.resize());
+    window.addEventListener("resize", resize);
+    dialog.addEventListener("close", () => {
+      window.removeEventListener("resize", resize);
+      dialog.remove();
+    }, { once: true });
+    dialog.showModal();
+    resize();
+    fields[0].input.focus();
   }
 
   function folderMenu(event, id) {
@@ -1047,8 +1114,9 @@ window.createLibrary = function createLibrary(host) {
       { label: "New folder inside", action: () => createFolder(id) },
       { label: "Rename", action: () => startRename("folder", id) },
       { label: "Move to…", action: () => openMovePicker({ kind: "folder", id }, point) },
+      { label: "Agent instructions", action: () => editFolderInstructions(folder) },
       "sep",
-      { label: "Export folder", disabled: countPages(id) === 0, action: () => host.downloadFolderExport(id) },
+      { label: "Export folder", action: () => host.downloadFolderExport(id) },
       "sep",
       { label: "Delete folder…", danger: true, action: () => deleteFolder(id) },
     ]);

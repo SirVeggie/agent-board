@@ -622,7 +622,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "library_folders",
-    "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with the number of pages directly inside it. Use before page_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for library_search. Never create a new folder unless the user asked for one.",
+    "List the Library's folders as paths (e.g. \"CLIMS/Releases\"), depth-first in the user's order, each with its description when set and the number of pages directly inside it. Use before page_show when a new page clearly belongs to an existing folder, then pass that exact path as folder. Also usable as the folder filter for library_search. Never create a new folder unless the user asked for one.",
     {},
     { readOnlyHint: true },
     async () => {
@@ -630,9 +630,9 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const folders = (data as { folders: Array<{ path: string; pages: number }> }).folders ?? [];
+      const folders = (data as { folders: Array<{ path: string; pages: number; description?: string }> }).folders ?? [];
       return jsonResult({
-        folders: folders.map(({ path, pages }) => ({ path, pages })),
+        folders: folders.map(({ path, pages, description }) => ({ path, pages, ...(description ? { description } : {}) })),
         note: folders.length ? `${folders.length} folders.` : "The Library has no folders; new pages go to the root.",
       });
     }

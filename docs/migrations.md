@@ -68,7 +68,14 @@
 - **How to verify:** `agent page writes record created-by and last-changed-by`, `user writes leave provenance alone; external agents have no thread`, and `page provenance persists, exports, and migrates a missing column` in `src/store.test.ts`.
 - **When to remove:** Keep. This is the current schema.
 
-## `tabs.folder_instructions` column (additive, schema still 3)
+## Folder description and instructions (additive, schema still 3)
+
+- **What changed:** Agent instructions now belong to folders, edited through the folder context menu. `folders.description` and `folders.instructions` are text columns with empty defaults, added on open for existing databases. Descriptions appear in folder listings; both fields enter folder/page thread context, with parents first.
+- **Compatibility:** The old page flag column remains for database compatibility but is no longer used. Pages titled Instructions are ordinary pages, and the page toggle route is retired. Existing instruction pages remain in the Library; their text can be copied into the new folder dialog.
+- **Export format:** Optional `folders` entries carry paths, descriptions and instructions in folder/Library exports, including empty folders. Older exports without these entries still import. `EXPORT_VERSION` stays `1`.
+- **Protocol:** `PUT /api/folders/:fid/instructions` replaces the page toggle and remains restricted to the Scribe UI. `VERSION` stays `3.0.0`.
+
+## `tabs.folder_instructions` column (retired, additive, schema still 3)
 
 - **What changed:** A page can be marked as its Library folder's standing agent instructions (`folderInstructions` on the tab, tab menu **Use as folder instructions**). Stored as `tabs.folder_instructions INTEGER NOT NULL DEFAULT 0`. A page titled `Instructions` counts even without the flag. Export files carry optional `folderInstructions: true`.
 - **Why no version bump:** Existing rows are unchanged (default 0). SQLite has no `ADD COLUMN IF NOT EXISTS`, so `ensureFolderInstructionsColumn` checks `PRAGMA table_info(tabs)` first. `SCHEMA_VERSION` stays `3`.

@@ -38,6 +38,8 @@ export type StoredFolder = {
 
 type FolderRow = {
   id: string;
+  description: string;
+  instructions: string;
   parent_id: string | null;
   name: string;
   pos: number;
@@ -205,8 +207,8 @@ ON CONFLICT(id) DO UPDATE SET
 `;
 
 const INSERT_FOLDER_SQL = `
-INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch, description, instructions)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const UPSERT_TEMPLATE_SQL = `
@@ -722,7 +724,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     JSON.stringify(tab.events ?? []),
     JSON.stringify(tab.assets ?? []),
     tab.agentHidden ? 1 : 0,
-    tab.folderInstructions ? 1 : 0,
+    0, // Retired page instruction flag; column retained for older databases.
     tab.folderId ?? null,
     tab.libPos,
     status === "deleted" ? (deletedBatch ?? null) : null,
@@ -744,6 +746,8 @@ function folderToParams(stored: StoredFolder): SQLInputValue[] {
     folder.updatedAt,
     deletedAt ?? null,
     deletedAt !== undefined ? (deletedBatch ?? null) : null,
+    folder.description ?? "",
+    folder.instructions ?? "",
   ];
 }
 
@@ -753,6 +757,8 @@ function rowToFolder(row: FolderRow): StoredFolder {
       id: row.id,
       parentId: row.parent_id ?? null,
       name: row.name,
+      ...(row.description ? { description: row.description } : {}),
+      ...(row.instructions ? { instructions: row.instructions } : {}),
       pos: Number(row.pos) || 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -807,9 +813,6 @@ function rowToStored(row: TabRow): StoredTab {
   };
   if (row.agent_hidden) {
     tab.agentHidden = true;
-  }
-  if (row.folder_instructions) {
-    tab.folderInstructions = true;
   }
   if (row.folder_id) {
     tab.folderId = row.folder_id;

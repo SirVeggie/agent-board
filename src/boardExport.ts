@@ -60,9 +60,10 @@ export type BoardExportPage = {
   pageAssets?: BoardExportPageAsset[];
   template?: PageTemplateBinding;
   agentHidden?: boolean;
-  folderInstructions?: boolean;
   provenance?: PageProvenance;
 };
+
+export type BoardExportFolder = { path: string; description?: string; instructions?: string };
 
 export type BoardExportFile = {
   format: typeof EXPORT_FORMAT;
@@ -70,6 +71,7 @@ export type BoardExportFile = {
   exportedAt: number;
   templates: Template[];
   pages: BoardExportPage[];
+  folders?: BoardExportFolder[];
 };
 
 export type ImportPageInput = {
@@ -87,7 +89,6 @@ export type ImportPageInput = {
   pageAssets?: PageAssetDraft[];
   template?: PageTemplateBinding;
   agentHidden?: boolean;
-  folderInstructions?: boolean;
   provenance?: PageProvenance;
 };
 
@@ -95,6 +96,7 @@ export type ParsedImport = {
   kind: "export" | "html";
   templates: Template[];
   pages: ImportPageInput[];
+  folders?: BoardExportFolder[];
 };
 
 export function buildExport(
@@ -135,7 +137,6 @@ export function buildExport(
           }
         : {}),
       ...(tab.agentHidden ? { agentHidden: true } : {}),
-      ...(tab.folderInstructions ? { folderInstructions: true } : {}),
       ...(tab.provenance ? { provenance: tab.provenance } : {}),
       ...(tab.templateId && included.has(tab.templateId)
         ? {
@@ -214,7 +215,7 @@ export function safeStem(title: string): string {
   return (cleaned || "page").slice(0, 80);
 }
 
-function contentFromExport(value: unknown): Pick<ParsedImport, "templates" | "pages"> {
+function contentFromExport(value: unknown): Pick<ParsedImport, "templates" | "pages" | "folders"> {
   if (!isExportFile(value)) {
     throw new Error("not an Scribe export");
   }
@@ -225,7 +226,13 @@ function contentFromExport(value: unknown): Pick<ParsedImport, "templates" | "pa
   if (!Array.isArray(rawTemplates)) {
     throw new Error("templates must be an array");
   }
-  if (!value.pages.length && !rawTemplates.length) {
+  if (value.folders !== undefined && (!Array.isArray(value.folders) || value.folders.some((folder) =>
+    !isPlainObject(folder) || typeof folder.path !== "string" || !folder.path.trim() ||
+    (folder.description !== undefined && typeof folder.description !== "string") ||
+    (folder.instructions !== undefined && typeof folder.instructions !== "string")))) {
+    throw new Error("folders must contain paths and text settings");
+  }
+  if (!value.pages.length && !rawTemplates.length && !value.folders?.length) {
     throw new Error("export has no pages or templates");
   }
   const templates = rawTemplates.map((raw, index) => templateFromExport(raw, index));
@@ -238,6 +245,7 @@ function contentFromExport(value: unknown): Pick<ParsedImport, "templates" | "pa
   }
   return {
     templates,
+    ...(value.folders ? { folders: value.folders.map(({ path, description, instructions }) => ({ path, description, instructions })) } : {}),
     pages: value.pages.map((page, index) => pageFromExport(page, index, templateIds)),
   };
 }
@@ -342,7 +350,6 @@ function pageFromExport(raw: unknown, index: number, templateIds: Set<string>): 
     pageAssets: pageAssetsFromExport(page.pageAssets, index),
     template: bindingFromExport(page.template, index, templateIds),
     ...(page.agentHidden === true ? { agentHidden: true } : {}),
-    ...(page.folderInstructions === true ? { folderInstructions: true } : {}),
     ...(provenance ? { provenance } : {}),
   };
 }

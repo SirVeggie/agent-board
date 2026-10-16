@@ -221,7 +221,6 @@
   const AGENT_HIDDEN_TITLE = "Hidden from the agent";
   const FOLDER_INSTRUCTIONS_SVG =
     '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3 2.5h7.2L13 5.3V13.5H3z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.2 8h5.6M5.2 10.2h3.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
-  const FOLDER_INSTRUCTIONS_TITLE = "Folder instructions for the agent";
   const UPDATE_SVG =
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zm-.8 3.2v4.1h1.6V4.7zm0 5.3v1.6h1.6V10z" fill="currentColor" fill-rule="evenodd"/></svg>';
   const UPDATE_TITLE = "Built-in template updated";
@@ -357,7 +356,6 @@
     closeTab: (id) => closeTab(id),
     setPinned,
     setAgentHidden,
-    setFolderInstructions,
     pickPageWorkspace,
     managePermissions: (id) => window.scribePermissions?.manage(id),
     copyTabKey,
@@ -389,7 +387,7 @@
     clearStripSlot,
     openThread: (id) => window.scribeChat?.openThread?.(id),
     pageStatus: (id) => window.scribeChat?.pageStatus?.(id) || null,
-    icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE, folderInstructions: FOLDER_INSTRUCTIONS_SVG, folderInstructionsTitle: FOLDER_INSTRUCTIONS_TITLE },
+    icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE, folderInstructions: FOLDER_INSTRUCTIONS_SVG },
   });
   const views = window.createViews({
     startPaneDrag,
@@ -1695,18 +1693,6 @@
       }
     } else if (hidden) {
       hidden.remove();
-    }
-    let instr = el.querySelector(".tab-folder-instructions");
-    if (tab.folderInstructions || (tab.title || "").trim().toLowerCase() === "instructions") {
-      if (!instr) {
-        instr = document.createElement("span");
-        instr.className = "tab-folder-instructions";
-        instr.setAttribute("aria-label", FOLDER_INSTRUCTIONS_TITLE);
-        instr.innerHTML = FOLDER_INSTRUCTIONS_SVG;
-        el.insertBefore(instr, el.querySelector(".tab-title"));
-      }
-    } else if (instr) {
-      instr.remove();
     }
     let dot = el.querySelector(".tab-updated");
     if (unread.has(tab.id) && tab.id !== state.activeId) {
@@ -3623,14 +3609,6 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workspace: picked || null }),
-    });
-  }
-
-  async function setFolderInstructions(id, on) {
-    await fetch(`/api/tabs/${encodeURIComponent(id)}/folder-instructions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ on }),
     });
   }
 

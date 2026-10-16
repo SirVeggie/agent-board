@@ -95,7 +95,7 @@ test("worktree threads with a linked node_modules are told how to change depende
   assert.doesNotMatch(threadInstructions(wt([]), {}), /package-lock-only/);
 });
 
-test("threadInstructions includes folder instruction pages, parents first", () => {
+test("threadInstructions includes folder settings, parents first", () => {
   const thread = {
     provider: "claude",
     mode: "board",
@@ -105,15 +105,16 @@ test("threadInstructions includes folder instruction pages, parents first", () =
   const text = threadInstructions(thread, {
     page: { id: "t1", key: "scribe:notes", title: "Notes", folder: "Work/Releases" },
     folderInstructions: [
-      { folder: null, key: "scribe:root-instructions", title: "Instructions", text: "Root rule." },
-      { folder: "Work/Releases", key: "scribe:release-rules", title: "Rules", text: "Release rule." },
+      { folder: null, description: "Root summary", text: "Root rule." },
+      { folder: "Work/Releases", text: "Release rule." },
     ],
   });
-  assert.match(text, /Folder instructions \(Library pages for this folder and its parents\)/);
+  assert.match(text, /Folder instructions \(for this Library folder and its parents\)/);
   const rootAt = text.indexOf('folder="Library root"');
   const nestedAt = text.indexOf('folder="Work/Releases"');
   assert.ok(rootAt >= 0 && nestedAt > rootAt);
   assert.match(text, /Root rule\./);
+  assert.match(text, /Description: Root summary/);
   assert.match(text, /Release rule\./);
   assert.doesNotMatch(threadInstructions(thread, { page: { id: "t1", key: "scribe:notes", title: "Notes", folder: "Work" } }), /Folder instructions/);
 });
