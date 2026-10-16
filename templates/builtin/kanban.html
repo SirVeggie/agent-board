@@ -1450,8 +1450,10 @@
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str(due));
     return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : NaN;
   }
+  var shortDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
   function shortDate(ts) {
-    return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    var date = new Date(ts);
+    return isNaN(date.getTime()) ? date.toString() : shortDateFormatter.format(date);
   }
   function ago(ts) {
     if (!ts) return "";
