@@ -3701,6 +3701,8 @@ html.tight-small .agent-full {
 
 .dock-input {
   display: flex;
+  /* Let the output shrink at the panel's height limit, keeping the composer inside its surface. */
+  flex-shrink: 0;
   align-items: flex-end;
   gap: 8px;
   min-width: 0;
