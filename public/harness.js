@@ -660,7 +660,7 @@
     if (cwd) bar.append(button("Add to this workspace…", "hx-btn", () => chat()?.editMcpServer?.(cwd, null, () => reload())));
     const more = button("All servers…", "hx-btn", () => chat()?.openMcpServers?.({ onClose: () => reload() }));
     more.dataset.tooltip = "Every workspace's list, import from Claude Code, Cursor, Pi and Codex, and the list as JSON";
-    bar.append(more);
+    bar.append(more, button("Saved permissions…", "hx-btn", () => chat()?.openMcpPermissions?.()));
     servers.append(bar);
     const scribeUse = calls.get("scribe");
     const rows = [

@@ -32,6 +32,12 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await page.route("http://mcp.test/**", async (route) => {
       const url = new URL(route.request().url());
       if (!url.pathname.startsWith("/api/agent/")) return route.fulfill({ contentType: "text/html", body: "<main></main>" });
+      if (url.pathname.includes("/harness/") || url.pathname.endsWith("/config") || url.pathname.endsWith("/threads")) {
+        const data = url.pathname.endsWith("/context")
+          ? { thread: route.request().postDataJSON(), own: { mcpDelivery: "" }, servers: [], leftOut: [], duplicates: [] }
+          : { prefs: {}, threads: [], totals: {}, toolKinds: [], tools: [], mcp: [], skills: [], folders: [], memories: [] };
+        return route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+      }
       if (url.pathname.endsWith("/mcp/permissions")) {
         if (route.request().method() === "DELETE") {
           if (fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "revoke failed" }) });
@@ -108,6 +114,12 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await permissions.getByRole("button", { name: /Revoke Unavailable server/ }).click();
     await permissions.getByText("No saved permissions.", { exact: true }).waitFor();
     assert.deepEqual(revoked[1], { key: "b".repeat(64), thread: "thread-a" });
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => (window as any).mcpTest.close());
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("mcp"));
+    await page.getByRole("button", { name: "Saved permissions…", exact: true }).click();
+    await page.locator(".ag-mcp").getByText("No saved permissions.", { exact: true }).waitFor();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
