@@ -1767,9 +1767,7 @@
         closeTab(current.id, { permanent: true });
         return;
       }
-      if (!current.pinned) {
-        closeTab(current.id);
-      }
+      closeTab(current.id);
     });
     el.addEventListener("mousedown", (event) => {
       if (event.button === 1) {
