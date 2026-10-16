@@ -1,0 +1,270 @@
+{
+  "measuredAt": "2026-10-16T19:11:07.311Z",
+  "page": "t_d93be87b",
+  "source": "H2O Lightning 4B",
+  "models": [
+    "h2o-lightning-4b"
+  ],
+  "timeoutMs": 20000,
+  "liveBudgetMs": 500,
+  "questions": {
+    "need": {
+      "type": "choice",
+      "instructions": "A user sent this message to a coding agent that can read files, edit files and run shell commands. What is the most the agent has to do to answer it? Pick the highest that applies.",
+      "options": {
+        "answer": "Only read, search and explain: a question, a review, an explanation, a plan or advice. Nothing is changed.",
+        "pages": "Create or change a page, note, board card or todo item in the app, without touching files in the project.",
+        "web": "Look something up on the web, without changing files or running commands.",
+        "edit": "Create, change, rename or delete files, such as writing or fixing code, without running anything.",
+        "run": "Run commands: build, test, install, start something, use git, or carry out a task whose steps are left to the agent."
+      }
+    }
+  },
+  "cohort": {
+    "total": 40,
+    "picked": 40,
+    "steered": 1,
+    "activity": {
+      "read": 3,
+      "edit": 0,
+      "run": 33,
+      "unknown": 4
+    },
+    "oldest": "2026-10-04T13:41:39.764Z",
+    "newest": "2026-10-16T00:34:23.236Z"
+  },
+  "answered": 40,
+  "failures": {},
+  "usage": {
+    "day": "2026-10-16",
+    "calls": 40,
+    "cached": 0,
+    "failed": 0,
+    "inputTokens": 11255,
+    "outputTokens": 0
+  },
+  "quality": [
+    {
+      "threshold": 0.5,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 29,
+      "ask": 16,
+      "edits": 13,
+      "unknown": 4,
+      "knownLowered": 25,
+      "conflicts": 22,
+      "conflictRate": 0.88
+    },
+    {
+      "threshold": 0.6,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 29,
+      "ask": 12,
+      "edits": 17,
+      "unknown": 4,
+      "knownLowered": 25,
+      "conflicts": 22,
+      "conflictRate": 0.88
+    },
+    {
+      "threshold": 0.7,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 27,
+      "ask": 10,
+      "edits": 17,
+      "unknown": 4,
+      "knownLowered": 23,
+      "conflicts": 20,
+      "conflictRate": 0.8695652173913043
+    },
+    {
+      "threshold": 0.75,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 26,
+      "ask": 9,
+      "edits": 17,
+      "unknown": 4,
+      "knownLowered": 22,
+      "conflicts": 19,
+      "conflictRate": 0.8636363636363636
+    },
+    {
+      "threshold": 0.8,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 26,
+      "ask": 8,
+      "edits": 18,
+      "unknown": 4,
+      "knownLowered": 22,
+      "conflicts": 19,
+      "conflictRate": 0.8636363636363636
+    },
+    {
+      "threshold": 0.85,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 17,
+      "ask": 6,
+      "edits": 11,
+      "unknown": 4,
+      "knownLowered": 13,
+      "conflicts": 10,
+      "conflictRate": 0.7692307692307693
+    },
+    {
+      "threshold": 0.9,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 14,
+      "ask": 6,
+      "edits": 8,
+      "unknown": 4,
+      "knownLowered": 10,
+      "conflicts": 7,
+      "conflictRate": 0.7
+    },
+    {
+      "threshold": 0.95,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 8,
+      "ask": 3,
+      "edits": 5,
+      "unknown": 3,
+      "knownLowered": 5,
+      "conflicts": 2,
+      "conflictRate": 0.4
+    },
+    {
+      "threshold": 0.99,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 1,
+      "ask": 0,
+      "edits": 1,
+      "unknown": 0,
+      "knownLowered": 1,
+      "conflicts": 0,
+      "conflictRate": 0
+    }
+  ],
+  "withinLiveBudget": [
+    {
+      "threshold": 0.5,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 29,
+      "ask": 16,
+      "edits": 13,
+      "unknown": 4,
+      "knownLowered": 25,
+      "conflicts": 22,
+      "conflictRate": 0.88
+    },
+    {
+      "threshold": 0.6,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 29,
+      "ask": 12,
+      "edits": 17,
+      "unknown": 4,
+      "knownLowered": 25,
+      "conflicts": 22,
+      "conflictRate": 0.88
+    },
+    {
+      "threshold": 0.7,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 27,
+      "ask": 10,
+      "edits": 17,
+      "unknown": 4,
+      "knownLowered": 23,
+      "conflicts": 20,
+      "conflictRate": 0.8695652173913043
+    },
+    {
+      "threshold": 0.75,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 26,
+      "ask": 9,
+      "edits": 17,
+      "unknown": 4,
+      "knownLowered": 22,
+      "conflicts": 19,
+      "conflictRate": 0.8636363636363636
+    },
+    {
+      "threshold": 0.8,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 26,
+      "ask": 8,
+      "edits": 18,
+      "unknown": 4,
+      "knownLowered": 22,
+      "conflicts": 19,
+      "conflictRate": 0.8636363636363636
+    },
+    {
+      "threshold": 0.85,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 17,
+      "ask": 6,
+      "edits": 11,
+      "unknown": 4,
+      "knownLowered": 13,
+      "conflicts": 10,
+      "conflictRate": 0.7692307692307693
+    },
+    {
+      "threshold": 0.9,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 14,
+      "ask": 6,
+      "edits": 8,
+      "unknown": 4,
+      "knownLowered": 10,
+      "conflicts": 7,
+      "conflictRate": 0.7
+    },
+    {
+      "threshold": 0.95,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 8,
+      "ask": 3,
+      "edits": 5,
+      "unknown": 3,
+      "knownLowered": 5,
+      "conflicts": 2,
+      "conflictRate": 0.4
+    },
+    {
+      "threshold": 0.99,
+      "eligible": 39,
+      "late": 0,
+      "lowered": 1,
+      "ask": 0,
+      "edits": 1,
+      "unknown": 0,
+      "knownLowered": 1,
+      "conflicts": 0,
+      "conflictRate": 0
+    }
+  ],
+  "steered": {
+    "answered": 1,
+    "lowered": 1
+  }
+}

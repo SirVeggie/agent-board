@@ -18,7 +18,8 @@ import type { ApprovalPolicy, Thread } from "./types.js";
 export const CEILING_BUDGET_MS = GATE_BUDGET_MS;
 /**
  * How sure the classifier must be that the message needs nothing above a level before the turn is
- * lowered to it. Not measured on real traffic yet, which is why the setting starts off.
+ * lowered to it. The first real-turn replay found frequent activity conflicts at 0.8;
+ * keep the setting off by default (docs/ceiling-evaluation.md).
  */
 export const CEILING_THRESHOLD = 0.8;
 /** The approval option the host adds while a turn runs lowered. */
