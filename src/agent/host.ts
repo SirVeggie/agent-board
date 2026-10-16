@@ -55,7 +55,7 @@ import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
-import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
+import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
 import { cleanCustomModes, modeKeepsServer, modeOff, threadCustom } from "./customModes.js";
@@ -1152,6 +1152,18 @@ export class AgentHost {
   }
 
   // ---------- harness view (#456) ----------
+
+  /** Startup context for the composer, including a draft that has not sent its first message. */
+  async contextSeed(input: ThreadPatch & { scope?: ThreadScope }, id?: string) {
+    const thread = id ? { ...this.requireThread(id), ...input } : this.draftThread(input);
+    const instructions = threadInstructions(thread, this.scopeInfo(thread));
+    const tools = await boardTools(this.ctx.boardMcp, thread.provider, !noPages(thread.scope));
+    const own = ownContext(thread, { claudeHooks: this.prefs().claudeHooks });
+    return {
+      tokens: seedTokens(thread.provider, estimateTokens(instructions.length), tools, own.files),
+      window: this.db.getSetting<number>(`contextWindow:${thread.provider}:${thread.model}`, 0),
+    };
+  }
 
   /** Token and tool totals over the stored threads; days limits it to turns started in that many days. */
   harnessStats(days: number | null): HarnessStats {
@@ -3623,6 +3635,11 @@ export class AgentHost {
         }
       },
       usage(usage) {
+        const t = thread();
+        if (t && usage.contextWindow && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0) {
+          const key = `contextWindow:${t.provider}:${run.turn.model}`;
+          if (host.db.getSetting(key, 0) !== usage.contextWindow) host.db.setSetting(key, usage.contextWindow);
+        }
         run.usage = { ...run.usage, ...Object.fromEntries(Object.entries(usage).filter(([, v]) => v !== undefined)) };
         run.turn.usage = run.usage;
         host.emit({ type: "agent_turn", turn: run.turn });

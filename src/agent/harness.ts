@@ -23,6 +23,14 @@ export function estimateTokens(chars: number): number {
   return Math.ceil(chars / 4);
 }
 
+// Approximate provider prompt and built-in tools, excluding Scribe's instructions and MCP tools.
+// These are deliberately estimates; a provider's context reading replaces them when available.
+const PROVIDER_SEED: Record<ProviderId, number> = { claude: 15000, codex: 15000, cursor: 15000, pi: 2000 };
+
+export function seedTokens(provider: ProviderId, instructions: number, tools: Pick<ToolList, "tokens" | "instructionsChars">, files: Array<{ tokens: number }>): number {
+  return PROVIDER_SEED[provider] + instructions + tools.tokens + estimateTokens(tools.instructionsChars) + files.reduce((sum, file) => sum + file.tokens, 0);
+}
+
 /** Tool schemas are JSON, which tokenizes denser than prose: Claude Code counts Scribe's own at about three characters a token. */
 function schemaTokens(chars: number): number {
   return Math.ceil(chars / 3);

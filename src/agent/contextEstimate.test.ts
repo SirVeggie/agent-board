@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { seedTokens } from "./harness.js";
 
 // The chat's context estimate lives in the browser script; take its two pure functions out to run them here.
 const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
@@ -40,4 +41,43 @@ test("without a provider count, the estimate starts over after the conversation 
     { kind: "text", turnId: "t2", text: "b".repeat(80) },
   ];
   assert.equal(estimateContext(detail(items), null), 20);
+});
+
+test("startup estimates include instructions, tool schemas, server instructions and workspace files", () => {
+  const base = seedTokens("codex", 0, { tokens: 0, instructionsChars: 0 }, []);
+  assert.ok(base > 0);
+  assert.equal(seedTokens("codex", 1200, { tokens: 800, instructionsChars: 400 }, [{ tokens: 300 }]), base + 2400);
+});
+
+test("the meter includes startup context before a reply and replaces it with measured context", () => {
+  const turns = new Map<string, any>();
+  const S = { details: new Map([["thread", { items: [], turns }]]) };
+  const contextInfo = new Function("S", "modelInfo", "contextSeed", "noteWindows", "knownWindows",
+    `${fn("sizeTokens")}${fn("itemContextChars")}${fn("estimateContext")}${fn("contextInfo")}return contextInfo;`
+  )(S, () => null, () => ({ tokens: 24000, window: 272000 }), () => {}, new Map());
+  const view = { settings: () => ({ provider: "codex", model: "test" }), thread: () => ({ id: "thread", provider: "codex" }) };
+  assert.equal(contextInfo(view).used, 24000);
+  assert.equal(contextInfo(view).window, 272000);
+  assert.equal(contextInfo(view).estimate, 24000);
+  turns.set("t1", { id: "t1", seq: 1, usage: { contextTokens: 31000, contextWindow: 272000 } });
+  assert.equal(contextInfo(view).used, 31000);
+  assert.equal(contextInfo(view).estimate, 0);
+});
+
+test("startup requests are shared across renders and late replies cannot overwrite changed settings", async () => {
+  const requests: Array<{ resolve: (value: unknown) => void }> = [];
+  const contextSeed = new Function("api", `${fn("contextSeed")}return contextSeed;`)(() => new Promise((resolve) => requests.push({ resolve })));
+  let refreshes = 0;
+  const view = { thread: () => null, refreshContextMeter: () => refreshes++ };
+  assert.equal(contextSeed(view, { provider: "codex" }), null);
+  contextSeed(view, { provider: "codex" });
+  assert.equal(requests.length, 1);
+  contextSeed(view, { provider: "cursor" });
+  requests[0].resolve({ tokens: 999 });
+  await Promise.resolve();
+  assert.equal(refreshes, 0);
+  requests[1].resolve({ tokens: 24000 });
+  await Promise.resolve();
+  assert.equal(contextSeed(view, { provider: "cursor" }).tokens, 24000);
+  assert.equal(refreshes, 1);
 });

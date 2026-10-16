@@ -281,6 +281,10 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   // The agent harness view (#456): what chats start with and how the stored threads used it.
+  router.post("/context/seed", wrap((req) => {
+    const body = isPlainRecord(req.body) ? req.body : {};
+    return host.contextSeed({ ...threadPatch(body), ...(body.scope ? { scope: parseScope(body.scope) } : {}) }, typeof body.threadId === "string" ? body.threadId : undefined);
+  }));
   router.get(
     "/harness/stats",
     wrap((req) => {

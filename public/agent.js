@@ -8321,6 +8321,23 @@
     }
   }
 
+  /** Fetch once per composer setup; never start a provider session or probe user MCP servers. */
+  function contextSeed(view, s) {
+    const input = { provider: s.provider, model: s.model, mode: s.mode, cwd: s.cwd, scope: s.scope, web: s.web, custom: s.custom, customMode: s.customMode, approval: s.approval };
+    const threadId = view.pendingFork ? undefined : view.thread()?.id;
+    const key = JSON.stringify({ ...input, threadId });
+    if (view.contextSeedKey !== key) {
+      view.contextSeedKey = key;
+      view.contextSeedValue = null;
+      void api("POST", "/context/seed", { ...input, threadId }).then((value) => {
+        if (view.contextSeedKey !== key) return;
+        view.contextSeedValue = value;
+        view.refreshContextMeter();
+      }).catch(() => {});
+    }
+    return view.contextSeedValue;
+  }
+
   /** Characters an item puts in the model's context. A subagent's own items stay out of it, and shown reasoning is not what the model keeps. */
   function itemContextChars(item) {
     if (item.parentToolId) return 0;
@@ -8368,13 +8385,14 @@
     const param = info?.params?.find((p) => p.id === CONTEXT_PARAM) || null;
     const size = param ? (s.modelParams?.[CONTEXT_PARAM] ?? param.default) : null;
     const detail = t ? S.details.get(t.id) : null;
+    const seed = contextSeed(view, s);
     const turns = detail ? [...detail.turns.values()].sort((a, b) => a.seq - b.seq) : [];
     if (t) noteWindows(t.provider, turns);
     const last = turns.findLast((x) => x.usage?.contextWindow || x.usage?.contextTokens);
     const usage = last?.usage || null;
     const measured = turns.findLast((x) => x.usage?.contextTokens) || null;
-    const window = usage?.contextWindow || sizeTokens(size) || knownWindows.get(`${s.provider}:${s.model}`) || 0;
-    const estimate = estimateContext(detail, measured);
+    const window = sizeTokens(size) || usage?.contextWindow || knownWindows.get(`${s.provider}:${s.model}`) || seed?.window || 0;
+    const estimate = estimateContext(detail, measured) + (measured ? 0 : seed?.tokens || 0);
     const used = (measured?.usage.contextTokens || 0) + estimate;
     return { s, param, size, usage, used, window, estimate, measured: Boolean(measured), fraction: window ? Math.min(1, used / window) : 0 };
   }
@@ -8425,9 +8443,9 @@
       bar.append(fill);
       row.append(el("span", "ag-usage-tip-label", `${about}${tokenCount(ctx.used)} of ${tokenCount(ctx.window)}`), bar, el("span", "ag-usage-tip-pct", percent(ctx.fraction)));
       tip.append(row);
-      if (!ctx.measured) tip.append(el("div", "ag-usage-tip-note", ctx.s.provider === "cursor" ? "Estimated from the chat's text: Cursor does not report it." : "Estimated from the chat's text until the next reply."));
+      if (!ctx.measured) tip.append(el("div", "ag-usage-tip-note", ctx.s.provider === "cursor" ? "Estimated from startup instructions, tools and chat text; Cursor does not report context." : "Estimated from startup instructions, tools and chat text until the next reply."));
     } else if (ctx.used > 0) {
-      tip.append(el("div", "ag-usage-tip-note", `${about}${tokenCount(ctx.used)} tokens, estimated from the chat's text. The window size shows after the next reply.`));
+      tip.append(el("div", "ag-usage-tip-note", `${about}${tokenCount(ctx.used)} tokens, including estimated startup instructions and tools. The window size is not known yet.`));
     } else {
       const note = !ctx.window
         ? "Shows how full the context is after the first reply."

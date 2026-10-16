@@ -7,6 +7,7 @@ import type { DecideResult, MlAnswers, MlQuestions } from "../ml/types.js";
 import type { HookRule } from "./hooks.js";
 import type { ApprovalDecision, RunSink, TurnInput, TurnResult } from "./providers/provider.js";
 import type { AgentEvent, ApprovalPolicy, Item, ProviderId, Thread } from "./types.js";
+import { AgentDb } from "./db.js";
 
 // Fake agents on every provider: Claude's and Pi's hold their [fake-run: ...] calls like the real ones.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-hooks-"));
@@ -86,6 +87,23 @@ after(async () => {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   } catch {
     // left for the OS to clean up
+  }
+});
+
+test("reported model windows persist on the host without another browser reading the chat", async () => {
+  const id = thread("codex");
+  codexTurn = async (sink) => {
+    sink.usage({ contextTokens: 25000, contextWindow: 272000 });
+    return { status: "done" };
+  };
+  host.send(id, { text: "Count context" });
+  await idle(id);
+  const db = new AgentDb(path.join(dir, "agent.sqlite"));
+  try {
+    assert.equal(db.getSetting(`contextWindow:codex:${host.getThread(id)!.model}`, 0), 272000);
+  } finally {
+    db.close();
+    codexTurn = async () => ({ status: "done" });
   }
 });
 
