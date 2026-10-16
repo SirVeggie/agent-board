@@ -3830,8 +3830,121 @@
       }
       event.preventDefault();
       el.classList.remove("file-drop-over");
-      importFiles(event.dataTransfer.files, destination);
+      void dropFiles(event, destination);
     });
+  }
+
+  // ---------- dropped files and folders (#654) ----------
+  // A Scribe export still imports its pages; any other file opens as a file page (a copy, since a
+  // browser gives the bytes, not the path), and a folder as a Library folder of them.
+  const DROP_MAX_FILES = 1000;
+  const DROP_SKIPPED = new Set(["node_modules", ".git", ".hg", ".svn", "__pycache__", ".venv", "venv"]);
+
+  /** The Library folder under a drop: the folder row, or the folder of the page row. */
+  function dropFolderOf(target) {
+    const row = target?.closest?.(".lib-row");
+    if (!row) return null;
+    if (row.dataset.kind === "folder") return row.dataset.id || null;
+    return libraryPages().find((page) => page.id === row.dataset.id)?.folderId || null;
+  }
+
+  async function uploadDropped(file, folderId, activate) {
+    const params = new URLSearchParams({ activate: activate ? "1" : "0" });
+    if (folderId) params.set("folderId", folderId);
+    const res = await fetch(`/api/files/upload?${params}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(file.name || "file") },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Could not open ${file.name}`);
+    return data;
+  }
+
+  function entryFile(entry) {
+    return new Promise((resolve, reject) => entry.file(resolve, reject));
+  }
+
+  /** Every entry in a dropped folder (readEntries hands them out in batches). */
+  async function entriesOf(dir) {
+    const reader = dir.createReader();
+    const all = [];
+    for (;;) {
+      const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      if (!batch.length) break;
+      all.push(...batch);
+    }
+    return all.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
+  }
+
+  async function dropFiles(event, destination) {
+    const items = [...(event.dataTransfer.items || [])].filter((item) => item.kind === "file");
+    // Entries must be taken while the drop event lasts; without them, plain files.
+    const entries = items.map((item) => item.webkitGetAsEntry?.() || null);
+    const files = [...event.dataTransfer.files];
+    const library = destination === "closed";
+    const folderId = library ? dropFolderOf(event.target) : null;
+    const tally = { files: 0, folders: 0, imported: 0, focusedId: null, error: null, truncated: false };
+    const openFile = async (file, parentId, activate) => {
+      if (tally.files >= DROP_MAX_FILES) {
+        tally.truncated = true;
+        return;
+      }
+      try {
+        const data = await uploadDropped(file, parentId, activate);
+        if (data.kind === "export") {
+          tally.imported += (data.opened || 0) + (data.closed || 0);
+          if (data.focusedId) tally.focusedId = data.focusedId;
+          return;
+        }
+        tally.files += 1;
+        if (activate && data.tab) tally.focusedId = data.tab.id;
+      } catch (err) {
+        tally.error = err.message;
+      }
+    };
+    const openDir = async (dir, parentId) => {
+      const res = await fetch("/api/folders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: dir.name, parentId }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.folder) {
+        tally.error = data.error || `Could not add the folder ${dir.name}`;
+        return;
+      }
+      tally.folders += 1;
+      if (!parentId) tally.topFolder = data.folder;
+      for (const entry of await entriesOf(dir).catch(() => [])) {
+        if (entry.name.startsWith(".") || tally.truncated) continue;
+        if (entry.isDirectory) {
+          if (!DROP_SKIPPED.has(entry.name.toLowerCase())) await openDir(entry, data.folder.id);
+        } else {
+          const file = await entryFile(entry).catch(() => null);
+          if (file) await openFile(file, data.folder.id, false);
+        }
+      }
+    };
+    if (entries.length && entries.every(Boolean)) {
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          await openDir(entry, folderId);
+        } else {
+          const file = await entryFile(entry).catch(() => null);
+          if (file) await openFile(file, folderId, !library);
+        }
+      }
+    } else {
+      for (const file of files) await openFile(file, folderId, !library);
+    }
+    if (tally.focusedId) focusWhenOpened(tally.focusedId);
+    if (tally.folders && !library) {
+      if (state.sidebarTab !== "library" || state.trashOpen) setSidebarTab("library");
+      if (!state.sideOpen) setSideOpen(true);
+    }
+    const parts = [];
+    if (tally.files) parts.push(tally.files === 1 ? "1 file" : `${tally.files} files`);
+    if (tally.folders) parts.push(tally.folders === 1 ? "1 folder" : `${tally.folders} folders`);
+    if (tally.imported) parts.push(tally.imported === 1 ? "imported 1 page" : `imported ${tally.imported} pages`);
+    if (tally.error && !parts.length) showNotice(tally.error);
+    else if (parts.length > 1 || tally.folders || tally.truncated || tally.error) showNotice(`Opened ${parts.join(", ")}${tally.truncated ? " (stopped at the file limit)" : ""}${tally.error ? `. ${tally.error}` : ""}`);
   }
 
   async function undoClose() {

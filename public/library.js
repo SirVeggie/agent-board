@@ -552,6 +552,51 @@ window.createLibrary = function createLibrary(host) {
     }
   }
 
+  // ---------- files on disk (#654) ----------
+  // Where the last Open file / Open folder dialog was, so the next one starts there.
+  let lastDiskPath = "";
+
+  /** Open a file from disk as a page (in folder parentId), and show it. */
+  async function openDiskFile(parentId = null) {
+    const picked = await window.scribeChat?.pickWorkspace?.(lastDiskPath, { files: "open", title: "Open file", hint: "", action: "Open" });
+    if (!picked) {
+      return;
+    }
+    lastDiskPath = picked;
+    const res = await send("POST", "/api/files/open", { path: picked, folderId: parentId });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.tab) {
+      host.showNotice(data.error || "Could not open the file");
+      return;
+    }
+    if (parentId) {
+      expandChain(parentId);
+    }
+    host.focusWhenOpened(data.tab.id);
+  }
+
+  /** Open a disk folder: a Library folder of file pages, one per file, with its subfolders. */
+  async function openDiskFolder(parentId = null) {
+    const picked = await window.scribeChat?.pickWorkspace?.(lastDiskPath, { title: "Open folder", hint: "", action: "Open folder", used: false });
+    if (!picked) {
+      return;
+    }
+    lastDiskPath = picked;
+    const res = await send("POST", "/api/files/open-folder", { path: picked, folderId: parentId });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.folder) {
+      host.showNotice(data.error || "Could not open the folder");
+      return;
+    }
+    host.addFolder(data.folder);
+    host.setPaneOpen(true);
+    expandChain(data.folder.id);
+    render();
+    rowFor("folder", data.folder.id)?.scrollIntoView({ block: "nearest" });
+    const count = data.pages + data.reused;
+    host.showNotice(`Opened ${data.folder.name}: ${count === 1 ? "1 file" : `${count} files`}${data.truncated ? " (stopped at the file limit)" : ""}`);
+  }
+
   async function createFolder(parentId = null) {
     if (query) {
       clearSearch();
@@ -1112,6 +1157,8 @@ window.createLibrary = function createLibrary(host) {
       openHere > 0 && { label: "Close open tabs", action: () => send("POST", `/api/folders/${encodeURIComponent(id)}/close`) },
       "sep",
       { label: "New folder inside", action: () => createFolder(id) },
+      { label: "Open file here…", action: () => openDiskFile(id) },
+      { label: "Open folder here…", action: () => openDiskFolder(id) },
       { label: "Rename", action: () => startRename("folder", id) },
       { label: "Move to…", action: () => openMovePicker({ kind: "folder", id }, point) },
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
@@ -1132,6 +1179,8 @@ window.createLibrary = function createLibrary(host) {
     const box = moreBtn.getBoundingClientRect();
     openMenu({ x: box.left, y: box.bottom + 4 }, [
       { label: "New folder", action: () => createFolder(null) },
+      { label: "Open file…", action: () => openDiskFile(null) },
+      { label: "Open folder…", action: () => openDiskFolder(null) },
       { label: "Expand all", disabled: model.folders.length === 0, action: () => setAllCollapsed(false) },
       { label: "Collapse all", disabled: model.folders.length === 0, action: () => setAllCollapsed(true) },
       "sep",

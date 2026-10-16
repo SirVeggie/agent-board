@@ -1704,7 +1704,13 @@ export async function startHttp(): Promise<http.Server> {
     if (refuseAgent(req, res)) return;
     try {
       if (!Buffer.isBuffer(req.body)) throw new Error("expected a file body");
-      const name = importFilename(req);
+      // Encoded by the board: a header cannot carry most non-Latin names as they are.
+      let name = importFilename(req);
+      try {
+        name = decodeURIComponent(name);
+      } catch {
+        /* sent as is */
+      }
       const folderId = parseFolderRef(req.query.folderId);
       const activate = req.query.activate !== "0";
       if (/\.json$/i.test(name) && !folderId) {
