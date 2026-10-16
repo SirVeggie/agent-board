@@ -98,7 +98,10 @@
     timer = setTimeout(show, delay);
   }
   document.addEventListener("pointerover", event => {
-    if (event.pointerType === "mouse" && !event.buttons) enter(target(event.target), 700);
+    if (event.pointerType === "mouse" && !event.buttons) {
+      const el = target(event.target);
+      enter(el, el?.matches(".search-help, .ag-help, .orb-settings-help") ? 0 : 700);
+    }
   });
   document.addEventListener("pointerout", event => {
     if (anchor && !anchor.contains(event.relatedTarget)) hide();

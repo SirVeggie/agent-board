@@ -2,13 +2,12 @@
  * The aurora edge: a thin line in the theme's effect colours along the bottom of the title bar that drifts while any
  * agent chat runs, from the same noise as the New page nebula. One small WebGL canvas, at half
  * resolution and about 30 fps, that only draws while an agent runs (and through the fade-out after)
- * with the window visible and focused. Idle, a static CSS tint can stand in, which needs no GPU.
+ * with the window visible and focused. The edge disappears when idle.
  */
 (() => {
   const appearanceStorage = window.scribeAppearance || localStorage;
   /** Settings keys, also written by the Layout switches in app.js. */
   const ANIM_KEY = "scribe.auroraEdge";
-  const IDLE_KEY = "scribe.auroraIdle";
   const FADE_MS = 1000;
 
   /**
@@ -70,7 +69,6 @@ gl_FragColor=vec4(col*a,a);}`;
     // Keep drawing through the fade-out rather than freezing mid-fade.
     if (!anim && root.classList.contains("on")) fadeUntil = performance.now() + FADE_MS;
     root.classList.toggle("on", anim);
-    root.classList.toggle("tint", appearanceStorage.getItem(IDLE_KEY) === "1");
     if (!anim) return;
     if (!window.scribeMotion.enabled()) {
       loop.stop();

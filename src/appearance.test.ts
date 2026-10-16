@@ -30,7 +30,7 @@ test("appearance API persists across restarts, merges profiles, and excludes fun
       "scribe.theme": "garnet", "scribe.uiEffects": "0", "scribe.chromeFx": "rise",
     });
     await put({ "scribe.theme": "dusk" });
-    await put({ "scribe.chromeFxWhen": "obsolete", "scribe.auroraIdle": "0" }, true);
+    await put({ "scribe.chromeFxWhen": "obsolete", "scribe.auroraEdge": "0" }, true);
     db.close();
     db = BoardDb.open(sqlite, path.join(dir, "state.json"));
     assert.equal((await (await fetch(base)).json())["scribe.theme"], "dusk");
@@ -40,7 +40,7 @@ test("appearance API persists across restarts, merges profiles, and excludes fun
     for (const settings of [{ "scribe.agent.sendKey": "mod" }, { "scribe.theme": "wrong" }, { "scribe.uiEffects": "true" }, { "scribe.dock-appearance.v1": "null" }]) {
       assert.equal((await put(settings)).status, 400);
     }
-    assert.equal(db.readAppearance()["scribe.auroraIdle"], "0");
+    assert.equal(db.readAppearance()["scribe.auroraEdge"], "0");
     assert.equal(db.readAppearance()["scribe.chromeFxWhen"], undefined);
     assert.equal(updates.length, 4);
   } finally {

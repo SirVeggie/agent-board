@@ -15,14 +15,28 @@ export class AudioService {
   }
   view() {
     const settings = this.store.read();
+    const { custom, ...stt } = settings.stt;
     const sources = this.sources().map(({ id, name }) => ({ id, name }));
-    return { ...settings, sources, available: sources.some(s => s.id === settings.stt.source), usage: this.usage() };
+    return { ...settings, stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },
+      sources, available: Boolean(this.source(settings.stt)), usage: this.usage() };
+  }
+  private source(stt: ReturnType<AudioStore["read"]>["stt"]): OpenAISource | undefined {
+    if (stt.source !== "__custom__") return this.sources().find(s => s.id === stt.source);
+    if (!stt.custom?.baseUrl) return undefined;
+    return { id: "custom", name: "Custom", ...stt.custom, models: [] };
   }
   update(value: unknown) {
-    const body = value as { stt?: object; input?: object } | null;
+    const body = value as { stt?: { custom?: { baseUrl?: string; apiKey?: string } }; input?: object } | null;
     const old = this.store.read();
-    const next = normalizeSettings({ stt: { ...old.stt, ...body?.stt }, input: { ...old.input, ...body?.input } });
-    if (next.stt.source && !this.sources().some(s => s.id === next.stt.source)) throw new Error("Choose an existing OpenAI source.");
+    const next = normalizeSettings({ stt: { ...old.stt, ...body?.stt,
+      ...(body?.stt?.custom ? { custom: { ...old.stt.custom, ...body.stt.custom } } : {}) }, input: { ...old.input, ...body?.input } });
+    if (next.stt.custom?.baseUrl) {
+      let url: URL;
+      try { url = new URL(next.stt.custom.baseUrl); } catch { throw new Error("Enter a full speech-to-text URL."); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Use an HTTP or HTTPS URL without credentials.");
+      next.stt.custom.baseUrl = url.toString().replace(/\/+$/, "");
+    }
+    if (next.stt.source && next.stt.source !== "__custom__" && !this.sources().some(s => s.id === next.stt.source)) throw new Error("Choose an existing OpenAI source.");
     this.store.write(next); return this.view();
   }
   usage() {
@@ -33,7 +47,7 @@ export class AudioService {
     try {
       if (!audio.size || !audio.type.startsWith("audio/")) return { ok: false, error: "invalid_audio", message: "Record or upload an audio clip." };
       if (audio.size > MAX_AUDIO_BYTES) return { ok: false, error: "too_large", message: "Audio must be under 25 MB." };
-      const settings = this.store.read(), source = this.sources().find(s => s.id === settings.stt.source);
+      const settings = this.store.read(), source = this.source(settings.stt);
       if (!source) return { ok: false, error: "no_source", message: "Choose a speech-to-text source in Settings → Audio." };
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;

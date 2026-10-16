@@ -85,7 +85,6 @@
   const tightSmallToggle = document.getElementById("tight-small");
   const uiFxToggle = document.getElementById("ui-fx");
   const auroraEdgeToggle = document.getElementById("aurora-edge");
-  const auroraIdleToggle = document.getElementById("aurora-idle");
   const chromeFxTrack = document.getElementById("chrome-fx");
   const chromeFxWhenTrack = document.getElementById("chrome-fx-when");
   const agentSideTrack = document.getElementById("agent-side");
@@ -154,7 +153,6 @@
   const UI_FX_KEY = "scribe.uiEffects";
   /** Also read by aurora.js, which draws the title bar edge. */
   const AURORA_EDGE_KEY = "scribe.auroraEdge";
-  const AURORA_IDLE_KEY = "scribe.auroraIdle";
   /** Also read by newpage.js, which draws them. Stored as the chosen ids, comma-separated; nothing stored means all. */
   const NEWPAGE_BG_KEY = "scribe.newPageBackgrounds";
   const NEWPAGE_PROVIDER_KEY = "scribe.newPageProviderColors";
@@ -471,7 +469,6 @@
   );
   document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));
   applyFlag(auroraEdgeToggle, AURORA_EDGE_KEY, true);
-  applyFlag(auroraIdleToggle, AURORA_IDLE_KEY, false);
   applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
   applyPaneSideAttr("librarySide", paneSide(LIBRARY_SIDE_KEY));
   renderThemeList();
@@ -484,8 +481,8 @@
   renderPalettePrefixSettings();
   window.addEventListener("scribe:appearance", () => {
     applyTheme(loadTheme(), false);
-    for (const [control, key] of [[tightSmallToggle, TIGHT_SMALL_KEY], [uiFxToggle, UI_FX_KEY], [auroraEdgeToggle, AURORA_EDGE_KEY], [auroraIdleToggle, AURORA_IDLE_KEY], [newPageProviderToggle, NEWPAGE_PROVIDER_KEY]]) {
-      applyFlag(control, key, key !== AURORA_IDLE_KEY && key !== NEWPAGE_PROVIDER_KEY);
+    for (const [control, key] of [[tightSmallToggle, TIGHT_SMALL_KEY], [uiFxToggle, UI_FX_KEY], [auroraEdgeToggle, AURORA_EDGE_KEY], [newPageProviderToggle, NEWPAGE_PROVIDER_KEY]]) {
+      applyFlag(control, key, key !== NEWPAGE_PROVIDER_KEY);
     }
     document.documentElement.classList.toggle("tight-small", flagOn(tightSmallToggle));
     document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));
@@ -521,10 +518,6 @@
   bindSettingHint(
     document.getElementById("aurora-edge-label"),
     "A thin glow in the theme's colours drifts along the bottom of the title bar while any agent chat runs, and fades out when they're done. It pauses while the window is in the background."
-  );
-  bindSettingHint(
-    document.getElementById("aurora-idle-label"),
-    "A faint, still line in the theme's colours under the title bar when no agent is working. It doesn't move, so it costs nothing."
   );
   bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
@@ -1260,9 +1253,30 @@
     }
   }
 
-  /** A track where any number of options can be on, but never none. */
+  /** A picker where any number of backgrounds can be on, but never none. */
   function renderNewPageBgs() {
-    const track = document.getElementById("newpage-bgs");
+    const trigger = document.getElementById("newpage-bgs");
+    trigger.onclick = openNewPageBgs;
+  }
+
+  function openNewPageBgs() {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm background-picker";
+    dialog.setAttribute("aria-label", "New page backgrounds");
+    const title = document.createElement("h3"); title.textContent = "New page backgrounds";
+    const track = document.createElement("div"); track.className = "background-grid";
+    const close = document.createElement("button"); close.type = "button"; close.textContent = "Done";
+    close.addEventListener("click", () => dialog.close());
+    dialog.append(title, track, close);
+    document.body.append(dialog);
+    dialog.showModal();
+    const effects = [];
+    dialog.addEventListener("close", () => { effects.forEach(fx => fx?.destroy()); dialog.remove(); });
+    dialog.addEventListener("click", event => {
+      if (event.target !== dialog) return;
+      const box = dialog.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
+    });
     const stored = (appearanceStorage.getItem(NEWPAGE_BG_KEY) || "").split(",");
     let on = NEWPAGE_BGS.map((item) => item.id).filter((id) => stored.includes(id));
     if (!on.length) on = NEWPAGE_BGS.map((item) => item.id);
@@ -1270,16 +1284,20 @@
     for (const item of NEWPAGE_BGS) {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.textContent = item.name;
+      const canvas = document.createElement("canvas"); canvas.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span"); label.textContent = item.name;
+      btn.append(canvas, label);
       btn.setAttribute("aria-pressed", String(on.includes(item.id)));
       btn.addEventListener("click", () => {
         const next = on.includes(item.id) ? on.filter((id) => id !== item.id) : [...on, item.id];
         if (!next.length) return;
         appearanceStorage.setItem(NEWPAGE_BG_KEY, next.join(","));
-        renderNewPageBgs();
+        on = next;
+        for (const [index, button] of [...track.children].entries()) button.setAttribute("aria-pressed", String(on.includes(NEWPAGE_BGS[index].id)));
         window.dispatchEvent(new Event("scribe:newpage-bg"));
       });
       track.appendChild(btn);
+      effects.push(window.scribeNewPagePreview?.(canvas, item.id));
     }
   }
 
@@ -1383,7 +1401,7 @@
       window.dispatchEvent(new Event("scribe:ui-fx"));
     }
     if (el === refreshOverlayToggle && !on) dismissRefreshOverlay();
-    if (el === auroraEdgeToggle || el === auroraIdleToggle) {
+    if (el === auroraEdgeToggle) {
       window.dispatchEvent(new Event("scribe:aurora"));
     }
   }
@@ -1453,8 +1471,15 @@
     desktopSettingsSection.id = "desktop-settings";
     desktopSettingsSection.className = "settings-section";
   }
+  const flairSection = document.createElement("section");
+  flairSection.className = "settings-section";
+  flairSection.innerHTML = "<h3>Visual flair</h3>";
+  const layout = settingsSections[5];
+  for (const row of [...layout.querySelectorAll(".setting-row")]) {
+    if (!row.querySelector("#agent-side, #library-side, #tight-small")) flairSection.append(row);
+  }
   const settingsCategories = window.scribeSettingsUI.mount(document.getElementById("settings-panel"), [
-    { label: "Appearance", sections: [settingsSections[0], settingsSections[5]] },
+    { label: "Appearance", sections: [settingsSections[0], settingsSections[5], flairSection] },
     { label: "Navigation", sections: [settingsSections[1], settingsSections[2]] },
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
     { label: "Classifier", sections: window.scribeMlSettings.sections },
@@ -5403,7 +5428,6 @@
   window.addEventListener("scribe:page-intent", (event) => onPageIntent(event.detail));
   window.addEventListener("scribe:page-hint", (event) => onPageHint(event.detail));
   auroraEdgeToggle.addEventListener("click", () => toggleFlag(auroraEdgeToggle, AURORA_EDGE_KEY));
-  auroraIdleToggle.addEventListener("click", () => toggleFlag(auroraIdleToggle, AURORA_IDLE_KEY));
   clearBtn.addEventListener("click", async () => {
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });

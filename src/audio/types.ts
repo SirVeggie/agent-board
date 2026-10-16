@@ -1,7 +1,7 @@
 import type { OpenAISource } from "../agent/openaiSources.js";
 
 export type AudioSettings = {
-  stt: { source?: string; model: string; language?: string };
+  stt: { source?: string; model: string; language?: string; custom?: { baseUrl: string; apiKey?: string } };
   input: { sendAfterDictation: boolean; pushToTalk: boolean };
 };
 export type AudioErrorKind = "no_source" | "invalid_audio" | "too_large" | "timeout" | "network" | "auth" | "rate_limit" | "engine" | "permission";

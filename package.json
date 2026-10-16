@@ -6,6 +6,7 @@
   "description": "Scribe: a local hub of HTML pages that you and your agents share over MCP",
   "scripts": {
     "build": "tsc",
+    "test:settings": "tsx --test src/settingsFixes.test.ts src/agent/forkSummaryUi.test.ts src/audio/audio.test.ts",
     "test:search": "tsx --test src/search/*.test.ts",
     "test:clear-command": "node --experimental-strip-types --test --test-isolation=none src/agent/clearCommand.test.ts",
     "test:mcp": "tsx --test src/agent/mcpPermissions.test.ts src/agent/mcpBridge.test.ts src/agent/mcpConfig.test.ts src/agent/codexProvider.test.ts",

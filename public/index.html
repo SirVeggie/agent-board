@@ -110,7 +110,7 @@
       </button>
     </div>
   </header>
-  <div class="chrome-edge" aria-hidden="true"><div class="chrome-edge-tint"></div><canvas></canvas></div>
+  <div class="chrome-edge" aria-hidden="true"><canvas></canvas></div>
   <div id="persist-banner" class="persist-banner" hidden role="alert">
     <p><strong>Could not save Scribe's data.</strong> Changes live only in this session until this is fixed. Ask an agent to look at it, or export the page.</p>
     <p id="persist-banner-detail" class="persist-banner-detail"></p>
@@ -310,9 +310,9 @@
           <span>Floating chat appearance</span>
           <button type="button" id="dock-appearance">Customize…</button>
         </div>
-        <div class="setting-row setting-row-stacked">
+        <div class="setting-row">
           <span id="newpage-bgs-label" class="setting-hinted">New page backgrounds</span>
-          <div class="button-track text-track wrap-track" id="newpage-bgs" role="group" aria-labelledby="newpage-bgs-label"></div>
+          <button type="button" id="newpage-bgs" aria-haspopup="dialog">Choose…</button>
         </div>
         <div class="setting-row">
           <span id="newpage-provider-colors-label" class="setting-hinted">New page colours follow chat provider</span>
@@ -333,10 +333,6 @@
         <div class="setting-row">
           <span id="aurora-edge-label" class="setting-hinted">Moving glow under the title bar while an agent works</span>
           <button type="button" class="pill-toggle" id="aurora-edge" role="switch" aria-checked="true" aria-labelledby="aurora-edge-label"></button>
-        </div>
-        <div class="setting-row">
-          <span id="aurora-idle-label" class="setting-hinted">Tinted line under the title bar</span>
-          <button type="button" class="pill-toggle" id="aurora-idle" role="switch" aria-checked="true" aria-labelledby="aurora-idle-label"></button>
         </div>
       </section>
       <section class="settings-section">

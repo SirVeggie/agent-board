@@ -1,7 +1,7 @@
 import { Router } from "express";
 
 export const APPEARANCE_KEYS = [
-  "scribe.theme", "scribe.tightSmall", "scribe.uiEffects", "scribe.auroraEdge", "scribe.auroraIdle",
+  "scribe.theme", "scribe.tightSmall", "scribe.uiEffects", "scribe.auroraEdge",
   "scribe.newPageBackgrounds", "scribe.newPageProviderColors", "scribe.chromeFx", "scribe.chromeFxWhen",
   "scribe.dock-appearance.v1",
 ] as const;
@@ -16,7 +16,7 @@ export function parseAppearance(value: unknown): Appearance {
       throw new Error(`Invalid appearance setting: ${key}`);
     }
     if (key === "scribe.theme" && !["neutral", "ember", "spectrum", "garnet", "dusk", "cream"].includes(item)) throw new Error("Invalid theme");
-    if (["scribe.tightSmall", "scribe.uiEffects", "scribe.auroraEdge", "scribe.auroraIdle", "scribe.newPageProviderColors"].includes(key) && !["0", "1"].includes(item)) throw new Error("Invalid appearance switch");
+    if (["scribe.tightSmall", "scribe.uiEffects", "scribe.auroraEdge", "scribe.newPageProviderColors"].includes(key) && !["0", "1"].includes(item)) throw new Error("Invalid appearance switch");
     if (key === "scribe.chromeFx" && !["wash", "motes", "rise", "off"].includes(item)) throw new Error("Invalid title bar background");
     if (key === "scribe.chromeFxWhen" && !["idle-still", "always", "busy"].includes(item)) throw new Error("Invalid title bar motion");
     if (key === "scribe.newPageBackgrounds" && (!item || item.split(",").some(id => !["nebula", "stardust", "aurora", "caustics", "contours", "halftone", "bokeh"].includes(id)))) throw new Error("Invalid backgrounds");

@@ -181,6 +181,22 @@ return glow(c,e);}`;
     bokeh: { frag: BOKEH },
   };
 
+  /** A still miniature of the real shader, released when the picker closes. */
+  window.scribeNewPagePreview = (canvas, id) => {
+    const style = STYLES[id], GL = window.scribeGL;
+    if (!style || !GL) return null;
+    const fx = GL.lazy(canvas, (style.derivatives ? "#extension GL_OES_standard_derivatives : enable\n" : "") + HEAD + style.frag + TAIL, {
+      scale: 1, extensions: style.derivatives ? ["OES_standard_derivatives"] : [],
+    });
+    const colors = GL.palette();
+    const probe = document.createElement("span"); probe.style.color = "var(--bg)";
+    document.body.append(probe);
+    const bg = (getComputedStyle(probe).color.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map(v => Number(v) / 255);
+    probe.remove();
+    fx.draw({ ...colors, u_c0: colors.u_c1.map(v => v * .2), u_bg: bg, u_tint: 1, u_time: 80, u_motionTime: 80, u_work: 0 });
+    return fx;
+  };
+
   /** The backgrounds the user left on in Settings; all of them when nothing valid is stored. */
   function chosen() {
     const ids = (appearanceStorage.getItem(BG_KEY) || "").split(",").filter((id) => STYLES[id]);

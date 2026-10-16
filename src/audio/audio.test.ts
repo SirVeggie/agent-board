@@ -16,6 +16,24 @@ import type { AudioResult, SttEngine, SttRequest } from "./types.js";
 
 const source: OpenAISource = { id: "test", name: "Test", baseUrl: "https://stt.invalid/v1", apiKey: "secret-key", models: [] };
 const clip = () => new Blob(["sound"], { type: "audio/webm;codecs=opus" });
+test("custom speech source works independently and keeps its key private across edits", async () => {
+  let request: SttRequest | undefined;
+  const service = new AudioService({ sources: () => [], store: memoryStore(), engine: { async transcribe(req) {
+    request = req; return { ok: true, text: "Custom transcript" };
+  } } });
+  const view = service.update({ stt: { source: "__custom__", custom: { baseUrl: "https://speech.invalid/v1/", apiKey: "private-key" } } });
+  assert.equal(view.available, true);
+  assert.equal(view.stt.custom?.hasKey, true);
+  assert.ok(!JSON.stringify(view).includes("private-key"));
+  service.update({ stt: { custom: { baseUrl: "http://localhost:1234/v1" }, model: "local-stt" } });
+  assert.equal((await service.transcribe(clip())).ok, true);
+  assert.equal(request?.source.apiKey, "private-key");
+  assert.equal(request?.source.baseUrl, "http://localhost:1234/v1");
+  assert.equal(request?.model, "local-stt");
+  service.update({ stt: { custom: { apiKey: "" } } });
+  assert.equal(service.view().stt.custom?.hasKey, false);
+  assert.throws(() => service.update({ stt: { custom: { baseUrl: "file:///tmp/audio" } } }));
+});
 function setup(results: Array<AudioResult | Error> = [{ ok: true, text: "Hello" }]) {
   const calls: SttRequest[] = [];
   const engine: SttEngine = { async transcribe(req) { calls.push(req); const result = results.shift() ?? { ok: true, text: "Hello" }; if (result instanceof Error) throw result; return result; } };

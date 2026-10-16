@@ -451,13 +451,6 @@ body {
   mask: linear-gradient(#000 0 2px, rgba(0, 0, 0, 0.4) 3px, transparent);
 }
 
-.chrome-edge-tint {
-  background: linear-gradient(90deg, rgba(var(--fx-3), 0.35), rgba(var(--fx-2), 0.35) 60%, rgba(var(--fx-3), 0.25));
-}
-
-.chrome-edge.tint:not(.on) .chrome-edge-tint {
-  opacity: 1;
-}
 
 .chrome-edge.on canvas {
   opacity: 0.8;
@@ -3085,7 +3078,30 @@ button.pill-toggle[aria-checked="true"]::after {
   color: var(--muted);
 }
 .search-pack-location button { flex-shrink: 0; }
-.search-help { padding: 0 5px; font-size: 11px; }
+body .search-help,
+body .ag-help,
+body .orb-settings-help {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: none;
+  cursor: default;
+}
+.background-picker { width: min(640px, calc(100vw - 40px)); max-width: 640px; padding: 18px; }
+.background-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
+.background-grid button { padding: 4px; overflow: hidden; border: 2px solid transparent; }
+.background-grid button[aria-pressed="true"] { border-color: var(--accent); }
+.background-grid canvas { display: block; width: 100%; height: 90px; border-radius: 5px; background: var(--bg); }
+.background-grid span { display: block; padding: 6px 0; }
+.audio-sources-link { margin-top: 12px; }
 .settings-hint-after {
   margin: 8px 2px 0;
 }
