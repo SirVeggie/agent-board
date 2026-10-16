@@ -39,11 +39,10 @@ html[data-theme="cream"] {
 /* ---------- chrome toggle ---------- */
 
 /* While an agent works: the sparkle glows in the live ember and a soft light travels the button's
-   outline. The outline stays put and only the light moves, so nothing wobbles. */
-@property --ag-orbit {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
+   outline. The outline stays put and only the light moves, so nothing wobbles. The ring masks a
+   square that turns with transform, so the light runs on the compositor instead of repainting. */
+.agent-orbit {
+  display: none;
 }
 
 .agent-toggle.busy {
@@ -54,22 +53,33 @@ html[data-theme="cream"] {
   animation: ag-toggle-breathe var(--dur-breathe) ease-in-out infinite;
 }
 
-.agent-toggle.busy::after {
-  content: "";
+.agent-toggle.busy .agent-orbit {
+  display: block;
   position: absolute;
   inset: 0;
+  overflow: hidden;
   border-radius: inherit;
   padding: 1.5px;
-  background: conic-gradient(from var(--ag-orbit), transparent 0 55%, rgba(var(--ag-live-rgb), 0.35) 75%, var(--ag-live) 92%, transparent 100%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  animation: ag-toggle-orbit 2.2s linear infinite;
   pointer-events: none;
 }
 
+.agent-orbit::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  background: conic-gradient(transparent 0 55%, rgba(var(--ag-live-rgb), 0.35) 75%, var(--ag-live) 92%, transparent 100%);
+  animation: ag-toggle-orbit 2.2s linear infinite;
+}
+
 @keyframes ag-toggle-orbit {
-  to { --ag-orbit: 360deg; }
+  to { transform: rotate(360deg); }
 }
 
 @keyframes ag-toggle-breathe {

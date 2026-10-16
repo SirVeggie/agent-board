@@ -2570,6 +2570,7 @@
       this.stickLock = false;
       this.stickY = 0;
       this.stickV = 0;
+      this.stickTarget = -1;
       this.queueShown = true;
       this.transcriptThreadId = null;
       this.transcriptHadContent = false;
@@ -4674,6 +4675,8 @@
       const el = this.scroll;
       if (!el) return;
       this.stick = true;
+      // New content or a resize: the running spring reads the bottom again on its next frame.
+      this.stickTarget = -1;
       const max = () => Math.max(0, el.scrollHeight - el.clientHeight);
       const reduce = instant || !window.scribeMotion.enabled();
       if (reduce) {
@@ -4692,18 +4695,24 @@
         }
         const dt = Math.min(0.05, Math.max(0, now - last) / 1000);
         last = now;
-        const target = max();
+        // Reading scrollHeight every frame forces a layout before the turn's own DOM writes.
+        if (this.stickTarget < 0) this.stickTarget = max();
+        const target = this.stickTarget;
         // Something else moved the scroll (a snap, a layout change): carry on from there.
         if (Math.abs(el.scrollTop - this.stickY) > 2) this.stickY = el.scrollTop;
         this.stickV += (omega * omega * (target - this.stickY) - 2 * omega * this.stickV) * dt;
         this.stickY = Math.min(target, this.stickY + this.stickV * dt);
         if (this.stickY >= target) this.stickV = Math.min(this.stickV, 0);
-        this.jumpScroll(this.stickY);
-        if (target - this.stickY < 0.5 && Math.abs(this.stickV) < 5) {
+        // Caught up: the sub-pixel tail would only repaint the transcript. New content starts it again.
+        if (target - this.stickY < 1 && Math.abs(this.stickV) < 20) {
           this.jumpScroll(target);
           this.stopStickAnim();
           return;
         }
+        // Only whole device pixels move the view; skip frames that would not.
+        const dpr = window.devicePixelRatio || 1;
+        const top = Math.round(this.stickY * dpr) / dpr;
+        if (Math.abs(top - el.scrollTop) * dpr >= 1) this.jumpScroll(top);
         this.stickAnim = requestAnimationFrame(tick);
       };
       this.stickAnim = requestAnimationFrame(tick);

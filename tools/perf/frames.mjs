@@ -42,7 +42,7 @@ if (args.thread) await page.evaluate((id) => window.scribeChat.openThread(id), S
 await page.waitForTimeout(4000);
 if (args.stream && args.thread) {
   const composer = page.locator("#agent-pane textarea.ag-textarea").first();
-  await composer.click();
+  await composer.focus();
   await composer.fill("[fake:stream=40] [fake:delay=200] perf frames probe");
   await page.keyboard.press("Enter");
   await page.waitForTimeout(3000);
