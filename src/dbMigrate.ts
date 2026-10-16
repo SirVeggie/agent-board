@@ -227,3 +227,15 @@ export function ensureWorkspaceColumn(db: DatabaseSync): void {
   }
   db.exec("ALTER TABLE tabs ADD COLUMN workspace TEXT");
 }
+
+/**
+ * Boards created before file pages (#654) have no tabs.file.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureFileColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "file")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN file TEXT");
+}

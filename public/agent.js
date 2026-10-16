@@ -1768,7 +1768,14 @@
 
   /* ---------- workspace picker ---------- */
 
+  /**
+   * opts.files: "open" lists files too and picks one; "save" picks where to save (input holds the
+   * full path, and browsing keeps its file name; opts.name is the fallback). opts.action names the button.
+   */
   function pickWorkspace(initial, opts = {}) {
+    const files = opts.files === "open" || opts.files === "save" ? opts.files : "";
+    const sep = (dir) => (/\\/.test(dir) || /^[A-Za-z]:/.test(dir) ? "\\" : "/");
+    const joinPath = (dir, name) => (dir ? dir.replace(/[\\/]+$/, "") + sep(dir) + name : name);
     return new Promise((resolve) => {
       const { panel, close: closeModal } = modal("ag-ws");
       let done = false;
@@ -1779,16 +1786,16 @@
         resolve(value);
       };
       const title = el("h2", "ag-modal-title", opts.title || "Workspace folder");
-      const hint = el("p", "ag-modal-hint", opts.hint || "Where the agent reads, edits, and runs commands for this thread.");
+      const hint = el("p", "ag-modal-hint", opts.hint ?? "Where the agent reads, edits, and runs commands for this thread.");
       const row = el("div", "ag-ws-row");
       const input = el("input", "ag-input");
       input.type = "text";
       input.placeholder = "C:\\path\\to\\project";
       input.value = initial || prefs().recentWorkspaces[0] || "";
-      const use = button("Use folder", "ag-btn primary", () => finish(input.value.trim() || null));
+      const use = button(opts.action || "Use folder", "ag-btn primary", () => finish(input.value.trim() || null));
       row.append(input, use);
       const used = el("div", "ag-ws-used");
-      const withThreads = opts.used === false ? [] : threadWorkspaces();
+      const withThreads = opts.used === false || files ? [] : threadWorkspaces();
       if (withThreads.length) {
         const usedHeading = helpHeading("Workspaces with threads", "Counts include all non-archived threads, including inactive workers and helpers nested under their parent threads. With Show workers off, a workspace containing only inactive workers can be absent from the thread list. Search for the folder path in the Workspaces thread list to find its threads, including workers, helpers, and older threads.");
         usedHeading.classList.add("ag-ws-used-label");
@@ -1807,22 +1814,32 @@
       const load = async (dir) => {
         list.replaceChildren(el("div", "ag-muted ag-ws-loading", "Loading…"));
         try {
-          const data = await api("GET", `/fs?path=${encodeURIComponent(dir || "")}`);
+          const data = files ? await listFiles(dir) : await api("GET", `/fs?path=${encodeURIComponent(dir || "")}`);
           crumbs.replaceChildren();
           if (data.parent !== null && data.parent !== undefined) {
             crumbs.append(button("↑", "ag-btn ghost small", () => load(data.parent), "Up", false));
           }
           crumbs.append(el("span", "ag-ws-cur", data.path || "This PC"));
           if (data.repo) crumbs.append(el("span", "ag-tag", "git"));
-          if (data.path) input.value = data.path;
+          if (data.path) input.value = files === "save" ? joinPath(data.path, R.basename(input.value) || opts.name || "untitled.txt") : data.path;
           list.replaceChildren();
           for (const d of data.dirs) {
             const item = button(d.name, "ag-ws-dir", () => load(d.path));
             item.prepend(icon("folder"));
-            item.addEventListener("dblclick", () => finish(d.path));
+            if (!files) item.addEventListener("dblclick", () => finish(d.path));
             list.append(item);
           }
-          if (!data.dirs.length) list.append(el("div", "ag-muted ag-ws-loading", data.exists === false ? "Folder not found" : "No subfolders"));
+          for (const f of files ? data.files || [] : []) {
+            const item = button(f.name, "ag-ws-dir ag-ws-file", () => {
+              input.value = f.path;
+              for (const other of list.querySelectorAll(".ag-ws-file.is-picked")) other.classList.remove("is-picked");
+              item.classList.add("is-picked");
+            });
+            item.prepend(icon("read"));
+            item.addEventListener("dblclick", () => finish(f.path));
+            list.append(item);
+          }
+          if (!list.childElementCount) list.append(el("div", "ag-muted ag-ws-loading", data.exists === false ? "Folder not found" : files ? "Empty folder" : "No subfolders"));
         } catch (err) {
           list.replaceChildren(el("div", "ag-muted", err.message));
         }
@@ -1832,11 +1849,12 @@
         if (event.key === "Escape") finish(null);
       });
       const actions = el("div", "ag-modal-actions");
+      // With files, a file's path browses its folder (the daemon lists the parent).
       actions.append(button("Browse here", "ag-btn ghost", () => load(input.value.trim())), el("span", "ag-grow"));
       // opts.clear: a button that resolves "" (no folder), apart from Cancel's null.
       if (opts.clear) actions.append(button(opts.clear, "ag-btn", () => finish("")));
       actions.append(button("Cancel", "ag-btn", () => finish(null)));
-      panel.append(title, hint, row);
+      panel.append(...(hint.textContent ? [title, hint, row] : [title, row]));
       if (used.childElementCount) panel.append(used);
       panel.append(browser, actions);
       load(input.value.trim());
@@ -1844,6 +1862,14 @@
       // Esc from the modal stack resolves as cancel.
       modalStack[modalStack.length - 1] = () => finish(null);
     });
+  }
+
+  /** Files and folders in a folder (the board's file API, not the agent one). */
+  async function listFiles(dir) {
+    const res = await fetch(`/api/files/list?path=${encodeURIComponent(dir || "")}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
   }
 
   /* ---------- Hook rules (Agent settings → Hooks) ---------- */

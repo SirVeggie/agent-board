@@ -4193,6 +4193,73 @@
       .catch((err) => reply({ ok: false, error: String(err?.message || err) }));
   }
 
+  /**
+   * scribe.file from a file page (#654): the file on that page's tab, as found from the frame that
+   * asked. Saving needs the user's click or key press in the page; Save as asks where.
+   */
+  async function onPageFile(event) {
+    const data = event.data;
+    const source = event.source;
+    const reply = (result, transfer) => {
+      source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*", transfer || []);
+    };
+    const frameId = frameIdByWindow(source);
+    const tab = frameId ? findAnyTab(frameId) : null;
+    if (!tab?.file) {
+      reply({ ok: false, error: "not_a_file_page" });
+      return;
+    }
+    const url = `/api/tabs/${encodeURIComponent(tab.id)}/file`;
+    const call = async (method, path, body) => {
+      const res = await fetch(path, body === undefined ? { method } : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const json = await res.json().catch(() => ({}));
+      return res.ok ? { ok: true, file: json } : { ok: false, status: res.status, ...json, error: String(json.error || `HTTP ${res.status}`) };
+    };
+    try {
+      if (data.op === "read") {
+        reply(await call("GET", url));
+      } else if (data.op === "image") {
+        const res = await fetch(`${url}/raw`);
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          reply({ ok: false, error: String(json.error || `HTTP ${res.status}`) });
+          return;
+        }
+        const buffer = await res.arrayBuffer();
+        reply({ ok: true, buffer, type: res.headers.get("Content-Type") || "" }, [buffer]);
+      } else if (data.op === "save" || data.op === "saveAs") {
+        if (!frameActivated(frameId)) {
+          reply({ ok: false, error: "no_gesture" });
+          return;
+        }
+        const body = { text: String(data.text ?? ""), eol: data.eol === "\r\n" ? "\r\n" : "\n", bom: data.bom === true };
+        if (data.op === "save") {
+          reply(await call("PUT", url, { ...body, mtime: data.mtime, force: data.force === true }));
+          return;
+        }
+        const target = await window.scribeChat?.pickWorkspace?.(tab.file.path, { files: "save", title: "Save as", hint: "", action: "Save", name: tab.title });
+        if (!target) {
+          reply({ ok: false, error: "cancelled" });
+          return;
+        }
+        let result = await call("POST", `${url}/save-as`, { ...body, path: target });
+        if (!result.ok && result.exists) {
+          if (!(await confirmDelete(`${target} already exists. Replace it?`, "Replace"))) {
+            reply({ ok: false, error: "cancelled" });
+            return;
+          }
+          result = await call("POST", `${url}/save-as`, { ...body, path: target, overwrite: true });
+        }
+        if (result.ok) showNotice(`Saved as ${result.file.name}`);
+        reply(result);
+      } else {
+        reply({ ok: false, error: "unknown_op" });
+      }
+    } catch (err) {
+      reply({ ok: false, error: String(err?.message || err) });
+    }
+  }
+
   /** scribe.permissions from a page: read its own, or ask the user for one (after a click). */
   function onPagePermissions(event) {
     const data = event.data;
@@ -5425,6 +5492,8 @@
       onPageAudio(event);
     } else if (event.data?.type === "scribe-reply") {
       onPageReply(event);
+    } else if (event.data?.type === "scribe-file") {
+      void onPageFile(event);
     } else if (event.data?.type === "scribe-title") {
       onPageTitle(event);
     } else if (event.data?.type === "scribe-preview") {

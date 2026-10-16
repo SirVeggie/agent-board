@@ -11,6 +11,7 @@ import { createStateOps } from "./stateOps.js";
  * - `scribe.signal(name, data)` and `data-scribe-signal`: events agents wait on.
  * - `scribe.action(name, args)`: the page template's actions.
  * - `scribe.reply(data, { summary })`: a form's answers to the page its agent wired it to (replyTo).
+ * - `scribe.file`: a file page's file (read, image, save, saveAs), through the board.
  * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
  *   `scribe.onOpen` for a link that names a record in the page (`key#card=12`),
  *   `scribe.preview` for Scribe's file viewer, and `scribe.agent` for chat threads the page starts.
@@ -1569,6 +1570,29 @@ export const BOARD_BRIDGE_JS = `
     return askBoard({ type: "scribe-reply", data: payload, summary: summary }, AGENT_ASK_MS);
   }
 
+  // ---------- file pages ----------
+  /**
+   * A file page's file (#654). The board reads and writes the file on this page's tab; the page
+   * cannot name another. read() resolves { ok, file } (text kinds carry text, eol, bom), image()
+   * { ok, buffer, type }. save(text, { mtime, eol, bom, force }) and saveAs(text, { eol, bom }) need a
+   * click or key press; save resolves { ok: false, conflict: true, mtime } when the file changed
+   * on disk, saveAs { ok: false, error: "cancelled" } when the user closes the dialog.
+   */
+  var fileApi = {
+    read: function () { return askBoard({ type: "scribe-file", op: "read" }, 60000); },
+    image: function () { return askBoard({ type: "scribe-file", op: "image" }, 120000); },
+    save: function (text, opts) {
+      if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
+      opts = opts || {};
+      return askBoard({ type: "scribe-file", op: "save", text: String(text), mtime: opts.mtime, eol: opts.eol, bom: opts.bom === true, force: opts.force === true }, 60000);
+    },
+    saveAs: function (text, opts) {
+      if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
+      opts = opts || {};
+      return askBoard({ type: "scribe-file", op: "saveAs", text: String(text), eol: opts.eol, bom: opts.bom === true }, 30 * 60 * 1000);
+    }
+  };
+
   window.scribe = {
     id: tabId,
     template: template,
@@ -1598,6 +1622,7 @@ export const BOARD_BRIDGE_JS = `
     signal: signal,
     action: action,
     reply: reply,
+    file: fileApi,
     open: open,
     resolve: resolve,
     preview: preview,

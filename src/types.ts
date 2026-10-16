@@ -218,6 +218,20 @@ export type Tab = {
    * the page; the user can change or clear it. Omitted for none.
    */
   workspace?: string;
+  /**
+   * A file page (#654): the file on disk the page shows and saves. Kept with the page's metadata,
+   * not its state, so the page's own code cannot point it at another file.
+   */
+  file?: FileBinding;
+};
+
+/**
+ * The file a file page opens. copy: the bytes were dropped in (a browser gives no path), so they
+ * live in Scribe's data folder until Save as writes them somewhere else.
+ */
+export type FileBinding = {
+  path: string;
+  copy?: boolean;
 };
 
 /**
@@ -461,6 +475,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.provenance ? { provenance: tab.provenance } : {}),
     ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
     ...(tab.workspace ? { workspace: tab.workspace } : {}),
+    ...(tab.file ? { file: tab.file } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(isBlankPage(tab) ? { blank: true } : {}),
     ...(tab.templateId
@@ -566,4 +581,11 @@ export function normalizeReplyTo(value: unknown): ReplyTarget | undefined {
     target.card = value.card;
   }
   return target;
+}
+
+export function normalizeFileBinding(value: unknown): FileBinding | undefined {
+  if (!isPlainObject(value) || typeof value.path !== "string" || !value.path.trim()) {
+    return undefined;
+  }
+  return { path: value.path, ...(value.copy === true ? { copy: true } : {}) };
 }

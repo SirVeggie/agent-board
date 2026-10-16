@@ -5038,6 +5038,15 @@ html.tight-small .agent-full {
   background: var(--accent-soft);
 }
 
+.ag-ws-file {
+  color: var(--muted);
+}
+
+.ag-ws-file.is-picked {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 .ag-ws-loading {
   padding: 12px;
 }

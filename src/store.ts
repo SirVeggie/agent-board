@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
 import { buildExport, type BoardExportFile, type BoardExportFolder, type ImportPageInput } from "./boardExport.js";
@@ -114,6 +115,7 @@ import {
   type TemplateUpsertInput,
 } from "./templates.js";
 import { wrapHtml } from "./wrapHtml.js";
+import { removeCopies, safeFileName, samePath, scanFolder, storeCopy, filePlaceholderHtml, type FolderEntry } from "./filePages.js";
 
 type Located = { tab: Tab; where: "open" | "closed" };
 
@@ -1337,6 +1339,9 @@ export class BoardStore extends EventEmitter {
     if (existing && isTemplateBound(existing.tab)) {
       throw new Error(boundHtmlError(existing.tab, this.templateLabel(existing.tab)));
     }
+    if (existing?.tab.file) {
+      throw new Error(`${existing.tab.key} is a file page (${existing.tab.file.path}); its HTML comes from Scribe. Edit the file instead.`);
+    }
     if (existing) {
       this.assertTabRevision(existing.tab, input.expectedRevision);
     }
@@ -2536,6 +2541,109 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
+  /** The page that has this file open, if any (#654). */
+  findFilePage(file: string): Tab | undefined {
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      if (tab.file && samePath(tab.file.path, file)) {
+        return tab;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Open a file as a page (#654): the page that already has it, or a new one named after the file.
+   * bytes: a dropped file with no path; Scribe keeps a copy in its data folder. folderId puts a new
+   * page in a Library folder; activate opens it in a tab (else it lands in the Library only).
+   */
+  openFilePage(input: { path?: string; name?: string; bytes?: Buffer; folderId?: string | null; activate?: boolean }): { tab: Tab; created: boolean } {
+    const activate = input.activate !== false;
+    if (input.path) {
+      const existing = this.findFilePage(input.path);
+      if (existing) {
+        if (activate) {
+          this.openPage(existing.id);
+        }
+        return { tab: existing, created: false };
+      }
+    } else if (!input.bytes) {
+      throw new Error("path or bytes is required");
+    }
+    const name = input.path ? path.basename(input.path) || input.path : safeFileName(input.name ?? "file");
+    if (input.folderId) {
+      this.requireFolder(input.folderId);
+    }
+    const { tab } = this.upsert({ title: name, html: filePlaceholderHtml(name, input.path ?? name), activate });
+    try {
+      tab.file = input.path ? { path: path.resolve(input.path) } : { path: storeCopy(tab.id, name, input.bytes!), copy: true };
+    } catch (err) {
+      this.deleteMany([tab.id]);
+      throw err;
+    }
+    tab.html = filePlaceholderHtml(name, tab.file.path);
+    if (input.folderId) {
+      return { tab: this.movePage(tab.id, input.folderId, 0), created: true };
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return { tab, created: true };
+  }
+
+  /**
+   * Save as for a file page: point it at another file (written by the caller) and name it after
+   * that file. A copy's old bytes go once the page no longer uses them.
+   */
+  setFilePath(idOrKey: string, file: string): Tab {
+    const tab = this.requireAny(idOrKey);
+    if (!tab.file) {
+      throw new Error("not a file page");
+    }
+    const wasCopy = tab.file.copy;
+    const name = path.basename(file) || file;
+    tab.file = { path: path.resolve(file) };
+    tab.html = filePlaceholderHtml(name, tab.file.path);
+    tab.title = name;
+    tab.updatedAt = Date.now();
+    tab.revision += 1;
+    if (wasCopy) {
+      removeCopies(tab.id);
+    }
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
+  }
+
+  /**
+   * Open folder (#654): a Library folder for the disk folder and each subfolder in it, and a file
+   * page for each file, all in the Library (no tabs). Files that already have a page keep it.
+   */
+  openDiskFolder(root: string, parentId: string | null): { folder: Folder; pages: number; reused: number; truncated: boolean } {
+    const { tree, truncated } = scanFolder(root);
+    let pages = 0;
+    let reused = 0;
+    const make = (entry: FolderEntry & { kind: "dir" }, parent: string | null): Folder => {
+      const folder = this.createFolder({ name: entry.name, parentId: parent });
+      let index = 0;
+      for (const child of entry.children) {
+        if (child.kind === "dir") {
+          make(child, folder.id);
+          continue;
+        }
+        const { tab, created } = this.openFilePage({ path: child.path, activate: false });
+        if (created) {
+          pages += 1;
+          this.movePage(tab.id, folder.id, index++);
+        } else {
+          reused += 1;
+        }
+      }
+      return folder;
+    };
+    return { folder: make(tree, parentId), pages, reused, truncated };
+  }
+
   /** `lift` moves the folder's contents up to its parent; `delete` bins the whole subtree as one batch. */
   deleteFolder(id: string, mode: FolderDeleteMode): { deleted: Tab[]; moved: Tab[] } {
     const folder = this.requireFolder(id);
@@ -3705,6 +3813,9 @@ export class BoardStore extends EventEmitter {
       this.dirty.delete(tab.id);
       if (!this.tabs.has(tab.id) && !this.closed.has(tab.id)) {
         deleteTabAssets(tab.id);
+        if (tab.file?.copy) {
+          removeCopies(tab.id);
+        }
       }
     }
     if (gone.folders.length) {

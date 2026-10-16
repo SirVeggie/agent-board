@@ -59,6 +59,7 @@ import { AudioService } from "./audio/service.js";
 import { shellAssets } from "./shellAssets.js";
 import { appearanceRouter } from "./appearance.js";
 import { contentOriginGate, isContentHost } from "./contentOrigin.js";
+import { FileConflictError, fileViewerHtml, listFolder, readFileForPage, readImageBytes, samePath, writeFileText } from "./filePages.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
 
@@ -1649,6 +1650,167 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  // ---------- file pages (#654) ----------
+  // The board UI only: the content origin cannot reach /api (contentOriginGate), and agents read
+  // and edit files with their own tools. A page asks the board (scribe.file), which calls these for
+  // the page's own file (Tab.file), never a path the page names.
+
+  /** Files and folders in a folder, for Open file / Open folder / Save as. No path: the drives (Windows) or /. */
+  app.get("/api/files/list", (req, res) => {
+    const raw = typeof req.query.path === "string" ? req.query.path.trim() : "";
+    if (!raw && process.platform === "win32") {
+      const drives = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((d) => `${d}:\\`).filter((d) => fs.existsSync(d));
+      res.json({ path: "", parent: null, dirs: drives.map((d) => ({ name: d, path: d })), files: [], exists: true });
+      return;
+    }
+    res.json(listFolder(raw || "/"));
+  });
+
+  app.post("/api/files/open", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      const file = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+      if (!file) throw new Error("path is required");
+      const resolved = path.resolve(file);
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) throw new Error(`file not found: ${resolved}`);
+      const { tab, created } = store.openFilePage({
+        path: resolved,
+        folderId: parseFolderRef(req.body?.folderId),
+        activate: req.body?.activate !== false,
+      });
+      res.status(created ? 201 : 200).json({ tab: toMeta(tab), created });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.post("/api/files/open-folder", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      const dir = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+      if (!dir) throw new Error("path is required");
+      const result = store.openDiskFolder(path.resolve(dir), parseFolderRef(req.body?.folderId));
+      res.status(201).json(result);
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  /**
+   * A dropped file (the browser gives its bytes, not its path). A Scribe export still imports as
+   * pages; anything else becomes a file page holding a copy.
+   */
+  app.post("/api/files/upload", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      if (!Buffer.isBuffer(req.body)) throw new Error("expected a file body");
+      const name = importFilename(req);
+      const folderId = parseFolderRef(req.query.folderId);
+      const activate = req.query.activate !== "0";
+      if (/\.json$/i.test(name) && !folderId) {
+        let parsed: ReturnType<typeof parseImport> | null = null;
+        try {
+          parsed = parseImport(req.body, name);
+        } catch {
+          parsed = null;
+        }
+        if (parsed?.kind === "export") {
+          const result = store.importBoard(parsed, activate ? "meta" : "closed");
+          res.status(201).json({ kind: "export", opened: result.opened, closed: result.closed, focusedId: result.focusedId, templatesCreated: result.templatesCreated });
+          return;
+        }
+      }
+      const { tab } = store.openFilePage({ name, bytes: req.body, folderId, activate });
+      res.status(201).json({ kind: "file", tab: toMeta(tab) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  app.get("/api/tabs/:id/file", (req, res) => {
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(readFileForPage(tab.file.path, tab.file.copy));
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message, path: tab.file.path });
+    }
+  });
+
+  app.get("/api/tabs/:id/file/raw", (req, res) => {
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    try {
+      const { bytes, type } = readImageBytes(tab.file.path);
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+      res.type(type).send(bytes);
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  /** Save: { text, mtime, eol, bom, force }. 409 { conflict, mtime } when the file changed on disk since mtime. */
+  app.put("/api/tabs/:id/file", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    try {
+      if (typeof req.body?.text !== "string") throw new Error("text is required");
+      const info = writeFileText(tab.file.path, req.body.text, {
+        expectedMtime: optionalNumber(req.body.mtime),
+        force: req.body.force === true,
+        eol: req.body.eol,
+        bom: req.body.bom === true,
+      });
+      res.json({ ...info, ...(tab.file.copy ? { copy: true } : {}) });
+    } catch (err) {
+      if (err instanceof FileConflictError) {
+        res.status(409).json({ error: err.message, conflict: true, mtime: err.mtime });
+        return;
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  /** Save as: { path, text, eol, bom, overwrite }. 409 { exists } when path is taken and overwrite is not set. */
+  app.post("/api/tabs/:id/file/save-as", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    try {
+      const raw = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+      if (!raw) throw new Error("path is required");
+      if (typeof req.body?.text !== "string") throw new Error("text is required");
+      const target = path.resolve(raw);
+      const other = store.findFilePage(target);
+      if (other && other.id !== tab.id) throw new Error(`${path.basename(target)} is open in another page (${other.title})`);
+      if (fs.existsSync(target) && req.body.overwrite !== true && !samePath(target, tab.file.path)) {
+        res.status(409).json({ error: "A file with that name already exists", exists: true });
+        return;
+      }
+      const info = writeFileText(target, req.body.text, { force: true, create: true, eol: req.body.eol, bom: req.body.bom === true });
+      const updated = store.setFilePath(tab.id, target);
+      res.json({ ...info, tab: toMeta(updated) });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   app.post("/api/import", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), (req, res) => {
     try {
       if (!Buffer.isBuffer(req.body)) {
@@ -2174,7 +2336,7 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
 </script>`;
 
 function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: BoardState): string {
-  const html = injectBoardKeys(rewriteAssetRefs(tab.html, tab.id));
+  const html = injectBoardKeys(tab.file ? fileViewerHtml() : rewriteAssetRefs(tab.html, tab.id));
   if (html.includes("data-scribe-bridge")) {
     return html;
   }
@@ -2253,6 +2415,13 @@ function agentRewrote(req: express.Request, tabId: string): void {
   if (viewerOf(req) === "agent") {
     store.resetRiskyPermissions(tabId);
   }
+}
+
+/** File writes are the user's: agents edit files with their own tools. True when it answered. */
+function refuseAgent(req: express.Request, res: express.Response): boolean {
+  if (viewerOf(req) !== "agent") return false;
+  res.status(403).json({ error: "Only the board opens and saves file pages" });
+  return true;
 }
 
 function viewerOf(req: express.Request): Viewer {
