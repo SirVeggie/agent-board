@@ -1,6 +1,8 @@
 # Permission ceiling replay, 2026-10-16
 
-Keep automatic lowering **off by default**. The current question and 0.8 threshold conflict
+Historical evaluation: the permission-ceiling experiment, its setting and replay tool were removed in #679 at the user's request. The results below describe the experiment before removal.
+
+The original recommendation was to keep automatic lowering **off by default**. The current question and 0.8 threshold conflict
 with recorded activity too often in the first real-turn sample. No threshold or question
 was tuned on this small sample.
 

@@ -97,7 +97,6 @@ import type {
 } from "./types.js";
 import { isProviderId, noPages } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
-import { LIFT_OPTION, canLower, ceilingReason, classifyCeiling, lowerApproval, lowered, type TurnCeiling } from "./ceiling.js";
 import { reviewNativeCommand } from "./nativeReview.js";
 import { injectionDetectors } from "./injection.js";
 
@@ -961,7 +960,6 @@ export class AgentHost {
       searxngUrl: cleanSearxngUrl(saved.searxngUrl),
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
-      lowerPermissions: saved.lowerPermissions === true,
       helpers: saved.helpers !== false,
       memory: saved.memory !== false,
       hookRules: savedRules(saved.hookRules),
@@ -980,7 +978,6 @@ export class AgentHost {
     // null puts back the starting list.
     if (patch.claudeHooks !== undefined) next.claudeHooks = patch.claudeHooks === true;
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
-    if (patch.lowerPermissions !== undefined) next.lowerPermissions = patch.lowerPermissions === true;
     if (patch.helpers !== undefined) next.helpers = patch.helpers === true;
     if (patch.memory !== undefined) next.memory = patch.memory !== false;
     if (patch.hookRules !== undefined) {
@@ -1016,7 +1013,7 @@ export class AgentHost {
       thread.updatedAt = Date.now();
       this.db.saveThread(thread);
       this.effectivePermissions.delete(thread.id);
-      this.sessions.get(thread.id)?.update(this.sessionThread(thread));
+      this.sessions.get(thread.id)?.update(thread);
       this.emit({ type: "agent_thread", thread: this.view(thread) });
     }
   }
@@ -1530,9 +1527,7 @@ export class AgentHost {
     next.updatedAt = Date.now();
     this.threads.set(id, next);
     this.db.saveThread(next);
-    // The user picked a level while the turn ran lowered: that is the level they want now.
-    if (next.approval !== thread.approval) this.liftCeiling(id);
-    this.sessions.get(id)?.update(this.sessionThread(next));
+    this.sessions.get(id)?.update(next);
     if (next.cwd && next.cwd !== thread.cwd) this.noteWorkspaces([next.cwd]);
     this.rememberChoices(next, patch);
     const view = this.view(next);
@@ -1569,7 +1564,7 @@ export class AgentHost {
     thread.threadGrants = next.threadGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
-    this.sessions.get(id)?.update(this.sessionThread(thread));
+    this.sessions.get(id)?.update(thread);
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
     return view;
@@ -2537,7 +2532,7 @@ export class AgentHost {
     const run = this.runs.get(threadId);
     if (!run) return "Not changed: with no turn running the user cannot be asked.";
     const goOn = opts.continue !== false;
-    if (this.sessionThread(thread).approval !== "full") {
+    if (thread.approval !== "full") {
       const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS.useful : null;
       const detail = [
         `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. Commands then run there, and this thread's approval level covers that folder instead.`,
@@ -3225,8 +3220,6 @@ export class AgentHost {
     this.emitThread(threadId);
     // A steered message that became this turn went through its prompt hook when it was steered.
     if (msg && userItem && !opts?.adopt) this.hookPrompt(threadId, run, msg, userItem);
-    // Asked now, so the wait runs beside the turn's own setup below.
-    const ceiling = this.askCeiling(thread, msg);
 
     // Checkpoint the page this turn is about, so an agent edit to it can be reverted.
     const pageId = thread.scope.kind === "page" && thread.scope.ref ? thread.scope.ref : msg?.context.find((c) => c.kind === "page")?.id;
@@ -3272,9 +3265,6 @@ export class AgentHost {
       thread = this.startOverWithRecap(thread, turn.id);
     }
 
-    // Only a turn that asked waits: without the setting a turn starts as it always did.
-    if (ceiling && !run.cancelled && !setupError) this.setCeiling(threadId, run, await ceiling);
-
     const sink = this.makeSink(threadId, run);
     let result: TurnResult = setupError ? { status: "error", error: setupError } : { status: "cancelled" };
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
@@ -3289,7 +3279,7 @@ export class AgentHost {
         // Stop can also arrive while the model is looked up.
         if (!run.cancelled) {
           const session = this.session(thread);
-          session.update(this.sessionThread(thread));
+          session.update(thread);
           const pageEdits = this.pageEditPrefix(thread, turn.id);
           // A note the agent must read comes before the text, so the message is then not sent as a command.
           const command = msg && !earlier && !reopened ? this.commandText(thread, msg) : null;
@@ -3693,15 +3683,14 @@ export class AgentHost {
       approval(req: ApprovalRequest, signal) {
         const decide = async (req: ApprovalRequest, wait: AbortSignal | undefined = signal): Promise<ApprovalDecision> => {
           const t = thread();
-          // A lowered turn answers from the lowered level (sessionThread), like its provider does.
-          const auto = autoApproval(t && host.sessionThread(t), req);
+          const auto = autoApproval(t, req);
           if (auto) return auto;
           const allow = req.options.find((o) => o.kind === "allow_once");
           if (req.toolId && run.hooks.approved.has(req.toolId)) {
             // The user approved this very call a moment ago, when the hook asked.
             if (allow) return Promise.resolve({ optionId: allow.id });
           }
-          if (t?.provider === "pi" && host.sessionThread(t).approval === "auto" && req.tool === "execute" && !req.humanOnly && allow) {
+          if (t?.provider === "pi" && t.approval === "auto" && req.tool === "execute" && !req.humanOnly && allow) {
             const workspace = t.worktree?.path ?? t.cwd;
             const review = await reviewNativeCommand(
               (state, questions, options) => host.hookBackend.decide(state, questions, options),
@@ -3710,33 +3699,22 @@ export class AgentHost {
             if (run.cancelled || wait?.aborted || host.runs.get(threadId) !== run) throw new Error("Auto review cancelled.");
             // Recheck after the asynchronous review: settings may have changed while it waited.
             const current = thread();
-            if (review.allowed && current?.provider === "pi" && host.sessionThread(current).approval === "auto" && (current.worktree?.path ?? current.cwd) === workspace) {
+            if (review.allowed && current?.provider === "pi" && current.approval === "auto" && (current.worktree?.path ?? current.cwd) === workspace) {
               return { optionId: allow.id };
             }
             req = { ...req, detail: [req.detail, review.reason].filter(Boolean).join("\n\n") };
           }
-          // What a hook or a native review wants asked is asked at the thread's own level too.
-          const ceiling = run.turn.ceiling && !run.turn.ceiling.lifted && allow && !req.humanOnly ? run.turn.ceiling : null;
-          const options = ceiling ? req.options.flatMap((o) => (o === allow ? [o, { id: LIFT_OPTION, label: "Allow for this turn", kind: "allow_always" as const }] : [o])) : req.options;
-          const detail = ceiling ? [req.detail, ceilingReason(ceiling)].filter(Boolean).join("\n\n") : req.detail;
           const item = host.addItem(threadId, turnId, {
             kind: "approval",
             requestId: "",
             ...(req.toolId ? { toolId: req.toolId } : {}),
             tool: req.tool,
             title: req.title,
-            ...(detail ? { detail } : {}),
-            options,
+            ...(req.detail ? { detail: req.detail } : {}),
+            options: req.options,
             status: "pending",
           });
-          const answer = waitFor<ApprovalDecision>("approval", item.id, wait);
-          if (!ceiling) return answer;
-          return answer.then((decision) => {
-            if (decision.optionId !== LIFT_OPTION) return decision;
-            // The provider only knows its own options: to it this is the plain allow.
-            host.liftCeiling(threadId);
-            return { optionId: allow!.id };
-          });
+          return waitFor<ApprovalDecision>("approval", item.id, wait);
         };
         // A hook can only tighten this: deny the call, or have the user decide whatever the approval level.
         const gate = host.approvalGate(threadId, run, req);
@@ -3835,47 +3813,6 @@ export class AgentHost {
         host.emitThread(threadId);
       },
     };
-  }
-
-  // ---------- a turn's lowered permissions (ceiling.ts) ----------
-
-  /**
-   * What the message needs, asked of the classifier while the turn sets up. Null without waiting when
-   * the setting is off, the thread cannot be lowered, or nobody would be there to click: a board
-   * worker, a helper, a message a page or Scribe sent, a slash command.
-   */
-  private askCeiling(thread: Thread, msg: QueuedMessage | null): Promise<TurnCeiling | null> | null {
-    if (!msg || msg.from || msg.card || !msg.text.trim() || msg.text.startsWith("/")) return null;
-    if (!this.prefs().lowerPermissions || !canLower(thread) || thread.helperOf || this.unattended(thread.id)) return null;
-    if (!this.hookBackend.maySend("messages")) return null;
-    return classifyCeiling((state, questions, options) => this.hookBackend.decide(state, questions, options), msg.text, thread);
-  }
-
-  private setCeiling(threadId: string, run: RunState, ceiling: TurnCeiling | null): void {
-    // The level changed while the classifier was asked: the answer was about the old one.
-    if (!ceiling || run.cancelled || ceiling.from !== this.threads.get(threadId)?.approval) return;
-    run.turn.ceiling = ceiling;
-    this.saveTurn(run.turn);
-    this.emit({ type: "agent_turn", turn: run.turn });
-  }
-
-  /** The thread as its provider session and the approval rules see it: with a lowered turn's level while one runs. */
-  private sessionThread(thread: Thread): Thread {
-    const ceiling = this.runs.get(thread.id)?.turn.ceiling;
-    if (!ceiling || ceiling.lifted) return thread;
-    const approval = lowerApproval(thread.approval, ceiling.approval);
-    return approval === thread.approval ? thread : lowered(thread, approval);
-  }
-
-  /** "Allow for this turn": the thread's own level applies for the rest of the turn. */
-  private liftCeiling(threadId: string): void {
-    const run = this.runs.get(threadId);
-    const thread = this.threads.get(threadId);
-    if (!run?.turn.ceiling || run.turn.ceiling.lifted || !thread) return;
-    run.turn.ceiling = { ...run.turn.ceiling, lifted: true };
-    this.saveTurn(run.turn);
-    this.emit({ type: "agent_turn", turn: run.turn });
-    this.sessions.get(threadId)?.update(thread);
   }
 
   // ---------- hooks (hooks.ts) ----------

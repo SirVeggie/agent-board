@@ -1,5 +1,4 @@
 import type { EffectivePermissions } from "./effectivePermissions.js";
-import type { TurnCeiling } from "./ceiling.js";
 import type { PageRunView } from "./pageRuns.js";
 /** Agent chat: threads, turns, and the display transcript shared by every provider. */
 
@@ -311,8 +310,6 @@ export type Turn = {
    * The next turn compares live revisions and warns the agent if the user edited one in between.
    */
   seenPages?: Array<{ id: string; key: string; title: string; revision: number; stateRevision: number }>;
-  /** The turn ran with a lower approval level than the thread's, because the message did not need more (ceiling.ts). */
-  ceiling?: TurnCeiling;
 };
 
 export type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "fetch" | "think" | "mcp" | "task" | "todo" | "other";

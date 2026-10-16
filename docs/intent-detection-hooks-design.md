@@ -24,16 +24,9 @@ These override the recommendations below where they differ.
   - The gate never allows a call: one that passes still goes through the provider's permission check. A call the user approved for a hook is not asked about a second time.
   - `context` is a message from the hook (`from: "hook"`), steered into the turn or queued behind it, at most once per detector and turn.
   - The user's rules (`Prefs.hookRules`, Agent settings, Hooks) match by keyword, regular expression, tool name, or a yes/no question for the classifier (the Classifier feature "Hook questions").
-  - Not built: `restrict` (the per-turn permission ceiling has its own card), `where.dock`, and the replay script. Features add their detectors to `AgentHost.detectors`.
+  - Not built: `restrict` (the permission-ceiling experiment was removed in #679), `where.dock`, and the replay script. Features add their detectors to `AgentHost.detectors`.
 
-- **Lowered permissions per turn** (#522): `src/agent/ceiling.ts`, and `askCeiling`, `sessionThread` and `liftCeiling` in the host. Off until its switch is turned on (Agent settings, Permissions).
-  - On send, a message the user typed in a Code thread above Ask first is asked one choice question: answer, pages, web, edit or run. No command and no edit likely (`CEILING_THRESHOLD`, 0.8, not yet measured) gives Ask first; no command likely gives Auto-edit; anything else leaves the thread's level. The question runs beside the turn's own setup and waits at most the gating budget (500 ms); a slow, failing or switched-off classifier leaves the thread's level (fail open).
-  - The ceiling is `Turn.ceiling`, never the thread's setting. The provider session and the host's approval rules get the thread through `sessionThread`, a live view whose only difference is the lower `approval`, so each provider's own mapping applies: Claude's permission mode changes on the running process, Pi's approvals are the host's, and Codex and Cursor take it when the turn starts (their session key holds the level, so they reconnect when it changes between turns).
-  - An approval asked in a lowered turn carries the reason and an extra option, Allow for this turn (`LIFT_OPTION`), which the host answers to the provider as its plain allow and then lifts the ceiling: the thread's own level applies for the rest of the turn. Picking a level in the thread while the turn runs lifts it too. On Codex and Cursor the lift reaches the provider's own sandbox and reviewer only on the next turn; until then the calls they ask about are answered at the thread's level by the host.
-  - Left out: board workers and their helpers, any helper thread, messages a page, a card or Scribe sent, slash commands, steered messages (the turn keeps the ceiling it started with), and threads in other modes.
-  - Cursor has no approval callback: a lowered turn there means its Auto-review (which denies instead of asking) and, when the user has it on, the host shell.
-  - The turn's footer shows "Ran as Ask first" (or "Started as" once lifted) with the reason in its tip.
-  - Not done: measuring the threshold on real turns (a replay script like the page-intent one), and a per-turn override on Codex's `turn/start` instead of the reconnect.
+- **Lowered permissions per turn** (#522): removed in #679 after the replay in #540 found frequent conflicts with recorded activity. See [the historical evaluation](ceiling-evaluation.md). The proposal below is retained as design history.
 
 - **Page-creation intent** (#518): `src/agent/pageIntent.ts`, on the host's `detectors`. It replaces #440.
   - The floating chat sends `dock: true` with a message (kept on the stored user item). Only those turns are watched; board workers and threads with detection off are not.
