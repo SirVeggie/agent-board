@@ -407,6 +407,7 @@ return glow(c,e);}`;
     /** The screen is over a page that has content (the creating screen), not standing in for a blank one. */
     let covering = false;
     let wordTimer = 0;
+    let wordAnimation = null;
     let wordAt = 0;
     let lastIntent = null;
     root.addEventListener("click", () => covering && !replacement && host.dismissIntent?.());
@@ -497,16 +498,22 @@ return glow(c,e);}`;
       root.classList.toggle("provider-colors", Boolean(colors));
       if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
       else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));
-      const id = covering ? "cover" : current?.id;
+      const id = current?.id;
       backdrop?.set(Boolean(current), current ? background(id) : null, current ? covering || host.working(id) : false, colors);
     }
 
     function showWord() {
+      wordAnimation?.cancel();
+      wordAnimation = null;
       intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
       if (!window.scribeMotion.enabled()) return;
-      window.scribeMotion.animate(intentWord,
-        [{ opacity: 0, filter: "blur(8px)", transform: "translateY(8px)" }, { opacity: 1, filter: "blur(0px)", transform: "none" }],
-        { duration: 520, easing: "ease-out" });
+      // Finish the exit before replacing the text; one timeline also survives timer throttling.
+      wordAnimation = window.scribeMotion.animate(intentWord, [
+        { opacity: 0, filter: "blur(8px)", transform: "translateY(8px)", offset: 0, easing: "ease-out" },
+        { opacity: 1, filter: "blur(0px)", transform: "none", offset: .2 },
+        { opacity: 1, filter: "blur(0px)", transform: "none", offset: .84, easing: "ease-in" },
+        { opacity: 0, filter: "blur(8px)", transform: "translateY(-6px)", offset: 1 },
+      ], { duration: INTENT_WORD_MS, fill: "both", easing: "linear" });
       wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
     }
 
@@ -514,11 +521,22 @@ return glow(c,e);}`;
     function setIntent(intent) {
       root.classList.toggle("intent", Boolean(intent));
       clearTimeout(wordTimer);
+      wordAnimation?.cancel();
+      wordAnimation = null;
       if (!intent) return;
       intentTitle.textContent = intent.title || "";
       wordAt = 0;
       showWord();
     }
+
+    function wordMotionChanged() {
+      clearTimeout(wordTimer);
+      wordAnimation?.cancel();
+      wordAnimation = null;
+      if (current && root.classList.contains("intent")) showWord();
+    }
+    matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", wordMotionChanged);
+    window.addEventListener("scribe:ui-fx", wordMotionChanged);
 
     /** cover: the page has content, and the screen goes over it while the floating chat writes a new page. */
     function render(tab, cover = false) {
@@ -526,18 +544,12 @@ return glow(c,e);}`;
       const entering = Boolean(tab && cover) && !(covering && current?.id === tab.id);
       const visible = Boolean(current);
       const intent = tab ? host.intent?.(tab.id) || null : null;
-      if (tab && current?.id !== tab.id && !covering) creationStarted = null;
+      if (tab && current?.id !== tab.id) creationStarted = null;
       if (tab && (cover || intent || host.working(tab.id))) creationStarted ??= performance.now();
-      // Adding a creating screen to an existing backdrop must not change its shader.
-      const existingBackground = entering && visible ? background(covering ? "cover" : current.id) : null;
       root.hidden = !tab;
       current = tab || null;
       covering = Boolean(tab && cover);
-      // Each new page gets a background of its own.
-      if (entering) {
-        if (existingBackground) picks.set("cover", existingBackground);
-        else picks.delete("cover");
-      }
+      // Blank and creating screens share their page's pick, including when other pages are busy.
       updateBackdrop();
       if (!tab) {
         creationStarted = null;

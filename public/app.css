@@ -4743,7 +4743,7 @@ main.blank-page #frames iframe:not(.inactive) {
   font-weight: 700;
   letter-spacing: -0.02em;
   color: transparent;
-  background: linear-gradient(100deg, rgba(255, 255, 255, 0.55) 30%, #fff 50%, rgba(255, 255, 255, 0.55) 70%) 0 0 / 220% 100%;
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.55) 30%, #fff 50%, rgba(255, 255, 255, 0.55) 70%) 0 0 / 200% 100% repeat-x;
   -webkit-background-clip: text;
   background-clip: text;
   animation: np-intent-sheen var(--dur-breathe) linear infinite;
@@ -4762,8 +4762,9 @@ main.blank-page #frames iframe:not(.inactive) {
 }
 
 @keyframes np-intent-sheen {
-  from { background-position: 110% 0; }
-  to { background-position: -110% 0; }
+  /* Move exactly one repeated tile, so the last frame meets the first. */
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 
 /* Over a page that is there already, a click puts the page back. */

@@ -9,7 +9,7 @@ function screen(webgl = true, restoring = false) {
   let selected = "nebula";
   let working = false;
   let step: (dt: number) => void = () => {};
-  let motionChange = () => {};
+  const motionChanges: (() => void)[] = [];
   let running = false;
   let uiEffects = true;
   const events: Record<string, (event?: any) => void> = {};
@@ -25,15 +25,17 @@ function screen(webgl = true, restoring = false) {
   const css: Record<string, string> = {};
   const draws: { u_time: number; u_motionTime: number; u_work: number }[] = [];
   const shaders: string[] = [];
+  let activeShader = "";
   const animations: { finished: Promise<void>; finish: () => void; cancelled: boolean; cancel: () => void }[] = [];
   const timers = new Map<number, () => void>();
   const warmTimers = new Map<number, () => void>();
   let timerId = 0;
   let now = 0;
+  let intent: { itemId: string; title: string } | null = null;
   const deadlines = new Map<number, number>();
   let hidden = false;
   const effects: { canvas: any; destroyed: boolean; ready: () => void; fail: () => void }[] = [];
-  const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChange = fn; } };
+  const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChanges.push(fn); } };
   const node = () => ({
     hidden: false, textContent: "", innerHTML: "",
     dataset: {} as Record<string, string>, style: { cssText: "" },
@@ -51,6 +53,7 @@ function screen(webgl = true, restoring = false) {
   root.classList.toggle = (name: string, on: boolean) => { if (on) classes.add(name); else classes.delete(name); };
   root.classList.add = (...names: string[]) => { names.forEach(name => classes.add(name)); };
   root.classList.remove = name => { classes.delete(name); };
+  (root.classList as any).contains = (name: string) => classes.has(name);
   (root as any).style = {
     setProperty: (name: string, value: string) => { css[name] = value; },
     removeProperty: (name: string) => { delete css[name]; },
@@ -61,16 +64,23 @@ function screen(webgl = true, restoring = false) {
     return parts.get(key)!;
   };
   const win: any = {
-    scribeMotion: { enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate(), animate: (node: any) => node.animate() },
+    scribeMotion: { enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate(), animate: (node: any, frames: any, options: any) => {
+      const animation = (root as any).animate();
+      Object.assign(animation, { node, frames, options });
+      return animation;
+    } },
     matchMedia: () => motion,
-    addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
+    addEventListener: (name: string, fn: (event?: any) => void) => {
+      const previous = events[name];
+      events[name] = (event?: any) => { previous?.(event); fn(event); };
+    },
     scribeOrb: { colors: (p: string) => palettes[p] },
     scribeGL: {
       lazy: (canvas: any, shader: string, opts: any) => {
         shaders.push(shader);
         const effect = { canvas, destroyed: false, ready: () => { canvas.dataset.ready = "1"; opts.onReady(); }, fail: () => opts.onError() };
         effects.push(effect);
-        return { set: (values: any) => Object.assign(uniforms, values), destroy() { effect.destroyed = true; }, draw: (values: any) => draws.push(values) };
+        return { set: (values: any) => { activeShader = shader; Object.assign(uniforms, values); }, destroy() { effect.destroyed = true; }, draw: (values: any) => draws.push(values) };
       },
       loop: (fn: (dt: number) => void) => {
         step = fn;
@@ -100,9 +110,12 @@ function screen(webgl = true, restoring = false) {
     templates: () => [], builtins: () => [], threads: () => 1, working: () => working,
     openChat() {},
     provider: () => provider,
+    intent: () => intent,
   });
   return {
-    page, draws, shaders, motion, uniforms, classes, css, root, animations, timers,
+    page, draws, shaders, motion, uniforms, classes, css, root, animations, timers, parts,
+    intent: (value: typeof intent) => { intent = value; },
+    activeShader: () => activeShader,
     frame: () => {
       const listeners = new Set<() => void>();
       return { dataset: {} as Record<string, string>, animate: (root as any).animate,
@@ -116,7 +129,7 @@ function screen(webgl = true, restoring = false) {
     tick: (dt: number) => { if (running) step(dt); },
     busy: (value: boolean) => { working = value; },
     choose: (id: string) => { selected = id; events["scribe:newpage-bg"](); },
-    reduce: (value: boolean) => { motion.matches = value; motionChange(); },
+    reduce: (value: boolean) => { motion.matches = value; motionChanges.forEach(fn => fn()); },
     uiEffects: (value: boolean) => { uiEffects = value; events["scribe:ui-fx"](); },
     running: () => running,
     effects, warmTimers,
@@ -167,6 +180,74 @@ test("warmup waits for restoration, reuses one prepared effect and replenishes w
   s.warm();
   assert.equal(s.shaders.length, 3);
   assert.ok(s.effects.filter(effect => !effect.destroyed).length <= 2);
+});
+
+test("overlapping creations consume separate picks, replenish the spare and keep their picks on return", () => {
+  const s = screen();
+  s.choose("nebula,aurora,caustics");
+  s.busy(true);
+  s.warm();
+  const first = s.effects[0];
+  first.ready();
+  s.page.render({ id: "first" }, true);
+  s.warm();
+  const second = s.effects[1];
+  // Consume the next effect before it has finished compiling.
+  s.page.render({ id: "second" }, true);
+  assert.equal(first.destroyed, true);
+  assert.equal(second.destroyed, false);
+  assert.equal(s.classes.has("gl"), false);
+  second.ready();
+  assert.equal(s.classes.has("gl"), true);
+  s.warm();
+  const third = s.effects[2];
+  third.ready();
+  s.page.render({ id: "third" });
+  s.page.render({ id: "third" }, true);
+  assert.equal(third.destroyed, false);
+  assert.equal(new Set(s.shaders).size, 3);
+  const spareCount = s.shaders.length;
+  s.warm();
+  assert.equal(s.shaders.length, spareCount + 1);
+  s.page.render({ id: "first" }, true);
+  assert.equal(s.activeShader(), s.shaders[0]);
+  s.page.render({ id: "second" }, true);
+  assert.equal(s.activeShader(), s.shaders[1]);
+  assert.ok(s.effects.filter(effect => !effect.destroyed).length <= 2);
+});
+
+test("word transitions finish their exit before replacement and cancel when leaving or disabling motion", () => {
+  const s = screen(false);
+  s.intent({ itemId: "one", title: "A page" });
+  s.page.render({ id: "first" });
+  const word = s.parts.get(".newpage-intent-word")!;
+  assert.equal(word.textContent, "Imagining…");
+  const first = s.animations.at(-1)! as any;
+  assert.equal(first.frames[0].opacity, 0);
+  assert.equal(first.frames.at(-1).opacity, 0);
+  assert.equal(first.options.duration, 2600);
+  s.advance(2599);
+  assert.equal(word.textContent, "Imagining…");
+  s.advance(1);
+  assert.equal(word.textContent, "Sketching…");
+  assert.equal(first.cancelled, true);
+  const second = s.animations.at(-1)!;
+  s.intent({ itemId: "one", title: "Updated title" });
+  s.page.render({ id: "first" });
+  assert.equal(second.cancelled, false);
+  s.uiEffects(false);
+  assert.equal(second.cancelled, true);
+  assert.equal(s.timers.size, 0);
+  s.uiEffects(true);
+  const resumed = s.animations.at(-1)!;
+  s.reduce(true);
+  assert.equal(resumed.cancelled, true);
+  assert.equal(s.timers.size, 0);
+  s.reduce(false);
+  const last = s.animations.at(-1)!;
+  s.page.render(null);
+  assert.equal(last.cancelled, true);
+  assert.equal(s.timers.size, 0);
 });
 
 test("warmup defers while hidden, discards disabled effects and reuses a single selected style", () => {
@@ -427,7 +508,7 @@ test("adding a creating overlay keeps the visible shader and does not fade it in
   const effect = s.effects.at(-1)!;
   const shaders = s.shaders.length;
   s.page.render({ id: "draft" }, true);
-  s.page.render({ id: "made" }, true);
+  s.page.render({ id: "draft" }, true);
   assert.equal(s.shaders.length, shaders);
   assert.equal(effect.destroyed, false);
   assert.equal(s.animations.length, 0);
