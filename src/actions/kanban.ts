@@ -14,17 +14,18 @@ import {
   type SweepContext,
   type ThreadRunInfo,
 } from "./types.js";
+import { claimOps, driveWorkers, workerLaunched, workerReady, workerStartOps } from "./kanbanWorkers.js";
 
 /** Rules the Kanban page follows too: done time, column order, card numbers, claims. Keep them in step. */
 
-type Column = { id: string; title: string; role?: string; wip?: number; paused?: boolean };
+export type Column = { id: string; title: string; role?: string; wip?: number; paused?: boolean };
 type Label = { id: string; name: string; color?: string };
 /** `by` is `"user"` for the person, the assignee/worker name for an agent, or `"agent"` on older comments. */
-type Comment = { id: string; by: string; at: number; text: string };
-type Status = { kind: string; text: string };
+export type Comment = { id: string; by: string; at: number; text: string };
+export type Status = { kind: string; text: string };
 /** waiting: set while the holder's turn waits on the user; keeps the status to put back after. */
-type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string; waiting?: { status: Status | null } };
-type Card = {
+export type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string; waiting?: { status: Status | null } };
+export type Card = {
   id: string;
   num: number;
   col: string;
@@ -64,10 +65,10 @@ const THREAD_STALE_MS = 30 * 60 * 1000;
 const SESSION_STALE_MS = 60 * 60 * 1000;
 const STATUS_KINDS = ["working", "blocked", "info"];
 
-const columns = (state: BoardState) => arr<Column>(state.columns);
+export const columns = (state: BoardState) => arr<Column>(state.columns);
 const labels = (state: BoardState) => arr<Label>(state.labels);
-const cards = (state: BoardState) => arr<Card>(state.cards);
-const cardPath = (card: Card) => `cards/id=${card.id}`;
+export const cards = (state: BoardState) => arr<Card>(state.cards);
+export const cardPath = (card: Card) => `cards/id=${card.id}`;
 
 /** The blocked status a card shows while its agent waits on the user. */
 function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }>["asking"]>): string {
@@ -78,32 +79,56 @@ function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }
 }
 
 /** A one-card run from the card menu (`settings.workers[id].solo[threadId]`). */
-type SoloRun = {
+export type SoloRun = {
   card?: number;
   at?: number;
+  /** A Continue's run: only a turn started since then counts. */
+  after?: number;
   wait?: { until?: number; count?: number; tries?: number };
   step?: { token: string; at: number };
 };
 
 /** An agent worker, set up on the page in settings.workers by its id. It takes the ready cards assigned to its name. */
-type Worker = {
+export type Worker = {
   name?: string;
+  instructions?: string;
+  /** "fresh": one card per chat. */
+  context?: string;
+  provider?: string;
+  model?: string;
+  effort?: string;
+  /** "true" | "false", or a provider's own fast setting. */
+  fast?: string;
+  mode?: string;
+  customMode?: string;
+  cwd?: string;
+  approval?: string;
+  worktree?: boolean;
+  web?: string;
+  show?: string;
+  helpers?: boolean;
   threadId?: string;
   stop?: boolean;
-  run?: unknown;
-  step?: { token: string; at: number };
+  run?: { since?: number; card?: number; startedAt?: number } | null;
+  step?: { token: string; at: number } | null;
+  /** The chat whose branch didn't merge when the worker paused; the next start merges it first. */
+  merge?: string | null;
+  error?: string | null;
+  fails?: number | null;
+  /** Cards a merge pause sent back to their ready column; they go on to review once it merges. */
+  mergeCards?: string[] | null;
   solo?: Record<string, SoloRun | null | undefined>;
 };
 
 /** How long a page holds a worker's step before another window may take over: covers a permission prompt. */
-const STEP_LEASE_MS = 15 * 60 * 1000;
+export const STEP_LEASE_MS = 15 * 60 * 1000;
 /** Newest lines kept in `settings.workerLog` (the page trims; this caps a read). */
-const MAX_WORKER_LOG = 200;
+export const MAX_WORKER_LOG = 200;
 const DEFAULT_LOG_LIMIT = 80;
 
 const USAGE_KEYS = ["turns", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "estimatedCostUsd", "reportedCostUsd", "promptTokens", "threads"] as const;
 
-type UsageTotals = {
+export type UsageTotals = {
   turns?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -120,7 +145,7 @@ type UsageTotals = {
   helpers?: UsageTotals;
 };
 
-function compactUsage(value: unknown, breakdown = true): UsageTotals | undefined {
+export function compactUsage(value: unknown, breakdown = true): UsageTotals | undefined {
   if (!value || typeof value !== "object") return undefined;
   const src = value as Record<string, unknown>;
   const out: UsageTotals = {};
@@ -146,7 +171,7 @@ function cardUsage(value: unknown): (UsageTotals & { at?: number; thread?: strin
 }
 
 /** One line in the board's worker log: starts, pauses, merges, usage-limit waits. */
-type WorkerLogEntry = {
+export type WorkerLogEntry = {
   id?: string;
   at?: number;
   kind?: string;
@@ -158,7 +183,7 @@ type WorkerLogEntry = {
   usage?: UsageTotals;
 };
 
-function workerLogEntries(state: BoardState): WorkerLogEntry[] {
+export function workerLogEntries(state: BoardState): WorkerLogEntry[] {
   const settings = state.settings as { workerLog?: unknown } | undefined;
   return arr<WorkerLogEntry>(settings?.workerLog).filter((e) => Boolean(e) && typeof e === "object");
 }
@@ -178,19 +203,19 @@ function compactLog(e: WorkerLogEntry): Record<string, unknown> {
   };
 }
 
-function workerMap(state: BoardState): Record<string, Worker> {
+export function workerMap(state: BoardState): Record<string, Worker> {
   const settings = state.settings as { workers?: Record<string, Worker> } | undefined;
   const all = settings?.workers;
   return all && typeof all === "object" ? all : {};
 }
 
 /** The workers as [id, worker] pairs, skipping broken entries. */
-function workerList(state: BoardState): Array<[string, Worker]> {
+export function workerList(state: BoardState): Array<[string, Worker]> {
   return Object.entries(workerMap(state)).filter((e): e is [string, Worker] => Boolean(e[1]) && typeof e[1] === "object");
 }
 
 /** A worker by id, else by name. */
-function findWorker(state: BoardState, ref: unknown): [string, Worker] {
+export function findWorker(state: BoardState, ref: unknown): [string, Worker] {
   const text = str(ref).trim();
   const list = workerList(state);
   const found = list.find(([id]) => id === text) ?? list.find(([, w]) => str(w.name).trim().toLowerCase() === text.toLowerCase());
@@ -257,11 +282,11 @@ function findColumn(state: BoardState, ref: unknown): Column {
   return found[0];
 }
 
-function roleColumn(state: BoardState, role: string): Column | undefined {
+export function roleColumn(state: BoardState, role: string): Column | undefined {
   return columns(state).find((c) => c.role === role);
 }
 
-function columnById(state: BoardState, id: string | undefined): Column | undefined {
+export function columnById(state: BoardState, id: string | undefined): Column | undefined {
   return id ? columns(state).find((c) => c.id === id) : undefined;
 }
 
@@ -276,13 +301,13 @@ function byBoardOrder(state: BoardState, list: Card[]): Card[] {
 }
 
 /** Agent column the card was in (or last came from) when this claim started. */
-function claimFrom(state: BoardState, card: Card): string | undefined {
+export function claimFrom(state: BoardState, card: Card): string | undefined {
   const current = columnById(state, card.col);
   if (current?.role === "agent") return current.id;
   return columnById(state, card.from)?.id ?? columnById(state, card.claim?.from)?.id;
 }
 
-function soloRunOf(w: Worker, threadId: string): SoloRun | undefined {
+export function soloRunOf(w: Worker, threadId: string): SoloRun | undefined {
   const run = w.solo?.[threadId];
   return run && typeof run === "object" ? run : undefined;
 }
@@ -320,12 +345,12 @@ function workerWaits(state: BoardState, threadId: string): boolean {
   return workerList(state).some(([, w]) => (w.threadId === threadId && Boolean(w.run)) || Boolean(soloRunOf(w, threadId)));
 }
 
-function resetTime(at: number): string {
+export function resetTime(at: number): string {
   return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 /** Where a stopped or released card goes: the inbox it came from, else the first agent column. */
-function returnColumn(state: BoardState, card: Card): Column | undefined {
+export function returnColumn(state: BoardState, card: Card): Column | undefined {
   return columnById(state, card.claim?.from) ?? columnById(state, card.from) ?? roleColumn(state, "agent");
 }
 
@@ -341,7 +366,7 @@ function labelIds(state: BoardState, refs: unknown): string[] {
 }
 
 /** Where a card lands in `cards` when it enters a column: on top, or after the column's last card. */
-function placement(state: BoardState, colId: string, top: boolean, except?: string): Record<string, unknown> {
+export function placement(state: BoardState, colId: string, top: boolean, except?: string): Record<string, unknown> {
   const inCol = cards(state).filter((c) => c.col === colId && c.id !== except);
   if (!inCol.length) {
     return { at: "end" };
@@ -350,7 +375,7 @@ function placement(state: BoardState, colId: string, top: boolean, except?: stri
 }
 
 /** Ops that move a card into a column, with the page's timestamp rules. Done columns put it on top. */
-function moveOps(state: BoardState, card: Card, col: Column, now: number, position?: unknown): unknown[] {
+export function moveOps(state: BoardState, card: Card, col: Column, now: number, position?: unknown): unknown[] {
   const done = col.role === "done";
   const top = position === "top" || (position === undefined && done);
   const fields: Record<string, unknown> = {};
@@ -781,24 +806,7 @@ export const kanbanActions: ActionSet = {
           throw new ActionError(`#${card.num} is held by ${card.claim.holder} since ${new Date(card.claim.at).toISOString()}`);
         }
         const working = roleColumn(state, "working");
-        const from = claimFrom(state, card);
-        const ops: unknown[] = [
-          { op: "test", path: `${cardPath(card)}/claim`, value: card.claim ?? null },
-          {
-            op: "merge",
-            path: cardPath(card),
-            value: {
-              assignee: name,
-              status: { kind: "working", text: str(args.text) || "Agent starting" },
-              claim: { holder: name, thread, at: ctx.now, seenAt: ctx.now, ...(from ? { from } : {}) },
-              thread,
-              threadAssignee: name,
-              ...(from ? { from } : {}),
-            },
-          },
-        ];
-        if (working) ops.push(...moveOps(state, card, working, ctx.now));
-        return { ops, result: { num: card.num, column: working?.title ?? null } };
+        return { ops: claimOps(state, card, thread, name, ctx.now, str(args.text) || undefined), result: { num: card.num, column: working?.title ?? null } };
       },
     },
     release: {
@@ -834,6 +842,19 @@ export const kanbanActions: ActionSet = {
         const col = args.to !== undefined ? findColumn(state, args.to) : (roleColumn(state, "review") ?? roleColumn(state, "done"));
         if (col) ops.push(...moveOps(state, card, col, ctx.now));
         return { ops, result: { num: card.num, column: col?.title ?? null, ...(text && !repeat ? {} : { handIn: "your earlier comment" }) } };
+      },
+    },
+    worker_start: {
+      description:
+        "The board's own bookkeeping when the user starts an agent worker; only the page calls it. Sets the worker running, so Scribe starts its next ready card, with or without a board window open.",
+      args: "{ worker }",
+      run(state, args, ctx) {
+        if (ctx.caller.by !== "user") throw new ActionError("worker_start is for the board page itself");
+        const [workerId, w] = findWorker(state, args.worker);
+        if (w.run) throw new ActionError("the worker is already running");
+        const why = workerReady(state, w);
+        if (why) throw new ActionError(`the worker ${why}`);
+        return { ops: workerStartOps(state, workerId, w, ctx.now), result: { ok: true } };
       },
     },
     worker_step: {
@@ -1021,6 +1042,13 @@ export const kanbanActions: ActionSet = {
       }
     }
     return ops.length ? { ops, result: null, events } : null;
+  },
+
+  drive(state, ctx) {
+    return driveWorkers(state, ctx);
+  },
+  launched(state, launch, result, now) {
+    return workerLaunched(state, launch, result, now);
   },
 
   runHold(state: BoardState, threadId: string): string | null {

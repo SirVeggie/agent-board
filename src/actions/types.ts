@@ -112,7 +112,56 @@ export type ActionSet = {
   runHold?(state: BoardState, threadId: string): string | null;
   /** Scribe moved one of the page's runs on (a limit wait, a resume, a merge fix, its end), e.g. to log it on the page. */
   runEvent?(state: BoardState, event: RunEvent, now: number): ActionOutcome | null;
+  /**
+   * One step of the page's own agents (a Kanban board's workers), run by the daemon whether or not
+   * a window shows the page: wrap up a chat whose run ended, start the next one, or wait. Called
+   * again on the new state until it returns null.
+   */
+  drive?(state: BoardState, ctx: DriveContext): DriveOutcome | null;
+  /** How a launch from drive went: ops to record the new chat (or why it didn't start). */
+  launched?(state: BoardState, launch: PageLaunch, result: { threadId: string } | { error: string }, now: number): ActionOutcome | null;
 };
+
+/** A new agent chat's settings, as a page's scribe.agent.start would pass them. */
+export type LaunchSettings = {
+  title: string;
+  mode: string;
+  provider?: string;
+  model?: string;
+  effort?: string;
+  customMode?: string;
+  show?: string;
+  web: string;
+  approval: string;
+  modelParams: Record<string, string>;
+  cwd?: string;
+  worktree?: boolean;
+  helpers: boolean;
+};
+
+/** What Scribe needs to see a page's chat through (see agent/pageRuns.ts RunInput). */
+export type PageRunInput = { tag: string; data: Record<string, unknown>; merge: boolean; resumePrompt: string; after?: number };
+
+/** A chat for the daemon to start for the page: handed back to launched with its result. */
+export type PageLaunch = {
+  prompt: string;
+  settings: LaunchSettings;
+  run: PageRunInput;
+  /** The action set's own bookkeeping, returned as given. */
+  ref: Record<string, unknown>;
+};
+
+export type DriveContext = SweepContext & {
+  page: { id: string; title: string };
+  /** Why the page may not start this chat without a click (its permissions), or null. */
+  mayStart(settings: LaunchSettings): string | null;
+  /** Hand one of the page's chats to Scribe to see through; false when Scribe can't. */
+  watch(threadId: string, run: PageRunInput): boolean;
+  /** Scribe stops seeing the chat through and forgets its ended run. */
+  release(threadId: string): void;
+};
+
+export type DriveOutcome = ActionOutcome & { launch?: PageLaunch };
 
 export type RunEvent = RunNote & { thread: string; run: PageRunView };
 

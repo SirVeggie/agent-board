@@ -1,5 +1,5 @@
 import type { EffectivePermissions } from "./effectivePermissions.js";
-import type { ThreadRunInfo } from "../actions/types.js";
+import type { LaunchSettings, PageRunInput, ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1083,6 +1083,65 @@ export class AgentHost {
   releasePageThread(id: string): ThreadView {
     this.pageRuns.release(id);
     return this.view(this.requireThread(id));
+  }
+
+  /**
+   * Start a chat for a page's own agents without a window (a Kanban board's next worker card, #312):
+   * what scribe.agent.start with a run does, with the board's fixed defaults for what the worker
+   * leaves out. The caller checked the page's permissions. Resolves with the thread id; throws with
+   * a message for the board's worker log.
+   */
+  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput): Promise<string> {
+    const setup = (what: string) => new Error(`Check the worker's setup: ${what}.`);
+    const status = await this.providerStatus();
+    const available = status.filter((x) => x.available).map((x) => x.id);
+    let provider: ProviderId | undefined;
+    if (s.provider) {
+      if (!isProviderId(s.provider)) throw setup(`unknown provider ${s.provider}`);
+      if (!available.includes(s.provider)) throw setup(`${status.find((x) => x.id === s.provider)?.label ?? s.provider} is not available`);
+      provider = s.provider;
+    } else {
+      provider = (["cursor", "codex", "claude", "pi"] as ProviderId[]).find((id) => available.includes(id)) ?? available[0];
+    }
+    if (!provider) throw new Error("No agent provider is available.");
+    const modes: ThreadMode[] = ["code", "ask", "plan", "board"];
+    const mode = modes.find((m) => m === s.mode);
+    if (!mode) throw setup(`unknown mode ${s.mode}`);
+    // A custom mode that is gone, or built on another mode, is refused: starting without its limits would be worse.
+    if (s.customMode && !this.prefs().customModes.some((m) => m.id === s.customMode && m.base === mode)) throw setup("its custom mode is gone");
+    const model = s.model || (provider === "cursor" ? "composer-2.5" : "default");
+    const models = await this.models(provider).catch(() => [] as ModelOption[]);
+    const info = models.find((m) => m.id === model);
+    if (model !== "default" && models.length && !info) throw setup(`unknown model ${model}`);
+    if (s.effort && info?.efforts.length && !info.efforts.some((e) => e.id === s.effort)) throw setup(`${model} has no effort "${s.effort}"`);
+    const approvals: ApprovalPolicy[] = ["ask", "edits", "auto", "full"];
+    const approval = approvals.find((a) => a === s.approval) ?? "auto";
+    const folder = mode === "code" || mode === "plan";
+    if (folder && !s.cwd) throw setup("it needs a folder");
+    if (this.closed) throw new Error("Scribe is shutting down.");
+    const thread = this.createThread(
+      {
+        provider,
+        model,
+        effort: s.effort || null,
+        modelParams: { ...s.modelParams },
+        mode,
+        ...(s.customMode ? { customMode: s.customMode } : {}),
+        approval,
+        web: parseWebAccess(s.web) ?? "off",
+        cwd: folder ? s.cwd : null,
+        useWorktree: folder && s.worktree === true,
+        title: s.title,
+        scope: { kind: "page", ref: pageId },
+        ...(s.helpers ? { helpersAllowed: true } : {}),
+      },
+      { remember: false }
+    );
+    // Handed over before its first message, so Scribe sees its first turn through.
+    this.watchPageThread(thread.id, { ...run, after: Date.now() });
+    this.send(thread.id, { text: prompt, from: "page" });
+    if (s.show === "dock" || s.show === "sidebar") this.emit({ type: "agent_page_show", threadId: thread.id, pageId, where: s.show });
+    return thread.id;
   }
 
   /**

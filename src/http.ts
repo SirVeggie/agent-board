@@ -154,6 +154,8 @@ export async function startHttp(): Promise<http.Server> {
       scheduleSweep(1000);
     }
     if (event.type === "agent_thread_deleted") waitingThreads.delete(event.id);
+    // A page's run ended (merged, or out of usage for good): its worker goes on to the next card.
+    if (event.type === "agent_thread" && event.thread.run?.phase === "ended") scheduleSweep(500);
   });
   const sweepTimer = setInterval(() => scheduleSweep(0), 60_000);
   sweepTimer.unref?.();
@@ -1740,7 +1742,9 @@ export async function startHttp(): Promise<http.Server> {
   store.on("reset", () => broadcast({ type: "snapshot", version: VERSION, reset: true, ...store.snapshot() }));
   store.on("folders", (folders: Folder[]) => broadcast({ type: "folders", folders }));
   store.on("trash", () => broadcast({ type: "trash" }));
-  store.on("tab_state", (tab: Tab, delta: { fromRevision: number; ops: StateOp[]; client?: string; writeId?: string }) =>
+  store.on("tab_state", (tab: Tab, delta: { fromRevision: number; ops: StateOp[]; client?: string; writeId?: string }) => {
+    // A card that came in, or a worker the user started, is picked up soon.
+    if (store.drives(tab)) scheduleSweep(500);
     broadcast({
       type: "tab_state",
       id: tab.id,
@@ -1749,8 +1753,8 @@ export async function startHttp(): Promise<http.Server> {
       ops: delta.ops,
       ...(delta.client ? { client: delta.client } : {}),
       ...(delta.writeId ? { writeId: delta.writeId } : {}),
-    })
-  );
+    });
+  });
   store.on("tab_event", (tab: Tab, event: PageEvent) => broadcast({ type: "tab_event", id: tab.id, event }));
   store.on("template_upserted", (template: TemplateMeta) => broadcast({ type: "template_upserted", template }));
   store.on("template_deleted", (id: string) => broadcast({ type: "template_deleted", id }));
@@ -1959,11 +1963,38 @@ function scheduleSweep(delayMs: number): void {
   }
   sweepQueued = setTimeout(() => {
     sweepQueued = null;
-    store.sweepActions({
+    const ctx = {
       now: Date.now(),
-      thread: (id) => (agentHost ? agentHost.runInfo(id) : { exists: false }),
-      sessionSeenAt: (session) => sessionSeen.get(session),
-    });
+      thread: (id: string) => (agentHost ? agentHost.runInfo(id) : { exists: false as const }),
+      sessionSeenAt: (session: string) => sessionSeen.get(session),
+    };
+    store.sweepActions(ctx);
+    const host = agentHost;
+    if (!host) return;
+    // Then the pages' own agents (Kanban workers) go on, whether or not a window shows them (#312).
+    store.driveActions(
+      {
+        ...ctx,
+        now: Date.now(),
+        watch: (thread, run) => {
+          try {
+            host.watchPageThread(thread, run);
+            return true;
+          } catch (err) {
+            log(`Could not see a page's chat through: ${(err as Error).message}`);
+            return false;
+          }
+        },
+        release: (thread) => {
+          try {
+            host.releasePageThread(thread);
+          } catch {
+            /* the chat is gone */
+          }
+        },
+      },
+      (pageId, launch) => host.launchPageThread(pageId, launch.prompt, launch.settings, launch.run)
+    );
   }, delayMs);
   sweepQueued.unref?.();
 }

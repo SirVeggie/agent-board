@@ -37,12 +37,13 @@ import {
   type PageAssetMeta,
   type PageAssetUsage,
 } from "./pageAssets.js";
-import { normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionValue } from "./pagePermissions.js";
+import { checkPermission, normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionNeed, type PermissionValue } from "./pagePermissions.js";
 import { normalizeSignalName } from "./signal.js";
 import { applyOps } from "./stateOps.js";
 import { normalizeEvents } from "./events.js";
 import { upgradeLegacyHtml } from "./legacyPages.js";
 import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type InboundReply, type ReplyDelivery, type RunEvent, type SweepContext } from "./actions/index.js";
+import type { DriveContext, LaunchSettings, PageLaunch } from "./actions/types.js";
 import type { RunNote } from "./agent/pageRuns.js";
 import {
   TRASH_TTL_MS,
@@ -134,6 +135,8 @@ const FOLDER_NAME_MAX = 120;
 const MAX_DRAFTS = 20;
 /** Most JSON a page's scribe.reply may carry. */
 const REPLY_DATA_MAX = 20_000;
+/** Steps one drive pass takes on a page at most: a wrap-up and a start for each of a few workers. */
+const MAX_DRIVE_STEPS = 20;
 /** Cap so a huge HTML page cannot blow the agent context. */
 const MAX_FOLDER_INSTRUCTION_CHARS = 16_000;
 
@@ -698,6 +701,68 @@ export class BoardStore extends EventEmitter {
         log(`Action sweep failed on ${tab.key}`, String(err));
       }
     }
+  }
+
+  /**
+   * Let each page's actions drive its own agents (a Kanban board's workers), with or without a
+   * window on it: step until there is none left. A step's launch goes to `launch`, and its result
+   * back to the page's launched hook.
+   */
+  driveActions(ctx: Omit<DriveContext, "page" | "mayStart">, launch: (pageId: string, launch: PageLaunch) => Promise<string>): void {
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      const set = this.actionsFor(tab);
+      if (!set?.drive) continue;
+      const page = { id: tab.id, title: tab.title };
+      const mayStart = (settings: LaunchSettings) => this.mayStartAgent(tab.id, settings);
+      // A step changes the state it reads, so the next one sees it; a few cover every worker of a board.
+      for (let i = 0; i < MAX_DRIVE_STEPS; i++) {
+        try {
+          const outcome = set.drive(tab.state, { ...ctx, page, mayStart });
+          if (!outcome) break;
+          const write = outcome.ops.length ? this.writeState(tab.id, { ops: outcome.ops, lenient: true }) : null;
+          for (const event of outcome.events ?? []) this.logEvent(tab.id, { name: event.name, data: event.data, by: "scribe" });
+          if (outcome.launch) this.launchFor(tab.id, outcome.launch, launch);
+          else if (!write?.ok || !write.applied.length) break;
+        } catch (err) {
+          log(`Action drive failed on ${tab.key}`, String(err));
+          break;
+        }
+      }
+    }
+  }
+
+  /** Whether the page's actions drive agents of its own (driveActions). */
+  drives(tab: Tab): boolean {
+    return Boolean(this.actionsFor(tab)?.drive);
+  }
+
+  private launchFor(pageId: string, item: PageLaunch, launch: (pageId: string, launch: PageLaunch) => Promise<string>): void {
+    void launch(pageId, item)
+      .then((threadId) => ({ threadId }), (err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }))
+      .then((result) => {
+        const tab = this.locate(pageId)?.tab;
+        const set = tab ? this.actionsFor(tab) : undefined;
+        if (!tab || !set?.launched) return;
+        try {
+          const outcome = set.launched(tab.state, item, result, Date.now());
+          if (outcome?.ops.length) this.writeState(tab.id, { ops: outcome.ops, lenient: true });
+        } catch (err) {
+          log(`Recording a launch failed on ${tab.key}`, String(err));
+        }
+      });
+  }
+
+  /** Why a page may not start this agent chat without a click (its permissions), or null. */
+  mayStartAgent(pageId: string, settings: LaunchSettings): string | null {
+    const grants = this.pagePermissions(pageId);
+    const allowed = (need: PermissionNeed) => checkPermission(grants, need) === "allow";
+    if (!allowed({ perm: "agent.chat" }) || !allowed({ perm: "agent.unattended" })) {
+      return "Scribe needs this board's permission to start agent chats on its own: press ▶ to allow it (or tab menu → Permissions…: Agent chats without a click).";
+    }
+    if ((settings.mode === "code" || settings.mode === "plan") && !allowed({ perm: "agent.workspace", folder: settings.cwd, approval: settings.approval })) {
+      return `Scribe needs this board's permission to start Code and Plan chats in ${settings.cwd} at ${settings.approval}: press ▶ to allow it (or tab menu → Permissions…).`;
+    }
+    return null;
   }
 
   /** A page's reason to keep a finished run's branch unmerged (see ActionSet.runHold), or null. */

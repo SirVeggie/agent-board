@@ -468,7 +468,9 @@ export type AgentEvent =
    */
   | { type: "agent_intent"; threadId: string; turnId: string | null; itemId?: string; name: string; stage?: string; title?: string; detector: string; event: string; early?: boolean; confidence?: number }
   /** The thread's agent browser opened, navigated, or closed (view null). */
-  | { type: "agent_browser"; threadId: string; view: BrowserView | null };
+  | { type: "agent_browser"; threadId: string; view: BrowserView | null }
+  /** A chat the daemon started for a page (a Kanban worker's card) that asks to be shown: windows showing that page open it there. */
+  | { type: "agent_page_show"; threadId: string; pageId: string; where: "dock" | "sidebar" };
 
 export type ModelOption = {
   id: string;
