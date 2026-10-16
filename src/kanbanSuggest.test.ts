@@ -1,5 +1,5 @@
+import { templateHtml } from "./testSupport/templates.js";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import { test } from "node:test";
 import { chromium, type Page } from "playwright-core";
 import { launchChromium } from "./chromium.js";
@@ -79,7 +79,7 @@ async function board(t: { skip: (why: string) => void }) {
   page.setDefaultTimeout(6000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+  const html = templateHtml("kanban");
   await page.setContent(`${STUB}${html}`);
   return { browser, page, errors };
 }

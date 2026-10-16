@@ -1,3 +1,4 @@
+import { templateHtml } from "./testSupport/templates.js";
 import { loadChatFixture } from "./testSupport/shell.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -24,7 +25,7 @@ test("updates keep hovered rows and focused editors connected", async () => {
         setLocal(patch) { Object.assign(this.local, patch); },
         onChange(fn) { this.changed = fn; }
       };
-    </script>${source("../templates/builtin/kanban.html")}`);
+    </script>${templateHtml("kanban")}`);
     await page.locator('.card[data-id="a"]').hover();
     assert.deepEqual(await page.evaluate(() => {
       const w = window as any;
@@ -82,7 +83,7 @@ test("updates keep hovered rows and focused editors connected", async () => {
         set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); },
         bind() {}, onChange(fn) { this.changed = fn; }
       };
-    </script>${source("../templates/builtin/todo-list.html")}`);
+    </script>${templateHtml("todo-list")}`);
     await page.locator('.item[data-id="a"]').hover();
     assert.deepEqual(await page.evaluate(() => {
       const w = window as any;
@@ -132,7 +133,7 @@ test("queued Kanban paints stop after the board is detached", async () => {
             setLocal(patch) { Object.assign(this.local, patch); },
             onChange(fn) { this.changed = fn; }
           };
-        </script>${source("../templates/builtin/kanban.html")}`);
+        </script>${templateHtml("kanban")}`);
         assert.deepEqual(await page.evaluate(trigger => {
           const w = window as any;
           w.scribe.state.cards[0] = { ...w.scribe.state.cards[0], title: 'Updated' };

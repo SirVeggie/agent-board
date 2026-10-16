@@ -67,6 +67,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await page.goto("http://views.test/");
     // tsx's named-function helper must also exist inside serialized evaluate callbacks.
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/motion.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/views.js", import.meta.url), "utf8") });
     const result = await page.evaluate(async () => {
@@ -696,6 +697,7 @@ test("a split holds more than two panes: stored two-pane splits migrate, drops a
     await page.goto("http://views.test/");
     await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
     await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") + "\nmain {position:relative} iframe {position:absolute}" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/motion.js", import.meta.url), "utf8") });
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/views.js", import.meta.url), "utf8") });
     const result = await page.evaluate(async () => {

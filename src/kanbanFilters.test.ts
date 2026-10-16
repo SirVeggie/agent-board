@@ -1,3 +1,4 @@
+import { templateHtml } from "./testSupport/templates.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
@@ -19,7 +20,7 @@ test("Kanban columns load batches independently and retain them through live upd
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    const html = templateHtml("kanban");
     await page.setContent(`<script>
       window.scribe = {
         state: {
@@ -151,7 +152,7 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    const html = templateHtml("kanban");
     await page.setContent(`<script>
       window.scribe = {
         state: { columns: [{ id: 'todo', title: 'Ready', role: 'agent' }], labels: [], cards: [], nextNum: 1,
@@ -275,7 +276,7 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    const html = templateHtml("kanban");
     await page.setContent(`<script>
       window.scribe = {
         state: {

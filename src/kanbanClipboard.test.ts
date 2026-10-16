@@ -1,3 +1,4 @@
+import { templateHtml } from "./testSupport/templates.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
@@ -22,7 +23,7 @@ test("comments can be copied from a separate-origin Scribe page", async (t) => {
     const app = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
     const constants = app.slice(app.indexOf("  const SANDBOX ="), app.indexOf("  const LIVE_FRAME_CAP"));
     const loader = app.slice(app.indexOf("  function loadFrame("), app.indexOf("  function discardFrame("));
-    const kanban = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    const kanban = templateHtml("kanban");
     const comment = "Copy **Markdown** exactly.\n\nSecond paragraph.";
     const state = {
       columns: [{ id: "todo", title: "Todo" }], labels: [], settings: {}, nextNum: 2,

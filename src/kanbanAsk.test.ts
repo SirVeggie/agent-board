@@ -1,5 +1,5 @@
+import { templateHtml } from "./testSupport/templates.js";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
@@ -19,7 +19,7 @@ test("Ask is gated by the default worker and leaves the card workflow intact", a
     page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    const html = fs.readFileSync(new URL("../templates/builtin/kanban.html", import.meta.url), "utf8");
+    const html = templateHtml("kanban");
     const stub = `<script>
       window.launches = [];
       window.askThreads = {};
