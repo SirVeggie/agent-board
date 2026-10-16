@@ -31,7 +31,7 @@ async function chatPage() {
   `);
   assert.notEqual(exposed, agent, "boot() is replaced");
   await loadShellScripts(page, {
-    scripts: [...chatScripts, "/vendor/marked.js", "/vendor/purify.js", "agent.js"],
+    scripts: [...chatScripts, "/vendor/marked.js", "/vendor/purify.js", "/vendor/highlight.js", "agent.js"],
     transform: (name, source) => (name === "agent.js" ? exposed : source),
   });
   return { browser, page, errors };
@@ -101,6 +101,36 @@ test("a turn's unchanged steps stay in the page, typed notes survive, and collap
         document.querySelector('[data-item-id="y"]')!.classList.contains("ag-answer-earlier")];
     });
     assert.deepEqual(still, [true, true, true, false, true]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("streamed markdown redraws only the block being written and highlights a fence once it closes", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    const result = await page.evaluate(() => {
+      const { R } = (window as any).T;
+      const target = document.createElement("div");
+      document.body.append(target);
+      const ctx = {};
+      R.renderMarkdownStream(target, "First paragraph.\n\nSecond", ctx);
+      const first = target.querySelector("p");
+      R.renderMarkdownStream(target, "First paragraph.\n\nSecond paragraph.\n\n```js\nconst a = 1;", ctx);
+      const keptFirst = target.querySelector("p") === first;
+      const openFence = target.querySelector("code")!;
+      const highlightedWhileOpen = openFence.classList.contains("hljs");
+      const text = "First paragraph.\n\nSecond paragraph.\n\n```js\nconst a = 1;\n```\n\nAfter **that**.";
+      R.renderMarkdownStream(target, text, ctx);
+      const code = target.querySelector("code")!;
+      const streamed = target.innerHTML;
+      const full = document.createElement("div");
+      R.renderMarkdown(full, text, ctx);
+      return [keptFirst, target.querySelector("p") === first, highlightedWhileOpen, code.classList.contains("hljs"),
+        target.querySelectorAll(".ag-code").length, streamed === full.innerHTML];
+    });
+    assert.deepEqual(result, [true, true, false, true, 1, true]);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

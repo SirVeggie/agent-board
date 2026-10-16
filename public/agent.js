@@ -4627,7 +4627,10 @@
           // A collapsed thought renders when it is opened.
           if (target && target.isConnected && !lazyBodies.has(node)) {
             const stick = this.stick;
-            R.renderMarkdown(target, item.text, mdCtx);
+            R.renderMarkdownStream(target, item.text, mdCtx);
+            // The step in the page shows this text now: a turn drawn again before the next item event keeps it.
+            const had = this.itemNodes.get(item.id);
+            if (had?.node === node) had.sig = itemSig(item, NO_CHILDREN);
             if (stick) this.scrollToEnd();
           }
         }, 70)
@@ -6292,6 +6295,8 @@
     if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) return true;
     return Boolean(it.output && it.tool !== "read" && !it.task?.background);
   }
+
+  const NO_CHILDREN = new Map();
 
   /** Classes renderGroup sets by where a step sits; a kept step's stand-in takes them again. */
   const PLACE_CLASSES = ["ag-step-last", "ag-answer-earlier"];

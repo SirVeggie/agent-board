@@ -178,29 +178,80 @@
     return out;
   }
 
-  function renderMarkdown(target, text, ctx) {
-    const src = prepareMarkdown(text);
-    let html;
-    try {
-      html = window.marked ? window.marked.parse(src, { gfm: true, breaks: false }) : escapeHtml(src).replace(/\n/g, "<br>");
-    } catch {
-      html = escapeHtml(src);
-    }
-    const clean = window.DOMPurify
+  const MD_OPTIONS = { gfm: true, breaks: false };
+
+  function sanitize(html, src) {
+    return window.DOMPurify
       ? window.DOMPurify.sanitize(html, {
           FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style", "iframe", "object", "embed", "dialog"],
           FORBID_ATTR: ["style", "action", "formaction"],
         })
       : escapeHtml(src);
-    target.innerHTML = clean;
+  }
+
+  function renderMarkdown(target, text, ctx) {
+    streams.delete(target);
+    const src = prepareMarkdown(text);
+    let html;
+    try {
+      html = window.marked ? window.marked.parse(src, MD_OPTIONS) : escapeHtml(src).replace(/\n/g, "<br>");
+    } catch {
+      html = escapeHtml(src);
+    }
+    target.innerHTML = sanitize(html, src);
     enhanceMarkdown(target, ctx);
+  }
+
+  /** What renderMarkdownStream drew into a target: one entry per top-level block, { raw, nodes, open }. */
+  const streams = new WeakMap();
+
+  /**
+   * renderMarkdown for text that keeps growing: closed blocks that did not change stay as they are, and only the
+   * trailing block (the one still being written) is drawn again. Its code is highlighted once the fence closes.
+   * Draw the final text with renderMarkdown: a later block can change an earlier one (a reference link's definition).
+   */
+  function renderMarkdownStream(target, text, ctx) {
+    const marked = window.marked;
+    if (!marked?.lexer || !marked.parser || !window.DOMPurify) return renderMarkdown(target, text, ctx);
+    let tokens;
+    try {
+      tokens = marked.lexer(prepareMarkdown(text), MD_OPTIONS);
+    } catch {
+      return renderMarkdown(target, text, ctx);
+    }
+    let blocks = streams.get(target);
+    if (!blocks) {
+      target.replaceChildren();
+      blocks = [];
+    }
+    let keep = 0;
+    while (keep < blocks.length && keep < tokens.length - 1 && !blocks[keep].open && blocks[keep].raw === tokens[keep].raw) keep += 1;
+    for (const block of blocks.slice(keep)) for (const node of block.nodes) node.remove();
+    const next = blocks.slice(0, keep);
+    for (let i = keep; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      const open = i === tokens.length - 1;
+      let html;
+      try {
+        html = marked.parser(Object.assign([token], { links: tokens.links }), MD_OPTIONS);
+      } catch {
+        html = escapeHtml(token.raw);
+      }
+      const box = document.createElement("div");
+      box.innerHTML = sanitize(html, token.raw);
+      enhanceMarkdown(box, ctx, { highlight: !open });
+      const nodes = [...box.childNodes];
+      target.append(...nodes);
+      next.push({ raw: token.raw, nodes, open });
+    }
+    streams.set(target, next);
   }
 
   function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
 
-  function enhanceMarkdown(root, ctx) {
+  function enhanceMarkdown(root, ctx, opts = {}) {
     const autoLinks = [];
     for (const a of root.querySelectorAll("a[href]")) {
       const href = a.getAttribute("href") || "";
@@ -237,7 +288,7 @@
         /* resolve is best effort */
       }
     }
-    for (const pre of root.querySelectorAll("pre")) codeBlock(pre);
+    for (const pre of root.querySelectorAll("pre")) codeBlock(pre, opts.highlight !== false);
     for (const table of root.querySelectorAll("table")) {
       const wrap = el("div", "ag-table-wrap");
       table.replaceWith(wrap);
@@ -272,14 +323,14 @@
     return mapped && hljs.getLanguage(mapped) ? mapped : "";
   }
 
-  function codeBlock(pre) {
+  function codeBlock(pre, highlight = true) {
     const code = pre.querySelector("code");
     const { lang, label, title } = fenceInfo(code);
     const hljs = window.hljs;
     const resolved = highlightLang(lang);
     const grammar = resolved && hljs?.getLanguage(resolved);
     const text = (code || pre).textContent.replace(/\n$/, "");
-    if (grammar && code) {
+    if (highlight && grammar && code) {
       try {
         code.innerHTML = hljs.highlight(text, { language: resolved, ignoreIllegals: true }).value;
         code.classList.add("hljs");
@@ -399,6 +450,7 @@
     dirname,
     counts,
     renderMarkdown,
+    renderMarkdownStream,
     escapeHtml,
     parsePatch,
     renderDiffFile,
