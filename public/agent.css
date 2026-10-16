@@ -1591,6 +1591,10 @@ html[data-theme="cream"] .ag-md {
   padding: 7px 9px;
 }
 
+.ag-helper-call .ag-task-brief .ag-md {
+  max-height: 440px;
+}
+
 /* Scribe page writes: the page as a chip, its buttons, the changes in short form, the raw call. */
 .ag-page-chip {
   flex: none;
