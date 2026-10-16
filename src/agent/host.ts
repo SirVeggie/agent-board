@@ -3159,25 +3159,30 @@ export class AgentHost {
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
     if (!run.cancelled && !setupError) {
       try {
-        if (thread.provider === "pi" && this.prefs().memory) {
-          const model = await (this.providers.pi as PiProvider).resolveModel(thread.model);
+        // The fake Native provider (SCRIBE_FAKE_AGENTS) has no models to look up.
+        const pi = this.agent("pi") as Partial<PiProvider>;
+        if (thread.provider === "pi" && this.prefs().memory && pi.resolveModel) {
+          const model = await pi.resolveModel(thread.model);
           run.memoryOwner = { provider: "pi", ...(model ? { source: model.provider } : {}) };
         }
-        const session = this.session(thread);
-        session.update(this.sessionThread(thread));
-        const pageEdits = this.pageEditPrefix(thread, turn.id);
-        // A note the agent must read comes before the text, so the message is then not sent as a command.
-        const command = msg && !earlier && !reopened ? this.commandText(thread, msg) : null;
-        result = await session.run(
-          {
-            text: command ?? (msg ? earlier + reopened + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
-            images: msg?.images ?? [],
-            documents: msg ? pdfs(msg) : [],
-            instructions: threadInstructions(thread, this.scopeInfo(thread)),
-          },
-          sink,
-          opts
-        );
+        // Stop can also arrive while the model is looked up.
+        if (!run.cancelled) {
+          const session = this.session(thread);
+          session.update(this.sessionThread(thread));
+          const pageEdits = this.pageEditPrefix(thread, turn.id);
+          // A note the agent must read comes before the text, so the message is then not sent as a command.
+          const command = msg && !earlier && !reopened ? this.commandText(thread, msg) : null;
+          result = await session.run(
+            {
+              text: command ?? (msg ? earlier + reopened + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
+              images: msg?.images ?? [],
+              documents: msg ? pdfs(msg) : [],
+              instructions: threadInstructions(thread, this.scopeInfo(thread)),
+            },
+            sink,
+            opts
+          );
+        }
       } catch (err) {
         result = { status: "error", error: (err as Error).message };
       }
@@ -3185,6 +3190,8 @@ export class AgentHost {
     if (run.cancelled && result.status !== "error") result = { status: "cancelled", next: result.next };
     // An edit's withdrawal must settle before deciding whether to adopt or requeue a steer.
     await run.steer?.msg.edit?.withdrawal;
+    // A host shut down mid-turn (daemon exit) has closed its database: the turn is resumed on the next start.
+    if (this.closed) return;
     // A steered message the turn did not take in: the provider runs it next (adopted below), or it lost it and it goes back to the front of the queue.
     const carried = run.steer && result.next === run.steer.id ? run.steer : null;
     if (run.steer && !carried) {
@@ -3232,6 +3239,7 @@ export class AgentHost {
     } else {
       turn.files = this.toolFiles(run);
     }
+    if (this.closed) return;
     if (turn.page) {
       const tab = store.get(turn.page.id, "agent");
       if (tab && tab.revision !== turn.page.before) {

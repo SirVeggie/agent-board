@@ -35,6 +35,7 @@ before(() => {
     status: async () => ({ id: "pi", label: "Native", available: true }),
     models: async () => [{ id: "local/m", label: "M", provider: "pi", efforts: [], params: [] }],
     complete: async () => "",
+    resolveModel: async () => null,
     prewarm: () => {},
     dispose: () => {},
     createSession: (thread: Thread) => {

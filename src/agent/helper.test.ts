@@ -33,6 +33,7 @@ before(() => {
       { id: "local/qwen-small", label: "Qwen Small", provider: "pi", efforts: [], params: [] },
     ],
     complete: async () => "",
+    resolveModel: async () => null,
     prewarm: () => {},
     dispose: () => {},
     createSession: (thread: Thread) => ({

@@ -198,6 +198,9 @@ function stopChild(child: ChildProcess): void {
 
 type AppServerCall = (method: string, params?: unknown) => Promise<unknown>;
 
+/** Stops for the one-shot app-servers still running, so disposing the provider leaves no child behind. */
+const appServerStops = new Set<() => void>();
+
 /** One `codex app-server --stdio` process for a handful of JSON-RPC calls, then killed. */
 function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall) => Promise<T>, timeoutMs = APP_SERVER_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -214,6 +217,7 @@ function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall
     const finish = (err?: Error, value?: T) => {
       if (settled) return;
       settled = true;
+      appServerStops.delete(stop);
       clearTimeout(timeout);
       stopChild(child);
       for (const wait of pending.values()) wait.reject(err ?? new Error("Codex app-server closed"));
@@ -224,6 +228,8 @@ function withAppServer<T>(env: Record<string, string>, run: (call: AppServerCall
 
     const timeout = setTimeout(() => finish(new Error("Codex app-server timed out")), timeoutMs);
     timeout.unref?.();
+    const stop = () => finish(new Error("Codex app-server stopped"));
+    appServerStops.add(stop);
 
     child.stdout?.on("data", (chunk: Buffer) => {
       buf += chunk.toString("utf8");
@@ -753,6 +759,7 @@ export class CodexProvider implements AgentProvider {
   dispose(): void {
     this.spares.dispose();
     for (const session of [...this.sessions]) session.dispose();
+    for (const stop of [...appServerStops]) stop();
   }
 }
 

@@ -109,7 +109,8 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     await sizeControl.press("ArrowLeft");
     await pick(selects.nth(2), "glow");
     await pick(selects.nth(1), "mesh");
-    const capture = async (): Promise<number[]> => page.locator(".dock-orb-canvas").evaluate(canvas => (canvas as any).lastPixels);
+    // A picked setting redraws on the next frame; read the pixels after it, not the frame before.
+    const capture = async (): Promise<number[]> => page.locator(".dock-orb-canvas").evaluate(canvas => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve((canvas as any).lastPixels)))));
     // Circular shapes have a soft edge; the galaxy retains its own fading arms.
     await pick(selects.nth(2), "none");
     for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone"]) {
@@ -124,14 +125,17 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     assert.ok((await capture()).every(v => v === 0), "no shape or icon is transparent");
     await pick(selects.nth(2), "glow");
     assert.ok((await capture()).some(v => v > 0), "icon works without a shape");
+    // Ice shades from cyan to white over time; a white icon counts the same bright pixels at any moment.
+    await pick(page.locator('dialog select[aria-label="Icon palette"]'), "white");
     await pick(selects.nth(1), "mesh");
     const meshIcon = await capture();
     await pick(selects.nth(1), "galaxy");
     const galaxyIcon = await capture();
     // Bright white icon pixels keep the same footprint on the larger galaxy coordinate domain.
     const bright = (pixels: number[]) => pixels.reduce((n, v, i) => n + (i % 4 === 0 && v > 200 && pixels[i+1] > 200 && pixels[i+2] > 200 ? 1 : 0), 0);
-    assert.ok(bright(galaxyIcon) > 10);
-    assert.ok(Math.abs(bright(meshIcon) - bright(galaxyIcon)) < 20);
+    assert.ok(bright(galaxyIcon) > 500);
+    assert.ok(Math.abs(bright(meshIcon) - bright(galaxyIcon)) < bright(meshIcon) * .05);
+    await pick(page.locator('dialog select[aria-label="Icon palette"]'), "ice");
     // Surface pixels verify a steady glow and genuinely moving waves, gradients and motes.
     for (const effect of ["glow", "breathing", "waveDots", "pulse", "motes"]) {
       await pick(selects.nth(3), effect);

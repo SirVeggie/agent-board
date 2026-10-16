@@ -10,7 +10,8 @@ process.env.SCRIBE_HOME = dir;
 const { store } = await import("../store.js");
 const { AgentHost } = await import("./host.js");
 let host: InstanceType<typeof AgentHost>;
-before(() => { store.load(); host = new AgentHost(() => {}); });
+// Memory makes a Native turn look up its model first; these tests time turns by the tick.
+before(() => { store.load(); host = new AgentHost(() => {}); host.setPrefs({ memory: false }); });
 after(() => { host.dispose(); store.closeDb(); fs.rmSync(dir, { recursive: true, force: true }); });
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const users = (id: string) => host.threadDetail(id)!.items.filter((it) => it.kind === "user");
