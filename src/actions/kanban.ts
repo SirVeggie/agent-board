@@ -14,6 +14,7 @@ import {
   type SweepContext,
   type ThreadRunInfo,
 } from "./types.js";
+import { applyStateOps } from "../stateOps.js";
 import { claimOps, driveWorkers, workerLaunched, workerReady, workerStartOps } from "./kanbanWorkers.js";
 
 /** Rules the Kanban page follows too: done time, column order, card numbers, claims. Keep them in step. */
@@ -540,6 +541,55 @@ function cardEvent(state: BoardState, card: Card): Record<string, unknown> {
   return { card: card.id, num: card.num, column: col?.title ?? null, columnId: card.col, ...(col?.role ? { role: col.role } : {}) };
 }
 
+/** A whole card for get: the summary's resolved names, with the comments themselves instead of their count. */
+function fullCard(state: BoardState, card: Card): Record<string, unknown> {
+  const { comments: _count, lastComment: _last, ...brief } = summary(state, card);
+  return { ...card, ...brief, comments: arr<Comment>(card.comments), labelIds: arr(card.labels) };
+}
+
+const MAX_GET_CARDS = 30;
+const MAX_BATCH = 100;
+
+/** update's ops: field changes, then an optional comment and move, so a triage step is one call. */
+function updateOps(state: BoardState, args: Record<string, unknown>, ctx: ActionContext): unknown[] {
+  const card = findCard(state, args.card);
+  const fields: Record<string, unknown> = {};
+  if (args.title !== undefined) fields.title = str(args.title);
+  if (args.description !== undefined) fields.description = str(args.description);
+  if (args.labels !== undefined) fields.labels = labelIds(state, args.labels);
+  if (args.priority !== undefined) fields.priority = Math.max(0, Math.min(4, Math.floor(Number(args.priority) || 0)));
+  if (args.due !== undefined) fields.due = args.due === null ? null : str(args.due);
+  if (args.assignee !== undefined) fields.assignee = args.assignee === null ? null : str(args.assignee);
+  if (args.status !== undefined) fields.status = checkStatus(args.status);
+  if (args.blockedBy !== undefined) fields.blockedBy = arr(args.blockedBy).map((ref) => findCard(state, ref).id);
+  if (args.checklist !== undefined) {
+    fields.checklist = arr(args.checklist).map((item) => {
+      const entry = typeof item === "object" && item ? (item as { text?: unknown; done?: unknown }) : { text: item };
+      return { id: newId("ck"), text: str(entry.text), done: Boolean(entry.done) };
+    });
+  }
+  const comment = args.comment !== undefined ? str(args.comment).trim() : "";
+  if (args.comment !== undefined && !comment) throw new ActionError("comment is empty");
+  if (args.position !== undefined && args.position !== "top" && args.position !== "bottom") {
+    throw new ActionError('position is "top" or "bottom"');
+  }
+  if (args.position !== undefined && args.to === undefined) throw new ActionError("position needs to");
+  const col = args.to !== undefined ? findColumn(state, args.to) : undefined;
+  if (!Object.keys(fields).length && !comment && !col) throw new ActionError("nothing to change");
+  const ops: unknown[] = [];
+  if (Object.keys(fields).length) ops.push({ op: "merge", path: cardPath(card), value: fields });
+  if (comment) ops.push(commentOp(card, commentAuthor(state, { ...card, ...(fields as Partial<Card>) }, ctx), comment, ctx.now));
+  if (col) ops.push(...moveOps(state, card, col, ctx.now, args.position));
+  return ops;
+}
+
+/** Writes answer lean: the card's number and where it now is, not the whole row again. */
+function updateResult(state: BoardState, args: Record<string, unknown>): { num: number; column: string } {
+  const card = findCard(state, args.card);
+  const col = args.to !== undefined ? findColumn(state, args.to) : columnById(state, card.col);
+  return { num: card.num, column: col?.title ?? card.col };
+}
+
 export const kanbanActions: ActionSet = {
   seed(state, values) {
     // Match the page's ensureShape fallback for older boards. Never replace custom starting columns.
@@ -619,13 +669,24 @@ export const kanbanActions: ActionSet = {
     },
     get: {
       description:
-        "One card in full: description, checklist, comments, images (attached so you can see them), with column and label names resolved.",
-      args: "{ card }",
+        `One card in full: description, checklist, comments, images (attached so you can see them), with column and label names resolved. cards: [12, 13, …] reads up to ${MAX_GET_CARDS} at once as { cards, missing? }.`,
+      args: "{ card } | { cards: [num] }",
       run(state, args) {
-        const card = findCard(state, args.card);
-        // The summary's comment count and last-comment stamp are for list rows; get keeps the comments themselves.
-        const { comments: _count, lastComment: _last, ...brief } = summary(state, card);
-        return { ops: [], result: { ...card, ...brief, comments: arr<Comment>(card.comments), labelIds: arr(card.labels) } };
+        if (args.cards === undefined) return { ops: [], result: fullCard(state, findCard(state, args.card)) };
+        const refs = arr(args.cards);
+        if (!refs.length) throw new ActionError("cards is a list of card numbers");
+        if (refs.length > MAX_GET_CARDS) throw new ActionError(`get reads up to ${MAX_GET_CARDS} cards at once`);
+        const found: Record<string, unknown>[] = [];
+        const missing: unknown[] = [];
+        for (const ref of refs) {
+          try {
+            found.push(fullCard(state, findCard(state, ref)));
+          } catch (err) {
+            if (!(err instanceof ActionError)) throw err;
+            missing.push(ref);
+          }
+        }
+        return { ops: [], result: { cards: found, ...(missing.length ? { missing } : {}) } };
       },
     },
     logs: {
@@ -711,27 +772,36 @@ export const kanbanActions: ActionSet = {
     },
     update: {
       description:
-        "Change a card's fields. labels (names or ids) and checklist replace the whole list; a checklist item is a string or { text, done }. status: { kind: working | blocked | info, text }, or null to clear it.",
-      args: "{ card, title?, description?, labels?, priority?, due?, assignee?, checklist?, status?, blockedBy? }",
-      run(state, args) {
-        const card = findCard(state, args.card);
-        const fields: Record<string, unknown> = {};
-        if (args.title !== undefined) fields.title = str(args.title);
-        if (args.description !== undefined) fields.description = str(args.description);
-        if (args.labels !== undefined) fields.labels = labelIds(state, args.labels);
-        if (args.priority !== undefined) fields.priority = Math.max(0, Math.min(4, Math.floor(Number(args.priority) || 0)));
-        if (args.due !== undefined) fields.due = args.due === null ? null : str(args.due);
-        if (args.assignee !== undefined) fields.assignee = args.assignee === null ? null : str(args.assignee);
-        if (args.status !== undefined) fields.status = checkStatus(args.status);
-        if (args.blockedBy !== undefined) fields.blockedBy = arr(args.blockedBy).map((ref) => findCard(state, ref).id);
-        if (args.checklist !== undefined) {
-          fields.checklist = arr(args.checklist).map((item) => {
-            const entry = typeof item === "object" && item ? (item as { text?: unknown; done?: unknown }) : { text: item };
-            return { id: newId("ck"), text: str(entry.text), done: Boolean(entry.done) };
-          });
-        }
-        if (!Object.keys(fields).length) throw new ActionError("nothing to change");
-        return { ops: [{ op: "merge", path: cardPath(card), value: fields }], result: summary(state, { ...card, ...(fields as Partial<Card>) }) };
+        "Change a card's fields. labels (names or ids) and checklist replace the whole list; a checklist item is a string or { text, done }. status: { kind: working | blocked | info, text }, or null to clear it. comment adds a comment and to (with position) moves the card, in the same step. Returns { num, column }.",
+      args: "{ card, title?, description?, labels?, priority?, due?, assignee?, checklist?, status?, blockedBy?, comment?, to?, position? }",
+      run(state, args, ctx) {
+        return { ops: updateOps(state, args, ctx), result: updateResult(state, args) };
+      },
+    },
+    batch: {
+      description:
+        `Update several cards in one step: changes is a list of update args ({ card, …fields, comment?, to?, position? }), up to ${MAX_BATCH}. They apply in order, all or none. Returns { cards: [{ num, column }] }.`,
+      args: "{ changes: [{ card, ...update args }] }",
+      run(state, args, ctx) {
+        const changes = arr<Record<string, unknown>>(args.changes);
+        if (!changes.length) throw new ActionError("changes is a list of update args, each with card");
+        if (changes.length > MAX_BATCH) throw new ActionError(`batch takes up to ${MAX_BATCH} changes at once`);
+        const ops: unknown[] = [];
+        const done: unknown[] = [];
+        let current = state;
+        changes.forEach((change, i) => {
+          if (!change || typeof change !== "object" || Array.isArray(change)) throw new ActionError(`changes[${i}] is not an object`);
+          try {
+            const next = updateOps(current, change, ctx);
+            done.push(updateResult(current, change));
+            current = applyStateOps(current, next) as BoardState;
+            ops.push(...next);
+          } catch (err) {
+            if (err instanceof ActionError) throw new ActionError(`changes[${i}] (card ${str(change.card)}): ${err.message}; nothing was changed`);
+            throw err;
+          }
+        });
+        return { ops, result: { cards: done } };
       },
     },
     comment: {

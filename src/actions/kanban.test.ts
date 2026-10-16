@@ -985,3 +985,46 @@ test("a reply waits for a chat on a plan limit, and offers Continue for a chat t
   const state = applyStateOps(start, gone.ops);
   assert.equal((card(state, 2).comments as Array<{ followUp?: string }>)[0].followUp, "offer");
 });
+
+test("get with cards reads several cards in full and names the missing ones", () => {
+  const commented = run(board(), "comment", { card: 2, text: "Note" }).state;
+  const { result } = run(commented, "get", { cards: [2, 1, 99] });
+  const got = result.cards as Array<{ num: number; comments: Array<{ text: string }>; column: string }>;
+  assert.deepEqual(got.map((c) => c.num), [2, 1]);
+  assert.equal(got[0].comments[0].text, "Note");
+  assert.equal(got[0].column, "Ready for agent");
+  assert.deepEqual(result.missing, [99]);
+  assert.throws(() => run(board(), "get", { cards: [] }), /list of card numbers/);
+  assert.throws(() => run(board(), "get", { cards: Array.from({ length: 31 }, (_, i) => i) }), /up to 30/);
+});
+
+test("update can comment and move in the same step, and answers lean", () => {
+  const { state, result } = run(board(), "update", { card: 1, priority: 3, comment: "Triaged", to: "Inbox" });
+  assert.deepEqual(result, { num: 1, column: "Inbox" });
+  assert.equal(card(state, 1).priority, 3);
+  assert.equal(card(state, 1).col, "in");
+  assert.equal(card(state, 1).movedAt, 1000);
+  assert.equal((card(state, 1).comments as Array<{ text: string }>)[0].text, "Triaged");
+  assert.deepEqual(run(board(), "update", { card: 1, comment: "Only a note" }).result, { num: 1, column: "Ready for agent" });
+  assert.throws(() => run(board(), "update", { card: 1 }), /nothing to change/);
+  assert.throws(() => run(board(), "update", { card: 1, position: "top" }), /position needs to/);
+});
+
+test("batch applies each card's update in order, all or none", () => {
+  const { state, result } = run(board(), "batch", {
+    changes: [
+      { card: 1, assignee: "Opus", to: "Inbox" },
+      { card: 2, priority: 2, comment: "Later", to: "Inbox" },
+    ],
+  });
+  assert.deepEqual(result.cards, [{ num: 1, column: "Inbox" }, { num: 2, column: "Inbox" }]);
+  assert.equal(card(state, 1).assignee, "Opus");
+  assert.equal(card(state, 2).priority, 2);
+  // Both land at the end of Inbox in the order given.
+  assert.deepEqual((state.cards as Array<{ num: number; col: string }>).filter((c) => c.col === "in").map((c) => c.num), [1, 2]);
+  assert.throws(
+    () => run(board(), "batch", { changes: [{ card: 1, priority: 1 }, { card: 9, priority: 1 }] }),
+    /changes\[1\] \(card 9\): .*nothing was changed/
+  );
+  assert.throws(() => run(board(), "batch", { changes: [] }), /changes is a list/);
+});
