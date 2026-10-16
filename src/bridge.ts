@@ -1,4 +1,7 @@
 import { createStateOps } from "./stateOps.js";
+import { readFileSync } from "node:fs";
+
+const POINTER_DRAG_JS = readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8");
 
 /**
  * Injected into every tab page. Gives the page `window.scribe`:
@@ -31,6 +34,7 @@ export const ENGINE_JS = `(function () {
 })()`;
 
 export const BOARD_BRIDGE_JS = `
+${POINTER_DRAG_JS}
 (function () {
   var boot = window.__SCRIBE_BOOT__ || {};
   var capturing = boot.capture === true || window.__SCRIBE_CAPTURE__ === true;
