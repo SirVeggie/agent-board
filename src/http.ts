@@ -2157,7 +2157,7 @@ function scheduleSweep(delayMs: number): void {
   if (sweepQueued) {
     return;
   }
-  sweepQueued = setTimeout(() => {
+  sweepQueued = setTimeout(async () => {
     sweepQueued = null;
     const ctx = {
       now: Date.now(),
@@ -2167,11 +2167,14 @@ function scheduleSweep(delayMs: number): void {
     store.sweepActions(ctx);
     const host = agentHost;
     if (!host) return;
+    const available = (await host.providerStatus().catch(() => [])).filter((p) => p.available).map((p) => p.id);
+    const defaultProvider = ["cursor", "codex", "claude", "pi"].find((id) => available.some((p) => p === id)) ?? available[0];
     // Then the pages' own agents (Kanban workers) go on, whether or not a window shows them (#312).
     store.driveActions(
       {
         ...ctx,
         now: Date.now(),
+        defaultProvider,
         watch: (thread, run) => {
           try {
             host.watchPageThread(thread, run);

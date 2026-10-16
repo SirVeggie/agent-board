@@ -195,6 +195,66 @@ test("max parallel workers holds a second worker back while the first starts", (
   assert.equal(drive(apply(state, first), c), null);
 });
 
+function queuedPair(firstProvider?: string, secondProvider?: string, settings: State = {}): State {
+  const state = board({ provider: firstProvider, run: { since: 5 } });
+  Object.assign(state.settings as State, settings);
+  ((state.settings as State).workers as State).w_two = { name: "Someone", mode: "ask", provider: secondProvider, run: { since: 5 } };
+  return state;
+}
+
+test("provider limit defaults to one across different workers, including launch leases", () => {
+  const { c } = ctx();
+  const state = queuedPair("codex", "codex");
+  const first = drive(state, c)!;
+  assert.equal(first.launch?.ref.worker, "w_op");
+  const starting = apply(state, first);
+  assert.equal(drive(starting, c), null);
+  const started = applyStateOps(starting, kanbanActions.launched!(starting, first.launch!, { threadId: "th_1" }, c.now)!.ops);
+  const running = ctx({ th_1: { exists: true, running: true, title: "First" } }).c;
+  assert.equal(drive(started, running), null);
+  // Finishing the first chat frees the provider slot for the other worker.
+  Object.assign(card(started, 1), { col: "rev", claim: undefined });
+  Object.assign(card(started, 2), { col: "rev" });
+  const finished = ctx({ th_1: ended({ kind: "done" }) }).c;
+  const wrapped = apply(started, drive(started, finished));
+  assert.equal(drive(wrapped, finished)?.launch?.ref.worker, "w_two");
+});
+
+test("different providers run together unless the total limit is reached", () => {
+  const { c } = ctx();
+  for (const total of [0, 1]) {
+    const state = queuedPair("codex", "claude", { maxWorkers: total });
+    const starting = apply(state, drive(state, c));
+    assert.equal(drive(starting, c)?.launch?.ref.worker, total ? undefined : "w_two");
+  }
+});
+
+test("provider limit can be raised or disabled, independently of the total limit", () => {
+  const { c } = ctx();
+  for (const perProvider of [0, 2]) {
+    const state = queuedPair("codex", "codex", { maxWorkersPerProvider: perProvider });
+    const starting = apply(state, drive(state, c));
+    assert.equal(drive(starting, c)?.launch?.ref.worker, "w_two");
+  }
+});
+
+test("implicit provider shares the slot with the resolved board default", () => {
+  const { c } = ctx({}, { defaultProvider: "codex" });
+  for (const providers of [[undefined, "codex"], ["codex", undefined]]) {
+    const state = queuedPair(...providers);
+    assert.equal(drive(apply(state, drive(state, c)), c), null);
+  }
+});
+
+test("expired launch leases do not occupy provider slots", () => {
+  const state = queuedPair("codex", "codex");
+  Object.assign(worker(state), { step: { token: "old", at: 1 } });
+  Object.assign(card(state, 1), { col: "rev" });
+  Object.assign(card(state, 2), { col: "rev" });
+  const { c } = ctx({}, { now: 1_000_000 });
+  assert.equal(drive(state, c)?.launch?.ref.worker, "w_two");
+});
+
 test("an ended one-card run is wrapped up and forgotten, and the worker's own queue is untouched", () => {
   const state = board({ solo: { th_s: { card: 3, at: 50 } } });
   Object.assign(card(state, 3), { col: "rev", thread: "th_s" });

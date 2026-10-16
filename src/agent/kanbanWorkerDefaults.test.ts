@@ -116,6 +116,39 @@ function fn(source: string, name: string): string {
   return match[0];
 }
 
+test("board slot display follows provider and total limits and saves Any explicitly", () => {
+  const workers: any = {
+    sol: { provider: "codex", run: {}, threadId: "first" },
+    web: { provider: "codex", run: {} },
+    other: { provider: "claude", run: {} },
+    implicit: { run: {} },
+  };
+  let settings: any = {};
+  const context = vm.createContext({
+    settings: () => settings, worker: (id: string) => workers[id],
+    workerIds: () => Object.keys(workers), workerOn: (w: any) => Boolean(w.run),
+    stepLeased: (w: any) => Boolean(w.step), launching: {}, agentOptions: null,
+    workerDefaults: () => ({ provider: "codex" }), str: (x: any) => x || "",
+    clamp: (v: number, min: number, max: number) => Math.min(max, Math.max(min, v)),
+    scribe: { set: (value: any) => { settings = value.settings; } },
+  });
+  const helpers = board.slice(board.indexOf("  function maxWorkers()"), board.indexOf("  /** Scribe (or a window with an older copy"));
+  vm.runInContext(helpers + "\n" + fn(board, "saveSetting"), context);
+  const limited = (id: string) => vm.runInContext(`atLimit('${id}')`, context);
+  assert.equal(limited("web"), true);
+  assert.equal(limited("implicit"), true);
+  assert.equal(limited("other"), false);
+  vm.runInContext("saveSetting('maxWorkersPerProvider', 0)", context);
+  assert.equal(settings.maxWorkersPerProvider, 0);
+  assert.equal(limited("web"), false);
+  settings.maxWorkers = 1;
+  assert.equal(limited("other"), true);
+  settings = { maxWorkersPerProvider: 2 };
+  assert.equal(limited("web"), false);
+  workers.implicit.step = {};
+  assert.equal(limited("web"), true);
+});
+
 test("Continue starts the newly assigned worker, but resumes for the same worker", async () => {
   for (const assignee of ["New", "Old"]) {
     const calls: any[] = [];

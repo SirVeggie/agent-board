@@ -960,7 +960,7 @@
   .swatch { width: 18px; height: 18px; border-radius: 50%; background: var(--who); padding: 0; }
   .swatch.sel { box-shadow: 0 0 0 2px rgba(18, 22, 30, 1), 0 0 0 4px var(--who); }
   .swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-  .wp-foot { display: flex; justify-content: space-between; align-items: center; padding: 8px 6px 2px; border-top: 1px solid var(--line); margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .wp-foot { display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: space-between; align-items: center; padding: 8px 6px 2px; border-top: 1px solid var(--line); margin-top: 6px; color: var(--muted); font-size: 12px; }
   .wp-foot-left { display: inline-flex; align-items: center; gap: 12px; }
   .wp-foot .add { color: var(--accent); padding: 4px 2px; }
   .wp-foot .add:hover { text-decoration: underline; }
@@ -4898,7 +4898,7 @@
   }
   function saveSetting(key, on) {
     var next = Object.assign({}, settings());
-    if (on) next[key] = on;
+    if (on || on === 0) next[key] = on;
     else delete next[key];
     scribe.set({ settings: next });
   }
@@ -5052,15 +5052,21 @@
     return out;
   }
   function maxWorkers() { return clamp(Math.floor(Number(settings().maxWorkers) || 0), 0, 99); }
-  /** Other workers are on cards (or starting one) up to the max parallel setting. */
+  function maxWorkersPerProvider() {
+    var value = settings().maxWorkersPerProvider;
+    return value == null ? 1 : clamp(Math.floor(Number(value) || 0), 0, 99);
+  }
+  /** Chats and launch leases reserve both total and provider slots. */
   function atLimit(id) {
-    var max = maxWorkers();
-    if (!max) return false;
+    var max = maxWorkers(), perProvider = maxWorkersPerProvider();
+    var provider = str(worker(id).provider) || workerDefaults(agentOptions).provider;
     var busy = workerIds().filter(function (other) {
       var w = worker(other);
       return other !== id && workerOn(w) && Boolean(w.threadId || stepLeased(w) || launching[other]);
-    }).length;
-    return busy >= max;
+    });
+    return Boolean((max && busy.length >= max) || (perProvider && busy.filter(function (other) {
+      return (str(worker(other).provider) || workerDefaults(agentOptions).provider) === provider;
+    }).length >= perProvider));
   }
   /** Scribe (or a window with an older copy of the board) is starting the worker's next chat. */
   function stepLeased(w) { return Boolean(w && w.step && Number(w.step.at) > Date.now() - STEP_LEASE_MS); }
@@ -6099,7 +6105,7 @@
     var rows = JSON.stringify([workerIds().map(function (id) {
       return [workerState(id), workerErrors[id] || "", Boolean(launching[id]), workerCards(id).length, atLimit(id)];
     }), columns().map(function (c) { return isReadyCol(c) ? (isPausedCol(c) ? 1 : 2) : 0; })]);
-    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.defaultWorker, s.maxWorkers, workersLogOpen && s.workerLog,
+    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.defaultWorker, s.maxWorkers, s.maxWorkersPerProvider, workersLogOpen && s.workerLog,
       workersLogOpen, panelOpen, panelEditor, agentOptions, optionsFailed], buildWorkersPanel);
   }
   function buildWorkersPanel() {
@@ -6236,25 +6242,29 @@
     });
     left.appendChild(logTog);
     foot.appendChild(left);
-    var maxWrap = el("label", "wp-max", "Max parallel ");
-    var maxSel = el("select", "field");
-    maxSel.setAttribute("aria-label", "Max parallel workers");
-    [["0", "Any"], ["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"]].forEach(function (o) {
-      var opt = el("option", null, o[1]);
-      opt.value = o[0];
-      maxSel.appendChild(opt);
-    });
-    maxSel.value = String(maxWorkers());
-    if (maxSel.value !== String(maxWorkers())) {
-      var extra = el("option", null, String(maxWorkers()));
-      extra.value = String(maxWorkers());
-      maxSel.appendChild(extra);
-      maxSel.value = extra.value;
+    function parallelSetting(label, key, value) {
+      var wrap = el("label", "wp-max", label + " ");
+      var sel = el("select", "field");
+      sel.setAttribute("aria-label", label + " workers");
+      [["0", "Any"], ["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"]].forEach(function (o) {
+        var opt = el("option", null, o[1]);
+        opt.value = o[0];
+        sel.appendChild(opt);
+      });
+      sel.value = String(value);
+      if (sel.value !== String(value)) {
+        var extra = el("option", null, String(value));
+        extra.value = String(value);
+        sel.appendChild(extra);
+        sel.value = extra.value;
+      }
+      sel.addEventListener("change", function () { saveSetting(key, Number(sel.value)); });
+      wrap.appendChild(sel);
+      enhanceSelect(sel);
+      foot.appendChild(wrap);
     }
-    maxSel.addEventListener("change", function () { saveSetting("maxWorkers", Number(maxSel.value) || null); });
-    maxWrap.appendChild(maxSel);
-    enhanceSelect(maxSel);
-    foot.appendChild(maxWrap);
+    parallelSetting("Max parallel", "maxWorkers", maxWorkers());
+    parallelSetting("Per provider", "maxWorkersPerProvider", maxWorkersPerProvider());
     workersPop.appendChild(foot);
     workersPop.scrollTop = scroll;
     var newLog = workersPop.querySelector(".wp-log-list");

@@ -48,7 +48,7 @@ const KEPT_NOTE = "Its chat and branch are kept: Continue that chat, or comment 
 const PRIORITIES = ["", "low", "medium", "high", "urgent"];
 
 type Info = ThreadRunInfo;
-type Settings = { workerInstructions?: unknown; maxWorkers?: unknown; workerOrder?: unknown; workerLog?: unknown };
+type Settings = { workerInstructions?: unknown; maxWorkers?: unknown; maxWorkersPerProvider?: unknown; workerOrder?: unknown; workerLog?: unknown };
 
 const settingsOf = (state: BoardState) => (state.settings && typeof state.settings === "object" ? (state.settings as Settings) : {});
 const workerPath = (id: string) => `settings/workers/${id}`;
@@ -127,12 +127,14 @@ export function nextCard(state: BoardState, w: Worker, skip: ReadonlySet<string>
   return workerCards(state, w).find((c) => !skip.has(c.id) && cardTakeable(state, c)) ?? null;
 }
 
-/** Other workers are on cards (or starting one) up to the max parallel setting. */
-function atLimit(state: BoardState, id: string, now: number): boolean {
+/** Reserve slots for chats and launch leases, across worker names using the same provider. */
+function atLimit(state: BoardState, id: string, now: number, defaultProvider = ""): boolean {
   const max = Math.min(99, Math.max(0, Math.floor(Number(settingsOf(state).maxWorkers) || 0)));
-  if (!max) return false;
-  const busy = workerList(state).filter(([other, w]) => other !== id && w.run && (w.threadId || leased(w.step, now))).length;
-  return busy >= max;
+  const value = settingsOf(state).maxWorkersPerProvider;
+  const perProvider = value == null ? 1 : Math.min(99, Math.max(0, Math.floor(Number(value) || 0)));
+  const busy = workerList(state).filter(([other, w]) => other !== id && w.run && (w.threadId || leased(w.step, now)));
+  const provider = str(workerOf(state, id)?.provider) || defaultProvider;
+  return Boolean((max && busy.length >= max) || (perProvider && busy.filter(([, w]) => (str(w.provider) || defaultProvider) === provider).length >= perProvider));
 }
 
 function clip(text: unknown, max: number): string {
@@ -575,7 +577,7 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
     const wrapped = wrapUp(plan, state, id, w, threadId, info, ctx);
     if (!wrapped.go) return plan.outcome();
     skip = new Set(wrapped.blocked);
-  } else if (!w.stop && (!nextCard(state, w) || atLimit(state, id, ctx.now))) {
+  } else if (!w.stop && (!nextCard(state, w) || atLimit(state, id, ctx.now, ctx.defaultProvider))) {
     return null;
   }
   const since = Number(w.run.since) || ctx.now;
@@ -584,7 +586,7 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
     return plan.outcome();
   }
   const c = nextCard(state, w, skip);
-  if (!c || atLimit(state, id, ctx.now)) {
+  if (!c || atLimit(state, id, ctx.now, ctx.defaultProvider)) {
     plan.patchWorker(id, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since } });
     plan.log(id, "wait", !c ? "Waiting for cards" : "Waiting for a free slot");
     return plan.outcome();

@@ -153,6 +153,8 @@ export type PageLaunch = {
 
 export type DriveContext = SweepContext & {
   page: { id: string; title: string };
+  /** Same available-provider default used when launching a board worker. */
+  defaultProvider?: string;
   /** Why the page may not start this chat without a click (its permissions), or null. */
   mayStart(settings: LaunchSettings): string | null;
   /** Hand one of the page's chats to Scribe to see through; false when Scribe can't. */
