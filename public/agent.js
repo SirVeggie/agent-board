@@ -2348,7 +2348,7 @@
     /** Settings shown in the composer: the thread's, or the draft's. */
     settings() {
       const t = this.thread();
-      if (t) return t;
+      if (t) return this.pendingFork ? { ...t, ...this.pendingFork.settings } : t;
       const p = prefs();
       const d = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
       const provider = d.settings.provider || (providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id || "cursor");
@@ -2389,6 +2389,27 @@
 
     async updateSettings(patch) {
       const t = this.thread();
+      if (t && (this.pendingFork || (patch.provider && patch.provider !== t.provider && t.stats.turns > 0))) {
+        const pending = this.pendingFork || { settings: {}, archive: false };
+        Object.assign(pending.settings, patch);
+        if (patch.provider || patch.model) {
+          const provider = pending.settings.provider || t.provider;
+          const model = patch.model || prefs().models?.[provider] || modelsOf(provider)[0]?.id || "default";
+          const choice = modelChoice(provider, model, prefs());
+          pending.settings.model = model;
+          if (patch.effort === undefined) pending.settings.effort = choice.effort;
+          if (patch.modelParams === undefined) pending.settings.modelParams = choice.modelParams;
+          if (patch.provider && patch.approval === undefined) pending.settings.approval = approvalFor(provider);
+        }
+        if (pending.settings.provider === t.provider) {
+          this.pendingFork = null;
+          return this.updateSettings(pending.settings);
+        }
+        this.pendingFork = pending;
+        this.renderComposerBar();
+        this.renderHeader();
+        return;
+      }
       if (!t) {
         this.draft = this.draft || { scope: { kind: "global", ref: null }, settings: {} };
         Object.assign(this.draft.settings, patch);
@@ -2407,12 +2428,6 @@
         await this.rememberDraftPrefs();
         this.renderComposerBar();
         this.renderHeader();
-        return;
-      }
-      if (patch.provider && patch.provider !== t.provider && t.stats.turns > 0) {
-        // A thread keeps its provider; it goes on in a fork, which carries the conversation over.
-        await forkThread(t, (id) => this.openThread(id), { provider: patch.provider, model: patch.model, ...(patch.mode ? { mode: patch.mode } : {}) });
-        notice(`Forked into a new ${PROVIDER_LABEL[patch.provider]} thread`);
         return;
       }
       try {
@@ -2454,6 +2469,8 @@
       this.audioComposer?.cancel();
       this.closeHelper();
       this.parkComposer();
+      this.pendingFork = null;
+      this.archiveOnSend = null;
       this.threadId = id;
       if (id) this.draft = null;
       this.expanded.clear();
@@ -2508,6 +2525,8 @@
       this.audioComposer?.cancel();
       this.closeHelper();
       this.parkComposer();
+      this.pendingFork = null;
+      this.archiveOnSend = null;
       this.threadId = null;
       this.draft = { scope, settings: { ...settings } };
       this.draftTab = this.variant === "dock" ? activeTab()?.id || null : null;
@@ -2526,6 +2545,8 @@
         threadId: this.threadId,
         draft: this.threadId || !this.draft ? null : { scope: { ...this.draft.scope }, settings: { ...this.draft.settings } },
         composer: this.composerContent(),
+        pendingFork: this.pendingFork,
+        archiveOnSend: this.archiveOnSend,
       };
       this.emptyComposer();
       this.handedOff = true;
@@ -2537,8 +2558,11 @@
       if (snap.threadId) this.setThread(snap.threadId);
       else this.startDraft(snap.draft?.scope || defaultScope(), snap.draft?.settings || {});
       this.handedOff = false;
+      this.pendingFork = snap.pendingFork || null;
+      this.archiveOnSend = snap.archiveOnSend || null;
       // What setThread loaded is an older copy of the same composer.
       if (snap.composer) this.fillComposer(snap.composer);
+      this.renderComposerBar();
       if (this.variant === "dock") {
         dock.remember(snap.threadId || null);
         dock.renderTitle();
@@ -4812,6 +4836,30 @@
     renderForkNote(t) {
       const note = this.forkNote;
       note.replaceChildren();
+      if (t && this.pendingFork) {
+        note.hidden = false;
+        const pending = this.pendingFork;
+        const line = el("div", "ag-fork-line");
+        line.append(icon("git"), el("span", null, `Sending will fork this conversation into a new ${PROVIDER_LABEL[pending.settings.provider]} thread.`));
+        const actions = el("div", "ag-fork-line");
+        actions.append(button("New thread", "ag-fork-act", () => {
+            const content = this.composerContent();
+            const settings = { ...this.settings(), customMode: pending.settings.customMode !== undefined ? pending.settings.customMode : t.custom?.id ?? null };
+            this.emptyComposer();
+            this.startDraft(t.scope, settings);
+            if (content) this.fillComposer(content);
+          }));
+        note.append(line, actions);
+        if (!t.archived) {
+          const archive = button(pending.archive ? "Archive on send ✓" : "Archive on send", "ag-fork-act", () => {
+            pending.archive = !pending.archive;
+            this.renderForkNote(t);
+          });
+          archive.setAttribute("aria-pressed", String(pending.archive));
+          actions.append(archive);
+        }
+        return;
+      }
       const fork = t && !t.stats.turns ? t.fork : null;
       note.hidden = !fork;
       if (!fork) return;
@@ -4834,13 +4882,13 @@
         const line = el("div", "ag-fork-line");
         line.append(
           el("span", null, `Archive ${fromName}?`),
-          button("Archive", "ag-fork-act", () => {
-            S.forkArchiveSeen.add(t.id);
-            archiveThread(from);
+          button(this.archiveOnSend === from.id ? "Archive on send ✓" : "Archive on send", "ag-fork-act", () => {
+            this.archiveOnSend = this.archiveOnSend === from.id ? null : from.id;
             this.renderForkNote(this.thread());
           }),
           button(icon("close"), "ag-icon-btn small", () => {
             S.forkArchiveSeen.add(t.id);
+            this.archiveOnSend = null;
             this.renderForkNote(this.thread());
           }, "Dismiss")
         );
@@ -5359,7 +5407,7 @@
     }
 
     async send() {
-      if (this.withdrawing) return;
+      if (this.withdrawing || this.sending) return;
       const text = this.input.value.trim();
       const scopeCmd = /^\/(here|folder|workspace|global)$/i.exec(text);
       if (scopeCmd && !this.attachments.length) {
@@ -5396,6 +5444,7 @@
         setTimeout(() => this.send(), 100);
         return;
       }
+      this.sending = true;
       const context = this.composerContext(text);
       const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
       const images = sending.filter((f) => f.mimeType.startsWith("image/"));
@@ -5409,6 +5458,7 @@
       this.renderContext();
       this.hidePicker();
       const sent = this.thread();
+      let archiveAfterSend = this.archiveOnSend;
       if (sent) {
         // Sent, so no longer a draft; the daemon clears its copy when the message arrives.
         sent.draft = null;
@@ -5416,6 +5466,21 @@
       }
       try {
         let id = this.threadId;
+        if (id && this.pendingFork) {
+          const pending = this.pendingFork;
+          const { thread } = await api("POST", `/threads/${encodeURIComponent(id)}/fork`, pending.settings);
+          S.threads.set(thread.id, thread);
+          S.details.set(thread.id, { items: [], byId: new Map(), turns: new Map() });
+          this.threadId = id = thread.id;
+          this.pendingFork = null;
+          this.archiveOnSend = pending.archive ? sent.id : null;
+          archiveAfterSend = this.archiveOnSend;
+          if (this.variant !== "dock") setCurrent(id);
+          else dock.remember(id);
+          // The fork endpoint chooses the provider/model; apply other pending composer settings too.
+          await this.updateSettings(pending.settings);
+          this.renderAll();
+        }
         if (!id) {
           const cur = this.settings();
           const { thread } = await api("POST", "/threads", {
@@ -5443,6 +5508,11 @@
         this.stick = true;
         // dock: the host watches a floating-chat turn for a new page on its way (pageIntent.ts).
         await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, ...(this.variant === "dock" ? { dock: true } : {}) });
+        if (archiveAfterSend) {
+          const from = archiveAfterSend;
+          if (this.threadId === id) this.archiveOnSend = null;
+          api("PATCH", `/threads/${encodeURIComponent(from)}`, { archived: true }).catch((err) => notice(err.message));
+        }
         for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         this.renderContext();
       } catch (err) {
@@ -5456,6 +5526,8 @@
         } else {
           for (const file of held) if (file.url) URL.revokeObjectURL(file.url);
         }
+      } finally {
+        this.sending = false;
       }
     }
   }

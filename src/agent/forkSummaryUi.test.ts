@@ -4,6 +4,107 @@ import test from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "../chromium.js";
 
+test("provider switches fork on send and archive only after an accepted message", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Pending provider switch test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    const requests: { method: string; path: string; body: any }[] = [];
+    let rejectMessage = false;
+    const source = { id: "original", title: "Original", provider: "claude", model: "haiku", mode: "code", approval: "ask", scope: { kind: "global", ref: null }, stats: { turns: 3 }, status: "idle" };
+    let fork: any;
+    await page.route("http://fork.test/**", async (route) => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname.replace("/api/agent", "");
+      if (!req.url().includes("/api/agent/")) return route.fulfill({ contentType: "text/html", body: "<main></main>" });
+      const body = req.postData() ? req.postDataJSON() : null;
+      requests.push({ method: req.method(), path, body });
+      let data: any = {};
+      if (path.endsWith("/fork")) {
+        fork = { ...source, ...body, id: "fork", stats: { turns: 0 }, fork: { from: source.id, title: source.title, provider: source.provider } };
+        data = { thread: fork };
+      } else if (path === "/threads/fork" && req.method() === "PATCH") {
+        fork = { ...fork, ...body };
+        data = { thread: fork };
+      } else if (path === "/threads/original" && req.method() === "PATCH") data = { thread: { ...source, ...body } };
+      if (path.endsWith("/messages") && rejectMessage) return route.fulfill({ status: 400, json: { error: "Try again" } });
+      return route.fulfill({ json: data });
+    });
+    await page.goto("http://fork.test/");
+    await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
+    for (const name of ["motion.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js", "settings-ui.js"]) {
+      await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    }
+    const js = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
+    await page.addScriptTag({ content: js.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  renderAll = () => {}; window.switchTest = { ChatView, S };") });
+    await page.evaluate((source) => {
+      const w = window as any;
+      const { ChatView, S } = w.switchTest;
+      S.threads.set(source.id, source);
+      S.config = { providers: [], models: {}, prefs: { models: {}, modelSettings: {} } };
+      const view = Object.create(ChatView.prototype);
+      Object.assign(view, { threadId: source.id, variant: "full", input: document.createElement("textarea"), forkNote: document.createElement("div"), attachments: [], mentions: [] });
+      for (const method of ["renderHeader", "renderContext", "autosize", "hidePicker", "closeHelper", "focus", "parkComposer"]) view[method] = () => {};
+      view.renderComposerBar = () => view.renderForkNote(view.thread());
+      view.renderAll = view.renderComposerBar;
+      view.composerContext = () => [];
+      document.querySelector("main")!.append(view.forkNote);
+      w.switchTest.view = view;
+    }, source);
+    const update = (patch: any) => page.evaluate((patch) => (window as any).switchTest.view.updateSettings(patch), patch);
+    await update({ provider: "codex", model: "mini" });
+    await page.getByRole("button", { name: "Archive on send", exact: true }).click();
+    assert.equal(requests.length, 0);
+    await update({ model: "large" });
+    assert.equal(await page.evaluate(() => (window as any).switchTest.view.settings().model), "large");
+    await update({ provider: "claude", model: "haiku" });
+    assert.equal(requests.some(r => r.path.endsWith("/fork") || r.body?.archived), false);
+    assert.equal(await page.evaluate(() => (window as any).switchTest.view.pendingFork), null);
+
+    await update({ provider: "codex", model: "mini" });
+    await page.evaluate(() => {
+      const view = (window as any).switchTest.view;
+      view.input.value = "Keep this draft";
+      view.attachments = [{ name: "a.txt", mimeType: "text/plain", data: "YWJj" }];
+    });
+    await page.getByRole("button", { name: "New thread", exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => {
+      const v = (window as any).switchTest.view;
+      return [v.threadId, v.settings().provider, v.input.value, v.attachments.length, v.pendingFork];
+    }), [null, "codex", "Keep this draft", 1, null]);
+    assert.equal(requests.some(r => r.path.endsWith("/fork") || r.path === "/threads"), false);
+
+    await page.evaluate(() => {
+      const v = (window as any).switchTest.view;
+      v.threadId = "original";
+      v.draft = null;
+      v.attachments = [];
+      v.input.value = "Continue";
+    });
+    await update({ provider: "codex", model: "mini" });
+    await page.getByRole("button", { name: "Archive on send", exact: true }).click();
+    rejectMessage = true;
+    await page.evaluate(() => (window as any).switchTest.view.send());
+    assert.equal(requests.filter(r => r.method === "POST" && r.path.endsWith("/fork")).length, 1);
+    assert.equal(requests.some(r => r.body?.archived), false);
+    assert.equal(await page.evaluate(() => (window as any).switchTest.view.input.value), "Continue");
+    rejectMessage = false;
+    const archiveResponse = page.waitForResponse(r => r.url().endsWith("/threads/original") && r.request().postDataJSON()?.archived === true);
+    await page.evaluate(() => (window as any).switchTest.view.send());
+    await archiveResponse;
+    assert.equal(requests.filter(r => r.method === "POST" && r.path.endsWith("/fork")).length, 1);
+    const archived = requests.findIndex(r => r.body?.archived === true);
+    assert.ok(archived > requests.findLastIndex(r => r.path.endsWith("/messages")));
+  } finally { await browser.close(); }
+});
+
 test("fork model settings populate after startup and follow provider changes", async (t) => {
   let browser;
   try {
