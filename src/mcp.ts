@@ -262,76 +262,38 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_show",
-    "Present an HTML page in Scribe, the user's local page viewer. Creates a page or replaces the page with the same key (whether its tab is open or closed). Every page lives in the Library; the tab strip is just the pages currently open. Default: focus the tab, reopen it if closed, and open the browser only if nothing is viewing Scribe. Pass background: true to skip focus and the strip for a new page (created in the Library with a Library blip); an already-open tab stays in the background with an unread blip; an already-closed page stays closed with a Library blip. Use background when creating a page the user will open from a link rather than look at now. This is the only tool needed to show a page — do not follow it with a separate open or refresh. Prefer this over writing HTML files into the workspace. Pass html (a full document or fragment), or htmlPath to a local HTML file — in Code mode, write a large page to a temp file and pass htmlPath so it is not pasted as a tool argument. Mutually exclusive. To show a user image file, pass assets (local paths) and reference them as asset:name in the HTML. Reuse key when updating the same topic. For a small change to an existing page, prefer page_patch instead of rewriting html.",
+    "Show an HTML page in Scribe: creates it, or replaces the page with the same key (open or closed). Pass html (a document or fragment) or htmlPath (a local file; use it for large pages in Code mode). This alone shows the page; no separate open or refresh. For a small change to an existing page, use page_patch.",
     {
-      key: z
-        .string()
-        .optional()
-        .describe("Stable identity for this page, e.g. sprint-notes; Scribe stores it as scribe:sprint-notes. Reusing the same key updates that page instead of opening another."),
-      title: z.string().describe("Tab title shown in Scribe."),
-      html: z
-        .string()
-        .optional()
-        .describe("HTML document or fragment to render in the tab. Omit when passing htmlPath."),
-      htmlPath: z
-        .string()
-        .min(1)
-        .optional()
-        .describe(
-          "Local HTML file that is the page body. Use instead of html when the document is large (write it with file tools to a temp file, then pass the path). Same create-or-replace behaviour as html, including title, state, assets, folder, and background. Mutually exclusive with html."
-        ),
+      key: z.string().optional().describe("Stable page identity, e.g. sprint-notes (stored as scribe:sprint-notes). Reuse it to update the same page."),
+      title: z.string().describe("Tab title."),
+      html: z.string().optional().describe("HTML document or fragment. Omit when passing htmlPath."),
+      htmlPath: z.string().min(1).optional().describe("Local HTML file to use as the page instead of html."),
       assets: z
-        .array(
-          z.union([
-            z.string().describe("Absolute or workspace-relative path to an image file."),
-            z.object({
-              path: z.string().describe("Absolute or workspace-relative path to an image file."),
-              name: z
-                .string()
-                .optional()
-                .describe("Name to use in asset:name. Defaults to the file's basename."),
-            }),
-          ])
-        )
+        .array(z.union([z.string(), z.object({ path: z.string(), name: z.string().optional().describe("Name for asset:name. Default: the file's basename.") })]))
         .optional()
-        .describe(
-          "Local image files to attach (png, jpg, gif, webp, svg, ico, avif). Reference them in HTML as asset:name, e.g. <img src=\"asset:hero.png\">. Re-showing the same key without assets keeps files already attached."
-        ),
+        .describe("Local image files to attach; reference them in the HTML as asset:name. Re-showing without assets keeps the attached ones."),
       background: z
         .boolean()
         .optional()
-        .describe(
-          "If true, do not focus this tab and do not bring the Scribe window forward. A new page is created in the Library without opening a tab (unread blip on Library). An already-open tab stays open with an unread blip; an already-closed page stays closed with a Library blip. Use when the user said in the background / don’t switch tabs, for a page you will link to rather than put in front of them, and for private screenshot loops. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
-        ),
-      pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned will keep it."),
+        .describe("Don't focus the tab or bring Scribe forward. A new page goes to the Library without a tab; an open tab gets an unread blip; a closed page stays closed. Use it for a page the user will open from a link, or when they asked not to switch tabs."),
+      pin: z.boolean().optional().describe("Pin the tab so Clear/close-unpinned keeps it."),
       folder: z
         .string()
         .optional()
-        .describe(
-          "Library folder path for a new page, e.g. \"CLIMS/Releases\" (created if missing). Only used when the page is created; never moves an existing page — the user organizes the Library. Pass an existing path from library_folders when the new page clearly belongs there, or a new path only when the user asked for that folder. Otherwise omit (the page lands in the Library root)."
-        ),
-      state: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
-          "Initial state for an interactive page, readable in the page as scribe.state. Applied only when the tab has no state yet, so re-showing a page never resets what the user has changed."
-        ),
+        .describe("Library folder for a new page, e.g. \"CLIMS/Releases\"; never moves an existing page. Pass an existing path from library_folders, or a new one only when the user asked. Default: Library root."),
+      state: z.record(z.string(), z.unknown()).optional().describe("Initial scribe.state, applied only when the page has no state yet."),
       expectedRevision: z
         .number()
         .optional()
-        .describe(
-          "Refuse to replace an existing page whose revision is no longer this one. Without it, re-showing a page you read or wrote earlier in this session is refused if someone changed it since."
-        ),
+        .describe("Refuse to replace the page if its revision is no longer this one. A page you read or wrote this session is guarded like this anyway."),
       replyTo: z
         .object({
-          page: z.string().describe("The page replies go to: its key (scribe:agent-todo) or id."),
-          card: z.number().int().positive().optional().describe("On a Kanban board: the card number the form is about."),
+          page: z.string().describe("Page key or id."),
+          card: z.number().int().positive().optional().describe("Kanban card number."),
         })
         .nullable()
         .optional()
-        .describe(
-          "Where the page's scribe.reply(data, { summary }) goes when the user clicks its submit button. Set it on a form you make for a Kanban card (page: the board, card: its number): the reply is posted on the card as the user's comment and sent on to the card's chat (into its running turn, or Continue). On another page it is a reply event you can page_wait on. Kept with the page, not in its HTML, so the page's code cannot change it; null clears it."
-        ),
+        .describe("Where the page's scribe.reply(data, { summary }) goes on submit. On a form for a Kanban card ({ page: board, card }), it posts on the card as the user's comment and reaches the card's chat; elsewhere it is a reply event for page_wait. null clears it."),
     },
     async ({ key, title, html: htmlArg, htmlPath, assets, pin, state, background, folder, expectedRevision, replyTo }) => {
       const resolved = resolveShowHtml(htmlArg, htmlPath);
@@ -400,84 +362,38 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_patch",
-    "Patch snippets on an existing Scribe page without rewriting the whole HTML. The page must already exist (open or closed) — this does not create a page. Each edit replaces an exact oldString with newString in the stored HTML. oldString must match exactly once unless replaceAll is true. Edits apply in order, atomically: if any edit fails, nothing changes, and the error shows where the stored text diverged from your oldString. Does not change page state or events. Default: focus the tab (and reopen it if closed). Pass background: true to patch without focusing. Prefer this over page_show when you are changing a few snippets. If you showed a fragment, the stored page is a wrapped full document — match the body you wrote, not the wrapper. For a large page, find the spot with page_grep or a page_read offset/limit window and patch it the same way, or replace a numbered block with startLine/endLine. To build a large new page in parts, page_show the first part and add the rest with append edits. With file tools (Code mode) you can instead check it out with page_read toFile: true, edit that file, then pass htmlPath (and the checkout's revision as expectedRevision) instead of edits.",
+    "Change part of an existing Scribe page (open or closed) without rewriting it; does not create pages or change page state. Edits apply in order and atomically: if one fails, nothing changes and the error shows where the stored HTML diverged. Match the body you wrote, not the wrapper Scribe adds around a fragment. For large pages, find the spot with page_grep or a page_read window first. Focuses the tab unless background is true. Details: scribe_docs \"Patch an existing page\".",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
       edits: z
         .array(
           z.object({
-            oldString: z
-              .string()
-              .min(1)
-              .optional()
-              .describe("Exact snippet to find in the stored HTML. Must match once unless replaceAll is true."),
-            newString: z
-              .string()
-              .describe("Replacement, inserted lines, or the appended part. Pass an empty string to delete the snippet or lines."),
-            replaceAll: z
-              .boolean()
-              .optional()
-              .describe("With oldString: replace every match. Default false (exactly one match required)."),
-            startLine: z
-              .number()
-              .int()
-              .optional()
-              .describe("Instead of oldString: first line to replace (1-based, as numbered by page_read / page_grep). Pass endLine too."),
+            oldString: z.string().min(1).optional().describe("Exact snippet of the stored HTML; must match once unless replaceAll."),
+            newString: z.string().describe("Replacement or inserted text; empty deletes."),
+            replaceAll: z.boolean().optional().describe("Replace every match of oldString."),
+            startLine: z.number().int().optional().describe("Instead of oldString: first line to replace (1-based, as page_read / page_grep number them), with endLine."),
             endLine: z.number().int().optional().describe("Last line to replace, inclusive."),
-            afterLine: z
-              .number()
-              .int()
-              .optional()
-              .describe("Instead of oldString: insert newString as new lines after this line (0 = at the top)."),
-            append: z
-              .boolean()
-              .optional()
-              .describe(
-                "Instead of oldString: insert newString before the page's closing </body> (or at its end). Build a large page in parts: page_show the first part, then append the rest one call at a time."
-              ),
+            afterLine: z.number().int().optional().describe("Instead of oldString: insert after this line (0 = top)."),
+            append: z.boolean().optional().describe("Instead of oldString: insert before </body> (or at the end), to build a large page in parts."),
           })
         )
         .min(1)
         .optional()
-        .describe(
-          "Edits to apply in order; each sees the result of the previous one. Each edit has newString and one of: oldString (exact snippet), startLine + endLine (replace those lines), afterLine (insert after it), or append: true. Line numbers count against the page as earlier edits left it, so list line edits bottom to top, and pass expectedRevision from the read you numbered them from. Omit when only changing title or when passing htmlPath. Refused on pages bound to a template."
-        ),
+        .describe("Edits in order, each on the result of the last. Line numbers shift with earlier edits: list line edits bottom to top and pass expectedRevision from the read you numbered them from. Refused on template-bound pages."),
       htmlPath: z
         .string()
         .min(1)
         .optional()
-        .describe(
-          "Local HTML file that replaces the whole page, usually the path returned by page_read toFile: true after you edited it. Keeps title, page state, and events. Mutually exclusive with edits. Does not create a page — for a new page from a file, use page_show htmlPath."
-        ),
-      expectedRevision: z
-        .number()
-        .optional()
-        .describe(
-          "Refuse the change if the page's revision is no longer this one (someone else edited it). Pass the revision from page_read or the previous page_patch."
-        ),
-      title: z
-        .string()
-        .optional()
-        .describe(
-          "Optional new tab title. May be sent without edits to rename a tab, including a template-bound page. Ignored for 24h after the user renamed the page themselves (the result then has titleKept: true)."
-        ),
-      background: z
-        .boolean()
-        .optional()
-        .describe(
-          "If true, do not focus this tab and do not bring the Scribe window forward. Open tab: unread blip on that tab. Closed page: stays closed, unread blip on Library. Omit (default) when the user should look at this tab — that also reopens a closed page in the strip."
-        ),
+        .describe("Local HTML file that replaces the whole page (a page_read toFile checkout you edited), keeping title, state and events. Instead of edits."),
+      expectedRevision: z.number().optional().describe("Refuse the change if the page's revision is no longer this one (from page_read or the last page_patch)."),
+      title: z.string().optional().describe("New tab title; can be sent alone, also for a template-bound page. Ignored for 24h after the user renamed the page (titleKept: true)."),
+      background: z.boolean().optional().describe("Don't focus the tab or bring Scribe forward; the change shows as an unread blip."),
       replyTo: z
-        .object({
-          page: z.string().describe("The page replies go to: its key (scribe:agent-todo) or id."),
-          card: z.number().int().positive().optional().describe("On a Kanban board: the card number the form is about."),
-        })
+        .object({ page: z.string().describe("Page key or id."), card: z.number().int().positive().optional().describe("Kanban card number.") })
         .nullable()
         .optional()
-        .describe(
-          "Where the page's scribe.reply(data, { summary }) goes when the user clicks its submit button. Set it on a form you make for a Kanban card (page: the board, card: its number): the reply is posted on the card as the user's comment and sent on to the card's chat (into its running turn, or Continue). On another page it is a reply event you can page_wait on. Kept with the page, not in its HTML, so the page's code cannot change it; null clears it."
-        ),
+        .describe("Where the page's scribe.reply goes on submit, as in page_show. null clears it."),
     },
     async ({ id, key, edits, htmlPath, expectedRevision, title, background, replyTo }) => {
       const which = id || key;
@@ -1184,7 +1100,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_update",
-    "Change an interactive page's state with ops, without focusing or reopening it. An open page applies them live; an unfocused tab or a closed page shows an unread blip. Ops address items by path, so you send only what changes: merge one card, insert one comment, move one item, set one key. They apply in order, all or nothing (if one fails, nothing changes and the error names it), to the latest state, so you don't need expectedRevision unless your edit depends on a value you read. Replace a whole top-level key with { op: \"set\", path: \"todos\", value: [...] }. When the page's template has actions (its guide lists them), prefer page_action: it applies the page's rules for you. Never write a key the page uses for in-progress typing (by convention, draft). To put a local file into the page's data (an image on a todo item or a card), pass it in assets and write \"asset:<name>\" as the value where its URL belongs.",
+    "Change an interactive page's state with ops, without focusing or reopening it (an unfocused or closed page gets an unread blip). Ops address items by path, so send only what changes. They apply in order, all or nothing, to the latest state. When the page's template has actions, prefer page_action. Never write a key the page uses for in-progress typing (draft). Details: scribe_docs \"Reading and changing page state\".",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes."),
@@ -1193,51 +1109,21 @@ export async function startMcp(): Promise<void> {
           z.object({
             op: z
               .enum(STATE_OP_NAMES)
-              .describe(
-                "set: put value at path (an object key, or replace an array item; path \"\" replaces the whole state). merge: copy value's fields onto the object at path; a null field removes that key. remove: delete the key or array item at path. insert: add value to the array at path (created if missing). move: reposition the array item at path within its array. test: fail the whole write unless the value at path equals value (null matches a missing value)."
-              ),
-            path: z
-              .string()
-              .describe(
-                `"/"-separated. On an object a segment is a key; on an array it picks an item by id ("cards/c_12ab"), by field=value ("cards/num=31"), or by "#<index>". Examples: merge "cards/num=31", insert "cards/num=31/comments", set "nextNum".`
-              ),
+              .describe("set: value at path (path \"\" = whole state). merge: copy value's fields onto the object (null removes a key). remove. insert: into the array at path. move: within its array. test: fail the write unless path equals value (null = missing)."),
+            path: z.string().describe(`"/"-separated keys; on an array, an item by id ("cards/c_12ab"), field=value ("cards/num=31") or "#<index>".`),
             value: z.unknown().optional().describe("For set, merge, insert, test."),
-            before: z
-              .string()
-              .optional()
-              .describe(`For insert and move: place before the first item matching this selector, e.g. "col=col_ab12". No match places at the end.`),
-            after: z.string().optional().describe("For insert and move: place after the item matching this selector. No match places at the end."),
-            at: z
-              .union([z.enum(["start", "end"]), z.number().int().min(0)])
-              .optional()
-              .describe(`For insert and move: "start", "end" (default), or an index.`),
+            before: z.string().optional().describe(`For insert and move: before the first item matching this selector, e.g. "col=col_ab12".`),
+            after: z.string().optional().describe("For insert and move: after the item matching this selector."),
+            at: z.union([z.enum(["start", "end"]), z.number().int().min(0)]).optional().describe(`For insert and move: "start", "end" (default) or an index.`),
           })
         )
         .describe("The changes, applied in order."),
-      expectedRevision: z
-        .number()
-        .optional()
-        .describe("Refuse the write if the page's stateRevision is no longer this one. Only needed when your edit depends on a value you read."),
-      resolveIncompatibility: z
-        .boolean()
-        .optional()
-        .describe(
-          "If true, clear the template incompatibility overlay on this page after you have fixed its state. Only for pages bound to a template."
-        ),
+      expectedRevision: z.number().optional().describe("Refuse the write if stateRevision is no longer this one; only when your edit depends on a value you read."),
+      resolveIncompatibility: z.boolean().optional().describe("Clear a template-bound page's incompatibility overlay once you fixed its state."),
       assets: z
-        .array(
-          z.union([
-            z.string().describe("Absolute or workspace-relative path to a local file."),
-            z.object({
-              path: z.string().describe("Absolute or workspace-relative path to a local file."),
-              name: z.string().optional().describe("Name to use in asset:name. Defaults to the file's basename."),
-            }),
-          ])
-        )
+        .array(z.union([z.string(), z.object({ path: z.string(), name: z.string().optional().describe("Name for asset:name. Default: the file's basename.") })]))
         .optional()
-        .describe(
-          "Local files (images or any other file, 32 MB each) to store as page assets. Write the whole string \"asset:<name>\" as a value in an op wherever the file's URL belongs, e.g. { op: \"insert\", path: \"todos/t_1/images\", value: { id: \"i1\", name: \"photo.png\", data: \"asset:photo.png\" } }; it becomes a /blob/<id> URL the page can use as an img src. Every file must be referenced and every asset:<name> must have a file."
-        ),
+        .describe("Local files (32 MB each) to store as page assets. Write \"asset:<name>\" as an op value where the file's URL belongs; it becomes a /blob/<id> URL. Every file must be referenced."),
     },
     async ({ id, key, ops, expectedRevision, resolveIncompatibility, assets }) => {
       const which = id || key;
@@ -1352,115 +1238,62 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "template_upsert",
-    "Create or update a reusable Scribe template. Only use when the user explicitly asked to create or edit a Scribe template. Built-in templates are read-only: to change one, use a new key (template_get the built-in for its HTML), or update its local copy (localId from template_list) if the user wants that copy changed. Updating a template re-renders every page created from it. Bump stateVersion when the page data shape changes so existing pages show an incompatibility overlay until you fix their state.",
+    "Create or update a reusable Scribe template; only when the user asked for that. Updating one re-renders every page made from it. Built-ins are read-only: upsert under a new key, or update the user's copy by its localId. Read scribe_docs \"templates\" first.",
     {
-      key: z.string().optional().describe("Stable template identity. Reusing the same key updates that template."),
-      title: z.string().describe("Name shown in the Templates sidebar."),
-      description: z.string().optional().describe("Short blurb under the name in the template list."),
-      html: z
-        .string()
-        .describe(
-          "Template HTML. Use {{fieldKey}} for form values (HTML-escaped). Page scripts can also read scribe.template.values."
-        ),
+      key: z.string().optional().describe("Stable template identity; reuse it to update."),
+      title: z.string().describe("Name in the Templates sidebar."),
+      description: z.string().optional().describe("Blurb under the name."),
+      html: z.string().describe("Template HTML; {{fieldKey}} inserts a form value (escaped), scripts read scribe.template.values."),
       fields: z
         .array(
           z.object({
-            key: z.string().describe("Identifier used in {{key}} and scribe.template.values. JS identifier."),
-            label: z.string().describe("Label on the Open / Edit form."),
+            key: z.string().describe("JS identifier, used as {{key}}."),
+            label: z.string(),
             type: z.enum(["text", "textarea", "number", "select", "checkbox"]),
             required: z.boolean().optional(),
             placeholder: z.string().optional(),
             help: z.string().optional(),
             default: z.union([z.string(), z.number(), z.boolean()]).optional(),
-            options: z
-              .array(z.union([z.string(), z.object({ value: z.string(), label: z.string() })]))
-              .optional()
-              .describe("Required for select. Strings are used as both value and label."),
+            options: z.array(z.union([z.string(), z.object({ value: z.string(), label: z.string() })])).optional().describe("Required for select."),
             min: z.number().optional(),
             max: z.number().optional(),
-            maxLength: z
-              .number()
-              .int()
-              .optional()
-              .describe("Character limit for text/textarea values (default 500 / 4000, up to 65536)."),
+            maxLength: z.number().int().optional(),
           })
         )
         .optional()
-        .describe("Form fields the user fills when opening or editing a page from this template."),
-      titleTemplate: z
-        .string()
-        .optional()
-        .describe('Tab title pattern, e.g. "{{title}}". Defaults to a field named title, or the template name.'),
-      initialState: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe("Seeded as scribe.state when a new page is opened from this template."),
-      stateVersion: z
-        .number()
-        .optional()
-        .describe("Integer >= 1. Bump when existing page data will not work with the new HTML."),
-      guide: z
-        .string()
-        .optional()
-        .describe(
-          "Markdown for agents that later work with pages from this template: the state shape, events the page sends, and conventions (how to add an item, which keys to leave alone). Tool results hand it to an agent the first time it touches such a page. Omit to keep the current guide; an empty string removes it."
-        ),
+        .describe("The form the user fills when opening or editing a page."),
+      titleTemplate: z.string().optional().describe('Tab title pattern, e.g. "{{title}}".'),
+      initialState: z.record(z.string(), z.unknown()).optional().describe("scribe.state for a new page."),
+      stateVersion: z.number().optional().describe("Integer >= 1. Bump when existing page data no longer fits the HTML."),
+      guide: z.string().optional().describe("Markdown agent guide for its pages (state shape, events, rules). Omit to keep; \"\" removes."),
       agentActions: z
         .array(
           z.object({
-            id: z.string().describe("Lowercase slug, e.g. summarise. It is the chat's slash command (/summarise)."),
-            label: z.string().describe("Menu and palette label, e.g. Summarise."),
+            id: z.string().describe("Lowercase slug; also the /slash command."),
+            label: z.string(),
             description: z.string().optional(),
-            prompt: z
-              .string()
-              .describe(
-                "The message sent to the agent. Placeholders: {{selection}} (text selected on the page), {{input}} (text typed after the slash command), {{page.title}}, {{page.key}}, and the names in context. {{#selection}}…{{/selection}} keeps its text only when there is a selection (same for the others). The page and its guide are attached for the agent anyway."
-              ),
-            where: z
-              .array(z.enum(["menu", "palette", "slash"]))
-              .optional()
-              .describe("Page right-click menu, Ctrl+P palette while the page is open, chat slash menu. Default: all three."),
-            selection: z.enum(["required", "optional", "none"]).optional().describe("Offer it only with text selected (required), only without (none), or either (default)."),
-            context: z
-              .array(z.string())
-              .optional()
-              .describe(
-                "Placeholders the page supplies for what the user right-clicked, e.g. [\"card\"] for {{card}}. The page sets them with data-scribe-context='{\"card\":\"#12 Fix login\"}' on an element (the nearest one under the cursor wins per name), or passes them to scribe.agent.runAction from its own menu. The action shows only in a right-click menu where all of them are supplied."
-              ),
-            run: z
-              .enum(["new", "chat"])
-              .optional()
-              .describe("new (default): a new thread on the page with the thread settings. chat: sent in the chat at hand, with its settings."),
+            prompt: z.string().describe("Message to the agent; {{selection}}, {{input}}, {{page.title}}, {{page.key}} and context names."),
+            where: z.array(z.enum(["menu", "palette", "slash"])).optional(),
+            selection: z.enum(["required", "optional", "none"]).optional(),
+            context: z.array(z.string()).optional().describe("Placeholders the page supplies for what was right-clicked."),
+            run: z.enum(["new", "chat"]).optional(),
             thread: z
               .object({
-                mode: z.enum(["board", "ask"]).optional().describe("board (Pages, the default) or ask (read-only)."),
+                mode: z.enum(["board", "ask"]).optional(),
                 provider: z.string().optional(),
                 model: z.string().optional(),
                 effort: z.string().optional(),
                 fast: z.boolean().optional(),
                 web: z.enum(["on", "limited", "off"]).optional(),
-                title: z.string().optional().describe("Thread title; placeholders work here too."),
+                title: z.string().optional(),
               })
-              .optional()
-              .describe("Settings for the new thread; unset ones follow the user's defaults."),
+              .optional(),
           })
         )
         .optional()
-        .describe(
-          "Agent prompts the user can run on pages from this template, from the page's right-click menu, the palette, and the chat's slash menu. Omit to keep the current ones; an empty array removes them (a built-in's local copy then uses the built-in's)."
-        ),
-      pin: z
-        .boolean()
-        .optional()
-        .describe(
-          "Whether pages from this template open pinned (default true). Keep it for app-like templates the user returns to (a board, a tracker, a dashboard). Pass false for page-like templates the user makes many of (a note, a document), so those pages close with Clear like ordinary pages. Omit to keep the current setting."
-        ),
-      syncedWithBuiltin: z
-        .boolean()
-        .optional()
-        .describe(
-          "For a built-in's local copy with builtinUpdate: pass true once this upsert brings in the built-in's latest changes (template_get the built-in), to clear the flag."
-        ),
+        .describe("Agent prompts offered on its pages. Omit to keep; [] removes."),
+      pin: z.boolean().optional().describe("Pages open pinned (default true); false for note-like templates. Omit to keep."),
+      syncedWithBuiltin: z.boolean().optional().describe("True when this upsert merges the built-in's latest changes into its copy."),
     },
     async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, agentActions, pin, syncedWithBuiltin }) => {
       const { status, data } = await api("POST", "/api/templates", {
