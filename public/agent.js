@@ -2834,10 +2834,12 @@
       this.focus();
     }
 
-    /** An empty composer for a new thread. Whatever was being written here is kept (see parkComposer). */
-    startDraft(scope, settings = {}) {
+    /** Start a new thread, parking the old composer unless a user action explicitly moves it. */
+    startDraft(scope, settings = {}, moveComposer = false) {
       this.audioComposer?.cancel();
       this.closeHelper();
+      const content = moveComposer ? this.composerContent() : null;
+      if (content) this.emptyComposer();
       this.parkComposer();
       this.pendingFork = null;
       this.archiveOnSend = null;
@@ -2845,6 +2847,7 @@
       this.draft = { scope, settings: { ...settings } };
       this.draftTab = this.variant === "dock" ? activeTab()?.id || null : null;
       this.loadComposer();
+      if (content) this.fillComposer(content);
       this.renderAll();
       if (this.variant === "dock") {
         dock.bindFeed();
@@ -7423,7 +7426,7 @@
           items.push({ label: helperName(h), detail: `Helper · ${threadWhenText(h)}`, search: t.title, sub: true, searchOnly: !must(h) && !latest.includes(h), checked: h.id === currentId, run: () => this.pick(h.id) });
         }
       };
-      items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) setDockPick(tab.id, null); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }); this.renderTitle(); } });
+      items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) setDockPick(tab.id, null); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }, {}, true); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
       for (const t of pageThreads) add(t, threadWhenText(t));
       if (others.length) items.push({ header: "Recent" });
@@ -11335,7 +11338,7 @@
     };
   }
 
-  function newThread(fromView, resetSettings = false) {
+  function newThread(fromView, resetSettings = false, moveComposer = true) {
     const where = fromView ? (fromView.variant === "full" ? "full" : fromView.variant === "dock" ? "dock" : "side") : shortcutChat();
     const view = fromView || (where === "dock" ? dock.view : where === "full" ? full.view : sidebar.view);
     const cur = resetSettings ? null : view.settings();
@@ -11343,7 +11346,7 @@
     const settings = resetSettings ? {} : inheritSettings(view);
     if (where === "dock") {
       if (scope.kind === "page") setDockPick(scope.ref, null);
-      view.startDraft(scope, settings);
+      view.startDraft(scope, settings, moveComposer);
       dock.renderTitle();
     } else if (where === "full") {
       view.startDraft(scope, settings);
@@ -11665,7 +11668,7 @@
       if (!S.dockShown) dock.setShown(true);
       view = dock.view;
     }
-    newThread(view);
+    newThread(view, false, false);
     view.fillComposer({ text });
     setTimeout(() => view.focus(), 70);
   }

@@ -199,3 +199,69 @@ test("the regular new-thread action still inherits the current chat settings", (
   const context = vm.createContext({ full: { renderList() {} }, inheritSettings: () => current, notice() {}, view });
   vm.runInContext(between("  function newThread(fromView", "  async function cycleMode()") + "newThread(view);", context);
 });
+
+test("user-created floating threads move the composer; other layouts and automatic drafts park it", () => {
+  for (const variant of ["dock", "side", "full"]) {
+    for (const userInitiated of [true, false]) {
+      for (const existingThread of [true, false]) {
+        const saved: any[] = [];
+        const S = { composers: new Map() };
+        const context = vm.createContext({
+          S, activeTab: () => ({ id: "page" }), setDockPick() {}, setTimeout() {}, notice() {},
+          dock: { bindFeed() {}, renderTitle() {} }, full: { renderList() {} }, sidebar: { listOpen: false },
+          inheritSettings: (view: any) => view.settings(),
+          syncThreadDraft: (thread: any, content: any) => { thread.draft = content; },
+          saveDraftThread: (_settings: any, content: any) => saved.push(content),
+        });
+        const view = vm.runInContext(`new (class {
+          ${between("    startDraft(scope", "    /** Hand this chat")}
+          ${between("    composerContent()", "    visible()")}
+        })()`, context);
+        const scope = { kind: "page", ref: "page" };
+        const thread = { id: "old", draft: { text: "saved copy" } };
+        Object.assign(view, {
+          variant, threadId: existingThread ? thread.id : null, draft: { scope, settings: {} },
+          input: { value: "Unsent text" }, mentions: [{ kind: "page", id: "mentioned" }],
+          attachments: [{ name: "notes.txt", preview: "blob:preview" }],
+          settings: () => ({ scope }), thread: () => view.threadId ? thread : null,
+          closeHelper() {}, autosize() {}, renderContext() {}, renderAll() {},
+        });
+        const content = view.composerContent();
+        context.view = view;
+        if (userInitiated) {
+          vm.runInContext(between("  function newThread(fromView", "  async function cycleMode()") + "newThread(view);", context);
+        } else {
+          view.startDraft(scope);
+        }
+        const moved = variant === "dock" && userInitiated;
+        assert.equal(view.input.value, moved ? "Unsent text" : "");
+        assert.equal(view.attachments.length, moved ? 1 : 0);
+        assert.equal(view.mentions.length, moved ? 1 : 0);
+        if (moved) assert.equal(view.attachments, content.attachments);
+        if (existingThread) {
+          assert.deepEqual(thread.draft, moved ? null : content);
+          assert.deepEqual(S.composers.get("old"), moved ? undefined : content);
+        } else {
+          assert.equal(saved.length, moved ? 0 : 1);
+          if (!moved) assert.deepEqual(saved[0], content);
+        }
+      }
+    }
+  }
+});
+
+test("the floating thread menu explicitly moves the composer", () => {
+  let items: any[] = [];
+  let args: any[] = [];
+  const menu = source.slice(source.lastIndexOf("    threadMenu(anchor) {"), source.indexOf("    pick(id) {", source.lastIndexOf("    threadMenu(anchor) {")));
+  const dock = vm.runInNewContext(`({${menu}})`, {
+    S: { threads: new Map() }, activeTab: () => ({ id: "page" }),
+    hiddenWorkspaceKeys: () => new Set(), setDockPick() {},
+    openMenu: (_anchor: any, entries: any[]) => { items = entries; },
+  });
+  dock.view = { startDraft: (...values: any[]) => { args = values; } };
+  dock.renderTitle = () => {};
+  dock.threadMenu({});
+  items.find((item) => item.label === "New thread").run();
+  assert.equal(args[2], true);
+});
