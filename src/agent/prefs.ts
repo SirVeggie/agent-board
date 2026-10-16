@@ -75,8 +75,8 @@ export type Prefs = {
   worktrees: Record<string, boolean>;
   /** Main utility agent (palette AI search); retains the original setting key and saved choice. */
   summarizer: { provider: ProviderId; model: string };
-  /** Fork summary model per destination provider. Null or absent uses the destination thread's model. */
-  forkSummarizers: Partial<Record<ProviderId, string | null>>;
+  /** Summary choice per chat provider. Legacy strings refer to that provider; null uses the chat model. */
+  forkSummarizers: Partial<Record<ProviderId, string | { provider: ProviderId; model: string } | null>>;
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -119,12 +119,19 @@ export function seedForkSummarizers(saved: Partial<Prefs>): Prefs["forkSummarize
 export function cleanForkSummarizers(value: unknown): Prefs["forkSummarizers"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).filter(([provider, model]) =>
-    ["claude", "codex", "cursor", "pi"].includes(provider) && (model === null || (typeof model === "string" && model.trim().length > 0))
+    ["claude", "codex", "cursor", "pi"].includes(provider) && (model === null || (typeof model === "string" && model.trim().length > 0) ||
+      (typeof model === "object" && model !== null && "provider" in model && "model" in model &&
+        ["claude", "codex", "cursor", "pi"].includes(String(model.provider)) && typeof model.model === "string" && model.model.trim().length > 0))
   ));
 }
 
 export function forkSummaryModel(prefs: Prefs, thread: Pick<Thread, "provider" | "model">): string {
-  return prefs.forkSummarizers[thread.provider] || thread.model;
+  return summaryChoice(prefs, thread).model;
+}
+
+export function summaryChoice(prefs: Prefs, thread: Pick<Thread, "provider" | "model">): { provider: ProviderId; model: string } {
+  const choice = prefs.forkSummarizers[thread.provider];
+  return typeof choice === "object" && choice ? choice : { provider: thread.provider, model: choice || thread.model };
 }
 
 /** Ignore malformed or obsolete mode ids in saved preferences and API patches. */

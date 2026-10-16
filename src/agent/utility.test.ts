@@ -31,13 +31,21 @@ test("utility completion keeps the saved primary choice", async () => {
   assert.deepEqual(calls, [{ provider: "pi", model: "main" }]);
 });
 
+test("regular summaries dispatch cross-provider choices from Summary models", async () => {
+  const { host, calls } = fixture();
+  host.prefs = () => ({ ...DEFAULT_PREFS, summarizer: { provider: "codex", model: "large" },
+    forkSummarizers: { codex: { provider: "pi", model: "local-summary" } } });
+  await host.summarize("Summarize this");
+  assert.deepEqual(calls, [{ provider: "pi", model: "local-summary" }]);
+});
+
 test("usage failures follow Cursor, Claude, Codex, Native with summary models", async () => {
   const { host, calls } = fixture({ primary: "cursor", failures: {
     cursor: new Error("Out of usage"), claude: new Error("Usage limit reached"), codex: new Error("429 rate limit"),
   } });
   await host.summarize("Question");
   assert.deepEqual(calls, [
-    { provider: "cursor", model: "main" }, { provider: "claude", model: "haiku" },
+    { provider: "cursor", model: "cursor-small" }, { provider: "claude", model: "haiku" },
     { provider: "codex", model: "mini" }, { provider: "pi", model: "native-chat" },
   ]);
 });

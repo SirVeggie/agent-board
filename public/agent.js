@@ -8322,7 +8322,7 @@
     const head = el("h3", "ag-help-head", text);
     const b = el("button", "ag-help");
     b.type = "button";
-    b.append(icon("question"));
+    b.textContent = "?";
     b.setAttribute("aria-label", `About ${text}`);
     b.setAttribute("aria-description", help);
     bindHoverTip(b, () => noteTip(help), { delay: 0, start: true });
@@ -9435,9 +9435,9 @@
 
       const helpers = el("section", "settings-section");
       const helpersOn = switchControl(
-        () => Boolean(prefs().helpers),
+        () => prefs().helpers !== false,
         () => {
-          const on = !prefs().helpers;
+          const on = prefs().helpers === false;
           S.config.prefs = { ...prefs(), helpers: on };
           api("PUT", "/prefs", { helpers: on })
             .then((next) => {
@@ -9458,7 +9458,7 @@
         })
       );
       const forkSummaries = el("section", "settings-section");
-      forkSummaries.append(helpHeading("Summaries for forks", "A fork starting a fresh session carries the earlier thread's first and last messages and a summary of the rest. The destination provider writes that summary."));
+      forkSummaries.append(helpHeading("Summary models", "Choose a model for summaries written by Scribe, including forks. Provider-managed context compaction uses the provider's own model."));
       this.forkSummaryRows = el("div");
       forkSummaries.append(this.forkSummaryRows);
       this.forkSummarizers = new Map();
@@ -9837,24 +9837,28 @@
     forkSummarizerButton(provider) {
       const b = el("button", "ag-pill ag-summarizer");
       b.type = "button";
-      b.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} fork summary model`);
+      b.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} summary model`);
       this.forkSummarizers.set(provider, b);
       b.addEventListener("click", () => {
-        const cur = prefs().forkSummarizers?.[provider] || null;
+        const saved = prefs().forkSummarizers?.[provider];
+        const cur = typeof saved === "string" ? { provider, model: saved } : saved;
         const save = async (model) => {
           try {
             S.config.prefs = await api("PUT", "/prefs", { forkSummarizers: { [provider]: model } });
             this.renderSummarizer();
           } catch (err) { notice(err.message); }
         };
-        const items = [{ label: "Use destination thread's model", checked: !cur, run: () => save(null) }];
-        items.push(...modelMenuItems(provider, modelsOf(provider), (m) => ({
-          label: m.label,
-          detail: m.id !== m.label ? m.id : m.description,
-          search: m.id,
-          checked: cur === m.id,
-          run: () => save(m.id),
-        })));
+        const items = [{ label: "Use chat's model", checked: !cur, run: () => save(null) }];
+        for (const source of [provider, ...PROVIDERS.filter(p => p !== provider && providerAvailable(p))]) {
+          items.push({ header: PROVIDER_LABEL[source] || source });
+          items.push(...modelMenuItems(source, modelsOf(source), (m) => ({
+            label: m.label,
+            detail: m.id !== m.label ? m.id : m.description,
+            search: `${source} ${m.id}`,
+            checked: cur?.provider === source && cur?.model === m.id,
+            run: () => save({ provider: source, model: m.id }),
+          })));
+        }
         openMenu(b, items, { search: true, width: 300, placeholder: "Search models" });
       });
       return b;
@@ -9903,14 +9907,15 @@
           const b = this.forkSummarizers.get(provider) || this.forkSummarizerButton(provider);
           const row = b.closest(".setting-row") || settingRow(PROVIDER_LABEL[provider] || provider, b, {
             id: `ag-fork-summarizer-${provider}-label`,
-            hint: "Choose a summary model from this provider, or use the destination thread's model. This applies when the fork cannot continue the original provider session.",
+            hint: "Choose a model for summaries of chats using this provider, or use the chat's own model.",
           });
           this.forkSummaryRows.append(row);
         }
       }
       for (const [provider, b] of this.forkSummarizers || []) {
-        const model = prefs().forkSummarizers?.[provider];
-        b.replaceChildren(providerIcon(provider), el("span", null, model ? modelInfo(provider, model)?.label || model : "Use destination thread's model"));
+        const saved = prefs().forkSummarizers?.[provider];
+        const choice = typeof saved === "string" ? { provider, model: saved } : saved;
+        b.replaceChildren(providerIcon(choice?.provider || provider), el("span", null, choice ? modelInfo(choice.provider, choice.model)?.label || choice.model : "Use chat's model"));
       }
       if (!this.summarizer) return;
       const cur = prefs()?.summarizer;
@@ -11079,7 +11084,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

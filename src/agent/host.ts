@@ -56,7 +56,7 @@ import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverMode
 import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
-import { cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, forkSummaryModel, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
+import { cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
 import { cleanCustomModes, modeKeepsServer, modeOff, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -4758,19 +4758,18 @@ export class AgentHost {
   }
 
   private summarizerLabel(thread: Thread): string {
-    const provider = thread.provider;
-    const model = forkSummaryModel(this.prefs(), thread);
+    const { provider, model } = summaryChoice(this.prefs(), thread);
     const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
     return `${label} (${this.providers[provider].label})`;
   }
 
-  /** Utility completion, falling back to providers' fork-summary models when usage runs out. */
+  /** Utility completion uses the shared summary choices, falling back when usage runs out. */
   async summarize(prompt: string, signal?: AbortSignal): Promise<{ text: string; model: string }> {
     const prefs = this.prefs();
-    const primary = prefs.summarizer;
+    const primary = summaryChoice(prefs, prefs.summarizer);
     const choices = [primary, ...(["cursor", "claude", "codex", "pi"] as const)
       .filter((provider) => provider !== primary.provider)
-      .map((provider) => ({ provider, model: forkSummaryModel(prefs, { provider, model: prefs.models[provider] || "default" }) }))];
+      .map((provider) => summaryChoice(prefs, { provider, model: prefs.models[provider] || "default" }))];
     let lastError: unknown = new Error("No utility agent is available.");
     for (const { provider, model } of choices) {
       signal?.throwIfAborted();
@@ -4824,8 +4823,7 @@ export class AgentHost {
     const material = this.db.getSetting<ForkMaterial | null>(`fork:${threadId}`, null);
     if (!material) return "";
     if (material.middle && !material.summary) {
-      const provider = thread.provider;
-      const model = forkSummaryModel(this.prefs(), thread);
+      const { provider, model } = summaryChoice(this.prefs(), thread);
       const label = this.summarizerLabel(thread);
       const notice = this.addItem(threadId, run.turn.id, { kind: "notice", level: "info", text: `Summarizing “${fork.title}” with ${label}…` });
       run.abort = new AbortController();

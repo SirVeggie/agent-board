@@ -71,3 +71,9 @@ test("legacy summary choices migrate only to their own destination provider", ()
   assert.deepEqual(seedForkSummarizers({ summarizer: DEFAULT_PREFS.summarizer, forkSummarizers: { claude: null } }), { claude: null });
   assert.deepEqual(cleanForkSummarizers({ codex: "mini", cursor: null, pi: 12, claude: "", unknown: "x" }), { codex: "mini", cursor: null });
 });
+
+test("summary choices retain cross-provider selections and reject invalid providers", () => {
+  const choice = { provider: "pi" as const, model: "src-local/small" };
+  assert.deepEqual(cleanForkSummarizers({ codex: choice, claude: { provider: "unknown", model: "x" } }), { codex: choice });
+  assert.equal(forkSummaryModel({ ...DEFAULT_PREFS, forkSummarizers: { codex: choice } }, { provider: "codex", model: "large" }), choice.model);
+});
