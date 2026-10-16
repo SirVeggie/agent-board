@@ -486,7 +486,8 @@
     }
     if (embed !== embedFocus) {
       embedFocus = embed;
-      invoke("key_focus", { embed }).catch(console.error);
+      // Shells older than key_focus catch every shortcut natively, as before.
+      invoke("key_focus", { embed }).catch(() => {});
     }
   }
   addEventListener("focusin", reportFocus);
