@@ -146,10 +146,15 @@
 
   function tiles(list) {
     const row = el("div", "hx-tiles");
-    for (const [label, value, note] of list) {
+    for (const [label, value, note, tip] of list) {
       const tile = el("div", "hx-tile");
       tile.append(el("span", "hx-tile-label", label), el("strong", "hx-tile-value", value));
       if (note) tile.append(el("span", "hx-tile-note", note));
+      if (tip) {
+        tile.dataset.tooltip = tip;
+        tile.setAttribute("aria-description", tip);
+        tile.tabIndex = 0;
+      }
       row.append(tile);
     }
     return row;
@@ -237,12 +242,16 @@
     return S.days ? `the last ${S.days} days` : "all stored threads";
   }
 
+  function costStatus(u) {
+    if (!u.pricedTurns) return "Unknown";
+    return u.costPartial || u.unpricedTurns ? "Partial" : u.estimatedCostUsd === u.costUsd && u.reportedCostUsd === undefined ? "Estimated" : u.reportedCostUsd === u.costUsd && u.estimatedCostUsd === undefined ? "Provider-reported" : "Recorded";
+  }
+
   function costText(cost) {
     if (typeof cost === "object" && cost) {
       const u = cost;
       if (!u.pricedTurns) return "Unknown";
-      const origin = u.costPartial || u.unpricedTurns ? "Partial " : u.estimatedCostUsd === u.costUsd && u.reportedCostUsd === undefined ? "Estimated " : u.reportedCostUsd === u.costUsd && u.estimatedCostUsd === undefined ? "Provider-reported " : "Recorded ";
-      return origin + costText(u.costUsd) + (u.unpricedTurns ? ` · ${count(u.unpricedTurns)} unpriced ${u.unpricedTurns === 1 ? "turn" : "turns"}` : "");
+      return `${costStatus(u)} ${costText(u.costUsd)}` + (u.unpricedTurns ? ` · ${count(u.unpricedTurns)} unpriced ${u.unpricedTurns === 1 ? "turn" : "turns"}` : "");
     }
     if (cost > 0 && cost < 0.0001) return "<$0.0001";
     return typeof cost === "number" ? `$${cost.toFixed(cost < 0.01 ? 4 : cost < 0.1 ? 3 : 2)}` : "–";
@@ -261,7 +270,7 @@
         ["Sent to models", tokens(t.prompt), `${pct(t.cached, t.prompt)} read from cache`],
         ["Written by models", tokens(t.output), t.reasoning ? `${tokens(t.reasoning)} reasoning` : ""],
         ["Tool calls", count(t.toolCalls), `${(t.toolCalls / Math.max(1, t.turns)).toFixed(1)} a turn · ${pct(t.toolErrors, t.toolCalls)} failed`],
-        ["Cost", costText(t), `${t.unpricedTurns || 0} unpriced turns · estimated ${costText(t.estimatedCostUsd)} · provider-reported ${costText(t.reportedCostUsd)}`],
+        ["Cost", t.pricedTurns ? costText(t.costUsd) : "Unknown", t.pricedTurns ? costStatus(t) : "", `${costText(t)}\n${count(t.unpricedTurns)} unpriced turns\nEstimated: ${costText(t.estimatedCostUsd)}\nProvider-reported: ${costText(t.reportedCostUsd)}`],
       ])
     );
 
