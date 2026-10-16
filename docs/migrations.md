@@ -29,6 +29,16 @@
 - **How to verify:** `a page's reply target is set by agents, persists, …` in `src/store.test.ts`; the reply tests at the end of `src/actions/kanban.test.ts`.
 - **When to remove:** Keep. This is the current schema.
 
+## Kanban workers: the daemon picks the next card (page state, no schema change)
+
+- **What changed:** The daemon now runs Kanban workers end to end (#312): the Kanban action set's `drive` hook wraps up a worker's chat once its run ended (blocks unfinished cards, pauses the worker), and starts its next ready card (`AgentHost.launchPageThread`), whether or not a window shows the board. The built-in board only shows workers and takes clicks: its run switch calls `scribe.agent.allow` and the new `worker_start` action.
+- **Affected data:** None new. The daemon writes the same worker fields the page did (`threadId`, `run`, `step`, `merge`, `fails`, `mergeCards`, `solo`) and the same `settings.workerLog` lines.
+- **Transform:** None. Board copies with older saved HTML keep their own loop; they and the daemon share the step lease (`settings.workers[id].step`, taken by `worker_step`), so only one of them starts each card. Starting chats without a click needs the page's `agent.unattended` permission (and the worker's folder): when it is missing, the worker pauses and says so, and ▶ asks for it.
+- **Protocol:** additive bridge call `scribe.agent.allow`, action `worker_start`, agent event `agent_page_show`; `VERSION` stays `3.0.0`.
+- **Where:** `src/actions/kanbanWorkers.ts`, `src/actions/kanban.ts` (`drive`, `launched`, `worker_start`), `src/store.ts` (`driveActions`, `mayStartAgent`), `src/http.ts` (`scheduleSweep`), `src/agent/host.ts` (`launchPageThread`), `templates/builtin/kanban.html` (`launchWorker`), `public/agent.js` (`allow`).
+- **How to verify:** `src/actions/kanbanWorkers.test.ts`.
+- **When to remove:** `worker_step` / `worker_solo_step` once no edited board copies predate this.
+
 ## Kanban workers: chats handed to Scribe as runs (`agent.sqlite` setting, page state, no schema change)
 
 - **What changed:** The daemon now owns the lifecycle of worker chats (#285): plan-limit waits and resumes, worktree merges, and merge-fix requests (`src/agent/pageRuns.ts`). The Kanban template hands each chat over with `scribe.agent.start({ run })` / `scribe.agent.watch()` and only acts on the run's outcome. Runs are kept in the `pageRuns` setting of `agent.sqlite`.
