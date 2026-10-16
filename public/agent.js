@@ -523,6 +523,7 @@
     try {
       const data = await api("GET", "/threads");
       S.threads = new Map(data.threads.map((t) => [t.id, t]));
+      invalidateMessageSearch(); // Reconnects may have missed message events.
     } catch {
       return;
     }
@@ -592,6 +593,16 @@
   });
 
   function onEvent(msg) {
+    // Search includes unloaded threads too; handle changes before detail-cache early returns.
+    if (msg.type === "agent_item") {
+      const prev = S.details.get(msg.item.threadId)?.byId.get(msg.item.id);
+      if (!prev || searchableMessageText(prev) !== searchableMessageText(msg.item) || prev.seq !== msg.item.seq) invalidateMessageSearch();
+    } else if (msg.type === "agent_delta") {
+      const item = S.details.get(msg.threadId)?.byId.get(msg.itemId);
+      if (msg.append && (!item || searchableMessageText(item) !== null)) invalidateMessageSearch();
+    } else if (msg.type === "agent_item_deleted" || msg.type === "agent_thread_deleted") {
+      invalidateMessageSearch();
+    }
     switch (msg.type) {
       case "agent_thread": {
         const prev = S.threads.get(msg.thread.id);
@@ -1080,29 +1091,59 @@
   }
 
   /** What the daemon found in threads' messages, by query. The list itself only knows titles. */
-  const messageSearch = { cache: new Map(), last: new Map(), timer: 0, cancel: null };
+  const messageSearch = { cache: new Map(), last: new Map(), timer: 0, cancel: null, generation: 0, refreshTimer: 0 };
+
+  /** Match the searchable-text exclusions in src/agent/db.ts. */
+  function searchableMessageText(item) {
+    return (item.kind === "user" || item.kind === "text") && !item.dropped && item.parentToolId == null ? item.text ?? "" : null;
+  }
+
+  function cancelMessageSearch() {
+    ++messageSearch.generation;
+    clearTimeout(messageSearch.timer);
+    messageSearch.cancel?.();
+    messageSearch.cancel = null;
+  }
+
+  function invalidateMessageSearch() {
+    cancelMessageSearch();
+    messageSearch.cache.clear();
+    messageSearch.last = new Map();
+    // Coalesce streaming changes; refresh visible searches after the burst settles.
+    clearTimeout(messageSearch.refreshTimer);
+    messageSearch.refreshTimer = setTimeout(() => {
+      renderLists();
+      if (S.search) void searchMessages(S.search).then((fresh) => fresh && renderLists());
+      window.dispatchEvent(new CustomEvent("scribe:thread-search-invalidated"));
+    }, 180);
+  }
 
   /** Ask the daemon which threads' messages mention the words. Resolves true when there are new hits to show. */
   function searchMessages(q) {
     const key = searchWords(q).join(" ");
-    clearTimeout(messageSearch.timer);
-    messageSearch.cancel?.();
-    messageSearch.cancel = null;
+    cancelMessageSearch();
+    const generation = messageSearch.generation;
     const had = messageSearch.cache.get(key);
-    if (!key || (had && Date.now() - had.at < 30_000)) return Promise.resolve(false);
+    if (!key) return Promise.resolve(false);
+    if (had && Date.now() - had.at < 30_000) {
+      messageSearch.last = had.hits;
+      return Promise.resolve(false);
+    }
     return new Promise((resolve) => {
       messageSearch.cancel = () => resolve(false);
       messageSearch.timer = setTimeout(async () => {
-        messageSearch.cancel = null;
         try {
           const data = await api("GET", `/thread-search?q=${encodeURIComponent(key)}`);
+          if (generation !== messageSearch.generation) return resolve(false);
           const hits = new Map((data.hits || []).map((hit) => [hit.id, hit]));
           messageSearch.cache.delete(key);
           messageSearch.cache.set(key, { at: Date.now(), hits });
           if (messageSearch.cache.size > 8) messageSearch.cache.delete(messageSearch.cache.keys().next().value);
           messageSearch.last = hits;
+          messageSearch.cancel = null;
           resolve(true);
         } catch {
+          if (generation === messageSearch.generation) messageSearch.cancel = null;
           resolve(false);
         }
       }, 180);

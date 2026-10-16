@@ -4577,6 +4577,10 @@
     applyPaletteHits(window.scribeChat.searchThreads(query));
   }
 
+  window.addEventListener("scribe:thread-search-invalidated", () => {
+    if (isPaletteOpen() && paletteQuery().id === "threads") void runThreadPaletteSearch(paletteQuery().query);
+  });
+
   async function runPaletteSearch() {
     const parsed = paletteQuery();
     updatePaletteChrome(parsed);
