@@ -2540,6 +2540,8 @@
       this.dirtyAll = false;
       this.raf = 0;
       this.mdTimers = new Map();
+      /** Built transcript steps by item id: { sig, node }. A step whose sig is unchanged is kept as it is (#431). */
+      this.itemNodes = new Map();
       /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
       this.attachments = [];
       /** The page tab the floating chat's draft belongs to (it follows the active page). */
@@ -3274,6 +3276,7 @@
       const id = this.threadId;
       const keepPlace = this.transcriptThreadId === id && this.transcriptHadContent && !this.stick;
       const savedTop = keepPlace ? this.scroll.scrollTop : 0;
+      this.itemNodes.clear();
       this.transcript.replaceChildren();
       this.queueList.replaceChildren();
       this.queueShown = true;
@@ -3312,6 +3315,8 @@
       for (const group of this.groups(detail)) {
         this.groupHost(group.key).append(this.renderGroup(group));
       }
+      this.adoptItemNodes(this.transcript);
+      this.adoptItemNodes(this.queueList);
       this.markLatest();
       this.measureUserMessages();
       this.updateQueueDock();
@@ -3433,7 +3438,7 @@
       let explore = [];
       const flush = () => {
         if (!explore.length) return;
-        put(explore.length === 1 ? this.renderTool(explore[0], byParent) : this.renderExplore(explore, byParent));
+        put(explore.length === 1 ? this.itemNode(explore[0], byParent, group.key, () => this.renderTool(explore[0], byParent)) : this.renderExplore(explore, byParent, group.key));
         explore = [];
       };
       for (const it of rest) {
@@ -3445,7 +3450,7 @@
           continue;
         }
         flush();
-        const node = this.renderItem(it, byParent, group.turn);
+        const node = this.itemNode(it, byParent, group.key, () => this.renderItem(it, byParent, group.turn));
         if (node) {
           if (it.kind === "text" && it !== lastAnswer) node.classList.add("ag-answer-earlier");
           put(node);
@@ -3469,6 +3474,33 @@
       if (body.childElementCount) wrap.append(body);
       if (group.turn) wrap.append(this.renderTurnFooter(group.turn, group.items));
       return wrap;
+    }
+
+    /**
+     * A step for a turn being drawn again: a stand-in for the node already in the page when nothing it shows
+     * changed (scribeKeep), so the step keeps its hover, selection, animations and what was typed in it.
+     */
+    itemNode(it, byParent, groupKey, build) {
+      // Helper calls also show their helper's thread, and a message its place in the queue.
+      if (it.kind === "user" || (it.kind === "tool" && helperCall(it))) return build();
+      const sig = itemSig(it, byParent);
+      const had = this.itemNodes.get(it.id);
+      if (had?.sig === sig && had.node.isConnected && had.node.closest(".ag-turn")?.dataset.turn === groupKey && this.root.contains(had.node)) {
+        const stub = window.scribeKeep(had.node);
+        stub.classList.remove(...PLACE_CLASSES);
+        return stub;
+      }
+      const node = build();
+      if (node) this.itemNodes.set(it.id, { sig, node });
+      return node;
+    }
+
+    /** After a turn is drawn: the cache points at the steps in the page, which may be earlier copies dom-sync kept. */
+    adoptItemNodes(root) {
+      for (const node of root.querySelectorAll("[data-item-id]")) {
+        const had = this.itemNodes.get(node.dataset.itemId);
+        if (had) had.node = node;
+      }
     }
 
     /** "Read 2 files · edited agent.css +8 −6 · 6s" for a turn whose steps are folded away. */
@@ -3791,16 +3823,19 @@
       node.dataset.itemId = it.id;
       const head = button("", "ag-reason-head", () => {
         this.toggle(key, node);
+        if (node.classList.contains("open")) fillLazy(node);
       });
       const secs = it.endedAt && it.endedAt - it.startedAt >= 1000 ? R.duration(it.endedAt - it.startedAt) : "";
       head.append(icon("think"), el("span", "ag-reason-label", running ? "Thinking" : `Thought${secs ? ` for ${secs}` : ""}`), el("span", "ag-reason-preview", lastLine(it.text)), ...[hookFlags(it)].filter(Boolean), icon("chevron", "ag-ico ag-chev"));
       const body = el("div", "ag-reason-body ag-md");
-      R.renderMarkdown(body, it.text, mdCtx);
+      const fill = () => R.renderMarkdown(body, it.text, mdCtx);
+      if (isOpen) fill();
+      else lazyBodies.set(node, fill);
       node.append(head, body);
       return node;
     }
 
-    renderExplore(items, byParent) {
+    renderExplore(items, byParent, groupKey) {
       const key = `g:${items[0].id}`;
       const running = items.some((it) => it.status === "running" || it.status === "pending");
       const node = el("div", `ag-group${this.expanded.has(key) ? " open" : ""}${running ? " live" : ""}`);
@@ -3821,7 +3856,7 @@
         icon("chevron", "ag-ico ag-chev")
       );
       const body = el("div", "ag-group-body");
-      for (const it of items) body.append(this.renderTool(it, byParent));
+      for (const it of items) body.append(this.itemNode(it, byParent, groupKey, () => this.renderTool(it, byParent)));
       node.append(head, body);
       return node;
     }
@@ -3831,9 +3866,13 @@
       if (helper) return this.renderHelperCall(it, helper);
       const key = `t:${it.id}`;
       const task = it.task;
-      const node = el("div", `ag-tool k-${it.tool} s-${it.status}${task ? ` has-task ts-${task.status}` : ""}${this.expanded.has(key) ? " open" : ""}`);
+      const open = this.expanded.has(key);
+      const node = el("div", `ag-tool k-${it.tool} s-${it.status}${task ? ` has-task ts-${task.status}` : ""}${open ? " open" : ""}`);
       node.dataset.itemId = it.id;
-      const head = button("", "ag-tool-head", () => this.toggle(key, node));
+      const head = button("", "ag-tool-head", () => {
+        this.toggle(key, node);
+        if (node.classList.contains("open")) fillLazy(node);
+      });
       // A task outlives its tool call: a background agent is still working after the call returned.
       const busy = task ? task.status === "running" : it.status === "running" || it.status === "pending";
       const failed = task ? task.status === "error" : it.status === "error";
@@ -3875,49 +3914,54 @@
       head.append(icon("chevron", "ag-ico ag-chev"));
       node.append(head);
       if (task) node.append(this.renderTaskLine(it));
-      const body = el("div", "ag-tool-body");
-      if (page) {
-        this.pageToolBody(body, it, page);
-      } else if (it.tool === "execute") {
-        if (it.detail && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
-        // The head cuts the command to one line; the body has all of it.
-        if (it.detail) body.append(el("pre", "ag-pre small ag-cmd-full", it.detail));
-      } else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
-      if (it.diff) {
-        const files = R.parsePatch(it.diff);
-        for (const f of files) {
-          const fh = el("div", "ag-inline-diff-head");
-          fh.append(el("span", "ag-fpath", f.path), R.counts(f.added, f.removed), button("Open", "ag-btn tiny", () => openDiff({ kind: "turn", threadId: it.threadId, turnId: it.turnId, path: f.path })));
-          body.append(fh, R.renderDiffFile(f, { collapsedAfter: 160 }));
-        }
-      } else if (it.tool === "task" && typeof it.input?.prompt === "string") {
-        // The brief the agent gave its subagent, readable rather than as JSON.
-        const brief = el("div", "ag-task-brief");
-        brief.append(el("div", "ag-task-brief-label", it.input.subagent_type ? `Brief for ${it.input.subagent_type}` : "Brief"));
-        const md = el("div", "ag-md small");
-        R.renderMarkdown(md, it.input.prompt, mdCtx);
-        brief.append(md);
-        body.append(brief);
-      } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) {
-        body.append(el("pre", "ag-pre small", jsonText(it.input)));
-      }
-      // A background task's tool result is only the launch receipt; its outcome is on the task line.
-      if (it.output && it.tool !== "read" && !task?.background && !page) {
-        const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
-        body.append(out);
-      }
       const children = byParent.get(it.toolId);
-      if (children?.length) {
-        const sub = el("div", "ag-subtools");
-        for (const child of children) {
-          const n = child.kind === "tool" ? this.renderTool(child, byParent) : this.renderItem(child, byParent);
-          if (n) sub.append(n);
+      const steps = children ? children.filter((c) => c.kind === "tool").length : 0;
+      if (steps) label.append(el("span", "ag-muted", ` · ${steps} ${steps === 1 ? "step" : "steps"}`));
+      const body = el("div", "ag-tool-body");
+      const fill = () => {
+        if (page) {
+          this.pageToolBody(body, it, page);
+        } else if (it.tool === "execute") {
+          if (it.detail && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
+          // The head cuts the command to one line; the body has all of it.
+          if (it.detail) body.append(el("pre", "ag-pre small ag-cmd-full", it.detail));
+        } else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
+        if (it.diff) {
+          const files = R.parsePatch(it.diff);
+          for (const f of files) {
+            const fh = el("div", "ag-inline-diff-head");
+            fh.append(el("span", "ag-fpath", f.path), R.counts(f.added, f.removed), button("Open", "ag-btn tiny", () => openDiff({ kind: "turn", threadId: it.threadId, turnId: it.turnId, path: f.path })));
+            body.append(fh, R.renderDiffFile(f, { collapsedAfter: 160 }));
+          }
+        } else if (it.tool === "task" && typeof it.input?.prompt === "string") {
+          // The brief the agent gave its subagent, readable rather than as JSON.
+          const brief = el("div", "ag-task-brief");
+          brief.append(el("div", "ag-task-brief-label", it.input.subagent_type ? `Brief for ${it.input.subagent_type}` : "Brief"));
+          const md = el("div", "ag-md small");
+          R.renderMarkdown(md, it.input.prompt, mdCtx);
+          brief.append(md);
+          body.append(brief);
+        } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) {
+          body.append(el("pre", "ag-pre small", jsonText(it.input)));
         }
-        body.append(sub);
-        const steps = children.filter((c) => c.kind === "tool").length;
-        if (steps) head.querySelector(".ag-tool-label")?.append(el("span", "ag-muted", ` · ${steps} ${steps === 1 ? "step" : "steps"}`));
-      }
-      if (body.childElementCount) node.append(body);
+        // A background task's tool result is only the launch receipt; its outcome is on the task line.
+        if (it.output && it.tool !== "read" && !task?.background && !page) {
+          const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
+          body.append(out);
+        }
+        if (children?.length) {
+          const sub = el("div", "ag-subtools");
+          for (const child of children) {
+            const n = child.kind === "tool" ? this.renderTool(child, byParent) : this.renderItem(child, byParent);
+            if (n) sub.append(n);
+          }
+          body.append(sub);
+        }
+      };
+      // A collapsed step builds its body (diffs, briefs, output) the first time it is opened.
+      if (open || page) fill();
+      else if (toolHasBody(it, children)) lazyBodies.set(node, fill);
+      if (body.childElementCount || lazyBodies.has(node)) node.append(body);
       else node.classList.add("bare");
       return node;
     }
@@ -4244,6 +4288,7 @@
       const node = el("div", `ag-card ag-approval s-${it.status}`);
       node.dataset.itemId = it.id;
       if (it.status !== "pending") {
+        cardNotes.delete(`approval:${it.id}`);
         const opt = it.options.find((o) => o.id === it.decision);
         const allowed = opt ? opt.kind.startsWith("allow") : false;
         node.classList.add("done");
@@ -4255,7 +4300,7 @@
       head.append(icon("shield"), el("span", "ag-card-title", it.title));
       node.append(head);
       if (it.detail) node.append(el("pre", "ag-pre small", it.detail));
-      const note = el("input", "ag-input small");
+      const note = keepNote(el("input", "ag-input small"), `approval:${it.id}`);
       note.placeholder = "Note for the agent (optional, sent with Deny)";
       const actions = el("div", "ag-card-actions");
       for (const opt of it.options) {
@@ -4371,6 +4416,7 @@
       pageLink.addEventListener("click", onOpen);
       pageLink.addEventListener("auxclick", onOpen);
       if (it.status !== "pending") {
+        cardNotes.delete(`ask:${it.id}`);
         node.classList.add("done");
         const answered = it.status === "answered";
         const text = answered ? "Answered on " : it.status === "skipped" ? "Skipped · " : "Not answered · ";
@@ -4385,7 +4431,7 @@
       const body = el("div", "ag-q-prompt");
       body.append("Answer on ", pageLink, ". The agent carries on when you submit it.");
       node.append(body);
-      const note = el("input", "ag-input small");
+      const note = keepNote(el("input", "ag-input small"), `ask:${it.id}`);
       note.placeholder = "Note for the agent (for Skip)";
       const actions = el("div", "ag-card-actions");
       actions.append(
@@ -4408,8 +4454,9 @@
       const body = el("div", "ag-md ag-plan-body");
       R.renderMarkdown(body, it.text, mdCtx);
       node.append(body);
-      if (it.status === "pending") {
-        const note = el("textarea", "ag-input small");
+      if (it.status !== "pending") cardNotes.delete(`plan:${it.id}`);
+      else {
+        const note = keepNote(el("textarea", "ag-input small"), `plan:${it.id}`);
         note.rows = 2;
         note.placeholder = "What should change? (for Request changes)";
         const actions = el("div", "ag-card-actions");
@@ -4577,7 +4624,8 @@
         setTimeout(() => {
           this.mdTimers.delete(item.id);
           const target = item.kind === "reasoning" ? node.querySelector(".ag-reason-body") : node;
-          if (target && target.isConnected) {
+          // A collapsed thought renders when it is opened.
+          if (target && target.isConnected && !lazyBodies.has(node)) {
             const stick = this.stick;
             R.renderMarkdown(target, item.text, mdCtx);
             if (stick) this.scrollToEnd();
@@ -4624,6 +4672,7 @@
           if (nextGroup) nextGroup.before(fresh);
           else host.append(fresh);
         }
+        this.adoptItemNodes(live);
         this.markEntering(live, known);
       }
       this.markLatest();
@@ -6224,6 +6273,47 @@
 
   /** A chat step: kept or replaced whole when its turn is re-rendered, since its handlers close over its own nodes. */
   const isItemNode = (node) => node.hasAttribute("data-item-id");
+
+  /** A collapsed step's body, built the first time it is opened: node -> fill(). */
+  const lazyBodies = new WeakMap();
+
+  function fillLazy(node) {
+    const fill = lazyBodies.get(node);
+    if (!fill) return;
+    lazyBodies.delete(node);
+    fill();
+  }
+
+  /** Whether a tool step that is not a page write has a body to open: the same tests renderTool's body makes. */
+  function toolHasBody(it, children) {
+    const brief = it.tool === "task" && typeof it.input?.prompt === "string";
+    if (it.detail && !brief) return true;
+    if (it.diff || brief || children?.length) return true;
+    if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) return true;
+    return Boolean(it.output && it.tool !== "read" && !it.task?.background);
+  }
+
+  /** Classes renderGroup sets by where a step sits; a kept step's stand-in takes them again. */
+  const PLACE_CLASSES = ["ag-step-last", "ag-answer-earlier"];
+
+  /** What an item's step shows, as a string: equal strings render the same. */
+  function itemSig(it, byParent) {
+    const children = it.kind === "tool" && it.toolId ? byParent.get(it.toolId) : null;
+    const page = it.kind === "tool" ? pageTool(it) : null;
+    return JSON.stringify([it, page?.title, children?.map((child) => itemSig(child, byParent))]);
+  }
+
+  /** Text typed into a waiting card (an approval's or a page ask's note, a plan's change request), kept across re-renders. */
+  const cardNotes = new Map();
+
+  function keepNote(input, key) {
+    input.value = cardNotes.get(key) || "";
+    input.addEventListener("input", () => {
+      if (input.value) cardNotes.set(key, input.value);
+      else cardNotes.delete(key);
+    });
+    return input;
+  }
 
   const mdCtx = { resolvePages: (targets) => app()?.resolvePages?.(targets) || {} };
 

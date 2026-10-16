@@ -58,6 +58,9 @@
   // Without a key these are never patched: their handlers or their content belong to the copy they came with.
   const WHOLE = new Set(["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "DETAILS", "CANVAS", "IFRAME", "VIDEO", "AUDIO"]);
   const sigs = new WeakMap();
+  const KEEP = "data-sync-keep";
+  // stand-in -> the node in the page it stands for
+  const kept = new WeakMap();
 
   function keyOf(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
@@ -84,6 +87,12 @@
     else for (let i = 0; i < old.children.length; i += 1) stampFrom(old.children[i], fresh.children[i], opts);
   }
 
+  function patchClass(old, fresh) {
+    const cls = fresh.getAttribute("class");
+    if (cls === null) old.removeAttribute("class");
+    else if (old.getAttribute("class") !== cls) old.setAttribute("class", cls);
+  }
+
   function patchAttrs(old, fresh) {
     for (const { name } of [...old.attributes]) {
       if (!IGNORED.has(name) && !fresh.hasAttribute(name)) old.removeAttribute(name);
@@ -103,6 +112,11 @@
     }
     const key = keyOf(fresh);
     if (keyOf(old) !== key) return fresh;
+    // A stand-in for a node the renderer knows is unchanged (window.scribeKeep): keep it, take only its classes.
+    if (key !== null && fresh.hasAttribute(KEEP) && kept.get(fresh) === old) {
+      patchClass(old, fresh);
+      return old;
+    }
     if (opts.atomic?.(fresh)) {
       const sig = fresh.outerHTML;
       const had = sigs.get(old);
@@ -167,10 +181,34 @@
     sync(parent, nodes.flatMap((node) => (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? [...node.childNodes] : [node])), opts);
   };
 
+  /** A stand-in that went in where its node was not: put the node itself there (it moves, so it loses :hover). */
+  function resolveKept(root) {
+    const stubs = root.hasAttribute?.(KEEP) ? [root] : [...root.querySelectorAll(`[${KEEP}]`)];
+    for (const stub of stubs) {
+      const real = kept.get(stub);
+      if (!real) continue;
+      patchClass(real, stub);
+      stub.replaceWith(real);
+    }
+  }
+
   /** Bring `old` up to date with `fresh` where it stands, and return the node now in the page (`fresh` if `old` could not be patched). */
   window.scribeMorph = function scribeMorph(old, fresh, opts = {}) {
     const live = patch(old, fresh, { ...opts, patch: true });
     if (live !== old) old.replaceWith(live);
+    resolveKept(live);
     return live;
+  };
+
+  /**
+   * A stand-in for `node`, to put in a new copy where `node` would go when the renderer knows it has not changed:
+   * scribeMorph keeps `node` itself and gives it only the stand-in's classes, so the renderer can add or drop its
+   * own position classes on the stand-in. `node` needs a key (KEYS). The stand-in starts with `node`'s classes.
+   */
+  window.scribeKeep = function scribeKeep(node) {
+    const stub = node.cloneNode(false);
+    stub.setAttribute(KEEP, "");
+    kept.set(stub, node);
+    return stub;
   };
 })();
