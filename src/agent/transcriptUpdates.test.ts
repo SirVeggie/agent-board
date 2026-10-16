@@ -136,3 +136,32 @@ test("streamed markdown redraws only the block being written and highlights a fe
     await browser.close();
   }
 });
+
+test("a hidden view skips transcript work and draws once when shown", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    await page.evaluate(([thread, items, turn]) => (window as any).T.open(thread, items, [turn]), [thread, items, turn] as const);
+    const result = await page.evaluate(async () => {
+      const w = window as any;
+      const { S, view, onEvent, frame } = w.T;
+      S.fullOpen = false;
+      let draws = 0;
+      const draw = view.renderTranscript.bind(view);
+      view.renderTranscript = () => { draws += 1; draw(); };
+      onEvent({ type: "agent_item", item: { id: "y", threadId: "t", turnId: "u1", seq: 5, kind: "text", text: "Hi" } });
+      onEvent({ type: "agent_delta", threadId: "t", itemId: "y", append: " there" });
+      await frame();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const hidden = [Boolean(document.querySelector('[data-item-id="y"]')), view.stale];
+      S.fullOpen = true;
+      view.wake();
+      view.wake();
+      return [...hidden, document.querySelector('[data-item-id="y"]')?.textContent?.trim(), view.stale, draws];
+    });
+    // Nothing asked for a whole redraw while hidden, and the second wake had nothing to do.
+    assert.deepEqual(result, [false, true, "Hi there", false, 1]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});

@@ -49,6 +49,8 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       const text = { id: "reply", threadId: "helper", turnId: "helper-turn", seq: 1, kind: "text", text: "I am checking the files." };
       S.details.set("helper", { items: [text], byId: new Map([[text.id, text]]), turns: new Map([["helper-turn", { id: "helper-turn", status: "running" }]]) });
       document.querySelector("main")!.append(view.root);
+      // An open sidebar: a closed one is not drawn.
+      S.sideOpen = true;
       S.current = "parent";
       view.setThread("parent");
       view.input.value = "Parent draft";

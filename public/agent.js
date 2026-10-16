@@ -2893,7 +2893,34 @@
     }
 
     visible() {
+      // A closed sidebar is only clipped to no width.
+      if (this.variant === "side" && !S.sideOpen) return false;
       return this.root.isConnected && this.root.offsetParent !== null;
+    }
+
+    /**
+     * Whether this view's transcript is on screen. A hidden one is not drawn: it is marked stale and drawn once
+     * when it is shown (wake). The collapsed floating chat shows its step feed instead, and the full window
+     * covers the sidebar and the floating chat.
+     */
+    shown() {
+      if (!this.root.isConnected) return false;
+      switch (this.variant) {
+        case "helper":
+          return Boolean(this.owner?.shown());
+        case "side":
+          return S.sideOpen && !S.fullOpen;
+        case "dock":
+          return S.dockShown && S.dockExpanded && !S.fullOpen;
+        default:
+          return S.fullOpen;
+      }
+    }
+
+    /** Draw the transcript if it changed while hidden and is on screen now. */
+    wake() {
+      if (this.stale && this.shown()) this.renderTranscript();
+      if (this.helperView?.root.isConnected) this.helperView.wake();
     }
 
     focus() {
@@ -3273,6 +3300,12 @@
     }
 
     renderTranscript() {
+      if (!this.shown()) {
+        this.stale = true;
+        this.dirtyTurns.clear();
+        return;
+      }
+      this.stale = false;
       const id = this.threadId;
       const keepPlace = this.transcriptThreadId === id && this.transcriptHadContent && !this.stick;
       const savedTop = keepPlace ? this.scroll.scrollTop : 0;
@@ -4575,17 +4608,21 @@
 
     onItem(item, isNew) {
       if (isNew && item.kind === "user" && item.turnId === null) this.stick = true;
-      this.dirtyTurns.add(itemGroupKey(item));
-      // A queued message that starts a turn or is steered into one leaves the queued group.
-      if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
-      this.schedule();
+      if (this.shown()) {
+        this.dirtyTurns.add(itemGroupKey(item));
+        // A queued message that starts a turn or is steered into one leaves the queued group.
+        if ((isNew && item.turnId) || item.kind === "user") this.dirtyTurns.add("pending");
+        this.schedule();
+      } else this.stale = true;
       if (item.kind === "user") this.renderContext();
       this.refreshContextMeter();
     }
 
     onTurn(turn) {
-      this.dirtyTurns.add(turn.id);
-      this.schedule();
+      if (this.shown()) {
+        this.dirtyTurns.add(turn.id);
+        this.schedule();
+      } else this.stale = true;
       this.refreshContextMeter();
       // The strip's run clock starts from the running turn, which can arrive after the thread's status.
       if (this.status && turn.status === "running" && !this.status.querySelector(".ag-clock")) this.renderComposerBar();
@@ -4605,6 +4642,10 @@
     }
 
     onDelta(item) {
+      if (!this.shown()) {
+        this.stale = true;
+        return;
+      }
       const node = this.transcript.querySelector(`[data-item-id="${item.id}"]`);
       if (!node) {
         this.dirtyTurns.add(itemGroupKey(item));
@@ -4649,6 +4690,11 @@
       const t = this.thread();
       const detail = t && S.details.get(t.id);
       if (!detail) return;
+      if (this.stale || !this.shown()) {
+        // Hidden since the turn was marked, or a whole redraw is owed: draw all of it (now or when shown).
+        this.renderTranscript();
+        return;
+      }
       const keys = new Set(this.dirtyTurns);
       this.dirtyTurns.clear();
       if (this.transcript.querySelector(".ag-empty")) {
@@ -6846,6 +6892,7 @@
       this.pane.toggleAttribute("inert", !S.sideOpen);
       this.pane.setAttribute("aria-hidden", S.sideOpen ? "false" : "true");
       document.getElementById("agent-toggle")?.setAttribute("aria-expanded", S.sideOpen ? "true" : "false");
+      this.view.wake();
     },
     ensureThread() {
       if (this.view.threadId || this.view.draft) return;
@@ -6966,6 +7013,7 @@
       this.root.hidden = false;
       document.body.classList.add("agent-full-open");
       this.view.giveChat(snap);
+      this.view.wake();
       this.renderList();
       setTimeout(() => this.view.focus(), 50);
     },
@@ -6975,6 +7023,8 @@
       this.view.audioComposer?.cancel();
       this.root.hidden = true;
       document.body.classList.remove("agent-full-open");
+      sidebar.view.wake();
+      dock.view.wake();
     },
     renderList() {
       if (!S.fullOpen) return;
@@ -7102,6 +7152,7 @@
       if (!S.dockShown) this.view.audioComposer?.cancel();
       this.root.classList.toggle("expanded", S.dockShown && S.dockExpanded);
       this.renderHandle();
+      this.view.wake();
       requestAnimationFrame(() => this.view.autosize());
     },
     setShown(shown) {
@@ -7117,13 +7168,13 @@
     },
     setExpanded(expanded) {
       S.dockExpanded = expanded;
-      this.apply();
       if (expanded) {
         this.clearFeedLines();
-        this.view.renderTranscript();
-      } else {
-        this.bindFeed();
+        // Drawn afresh when it opens (apply wakes it), at the bottom.
+        this.view.stale = true;
       }
+      this.apply();
+      if (!expanded) this.bindFeed();
     },
     remember(id) {
       const tab = activeTab();
