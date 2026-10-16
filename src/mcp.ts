@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -7,7 +6,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
-import { safeStem } from "./boardExport.js";
+import { writeCheckout } from "./pageCheckout.js";
 import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, contentBaseUrl } from "./config.js";
 import { BROWSER_ACTIONS } from "./browserActions.js";
 import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
@@ -124,7 +123,7 @@ export function registerCodexFileTools(server: McpServer, env = process.env): vo
   if (env.SCRIBE_THREAD && env.SCRIBE_PROVIDER === "codex") {
     server.tool(
       "read_file",
-      "Read a local UTF-8 text file, or list a folder, without a shell. Prefer this for routine file reads and skill instructions (SKILL.md and supporting files). Paths are absolute or relative to the current Scribe workspace. The host checks the current mode and read roots: workspace, this provider's skill folders (including user skills outside the workspace), Scribe-recorded worktree links and this thread's attachments, including resolved link targets. Only Code mode with Full access permits other outside paths. Returns numbered lines (a folder: one entry per line, folders ending in /), totalLines, truncated and nextOffset. Defaults to 200 lines; maximum 1000 lines, 32000 output characters and a 64 MiB file. Use nextOffset to continue. Lines over 2000 characters are cut, and the note says how many. Pages/Chat mode has no file access.",
+      "Read a local UTF-8 text file, or list a folder, without a shell. Prefer this for routine file reads and skill instructions (SKILL.md and supporting files). Paths are absolute or relative to the current Scribe workspace. The host checks the current mode and read roots: workspace, this provider's skill folders (including user skills outside the workspace), Scribe-recorded worktree links, this thread's attachments and (in Code mode) its page checkouts, including resolved link targets. Only Code mode with Full access permits other outside paths. Returns numbered lines (a folder: one entry per line, folders ending in /), totalLines, truncated and nextOffset. Defaults to 200 lines; maximum 1000 lines, 32000 output characters and a 64 MiB file. Use nextOffset to continue. Lines over 2000 characters are cut, and the note says how many. Pages/Chat mode has no file access.",
       {
         path: z.string().min(1).describe("Local text file or folder path, absolute or workspace-relative."),
         offset: z.number().int().min(1).optional().describe("First line, numbered from 1. Default 1."),
@@ -851,7 +850,7 @@ export async function startMcp(): Promise<void> {
         }
         let file: string;
         try {
-          file = writeCheckout(tab);
+          file = writeCheckout(tab, process.env.SCRIBE_THREAD);
         } catch (err) {
           return errorResult(`Could not write checkout: ${(err as Error).message}`);
         }
@@ -2227,14 +2226,6 @@ function boardUrl(id?: string): string {
 /** The tab page on its own, outside the board's iframe, so a browser tool can drive it. */
 function viewUrl(id: string): string {
   return `${contentBaseUrl()}/view/${encodeURIComponent(id)}`;
-}
-
-function writeCheckout(tab: Tab): string {
-  const dir = path.join(os.tmpdir(), "scribe");
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${safeStem(tab.key)}.html`);
-  fs.writeFileSync(file, tab.html, "utf8");
-  return file;
 }
 
 function stripBom(text: string): string {

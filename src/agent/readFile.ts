@@ -3,6 +3,7 @@ import path from "node:path";
 import { threadFilesDir } from "./attachments.js";
 import type { Thread } from "./types.js";
 import { skillFolders } from "./harness.js";
+import { pageCheckoutDir } from "../pageCheckout.js";
 
 export const READ_FILE_MAX_BYTES = 64 * 1024 * 1024;
 export const READ_FILE_MAX_CHARS = 32_000;
@@ -31,6 +32,7 @@ async function readRoots(thread: ReadScope): Promise<Array<{ lexical: string; re
   };
   if (thread.cwd) await add(thread.cwd);
   if (thread.id) await add(threadFilesDir(thread.id));
+  if (thread.id && thread.mode === "code") await add(pageCheckoutDir(thread.id));
   // Skills are loaded from files on demand, including user/provider folders outside the workspace.
   // Grant the skills subtree only; credentials and settings next to it remain outside the scope.
   for (const folder of skillFolders(thread.cwd)) {

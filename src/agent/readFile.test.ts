@@ -6,6 +6,45 @@ import { test, mock } from "node:test";
 import { readScopedFile, READ_FILE_MAX_BYTES, READ_FILE_MAX_LINE_CHARS } from "./readFile.js";
 import { threadFilesDir } from "./attachments.js";
 import type { ThreadWorktree } from "./types.js";
+import { pageCheckoutDir, writeCheckout } from "../pageCheckout.js";
+import { readHtmlPath } from "../mcp.js";
+
+test("Code threads can read and edit their own page checkout without exposing other scratch files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-checkout-test-"));
+  const tmpMock = mock.method(os, "tmpdir", () => root);
+  const cwd = path.join(root, "workspace");
+  const scope = { id: "thread-one", cwd, mode: "code", approval: "auto" } as const;
+  const link = path.join(pageCheckoutDir(scope.id), "escape");
+  try {
+    await fs.mkdir(cwd);
+    const tab = { key: "scribe:example", html: "<h1>Original</h1>" };
+    const file = writeCheckout(tab, scope.id);
+    const other = writeCheckout(tab, "thread-two");
+    const standalone = writeCheckout(tab);
+    assert.notEqual(file, other);
+    assert.match((await readScopedFile(scope, { path: file })).content, /Original/);
+    await fs.writeFile(file, "<h1>Edited</h1>");
+    assert.deepEqual(readHtmlPath(file), { html: "<h1>Edited</h1>" });
+    assert.equal(await fs.readFile(other, "utf8"), tab.html);
+    for (const denied of [other, standalone, path.dirname(pageCheckoutDir(scope.id))]) {
+      await assert.rejects(readScopedFile(scope, { path: denied }), /outside/);
+    }
+    for (const mode of ["ask", "plan", "board"] as const) {
+      await assert.rejects(readScopedFile({ ...scope, mode }, { path: file }), /outside|mode/);
+    }
+    await assert.rejects(readScopedFile({ ...scope, id: undefined }, { path: file }), /outside/);
+    await fs.symlink(path.dirname(other), link, "junction");
+    await assert.rejects(readScopedFile(scope, { path: path.join(link, path.basename(other)) }), /link target/);
+    // Re-checkout refreshes only this thread's copy.
+    assert.equal(writeCheckout(tab, scope.id), file);
+    assert.equal(await fs.readFile(file, "utf8"), tab.html);
+  } finally {
+    tmpMock.mock.restore();
+    await fs.unlink(link).catch(() => {});
+    assert.ok(path.basename(root).startsWith("scribe-checkout-test-"));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("external skills are readable under auto review without exposing adjacent files or nested link targets", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-read-skills-"));
