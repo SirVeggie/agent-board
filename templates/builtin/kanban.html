@@ -766,6 +766,7 @@
   .comment .x, .comment .copy { visibility: hidden; color: var(--muted); padding: 0 6px; flex: 0 0 auto; }
   .comment:hover .x, .comment:focus-within .x, .comment:hover .copy, .comment:focus-within .copy { visibility: visible; }
   .comment .copy:hover { color: var(--text); }
+  .comment .copy svg { display: block; }
   .comment .x:hover { color: var(--danger); }
   .comment .body { word-break: break-word; }
   .comment .body.md-preview { min-height: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; cursor: auto; }
@@ -3250,8 +3251,11 @@
       var box = el("div", "comment" + (isUserComment(cm.by) ? "" : " agent"));
       var who = el("div", "who");
       who.appendChild(el("span", null, commentWho(cm.by) + " · " + ago(cm.at) + commentFate(cm)));
-      var copy = el("button", "copy", "Copy text");
+      var copy = el("button", "copy");
       copy.type = "button";
+      copy.setAttribute("aria-label", "Copy text");
+      copy.setAttribute("data-tooltip", "Copy text");
+      copy.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3.8C3 3.3 3.3 3 3.8 3h6.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
       copy.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
